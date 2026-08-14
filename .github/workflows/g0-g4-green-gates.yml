@@ -93,7 +93,8 @@ jobs:
       - run: npm ci
         working-directory: server
       - uses: dtolnay/rust-toolchain@stable
-        with: { targets: aarch64-apple-ios,aarch64-apple-ios-sim }
+        with:
+          targets: "aarch64-apple-ios,aarch64-apple-ios-sim"
       - run: cargo build --release --features uniffi-bindings --target aarch64-apple-ios
         working-directory: core
       - run: cargo build --release --features uniffi-bindings --target aarch64-apple-ios-sim
