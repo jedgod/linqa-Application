@@ -49,6 +49,7 @@ jobs:
         working-directory: clients/web
       - run: npm ci
         working-directory: clients/mobile
+      - run: node scripts/check-mobile-build-assets.mjs clients/mobile
       - run: npm audit --omit=dev --audit-level=high
         working-directory: clients/mobile
       - run: npx expo-doctor && npx tsc --noEmit

@@ -23,6 +23,10 @@ export class AuthChallengeService {
     userAgent: string;
   }) {
     const client = await this.db.connect();
+    const requestingIpHash = hashIp(
+      this.config.IP_HASH_SECRET ?? this.config.CONTACT_DISCOVERY_SECRET,
+      input.ip
+    );
 
     try {
       await client.query("BEGIN");
@@ -37,6 +41,17 @@ export class AuthChallengeService {
 
       if ((recent.rows[0]?.count ?? 0) >= 5) {
         throw new Error("challenge rate limit exceeded");
+      }
+
+      const recentFromIp = await client.query(
+        `SELECT count(*)::int AS count
+         FROM authentication_challenges
+         WHERE requesting_ip_hash = $1
+           AND created_at > now() - interval '1 hour'`,
+        [requestingIpHash]
+      );
+      if ((recentFromIp.rows[0]?.count ?? 0) >= 20) {
+        throw new Error("challenge source rate limit exceeded");
       }
 
       await client.query(
@@ -77,18 +92,18 @@ export class AuthChallengeService {
           otp.salt,
           expiresAt,
           resendAfter,
-          hashIp(this.config.JWT_HS256_SECRET, input.ip),
+          requestingIpHash,
           sha256(input.userAgent)
         ]
       );
-
-      await client.query("COMMIT");
 
       if (input.identifierType === "PHONE") {
         await this.delivery.sendSms(input.normalizedIdentifier, otp.code);
       } else {
         await this.delivery.sendEmail(input.normalizedIdentifier, otp.code);
       }
+
+      await client.query("COMMIT");
 
       return {
         challengeId: inserted.rows[0].id as string,

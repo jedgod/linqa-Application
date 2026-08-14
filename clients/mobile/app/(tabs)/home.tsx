@@ -13,6 +13,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { MobileHubService, type HubContact, type HubConversation, type HubSnapshot } from "../../services/mobile-hub.service";
+import { accessTokenProvider } from "../../services/session";
 import { colors, radius, spacing } from "../../theme/tokens";
 
 const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
@@ -52,12 +53,11 @@ function formatRelative(epochMillis: number): string {
  */
 export default function HomeScreen() {
   const router = useRouter();
-  const client = useMemo(() => new MobileHubService(API), []);
+  const client = useMemo(() => new MobileHubService(API, () => accessTokenProvider.getAccessToken()), []);
   const [hub, setHub] = useState<HubSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [searchVisible, setSearchVisible] = useState(false);
   const [filter, setFilter] = useState<Filter>("ALL");
   const [statusModal, setStatusModal] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
@@ -122,23 +122,14 @@ export default function HomeScreen() {
     { key: "call", label: "Call", icon: "call-outline", accent: "#EAF7F4", tint: "#1EAB7A", onPress: () => router.push("/(tabs)/calls") },
     { key: "send", label: "Send\nMoney", icon: "arrow-up-outline", accent: "#FFF0E9", tint: "#FF8A3D", onPress: () => router.push("/linqasend/index") },
     { key: "vault", label: "Save to\nVault", icon: "lock-closed-outline", accent: "#F3E8FF", tint: "#8B5CF6", onPress: () => router.push("/modules/file-vault") },
-    { key: "event", label: "Event", icon: "calendar-outline", accent: "#EAF7F4", tint: "#14B8A6", onPress: () => router.push("/countrylinqa/full-flow") },
+    { key: "event", label: "Event", icon: "calendar-outline", accent: "#EAF7F4", tint: "#14B8A6", onPress: () => router.push("/countrylinqa/create?type=event") },
     { key: "post", label: "Post", icon: "create-outline", accent: "#EAF3FF", tint: "#3B82F6", onPress: () => setStatusModal(true) },
-    { key: "more", label: "More", icon: "ellipsis-horizontal", accent: "#F3F4F6", tint: "#64748B", onPress: () => router.push("/(tabs)/home") }
+    { key: "more", label: "More", icon: "ellipsis-horizontal", accent: "#F3F4F6", tint: "#64748B", onPress: () => router.push("/(tabs)/linqa") }
   ] as const;
 
   return (
     <SafeAreaView style={s.screen}>
       <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
-        <View style={s.statusBar}>
-          <Text style={s.timeText}>9:41</Text>
-          <View style={s.statusIcons}>
-            <Ionicons name="cellular" size={15} color="#111827" />
-            <Ionicons name="wifi" size={15} color="#111827" />
-            <Ionicons name="battery-full" size={18} color="#111827" />
-          </View>
-        </View>
-
         <View style={s.topRow}>
           <View style={s.brandWrap}>
             <View style={s.logoCircle}>
@@ -148,13 +139,16 @@ export default function HomeScreen() {
           </View>
 
           <View style={s.topActions}>
-            <Pressable style={s.iconButton} onPress={() => setSearchVisible((v) => !v)} accessibilityLabel="Search conversations">
+            <Pressable style={s.iconButton} onPress={() => router.push("/search")} accessibilityLabel="Search Linqa">
               <Ionicons name="search-outline" size={20} color="#0F172A" />
             </Pressable>
-            <Pressable style={s.iconButton} onPress={() => router.push("/(tabs)/settings")} accessibilityLabel="Open settings">
+            <Pressable style={s.iconButton} onPress={() => router.push("/modules/ai")} accessibilityLabel="Ask Linqa AI">
+              <Ionicons name="sparkles-outline" size={20} color="#0F172A" />
+            </Pressable>
+            <Pressable style={s.iconButton} onPress={() => router.push("/settings/notifications")} accessibilityLabel="Open notifications">
               <Ionicons name="notifications-outline" size={20} color="#0F172A" />
             </Pressable>
-            <Pressable style={s.avatarButton} onPress={() => setComposeModal(true)} accessibilityLabel="Open profile">
+            <Pressable style={s.avatarButton} onPress={() => router.push("/account/manage")} accessibilityLabel="Open profile">
               <View style={s.avatarMini}>
                 <Text style={s.avatarMiniText}>{hub ? initialsOf(hub.profile.displayName) : "J"}</Text>
               </View>
@@ -162,7 +156,7 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        <Text style={s.greeting}>Good morning, Jerry <Text style={s.emoji}>☀️</Text></Text>
+        <Text style={s.greeting}>{greeting()}, {hub?.profile.displayName.split(" ")[0] || "there"} <Text style={s.emoji}>👋</Text></Text>
         <Text style={s.subtitle}>Here's what's happening in your world today.</Text>
 
         <View style={s.heroCard}>
@@ -189,7 +183,7 @@ export default function HomeScreen() {
 
         <View style={s.sectionHeader}>
           <Text style={s.sectionTitle}>QUICK ACTIONS</Text>
-          <Text style={s.sectionLink}>Customize</Text>
+          <Pressable onPress={() => router.push("/(tabs)/linqa")}><Text style={s.sectionLink}>Customize</Text></Pressable>
         </View>
 
         <View style={s.quickGrid}>
@@ -272,20 +266,24 @@ export default function HomeScreen() {
         </View>
 
         <View style={s.bottomSplit}>
-          <View style={s.continuePanel}>
+          <Pressable
+            style={s.continuePanel}
+            onPress={() => router.push({ pathname: "/(tabs)/chats", params: hub?.conversations[0]?.id ? { conversationId: hub.conversations[0].id } : {} })}
+            accessibilityRole="button"
+          >
             <View style={s.personRow}>
               <View style={s.smallAvatar}>
-                <Text style={s.smallAvatarText}>SJ</Text>
+                <Text style={s.smallAvatarText}>{initialsOf(hub?.conversations[0]?.title || "Chats")}</Text>
               </View>
               <View style={s.personMeta}>
-                <Text style={s.personNameHuge}>Sarah Johnson</Text>
-                <Text style={s.personTime}>9:30 AM</Text>
+                <Text style={s.personNameHuge}>{hub?.conversations[0]?.title || "Open your chats"}</Text>
+                <Text style={s.personTime}>{hub?.conversations[0] ? formatRelative(hub.conversations[0].lastMessageAt) : ""}</Text>
               </View>
               <Ionicons name="ellipsis-horizontal" size={18} color="#475569" />
             </View>
-            <Text style={s.messageText}>Hey! Can you share the presentation?</Text>
-            <View style={s.messageBadge}>2</View>
-          </View>
+            <Text style={s.messageText}>{hub?.conversations[0]?.lastMessagePreview || "Your recent conversations will appear here."}</Text>
+            {(hub?.conversations[0]?.unreadCount ?? 0) > 0 ? <View style={s.messageBadge}><Text style={s.unreadBadgeText}>{hub?.conversations[0]?.unreadCount}</Text></View> : null}
+          </Pressable>
 
           <View style={s.countryPanel}>
             <View style={s.countryHeader}>
@@ -333,46 +331,14 @@ export default function HomeScreen() {
           ))}
         </View>
 
-        <View style={s.askRow}>
+        <Pressable style={s.askRow} onPress={() => router.push("/modules/ai")} accessibilityRole="button">
           <View style={s.aiIconWrap}><Ionicons name="sparkles-outline" size={18} color="#FFFFFF" /></View>
           <View style={s.aiTextWrap}>
             <Text style={s.aiTitle}>Ask Linqa AI</Text>
             <Text style={s.aiSubtitle}>Summarize my unread messages</Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color="#111827" />
-        </View>
-
-        <View style={s.toolbarRow}>
-          <Pressable style={s.bottomItemActive} onPress={() => router.push("/(tabs)/home")}>
-            <Ionicons name="home" size={22} color="#4F46E5" />
-            <Text style={s.bottomLabelActive}>Home</Text>
-          </Pressable>
-          <Pressable style={s.bottomItem} onPress={() => router.push("/(tabs)/calls")}>
-            <Ionicons name="call-outline" size={22} color="#475569" />
-            <Text style={s.bottomLabel}>Calls</Text>
-          </Pressable>
-          <Pressable style={s.centerFab} onPress={() => setComposeModal(true)}>
-            <Ionicons name="add" size={28} color="#FFFFFF" />
-          </Pressable>
-          <Pressable style={s.bottomItem} onPress={() => router.push("/(tabs)/chats")}>
-            <Ionicons name="chatbubble-outline" size={22} color="#475569" />
-            <Text style={s.bottomLabel}>Chats</Text>
-          </Pressable>
-          <Pressable style={s.bottomItem} onPress={() => router.push("/countrylinqa/world")}>
-            <Ionicons name="globe-outline" size={22} color="#475569" />
-            <Text style={s.bottomLabel}>Linqa</Text>
-          </Pressable>
-        </View>
-
-        {searchVisible && (
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search people and conversations"
-            placeholderTextColor={colors.textFaint}
-            style={s.searchInput}
-          />
-        )}
+        </Pressable>
 
         {loading && (
           <View style={s.center}>

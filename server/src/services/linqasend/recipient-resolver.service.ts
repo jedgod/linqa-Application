@@ -4,7 +4,14 @@ import { normalizeIdentifier } from "../../auth/normalize.js";
 export interface ResolvedLinqaUser {
   userId: string;
   displayName: string;
+  country: string;
+  preferredCurrency: string;
 }
+
+const COUNTRY_CURRENCY: Record<string, string> = {
+  GH: "GHS", KE: "KES", NG: "NGN", GB: "GBP", CA: "CAD", AU: "AUD",
+  DE: "EUR", FR: "EUR", ES: "EUR", IT: "EUR", JP: "JPY", US: "USD"
+};
 
 /**
  * Real lookup against `account_identifiers` (verified phone/email only —
@@ -26,9 +33,10 @@ export class RecipientResolverService {
     }
 
     const { rows } = await this.db.query(
-      `SELECT u.id, ai.display_value
+      `SELECT u.id, ai.display_value, p.display_name, u.verified_country_code
        FROM account_identifiers ai
        JOIN users u ON u.id = ai.user_id
+       LEFT JOIN user_profiles p ON p.user_id = u.id
        WHERE ai.type = $1 AND ai.normalized_value = $2
          AND ai.verified_at IS NOT NULL AND ai.disabled_at IS NULL
          AND u.status = 'ACTIVE'
@@ -38,6 +46,12 @@ export class RecipientResolverService {
 
     const row = rows[0];
     if (!row) return null;
-    return { userId: row.id as string, displayName: row.display_value as string };
+    const country = typeof row.verified_country_code === "string" ? row.verified_country_code : "US";
+    return {
+      userId: row.id as string,
+      displayName: (row.display_name ?? row.display_value) as string,
+      country,
+      preferredCurrency: COUNTRY_CURRENCY[country] ?? "USD"
+    };
   }
 }

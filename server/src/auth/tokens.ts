@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
-import { SignJWT } from "jose";
+import { importPKCS8, SignJWT } from "jose";
 import type { AppConfig } from "../config.js";
 
 export function randomToken(bytes = 32): string {
@@ -20,7 +20,14 @@ export async function issueAccessToken(
     sessionId: string;
   }
 ): Promise<string> {
-  const key = new TextEncoder().encode(config.JWT_HS256_SECRET);
+  const productionSigning = config.JWT_SIGNING_PRIVATE_KEY_PEM
+    ? await importPKCS8(config.JWT_SIGNING_PRIVATE_KEY_PEM, "EdDSA")
+    : null;
+  if (config.NODE_ENV === "production" && !productionSigning) {
+    throw new Error("production JWT signing key is not configured");
+  }
+  const key = productionSigning ?? new TextEncoder().encode(config.JWT_HS256_SECRET);
+  const algorithm = productionSigning ? "EdDSA" : "HS256";
   const now = Math.floor(Date.now() / 1000);
 
   return new SignJWT({
@@ -29,7 +36,7 @@ export async function issueAccessToken(
     scope: input.scopes.join(" "),
     sid: input.sessionId
   })
-    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setProtectedHeader({ alg: algorithm, typ: "JWT" })
     .setSubject(input.subject)
     .setIssuer(config.JWT_ISSUER)
     .setAudience(config.JWT_AUDIENCE)

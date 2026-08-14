@@ -8,6 +8,7 @@ import { verifyEnrollmentProof } from "../auth/enrollment-proof.js";
 import type { SessionService } from "../services/session.service.js";
 
 const ENROLLED_DEVICE_SCOPES = [
+  "account:write",
   "ai:use",
   "attachments:write",
   "calendar:read",
@@ -19,11 +20,17 @@ const ENROLLED_DEVICE_SCOPES = [
   "communities:write",
   "contacts:read",
   "contacts:write",
+  "countrylinqa:read",
+  "countrylinqa:write",
   "devices:alerts:read",
   "devices:alerts:write",
   "devices:read",
   "devices:write",
   "keys:write",
+  "linqasend:read",
+  "linqasend:write",
+  "vault:read",
+  "vault:write",
   "media:read",
   "message-requests:read",
   "message-requests:write",

@@ -9,7 +9,10 @@ const EnvSchema = z.object({
   JWT_AUDIENCE: z.string().min(1),
   JWT_HS256_SECRET: z.string().min(32),
   JWT_JWKS_URL: z.string().url().optional(),
+  JWT_SIGNING_PRIVATE_KEY_PEM: z.string().min(40).optional(),
+  JWT_VERIFYING_PUBLIC_KEY_PEM: z.string().min(40).optional(),
   CONTACT_DISCOVERY_SECRET: z.string().min(32),
+  IP_HASH_SECRET: z.string().min(32).optional(),
   TOKEN_VAULT_KEY_BASE64: z.string().min(44),
   TURN_SHARED_SECRET: z.string().min(32),
   TURN_URLS: z.string()
@@ -60,6 +63,8 @@ const EnvSchema = z.object({
 
   LINQASEND_WEBHOOK_SECRET: z.string().min(16).optional(),
   LINQASEND_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().min(60).max(86_400).default(300),
+  LINQASEND_PROVIDER_URL: z.string().url().optional(),
+  LINQASEND_PROVIDER_TOKEN: z.string().min(16).optional(),
 
   ESCALATION_STAFF_WEBHOOK_URL: z.string().url().optional(),
   ESCALATION_STAFF_WEBHOOK_SECRET: z.string().min(16).optional(),
@@ -88,6 +93,8 @@ const EnvSchema = z.object({
   SECURE_CORE_ARTIFACT_SHA256: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
   SECURE_CORE_ARTIFACT_PATH: z.string().min(1).optional(),
   COUNTRYLINQA_RISK_URL: z.string().url().optional(),
+  COUNTRYLINQA_GEOIP_URL: z.string().url().optional(),
+  COUNTRYLINQA_GEOIP_TOKEN: z.string().min(16).optional(),
   PRODUCTION_RELEASE_ID: z.string().trim().min(1).max(128).optional(),
   STEP_UP_PRIVATE_KEY_PEM: z.string().min(40).optional(),
   STEP_UP_PUBLIC_KEY_PEM: z.string().min(40).optional(),
@@ -106,6 +113,23 @@ const EnvSchema = z.object({
       });
     }
   };
+
+  requireAllOrNone([
+    ["JWT_SIGNING_PRIVATE_KEY_PEM", value.JWT_SIGNING_PRIVATE_KEY_PEM],
+    ["JWT_VERIFYING_PUBLIC_KEY_PEM", value.JWT_VERIFYING_PUBLIC_KEY_PEM]
+  ]);
+
+  if (value.NODE_ENV === "production" &&
+      (!value.JWT_SIGNING_PRIVATE_KEY_PEM || !value.JWT_VERIFYING_PUBLIC_KEY_PEM)) {
+    context.addIssue({
+      code: "custom",
+      message: "production requires JWT_SIGNING_PRIVATE_KEY_PEM and JWT_VERIFYING_PUBLIC_KEY_PEM for first-party sessions"
+    });
+  }
+
+  if (value.NODE_ENV === "production" && !value.IP_HASH_SECRET) {
+    context.addIssue({ code: "custom", message: "production requires a dedicated IP_HASH_SECRET" });
+  }
 
   requireAllOrNone([
     ["OBJECT_STORAGE_REGION", value.OBJECT_STORAGE_REGION],
@@ -129,6 +153,11 @@ const EnvSchema = z.object({
   requireAllOrNone([
     ["CDN_STORAGE_BUCKET", value.CDN_STORAGE_BUCKET],
     ["CDN_STORAGE_REGION", value.CDN_STORAGE_REGION]
+  ]);
+
+  requireAllOrNone([
+    ["LINQASEND_PROVIDER_URL", value.LINQASEND_PROVIDER_URL],
+    ["LINQASEND_PROVIDER_TOKEN", value.LINQASEND_PROVIDER_TOKEN]
   ]);
 
   requireAllOrNone([

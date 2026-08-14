@@ -39,7 +39,7 @@ export class FailClosedAccessTokenProvider implements AccessTokenProvider {
     }
 
     throw new Error(
-      "No secure session service is configured for this mobile client yet."
+      "No active authenticated session is available. Sign in again to continue."
     );
   }
 }

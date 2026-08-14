@@ -48,9 +48,10 @@ fun LoginScreen(
 
     fun normalizeIdentifier(raw: String): String {
         val trimmed = raw.trim()
-        if (trimmed.contains("@")) return trimmed
-        val digits = trimmed.filter(Char::isDigit)
-        return if (digits.length >= 10) "+1${digits.takeLast(10)}" else digits
+        if (trimmed.contains("@")) return trimmed.lowercase()
+        // Preserve the caller's country code. The server owns canonical
+        // E.164 validation; silently forcing +1 corrupts non-US numbers.
+        return trimmed.filter { it.isDigit() || it == '+' }
     }
 
     Column(
@@ -164,4 +165,3 @@ fun LoginScreen(
         }
     }
 }
-

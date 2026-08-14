@@ -1,23 +1,16 @@
 import React from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-
-const ACTIONS = [
-  ["chat", "chatbubble-outline", "New chat"],
-  ["group", "people-outline", "New group"],
-  ["call", "call-outline", "New call"],
-  ["community", "planet-outline", "Community"],
-  ["contact", "person-add-outline", "Add contact"],
-  ["qr", "qr-code-outline", "Scan QR"],
-  ["status", "add-circle-outline", "Create status"],
-] as const;
+import { CreateAction, CreateActionKey, GLOBAL_CREATE_ACTIONS } from "../navigation/information-architecture";
 
 export function QuickCreateSheet({
-  visible, onClose, onAction
+  visible, onClose, onAction, actions = GLOBAL_CREATE_ACTIONS, contextLabel
 }: {
   visible: boolean;
   onClose(): void;
-  onAction(key: (typeof ACTIONS)[number][0]): void;
+  onAction(key: CreateActionKey): void;
+  actions?: readonly CreateAction[];
+  contextLabel?: string;
 }) {
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
@@ -26,7 +19,7 @@ export function QuickCreateSheet({
           <View style={styles.header}>
             <View>
               <Text style={styles.title}>Create</Text>
-              <Text style={styles.subtitle}>Start something new in Linqa</Text>
+              <Text style={styles.subtitle}>{contextLabel || "Start something new in Linqa"}</Text>
             </View>
             <Pressable style={styles.close} onPress={onClose}>
               <Ionicons name="close" size={20} color="#A8BDC9" />
@@ -34,8 +27,8 @@ export function QuickCreateSheet({
           </View>
 
           <View style={styles.grid}>
-            {ACTIONS.map(([key, icon, label]) => (
-              <Pressable key={key} style={styles.item} onPress={() => onAction(key)}>
+            {actions.map(({ key, icon, label }) => (
+              <Pressable key={key} style={styles.item} onPress={() => onAction(key)} accessibilityRole="button">
                 <View style={styles.itemIcon}>
                   <Ionicons name={icon} size={23} color="#12D6AE" />
                 </View>

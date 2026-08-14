@@ -1,5 +1,8 @@
+import { useEffect, useMemo, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
+import { CountryLinqaService, type CountryLinqaPreferences } from "../../services/countrylinqa.service";
+import { accessTokenProvider } from "../../services/session";
 
 const purple = "#6f5ae6";
 const bg = "#f5f6fa";
@@ -9,6 +12,9 @@ const border = "#e3e8f0";
 
 export default function CountryLinqaWorldScreen() {
   const router = useRouter();
+  const client = useMemo(() => new CountryLinqaService(process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080", () => accessTokenProvider.getAccessToken()), []);
+  const [preferences, setPreferences] = useState<CountryLinqaPreferences | null>(null);
+  useEffect(() => { client.preferences().then(setPreferences).catch(() => setPreferences(null)); }, [client]);
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -26,8 +32,8 @@ export default function CountryLinqaWorldScreen() {
           <View style={styles.worldMap} />
           <View style={styles.modeRow}>
             <View>
-              <Text style={styles.modeLabel}>My Country Only</Text>
-              <Text style={styles.modeValue}>United States</Text>
+              <Text style={styles.modeLabel}>{preferences?.mode.replace(/_/g, " ") ?? "Discovery scope"}</Text>
+              <Text style={styles.modeValue}>{preferences?.verifiedCountryCode ?? "Verification required"}</Text>
             </View>
             <Text style={styles.modePill}>Live</Text>
           </View>
@@ -42,15 +48,25 @@ export default function CountryLinqaWorldScreen() {
             ["🏘", "Communities"],
             ["🌍", "Countries"],
           ].map(([icon, label]) => (
-            <Pressable key={label as string} style={styles.gridItem} onPress={() => router.push(label === "Countries" ? "/settings/countrylinqa" : "/countrylinqa/full-flow")}>
+            <Pressable key={label as string} style={styles.gridItem} onPress={() => {
+              const routes: Record<string, string> = {
+                "World Feed": "/countrylinqa/list?kind=feed&title=World%20Feed",
+                People: "/countrylinqa/list?kind=people&title=People",
+                Businesses: "/countrylinqa/list?kind=businesses&title=Businesses",
+                Events: "/countrylinqa/list?kind=events&title=Events",
+                Communities: "/countrylinqa/list?kind=communities&title=Communities",
+                Countries: "/settings/countrylinqa"
+              };
+              router.push(routes[label as string] as never);
+            }}>
               <Text style={styles.gridIcon}>{icon as string}</Text>
               <Text style={styles.gridLabel}>{label as string}</Text>
             </Pressable>
           ))}
         </View>
 
-        <Pressable style={styles.primaryButton} onPress={() => router.push("/countrylinqa/full-flow")}>
-          <Text style={styles.primaryButtonText}>Explore CountryLinqa</Text>
+        <Pressable style={styles.primaryButton} onPress={() => router.push("/countrylinqa/list?kind=feed&title=World%20Feed" as never)}>
+          <Text style={styles.primaryButtonText}>Open World Feed</Text>
         </Pressable>
       </ScrollView>
     </SafeAreaView>

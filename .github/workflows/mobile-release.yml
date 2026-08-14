@@ -31,10 +31,13 @@ jobs:
         working-directory: clients/mobile
       - run: npx tsc --noEmit
         working-directory: clients/mobile
-      - run: |
-          echo "Inject Android signing credentials from protected CI secrets."
-          echo "Run EAS or Gradle production build here."
-          echo "Upload to Play Console internal/beta/production track."
+      - name: Require EAS authentication
+        env: { EXPO_TOKEN: "${{ secrets.EXPO_TOKEN }}" }
+        run: test -n "$EXPO_TOKEN"
+      - name: Start signed Android build
+        env: { EXPO_TOKEN: "${{ secrets.EXPO_TOKEN }}" }
+        working-directory: clients/mobile
+        run: npx eas-cli build --platform android --profile "${{ inputs.channel }}" --non-interactive --no-wait
 
   ios:
     if: ${{ inputs.platform == 'ios' }}
@@ -50,7 +53,10 @@ jobs:
         working-directory: clients/mobile
       - run: npx tsc --noEmit
         working-directory: clients/mobile
-      - run: |
-          echo "Inject App Store Connect and signing credentials from protected CI secrets."
-          echo "Run EAS/Xcode archive here."
-          echo "Upload to TestFlight/App Store."
+      - name: Require EAS authentication
+        env: { EXPO_TOKEN: "${{ secrets.EXPO_TOKEN }}" }
+        run: test -n "$EXPO_TOKEN"
+      - name: Start signed iOS build
+        env: { EXPO_TOKEN: "${{ secrets.EXPO_TOKEN }}" }
+        working-directory: clients/mobile
+        run: npx eas-cli build --platform ios --profile "${{ inputs.channel }}" --non-interactive --no-wait

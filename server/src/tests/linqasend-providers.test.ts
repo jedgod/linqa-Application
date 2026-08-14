@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SafeDefaultFundingProvider,
   SafeDefaultKycProvider,
@@ -11,6 +11,25 @@ import { reconcileInFlightTransfers } from "../integrations/linqasend/reconcilia
 import type { Database } from "../db/pool.js";
 import type { FundingProvider, KycProvider, PayoutProvider } from "../integrations/linqasend/provider.contracts.js";
 import { createHmac } from "node:crypto";
+import { createHttpLinqaSendProviders } from "../integrations/linqasend/http.providers.js";
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("LinqaSend HTTP provider gateway", () => {
+  it("authenticates requests, serializes bigint amounts, and validates responses", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ decision: "PASS", reasons: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: "AUTHORIZED", providerRef: "fund-1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const providers = createHttpLinqaSendProviders("https://provider.test/", "provider-token-at-least-16");
+
+    await expect(providers.kyc.verifyIdentity({ legalName: "Alex", country: "US" })).resolves.toEqual({ decision: "PASS", reasons: [] });
+    await expect(providers.funding.authorizeFunding({ transferId: "t1", providerPaymentMethodRef: "pm1", amountMinor: 1250n, currency: "USD", idempotencyKey: "idem-1" })).resolves.toMatchObject({ status: "AUTHORIZED" });
+
+    expect(fetchMock.mock.calls[0]![1]!.headers.authorization).toBe("Bearer provider-token-at-least-16");
+    expect(fetchMock.mock.calls[1]![1]!.body).toContain('"amountMinor":"1250"');
+  });
+});
 
 describe("LinqaSend safe-default providers", () => {
   it("KYC fails closed to REVIEW rather than PASS or throwing", async () => {

@@ -63,6 +63,9 @@ describe("final runtime bootstrap", () => {
       method: "POST",
       url: "/v1/messages/:messageId/expiry-receipts"
     })).toBe(true);
+    expect(app.hasRoute({ method: "GET", url: "/v1/mobile-hub" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/countrylinqa/golive/posts" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/countrylinqa/golive/events" })).toBe(true);
   });
 
   it("keeps final readiness closed until the secure core is integrated", async () => {

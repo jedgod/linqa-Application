@@ -56,3 +56,23 @@ export class NoopGeoIpProvider implements GeoIpProvider {
     return undefined;
   }
 }
+
+/** HTTP adapter for a deployment-owned GeoIP service. It fails closed on
+ * transport, response, or schema errors so country evidence is never guessed. */
+export class HttpGeoIpProvider implements GeoIpProvider {
+  constructor(private readonly endpoint: string, private readonly token?: string) {}
+
+  async resolveCountry(ip: string): Promise<string> {
+    const url = new URL(this.endpoint);
+    url.searchParams.set("ip", ip);
+    const init: RequestInit = { signal: AbortSignal.timeout(5_000) };
+    if (this.token) init.headers = { authorization: `Bearer ${this.token}` };
+    const response = await fetch(url, init);
+    if (!response.ok) throw new Error("GeoIP provider unavailable");
+    const body = await response.json() as { countryCode?: unknown };
+    if (typeof body.countryCode !== "string" || !/^[A-Za-z]{2}$/.test(body.countryCode)) {
+      throw new Error("GeoIP provider returned an invalid country code");
+    }
+    return body.countryCode.toUpperCase();
+  }
+}

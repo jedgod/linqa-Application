@@ -13,6 +13,7 @@ import com.linqa.app.model.Message
 import com.linqa.app.model.MessageStatus
 import com.linqa.app.model.Profile
 import com.linqa.app.model.StatusUpdate
+import com.linqa.app.network.RealApiClient
 import java.io.IOException
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
@@ -31,22 +32,29 @@ object CoreBridge {
     private val jsonMediaType = "application/json".toMediaType()
     private val localMessages = mutableMapOf<String, MutableList<Message>>()
     @Volatile private var snapshot: HubSnapshot? = null
+    @Volatile private var authenticatedApi: RealApiClient? = null
+    @Volatile private var accessTokenProvider: (() -> String?)? = null
+
+    fun configureAuthenticatedClient(api: RealApiClient, tokenProvider: () -> String?) {
+        authenticatedApi = api
+        accessTokenProvider = tokenProvider
+        snapshot = null
+    }
+
+    private fun api(): RealApiClient = authenticatedApi
+        ?: error("Authenticated hub client is not configured")
 
     fun isNativeLoaded(): Boolean = NativeCore.isLoaded()
 
     fun versionPlaceholder(): String =
         if (NativeCore.isLoaded()) {
-            "linqa-core ${NativeCore.version()}; conversation data still via dev/mobile-hub bridge"
+            "linqa-core ${NativeCore.version()}; authenticated mobile hub"
         } else {
-            "PostgreSQL development bridge; secure core not loaded"
+            "Authenticated mobile hub; secure core not loaded"
         }
 
     suspend fun loadHub(): HubSnapshot = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url("${BuildConfig.HUB_BASE_URL}/v1/dev/mobile-hub")
-            .demoHeader()
-            .build()
-        parseSnapshot(execute(request)).also { snapshot = it }
+        parseSnapshot(api().get("/v1/mobile-hub")).also { snapshot = it }
     }
 
     suspend fun getProfile(): Profile = snapshot?.profile ?: loadHub().profile
@@ -73,13 +81,13 @@ object CoreBridge {
     suspend fun listDevices(): List<LinkedDevice> = (snapshot ?: loadHub()).devices
 
     suspend fun publishStatus(body: String) {
-        post("/v1/dev/mobile-hub/statuses", JSONObject().put("body", body))
+        post("/v1/mobile-hub/statuses", JSONObject().put("body", body))
         loadHub()
     }
 
     suspend fun createConversation(recipientUserId: String): String {
         val response = post(
-            "/v1/dev/mobile-hub/conversations",
+            "/v1/mobile-hub/conversations",
             JSONObject().put("recipientUserId", recipientUserId),
         )
         loadHub()
@@ -88,7 +96,7 @@ object CoreBridge {
 
     suspend fun createCall(peerUserId: String, video: Boolean = false) {
         post(
-            "/v1/dev/mobile-hub/calls",
+            "/v1/mobile-hub/calls",
             JSONObject()
                 .put("peerUserId", peerUserId)
                 .put("callType", if (video) "VIDEO" else "AUDIO"),
@@ -97,9 +105,9 @@ object CoreBridge {
     }
 
     fun connectRealtime(onChanged: () -> Unit): WebSocket {
-        val websocketUrl = BuildConfig.HUB_BASE_URL.replaceFirst("http", "ws") +
-            "/v1/dev/mobile-hub/live"
-        val request = Request.Builder().url(websocketUrl).demoHeader().build()
+        val websocketUrl = BuildConfig.HUB_BASE_URL.replaceFirst("http", "ws") + "/v1/mobile-hub/live"
+        val token = accessTokenProvider?.invoke() ?: error("Not authenticated")
+        val request = Request.Builder().url(websocketUrl).header("authorization", "Bearer $token").build()
         return client.newWebSocket(request, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (JSONObject(text).optString("type") == "mobile-hub.changed") onChanged()
@@ -110,16 +118,7 @@ object CoreBridge {
     suspend fun beginDeviceLink(): String =
         "Enrollment unavailable until proof verification is connected"
 
-    private suspend fun post(path: String, body: JSONObject): JSONObject =
-        withContext(Dispatchers.IO) {
-            execute(
-                Request.Builder()
-                    .url(BuildConfig.HUB_BASE_URL + path)
-                    .demoHeader()
-                    .post(body.toString().toRequestBody(jsonMediaType))
-                    .build(),
-            )
-        }
+    private suspend fun post(path: String, body: JSONObject): JSONObject = api().post(path, body)
 
     private fun execute(request: Request): JSONObject {
         client.newCall(request).execute().use { response ->
@@ -128,8 +127,6 @@ object CoreBridge {
             return JSONObject(body)
         }
     }
-
-    private fun Request.Builder.demoHeader() = header("x-linqa-demo-user", "galaxy")
 
     private fun parseSnapshot(root: JSONObject): HubSnapshot = HubSnapshot(
         profile = root.getJSONObject("profile").let {

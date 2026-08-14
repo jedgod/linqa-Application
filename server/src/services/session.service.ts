@@ -65,7 +65,6 @@ export class SessionService {
 
   async rotate(input: {
     refreshToken: string;
-    subject: string;
   }) {
     const presentedHash = hashToken(input.refreshToken);
     const client = await this.db.connect();
@@ -74,10 +73,11 @@ export class SessionService {
       await client.query("BEGIN");
 
       const result = await client.query(
-        `SELECT *
-         FROM auth_sessions
-         WHERE refresh_token_hash = $1
-            OR previous_refresh_token_hash = $1
+        `SELECT s.*, u.external_subject
+         FROM auth_sessions s
+         JOIN users u ON u.id = s.user_id
+         WHERE s.refresh_token_hash = $1
+            OR s.previous_refresh_token_hash = $1
          FOR UPDATE`,
         [presentedHash]
       );
@@ -117,7 +117,7 @@ export class SessionService {
 
       const accessToken = await issueAccessToken(this.config, {
         userId: row.user_id,
-        subject: input.subject,
+        subject: row.external_subject,
         deviceId: row.device_id ?? undefined,
         scopes: row.access_scope,
         sessionId: row.id

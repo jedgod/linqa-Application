@@ -93,6 +93,20 @@ export class CountryLinqaService {
     return this.request<ItemsResponse>("/v1/countrylinqa/golive/events");
   }
 
+  createPost(body: string) {
+    return this.request<{ id: string; createdAt: string }>("/v1/countrylinqa/golive/posts", {
+      method: "POST",
+      body: JSON.stringify({ body })
+    });
+  }
+
+  createEvent(input: { title: string; startsAt: string; city?: string }) {
+    return this.request<{ id: string; startsAt: string }>("/v1/countrylinqa/golive/events", {
+      method: "POST",
+      body: JSON.stringify(input)
+    });
+  }
+
   discoverUsers(query: { country?: string; region?: string; verifiedOnly?: boolean } = {}) {
     const params = new URLSearchParams(query as Record<string, string>).toString();
     return this.request<ItemsResponse>(`/v1/countrylinqa/discover/users${params ? `?${params}` : ""}`);

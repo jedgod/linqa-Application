@@ -4,14 +4,17 @@ import {
   Text, TextInput, View
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { CallsService, type CallHistoryItem } from "../../services/calls.service";
 import { accessTokenProvider } from "../../services/session";
 import { QuickCreateSheet } from "../../components/QuickCreateSheet";
+import { createActionsForPath, type CreateActionKey } from "../../navigation/information-architecture";
 
 const FILTERS = ["All", "Missed", "Audio", "Video"] as const;
 type Filter = (typeof FILTERS)[number];
 
 export default function CallsScreen() {
+  const router = useRouter();
   const [calls, setCalls] = useState<CallHistoryItem[]>([]);
   const [filter, setFilter] = useState<Filter>("All");
   const [query, setQuery] = useState("");
@@ -53,14 +56,12 @@ export default function CallsScreen() {
     return matchText && matchFilter;
   });
 
-  function onQuickCreateAction(_key: string) {
-    // None of the QuickCreateSheet actions (chat, group, call, community,
-    // contact, qr, status) have a corresponding creation flow supplied by
-    // the mobile feature packs applied to this repo - only view/management
-    // screens (calls, media, message requests, privacy center, settings)
-    // were supplied. Closing the sheet is the honest behavior until a real
-    // creation flow exists for one of these actions.
+  const callActions = createActionsForPath("/calls");
+
+  function onQuickCreateAction(key: CreateActionKey) {
+    const selected = callActions.find((item) => item.key === key);
     setQuickCreateOpen(false);
+    if (selected) router.push(selected.route as never);
   }
 
   return (
@@ -182,6 +183,7 @@ export default function CallsScreen() {
       <QuickCreateSheet
         visible={quickCreateOpen}
         onClose={() => setQuickCreateOpen(false)}
+        actions={callActions}
         onAction={onQuickCreateAction}
       />
     </SafeAreaView>

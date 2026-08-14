@@ -13,6 +13,12 @@ export interface AuthRouteDependencies {
   sessionService: SessionService;
 }
 
+export const PRE_ENROLLMENT_SCOPES = ["profile:read", "devices:read"] as const;
+
+export function isAuthenticationPurpose(purpose: string): boolean {
+  return purpose === "LOGIN" || purpose === "REGISTRATION";
+}
+
 export async function registerAuthRoutes(
   app: FastifyInstance,
   config: AppConfig,
@@ -68,6 +74,11 @@ export async function registerAuthRoutes(
 
       const verified = await deps.challengeService.verify(body);
 
+      if (!isAuthenticationPurpose(verified.purpose)) {
+        request.log.warn({ purpose: verified.purpose }, "challenge purpose cannot create a login session");
+        return reply.code(400).send({ error: "invalid_challenge_purpose" });
+      }
+
       const identifier = await db.query(
         `SELECT ai.*, u.external_subject
          FROM account_identifiers ai
@@ -84,16 +95,8 @@ export async function registerAuthRoutes(
         const session = await deps.sessionService.create({
           userId: row.user_id,
           subject: row.external_subject,
-          scopes: [
-            "profile:read",
-            "devices:read",
-            "account:write",
-            "countrylinqa:read",
-            "countrylinqa:write",
-            "linqasend:read",
-            "linqasend:write"
-          ],
-          ipHash: hashIp(config.JWT_HS256_SECRET, request.ip),
+          scopes: [...PRE_ENROLLMENT_SCOPES],
+          ipHash: hashIp(config.IP_HASH_SECRET ?? config.CONTACT_DISCOVERY_SECRET, request.ip),
           userAgentHash: sha256(request.headers["user-agent"] ?? "unknown")
         });
 
@@ -168,6 +171,12 @@ export async function registerAuthRoutes(
         const userId = user.rows[0].id as string;
 
         await client.query(
+          `INSERT INTO user_profiles (user_id, display_name) VALUES ($1, 'Linqa User')
+           ON CONFLICT (user_id) DO NOTHING`,
+          [userId]
+        );
+
+        await client.query(
           `INSERT INTO account_identifiers (user_id, type, normalized_value, display_value, is_primary, verified_at)
            VALUES ($1, $2, $3, $3, true, now())`,
           [userId, challenge.identifier_type, challenge.normalized_identifier]
@@ -178,16 +187,8 @@ export async function registerAuthRoutes(
         const session = await deps.sessionService.create({
           userId,
           subject,
-          scopes: [
-            "profile:read",
-            "devices:read",
-            "account:write",
-            "countrylinqa:read",
-            "countrylinqa:write",
-            "linqasend:read",
-            "linqasend:write"
-          ],
-          ipHash: hashIp(config.JWT_HS256_SECRET, request.ip),
+          scopes: [...PRE_ENROLLMENT_SCOPES],
+          ipHash: hashIp(config.IP_HASH_SECRET ?? config.CONTACT_DISCOVERY_SECRET, request.ip),
           userAgentHash: sha256(request.headers["user-agent"] ?? "unknown")
         });
 
@@ -215,8 +216,7 @@ export async function registerAuthRoutes(
 
     try {
       return await deps.sessionService.rotate({
-        refreshToken: body.refreshToken,
-        subject: "linqa-user"
+        refreshToken: body.refreshToken
       });
     } catch {
       return reply.code(401).send({ error: "invalid_refresh_token" });

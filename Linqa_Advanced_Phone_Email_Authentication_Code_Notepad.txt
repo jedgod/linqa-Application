@@ -1,36 +1,6 @@
-﻿================================================================================================================
-PACK STATUS: LIVE-SOURCE CANONICAL ALIGNMENT
-================================================================================================================
+LINQA LIVE-SOURCE COMPATIBILITY MANIFEST
+Compatibility path: Linqa_Advanced_Phone_Email_Authentication_Code_Notepad.txt
 
-This pack has been cleaned up to point to the real live implementation sources and to remove stale duplicate references.
+This notebook is reference-only. The live source of truth is server/src plus clients/mobile, clients/android, clients/web, core, database migrations, tests, and certification. All modules use server/src/auth/normalize.ts, server/src/routes/auth.ts, server/src/services/auth-challenge.service.ts, and server/src/services/session.service.ts; no parallel authentication, database, API, or crypto implementation may be created.
 
-PRIMARY LIVE SOURCES
-- server/src/auth/normalize.ts
-- server/src/routes/auth.ts
-- server/src/services/auth-challenge.service.ts
-- server/src/services/session.service.ts
-- clients/android/app/src/main/java/com/linqa/app/ui/screens/LoginScreen.kt
-- clients/android/app/src/main/java/com/linqa/app/ui/screens/OtpVerifyScreen.kt
-- clients/android/app/src/main/java/com/linqa/app/network/AuthApi.kt
-- clients/android/app/src/main/java/com/linqa/app/ui/MainActivity.kt
-- clients/web/src/auth/validation.ts
-- clients/mobile/auth/validation.ts
-
-CANONICAL RULES
-- The server contract is the source of truth for identifier validation.
-- Email must be normalized to lowercase and validated as a real email.
-- Phone numbers must be normalized to an E.164-style format, e.g. +15555550100.
-- Challenge generation returns a single-use challengeId and 6-digit code flow.
-- Verification returns either accountExists:true with temporarySession or registrationRequired:true.
-- Any stale duplicate or outdated pack copy is superseded by the running implementation.
-
-DUPLICATE CLEANUP
-- Repeated pack references and duplicate implementation copies were removed from this page.
-- This text file now reflects the live codebase rather than legacy pack content.
-
-LIVE-SOURCE AUTH STACK
-This pack is no longer treated as a standalone source of truth.
-The current canonical implementation is in the active app/server code, and the UI/logic pack content should be treated as reference material only unless it is intentionally wired into the live project.
-================================================================================================================
-END OF CLEANUP PASS
-================================================================================================================
+Extend canonical live files additively, retain authenticated ownership/scope checks, and keep provider-dependent capabilities fail-closed until production credentials and certification evidence exist.

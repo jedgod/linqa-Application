@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, importSPKI, jwtVerify } from "jose";
 import type { FastifyRequest } from "fastify";
 import type { AppConfig } from "../config.js";
 import type { AuthPrincipal } from "./types.js";
@@ -13,20 +13,26 @@ function bearerToken(request: FastifyRequest): string {
 
 export function createAuthenticator(config: AppConfig) {
   const developmentKey = new TextEncoder().encode(config.JWT_HS256_SECRET);
+  const productionKey = config.JWT_VERIFYING_PUBLIC_KEY_PEM
+    ? importSPKI(config.JWT_VERIFYING_PUBLIC_KEY_PEM, "EdDSA")
+    : null;
   const remoteKeys = config.JWT_JWKS_URL
     ? createRemoteJWKSet(new URL(config.JWT_JWKS_URL))
     : null;
 
   return async function authenticate(request: FastifyRequest): Promise<AuthPrincipal> {
     const token = bearerToken(request);
-    if (config.NODE_ENV === "production" && !remoteKeys) {
-      throw new Error("production JWKS authentication is not configured");
+    if (config.NODE_ENV === "production" && !productionKey) {
+      throw new Error("production first-party JWT verification is not configured");
     }
 
-    const { payload } = await jwtVerify(token, remoteKeys ?? developmentKey, {
+    const verificationKey = productionKey
+      ? await productionKey
+      : remoteKeys ?? developmentKey;
+    const { payload } = await jwtVerify(token, verificationKey, {
       issuer: config.JWT_ISSUER,
       audience: config.JWT_AUDIENCE,
-      algorithms: remoteKeys ? ["RS256", "ES256", "EdDSA"] : ["HS256"]
+      algorithms: productionKey ? ["EdDSA"] : remoteKeys ? ["RS256", "ES256", "EdDSA"] : ["HS256"]
     });
 
     const userId = typeof payload.user_id === "string" ? payload.user_id : undefined;

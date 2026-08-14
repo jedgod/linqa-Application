@@ -1,48 +1,35 @@
 import React, { useMemo, useState } from "react";
-import {
-  FlatList, Pressable, SafeAreaView, StyleSheet,
-  Text, TextInput, View
-} from "react-native";
+import { FlatList, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { HUB_GROUPS, LINQA_HUB_SERVICES } from "../navigation/information-architecture";
 
-const DATA = [
-  { id: "1", type: "People", title: "Avery Chen", subtitle: "Active now" },
-  { id: "2", type: "Chats", title: "Design Sync", subtitle: "Group conversation" },
-  { id: "3", type: "Calls", title: "Priya Nair", subtitle: "Missed audio call" },
-  { id: "4", type: "Media", title: "Launch wireframes", subtitle: "6 images" },
-  { id: "5", type: "Communities", title: "Product Circle", subtitle: "128 members" },
-];
-
-const FILTERS = ["All", "People", "Chats", "Calls", "Media", "Communities"];
+const FILTERS = ["All", ...HUB_GROUPS] as const;
 
 export default function SearchScreen() {
+  const router = useRouter();
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("All");
+  const [filter, setFilter] = useState<(typeof FILTERS)[number]>("All");
 
-  const results = useMemo(() => DATA.filter((item) => {
+  const results = useMemo(() => LINQA_HUB_SERVICES.filter((item) => {
     const q = query.trim().toLowerCase();
-    return (!q || item.title.toLowerCase().includes(q)) &&
-      (filter === "All" || item.type === filter);
+    return (!q || `${item.title} ${item.description} ${item.group}`.toLowerCase().includes(q)) &&
+      (filter === "All" || item.group === filter);
   }), [query, filter]);
 
   return (
     <SafeAreaView style={styles.screen}>
       <View style={styles.header}>
-        <Ionicons name="arrow-back" size={24} color="#AFC2CF" />
-        <Text style={styles.title}>Search</Text>
+        <Pressable onPress={() => router.back()} accessibilityLabel="Go back">
+          <Ionicons name="arrow-back" size={24} color="#222640" />
+        </Pressable>
+        <Text style={styles.title}>Search Linqa</Text>
         <View style={{ width: 24 }} />
       </View>
 
       <View style={styles.search}>
         <Ionicons name="search" size={19} color="#738EA1" />
-        <TextInput
-          autoFocus
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Search Linqa"
-          placeholderTextColor="#738EA1"
-          style={styles.input}
-        />
+        <TextInput autoFocus value={query} onChangeText={setQuery} placeholder="Search services, settings and actions" placeholderTextColor="#81879D" style={styles.input} />
       </View>
 
       <FlatList
@@ -52,30 +39,27 @@ export default function SearchScreen() {
         contentContainerStyle={styles.filters}
         showsHorizontalScrollIndicator={false}
         renderItem={({ item }) => (
-          <Pressable
-            onPress={() => setFilter(item)}
-            style={[styles.chip, filter === item && styles.chipActive]}
-          >
-            <Text style={[styles.chipText, filter === item && styles.chipTextActive]}>
-              {item}
-            </Text>
+          <Pressable onPress={() => setFilter(item)} style={[styles.chip, filter === item && styles.chipActive]}>
+            <Text style={[styles.chipText, filter === item && styles.chipTextActive]}>{item}</Text>
           </Pressable>
         )}
       />
 
       <FlatList
         data={results}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.key}
+        keyboardShouldPersistTaps="handled"
+        ListEmptyComponent={<Text style={styles.empty}>No matching Linqa service.</Text>}
         renderItem={({ item }) => (
-          <Pressable style={styles.row}>
-            <View style={styles.icon}>
-              <Ionicons name="search-outline" size={20} color="#12D6AE" />
+          <Pressable style={styles.row} onPress={() => router.push(item.route as never)} accessibilityRole="button">
+            <View style={[styles.icon, { backgroundColor: `${item.color}16` }]}>
+              <Ionicons name={item.icon} size={21} color={item.color} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.resultTitle}>{item.title}</Text>
-              <Text style={styles.resultSubtitle}>{item.type} · {item.subtitle}</Text>
+              <Text style={styles.resultSubtitle}>{item.group} · {item.description}</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#466176" />
+            <Ionicons name="chevron-forward" size={18} color="#9095A9" />
           </Pressable>
         )}
       />
@@ -84,31 +68,19 @@ export default function SearchScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#001520", paddingHorizontal: 16 },
-  header: {
-    paddingTop: 18, paddingBottom: 16, flexDirection: "row",
-    alignItems: "center", justifyContent: "space-between"
-  },
-  title: { color: "#F4FAFF", fontSize: 20, fontWeight: "800" },
-  search: {
-    height: 50, borderRadius: 15, backgroundColor: "#082536", borderWidth: 1,
-    borderColor: "#17445A", flexDirection: "row", alignItems: "center",
-    paddingHorizontal: 14, gap: 10
-  },
-  input: { flex: 1, color: "white", fontSize: 15 },
+  screen: { flex: 1, backgroundColor: "#F7F8FC", paddingHorizontal: 16 },
+  header: { paddingTop: 18, paddingBottom: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  title: { color: "#171A35", fontSize: 20, fontWeight: "800" },
+  search: { height: 50, borderRadius: 15, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E3E5EE", flexDirection: "row", alignItems: "center", paddingHorizontal: 14, gap: 10 },
+  input: { flex: 1, color: "#171A35", fontSize: 15 },
   filters: { gap: 8, paddingVertical: 14 },
-  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: "#082536" },
-  chipActive: { backgroundColor: "#0A4D4A", borderWidth: 1, borderColor: "#12D6AE" },
-  chipText: { color: "#7F98AA", fontSize: 12, fontWeight: "700" },
-  chipTextActive: { color: "#12D6AE" },
-  row: {
-    minHeight: 72, borderBottomWidth: 1, borderBottomColor: "#123649",
-    flexDirection: "row", alignItems: "center", gap: 12
-  },
-  icon: {
-    width: 44, height: 44, borderRadius: 13, backgroundColor: "#073B3C",
-    alignItems: "center", justifyContent: "center"
-  },
-  resultTitle: { color: "#EEF8FE", fontSize: 15, fontWeight: "800" },
-  resultSubtitle: { color: "#718A9C", fontSize: 12, marginTop: 3 }
+  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E7F0" },
+  chipActive: { backgroundColor: "#EEEAFE", borderColor: "#5B4CFF" },
+  chipText: { color: "#7F849A", fontSize: 12, fontWeight: "700" },
+  chipTextActive: { color: "#5B4CFF" },
+  row: { minHeight: 72, borderBottomWidth: 1, borderBottomColor: "#E7E9F1", flexDirection: "row", alignItems: "center", gap: 12 },
+  icon: { width: 44, height: 44, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  resultTitle: { color: "#1A1D38", fontSize: 15, fontWeight: "800" },
+  resultSubtitle: { color: "#747A91", fontSize: 12, marginTop: 3 },
+  empty: { color: "#73798E", textAlign: "center", marginTop: 40 }
 });

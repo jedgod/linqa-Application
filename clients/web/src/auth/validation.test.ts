@@ -5,6 +5,7 @@ describe("auth validation", () => {
   it("accepts a valid email", () => {
     const result = validateIdentifierInput(" User@Example.COM ");
     expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
     expect(result.normalized).toBe("user@example.com");
     expect(result.type).toBe("EMAIL");
   });
@@ -12,6 +13,7 @@ describe("auth validation", () => {
   it("accepts a valid E.164 phone number", () => {
     const result = validateIdentifierInput("+1 (240) 555-0198");
     expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
     expect(result.normalized).toBe("+12405550198");
     expect(result.type).toBe("PHONE");
   });
@@ -19,6 +21,7 @@ describe("auth validation", () => {
   it("rejects an invalid phone number format", () => {
     const result = validateIdentifierInput("1234");
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected phone validation to fail");
     expect(result.error).toContain("country code");
   });
 
@@ -30,6 +33,7 @@ describe("auth validation", () => {
   it("rejects a short OTP", () => {
     const result = validateOtpInput("12345");
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected OTP validation to fail");
     expect(result.error).toContain("6-digit");
   });
 });

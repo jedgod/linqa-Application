@@ -1,36 +1,28 @@
-﻿================================================================================================================
-PACK STATUS: LIVE-SOURCE CANONICAL ALIGNMENT
-================================================================================================================
+LINQA LIVE-SOURCE COMPATIBILITY MANIFEST
+Compatibility path: CountryLinqa™/CountryLinqa_FINAL_SOPHISTICATED_COMPREHENSIVE_CODE.txt
 
-This pack has been cleaned up to point to the real live implementation sources and to remove stale duplicate references.
+STATUS
+This notebook is reference-only. It does not contain executable source and must
+not be copied over the repository. The running implementation and its tests are
+the sole source of truth. This unique manifest supersedes the former duplicated
+auth-only pointer that appeared under unrelated pack names.
 
-PRIMARY LIVE SOURCES
-- server/src/auth/normalize.ts
-- server/src/routes/auth.ts
-- server/src/services/auth-challenge.service.ts
-- server/src/services/session.service.ts
-- clients/android/app/src/main/java/com/linqa/app/ui/screens/LoginScreen.kt
-- clients/android/app/src/main/java/com/linqa/app/ui/screens/OtpVerifyScreen.kt
-- clients/android/app/src/main/java/com/linqa/app/network/AuthApi.kt
-- clients/android/app/src/main/java/com/linqa/app/ui/MainActivity.kt
-- clients/web/src/auth/validation.ts
-- clients/mobile/auth/validation.ts
+CANONICAL LIVE SOURCES
+- clients/mobile/app/countrylinqa/
+- clients/mobile/app/settings/countrylinqa.tsx
+- clients/mobile/services/countrylinqa.service.ts
+- server/src/routes/countrylinqa/
+- server/src/services/countrylinqa/
+- certification/countrylinqa/
 
-CANONICAL RULES
-- The server contract is the source of truth for identifier validation.
-- Email must be normalized to lowercase and validated as a real email.
-- Phone numbers must be normalized to an E.164-style format, e.g. +15555550100.
-- Challenge generation returns a single-use challengeId and 6-digit code flow.
-- Verification returns either accountExists:true with temporarySession or registrationRequired:true.
-- Any stale duplicate or outdated pack copy is superseded by the running implementation.
+AUTHENTICATION CONTRACT
+- Server normalization, challenge purpose enforcement, session rotation, scopes,
+  device enrollment, and production Ed25519 verification remain authoritative.
+- UI modules obtain the current access token from the shared account/session stack;
+  they do not implement parallel login, token, user, or database models.
 
-DUPLICATE CLEANUP
-- Repeated pack references and duplicate implementation copies were removed from this page.
-- This text file now reflects the live codebase rather than legacy pack content.
-
-LIVE-SOURCE AUTH STACK
-This pack is no longer treated as a standalone source of truth.
-The current canonical implementation is in the active app/server code, and the UI/logic pack content should be treated as reference material only unless it is intentionally wired into the live project.
-================================================================================================================
-END OF CLEANUP PASS
-================================================================================================================
+DUPLICATE POLICY
+- Do not create another backend, auth stack, model tree, migration history, or
+  generated UniFFI/JNA binding. Extend the canonical live sources additively.
+- Reference images describe layout and workflow; live capability/readiness APIs
+  determine whether provider-dependent controls are enabled.

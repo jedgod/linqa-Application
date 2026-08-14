@@ -1,90 +1,13 @@
-import { useMemo, useState } from "react";
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
+import { CountryLinqaService, type CountryLinqaPreferences, type DiscoveryMode } from "../../services/countrylinqa.service";
+import { accessTokenProvider } from "../../services/session";
 
-const purple = "#6f5ae6";
-const text = "#1f2937";
-const softText = "#64748b";
-const border = "#dfe5f0";
-const bg = "#f5f6fa";
-
-export default function CountryLinqaSettings() {
-  const router = useRouter();
-  const [mode, setMode] = useState("My Country Only");
-
-  return (
-    <SafeAreaView style={styles.screen}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} accessibilityLabel="Back">
-          <Text style={styles.back}>‹</Text>
-        </Pressable>
-        <Text style={styles.headerTitle}>Discovery Settings</Text>
-      </View>
-
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.sectionTitle}>Current Mode</Text>
-        <View style={styles.modeCard}>
-          <Text style={styles.modeLabel}>My Country Only</Text>
-          <Text style={styles.modeMeta}>United States</Text>
-          <Text style={styles.changeLink}>Change</Text>
-        </View>
-
-        <Text style={styles.sectionTitle}>Privacy</Text>
-        {[
-          ["Show my city", false],
-          ["Show my state", true],
-          ["Show my country", true],
-        ].map(([label, active]) => (
-          <View key={label as string} style={styles.toggleRow}>
-            <Text style={styles.toggleText}>{label as string}</Text>
-            <View style={[styles.toggle, active && styles.toggleOn]}>
-              <View style={[styles.toggleKnob, active && styles.toggleKnobOn]} />
-            </View>
-          </View>
-        ))}
-
-        <Text style={styles.sectionTitle}>Who Can See Me</Text>
-        <View style={styles.selectCard}>
-          <Text style={styles.selectText}>Everyone</Text>
-          <Text style={styles.chevron}>›</Text>
-        </View>
-
-        <Text style={styles.sectionTitle}>Advanced</Text>
-        <View style={styles.toggleRow}>
-          <Text style={styles.toggleText}>Hide my location</Text>
-          <View style={styles.toggle}>
-            <View style={styles.toggleKnob} />
-          </View>
-        </View>
-
-        <Pressable style={styles.primaryButton}>
-          <Text style={styles.primaryButtonText}>Save Changes</Text>
-        </Pressable>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: bg },
-  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 18, paddingTop: 24, paddingBottom: 8 },
-  back: { color: text, fontSize: 30, fontWeight: "700" },
-  headerTitle: { flex: 1, color: purple, fontSize: 22, fontWeight: "900", letterSpacing: -0.35 },
-  content: { paddingHorizontal: 18, paddingTop: 8, paddingBottom: 32 },
-  sectionTitle: { color: text, fontSize: 13, fontWeight: "800", marginTop: 18, marginBottom: 8, letterSpacing: 0.1 },
-  modeCard: { backgroundColor: "#fff", borderWidth: 1, borderColor: border, borderRadius: 14, padding: 12, position: "relative", shadowColor: "#000", shadowOpacity: 0.02, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
-  modeLabel: { color: text, fontSize: 18, fontWeight: "800", letterSpacing: -0.2 },
-  modeMeta: { color: softText, fontSize: 12, marginTop: 6 },
-  changeLink: { position: "absolute", right: 12, top: 18, color: purple, fontSize: 12, fontWeight: "800" },
-  toggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10 },
-  toggleText: { color: text, fontSize: 15, fontWeight: "600" },
-  toggle: { width: 42, height: 22, borderRadius: 18, backgroundColor: "#d9dfe8", padding: 2 },
-  toggleOn: { backgroundColor: purple },
-  toggleKnob: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#fff", marginTop: 3, marginLeft: 2 },
-  toggleKnobOn: { marginLeft: 22 },
-  selectCard: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#fff", borderWidth: 1, borderColor: border, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 16 },
-  selectText: { color: text, fontSize: 16, fontWeight: "700" },
-  chevron: { color: softText, fontSize: 18 },
-  primaryButton: { marginTop: 24, width: "100%", backgroundColor: purple, borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center", shadowColor: "#6f5ae6", shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 2 },
-  primaryButtonText: { color: "#fff", fontSize: 16, fontWeight: "900", letterSpacing: 0.1 }
-});
+const API=process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const MODES:Array<{key:DiscoveryMode;label:string;detail:string}>=[{key:"MY_COUNTRY",label:"My Country",detail:"People and activity in your verified country"},{key:"SELECTED_COUNTRIES",label:"Selected Countries",detail:"Choose up to your entitled limit"},{key:"REGION",label:"Region",detail:"Discover within selected region codes"},{key:"GLOBAL",label:"Worldwide",detail:"Requires the applicable entitlement"}];
+export default function CountryLinqaSettings(){const router=useRouter();const client=useMemo(()=>new CountryLinqaService(API,()=>accessTokenProvider.getAccessToken()),[]);const [prefs,setPrefs]=useState<CountryLinqaPreferences|null>(null);const [mode,setMode]=useState<DiscoveryMode>("MY_COUNTRY");const [codes,setCodes]=useState("");const [regions,setRegions]=useState("");const [precision,setPrecision]=useState<"COUNTRY"|"STATE"|"CITY">("COUNTRY");const [showCity,setShowCity]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState<string|null>(null);const [saved,setSaved]=useState(false);
+ useEffect(()=>{client.preferences().then(p=>{setPrefs(p);setMode(p.mode);setCodes(p.selectedCountries.join(", "));setRegions(p.selectedRegions.join(", "));setPrecision(p.locationPrecision);setShowCity(p.showCity)}).catch(e=>setError(e instanceof Error?e.message:"Unable to load settings"))},[client]);
+ async function save(){setBusy(true);setSaved(false);setError(null);try{const split=(v:string)=>v.split(",").map(x=>x.trim().toUpperCase()).filter(Boolean);const next=await client.savePreferences({mode,selectedCountries:mode==="SELECTED_COUNTRIES"?split(codes):[],selectedRegions:mode==="REGION"?split(regions):[],locationPrecision:precision,showCity:precision==="CITY"&&showCity});setPrefs(next);setSaved(true)}catch(e){setError(e instanceof Error?e.message:"Unable to save settings")}finally{setBusy(false)}}
+ return <SafeAreaView style={s.screen}><View style={s.header}><Pressable onPress={()=>router.back()}><Text style={s.back}>‹</Text></Pressable><Text style={s.title}>Discovery Settings</Text></View><ScrollView contentContainerStyle={s.content}>{prefs===null&&!error?<ActivityIndicator color="#6558DC"/>:<><Text style={s.section}>Verified country</Text><View style={s.card}><Text style={s.cardTitle}>{prefs?.verifiedCountryCode??"Not verified"}</Text><Text style={s.meta}>State: {prefs?.verificationState??"UNKNOWN"}. Country changes require verification and step-up.</Text></View><Text style={s.section}>Discovery scope</Text>{MODES.map(m=><Pressable key={m.key} style={[s.mode,mode===m.key&&s.modeOn]} onPress={()=>setMode(m.key)}><View style={s.radio}>{mode===m.key&&<View style={s.radioOn}/>}</View><View style={{flex:1}}><Text style={s.modeTitle}>{m.label}</Text><Text style={s.meta}>{m.detail}</Text></View></Pressable>)}{mode==="SELECTED_COUNTRIES"&&<TextInput value={codes} onChangeText={setCodes} placeholder="Country codes, e.g. US, GH, GB" autoCapitalize="characters" style={s.input}/>} {mode==="REGION"&&<TextInput value={regions} onChangeText={setRegions} placeholder="Region codes, comma separated" autoCapitalize="characters" style={s.input}/>}<Text style={s.section}>Location privacy</Text><View style={s.segment}>{(["COUNTRY","STATE","CITY"] as const).map(x=><Pressable key={x} style={[s.segmentItem,precision===x&&s.segmentOn]} onPress={()=>setPrecision(x)}><Text style={s.segmentText}>{x}</Text></Pressable>)}</View><View style={s.toggle}><Text style={s.modeTitle}>Show my city</Text><Switch value={showCity&&precision==="CITY"} onValueChange={setShowCity} disabled={precision!=="CITY"} trackColor={{true:"#6558DC"}}/></View>{error&&<Text style={s.error}>{error.replace(/_/g," ")}</Text>}{saved&&<Text style={s.saved}>Preferences saved.</Text>}<Pressable style={s.button} onPress={save} disabled={busy}>{busy?<ActivityIndicator color="white"/>:<Text style={s.buttonText}>Save Changes</Text>}</Pressable></>}</ScrollView></SafeAreaView>}
+const s=StyleSheet.create({screen:{flex:1,backgroundColor:"#F6F7FB"},header:{flexDirection:"row",alignItems:"center",padding:18,gap:12},back:{fontSize:34,color:"#101828"},title:{fontSize:22,fontWeight:"900",color:"#6558DC"},content:{padding:18,paddingBottom:50},section:{fontWeight:"900",color:"#101828",marginTop:18,marginBottom:9},card:{backgroundColor:"white",padding:14,borderRadius:14,borderWidth:1,borderColor:"#E1E6EF"},cardTitle:{fontSize:18,fontWeight:"900",color:"#101828"},meta:{fontSize:12,color:"#667085",lineHeight:18,marginTop:3},mode:{flexDirection:"row",alignItems:"center",gap:12,backgroundColor:"white",borderWidth:1,borderColor:"#E1E6EF",borderRadius:14,padding:14,marginBottom:8},modeOn:{borderColor:"#6558DC",backgroundColor:"#F1EEFF"},radio:{width:20,height:20,borderRadius:10,borderWidth:2,borderColor:"#6558DC",alignItems:"center",justifyContent:"center"},radioOn:{width:10,height:10,borderRadius:5,backgroundColor:"#6558DC"},modeTitle:{fontWeight:"800",color:"#101828"},input:{height:50,borderWidth:1,borderColor:"#DDE3EC",borderRadius:14,backgroundColor:"white",paddingHorizontal:14,marginTop:4},segment:{flexDirection:"row",backgroundColor:"white",padding:4,borderRadius:14},segmentItem:{flex:1,padding:10,alignItems:"center",borderRadius:10},segmentOn:{backgroundColor:"#E9E6FF"},segmentText:{fontSize:11,fontWeight:"800",color:"#344054"},toggle:{flexDirection:"row",alignItems:"center",justifyContent:"space-between",marginTop:14},error:{color:"#B42318",marginTop:14},saved:{color:"#16815E",fontWeight:"800",marginTop:14},button:{height:54,backgroundColor:"#6558DC",borderRadius:14,alignItems:"center",justifyContent:"center",marginTop:22},buttonText:{color:"white",fontWeight:"900"}});

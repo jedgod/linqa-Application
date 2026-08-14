@@ -1,73 +1,12 @@
-import { useState } from "react";
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
+import { LinqaSendService } from "../../services/linqasend.service";
+import { accessTokenProvider } from "../../services/session";
 
-const cards = [
-  { brand: "Visa", number: "•••• 4242", expires: "Expires 12/27", selected: true },
-  { brand: "Mastercard", number: "•••• 1111", expires: "Expires 08/26", selected: false },
-  { brand: "Visa", number: "•••• 5678", expires: "Expires 11/25", selected: false }
-];
-
-export default function LinqaSendPaymentMethods() {
-  const router = useRouter();
-  const [selected, setSelected] = useState("Visa •••• 4242");
-  const [cardNo, setCardNo] = useState("4242 4242 4242 4242");
-
-  return (
-    <SafeAreaView style={styles.screen}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} accessibilityLabel="Back">
-          <Text style={styles.back}>←</Text>
-        </Pressable>
-        <Text style={styles.headerTitle}>Payment Methods</Text>
-      </View>
-
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.sectionTitle}>Debit/Credit Cards</Text>
-
-        {cards.map((card) => (
-          <Pressable key={card.number} style={[styles.cardRow, selected === `${card.brand} ${card.number}` && styles.cardRowSelected]} onPress={() => setSelected(`${card.brand} ${card.number}`)}>
-            <View style={styles.cardBrand}><Text style={styles.cardBrandText}>{card.brand.slice(0, 4)}</Text></View>
-            <View style={styles.cardMeta}>
-              <Text style={styles.cardName}>{card.brand} {card.number}</Text>
-              <Text style={styles.cardExpire}>{card.expires}</Text>
-            </View>
-            <Text style={[styles.radio, selected === `${card.brand} ${card.number}` && styles.radioSelected]}>{selected === `${card.brand} ${card.number}` ? "✓" : ""}</Text>
-          </Pressable>
-        ))}
-
-        <Pressable style={styles.linkRow} onPress={() => router.push("/linqasend/payment-methods")}>
-          <Text style={styles.linkPlus}>＋</Text>
-          <Text style={styles.linkText}>Add New Card</Text>
-        </Pressable>
-
-        <View style={styles.securityBox}>
-          <Text style={styles.securityText}>Your cards are secure and encrypted.</Text>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#F4F6FA" },
-  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 18, paddingTop: 22, paddingBottom: 8 },
-  back: { color: "#1F2A37", fontSize: 28, fontWeight: "700" },
-  headerTitle: { flex: 1, color: "#111827", fontSize: 22, fontWeight: "800" },
-  content: { paddingHorizontal: 18, paddingTop: 10, paddingBottom: 28 },
-  sectionTitle: { color: "#101828", fontSize: 18, fontWeight: "800", marginBottom: 14 },
-  cardRow: { backgroundColor: "#FFFFFF", borderRadius: 18, borderWidth: 1, borderColor: "#E5EAF2", paddingHorizontal: 12, paddingVertical: 14, flexDirection: "row", alignItems: "center", marginBottom: 12 },
-  cardRowSelected: { borderColor: "#4F46E5", backgroundColor: "#EEF2FF" },
-  cardBrand: { width: 42, height: 28, borderRadius: 8, backgroundColor: "#EAEAFB", justifyContent: "center", alignItems: "center" },
-  cardBrandText: { color: "#1F2A37", fontWeight: "800", fontSize: 10 },
-  cardMeta: { flex: 1, marginLeft: 12 },
-  cardName: { color: "#101828", fontSize: 15, fontWeight: "700" },
-  cardExpire: { color: "#667085", fontSize: 11, marginTop: 3 },
-  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: "#D0D8E2", justifyContent: "center", alignItems: "center", color: "#4F46E5" },
-  radioSelected: { borderColor: "#4F46E5", backgroundColor: "#4F46E5", color: "#fff" },
-  linkRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 18, marginBottom: 18 },
-  linkPlus: { color: "#4F46E5", fontSize: 26, fontWeight: "700" },
-  linkText: { color: "#1F2A37", fontSize: 16, fontWeight: "700" },
-  securityBox: { backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E4E8F0", padding: 14 },
-  securityText: { color: "#667085", textAlign: "center", fontWeight: "700" }
-});
+const API=process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+type Method={id:string;type:string;last4:string|null;verificationStatus:string};
+export default function LinqaSendPaymentMethods(){const router=useRouter();const client=useMemo(()=>new LinqaSendService(API,()=>accessTokenProvider.getAccessToken()),[]);const [items,setItems]=useState<Method[]|null>(null);const [type,setType]=useState<"BANK_ACCOUNT"|"MOBILE_WALLET">("BANK_ACCOUNT");const [reference,setReference]=useState("");const [last4,setLast4]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState<string|null>(null);const load=()=>client.listPaymentMethods().then(r=>setItems(r.items)).catch(e=>{setItems([]);setError(e instanceof Error?e.message:"Unable to load funding sources")});useEffect(()=>{void load()},[client]);
+ async function add(){if(reference.trim().length<4){setError("Enter the opaque provider reference returned by your bank or wallet provider.");return}setBusy(true);setError(null);try{await client.addPaymentMethod({type,reference:reference.trim(),...(last4.length===4?{last4}:{})});setReference("");setLast4("");await load()}catch(e){setError(e instanceof Error?e.message:"Unable to add funding source")}finally{setBusy(false)}}
+ return <SafeAreaView style={s.screen}><View style={s.header}><Pressable onPress={()=>router.back()}><Text style={s.back}>‹</Text></Pressable><Text style={s.title}>Funding Sources</Text></View><ScrollView contentContainerStyle={s.content}><Text style={s.section}>Verified sources</Text>{items===null?<ActivityIndicator color="#5146E5"/>:items.length===0?<Text style={s.muted}>No funding source on file.</Text>:items.map(x=><View key={x.id} style={s.row}><View style={{flex:1}}><Text style={s.rowTitle}>{x.type.replace(/_/g," ")}</Text><Text style={s.muted}>{x.last4?`•••• ${x.last4}`:"Tokenized reference"}</Text></View><Text style={s.verified}>{x.verificationStatus}</Text></View>)}<Text style={s.section}>Add a source</Text><View style={s.types}><Pressable style={[s.pill,type==="BANK_ACCOUNT"&&s.pillOn]} onPress={()=>setType("BANK_ACCOUNT")}><Text style={s.pillText}>Bank Account</Text></Pressable><Pressable style={[s.pill,type==="MOBILE_WALLET"&&s.pillOn]} onPress={()=>setType("MOBILE_WALLET")}><Text style={s.pillText}>Mobile Wallet</Text></Pressable></View><TextInput value={reference} onChangeText={setReference} placeholder="Provider token / account reference" autoCapitalize="none" style={s.input}/><TextInput value={last4} onChangeText={setLast4} placeholder="Last 4 (optional)" keyboardType="number-pad" maxLength={4} style={s.input}/><View style={s.warning}><Text style={s.warningText}>Never enter a card number, CVV, PIN, or password. Cards require a PCI-hosted tokenization provider and are intentionally unavailable until one is configured.</Text></View>{error&&<Text style={s.error}>{error}</Text>}<Pressable style={s.button} onPress={add} disabled={busy}>{busy?<ActivityIndicator color="white"/>:<Text style={s.buttonText}>Add Funding Source</Text>}</Pressable></ScrollView></SafeAreaView>}
+const s=StyleSheet.create({screen:{flex:1,backgroundColor:"#F6F7FB"},header:{flexDirection:"row",alignItems:"center",padding:18,gap:12},back:{fontSize:34,color:"#101828"},title:{fontSize:22,fontWeight:"900",color:"#101828"},content:{padding:18},section:{fontWeight:"900",fontSize:16,color:"#101828",marginVertical:14},muted:{color:"#667085",fontSize:12,marginTop:4},row:{flexDirection:"row",alignItems:"center",backgroundColor:"white",borderRadius:14,borderWidth:1,borderColor:"#E1E6EF",padding:14,marginBottom:10},rowTitle:{fontWeight:"800",color:"#101828"},verified:{color:"#16815E",fontWeight:"800",fontSize:11},types:{flexDirection:"row",gap:8},pill:{padding:12,borderRadius:12,borderWidth:1,borderColor:"#DDE3EC",backgroundColor:"white"},pillOn:{borderColor:"#5146E5",backgroundColor:"#ECEBFF"},pillText:{fontWeight:"800",color:"#344054"},input:{height:50,borderWidth:1,borderColor:"#DDE3EC",borderRadius:14,backgroundColor:"white",paddingHorizontal:14,marginTop:12},warning:{backgroundColor:"#FFF7E8",padding:14,borderRadius:14,marginTop:14},warningText:{color:"#7A4A00",fontSize:12,lineHeight:18},error:{color:"#B42318",marginTop:12},button:{height:54,backgroundColor:"#5146E5",borderRadius:14,alignItems:"center",justifyContent:"center",marginTop:18},buttonText:{color:"white",fontWeight:"900"}});

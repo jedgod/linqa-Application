@@ -14,6 +14,42 @@ import { AccountSessionStore } from "../account/AccountSessionStore";
 import { setActiveAccountSessionResolver } from "../services/session";
 
 const sessionStore = new AccountSessionStore(new AccountSecureStorage());
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const refreshes = new Map<string, Promise<Awaited<ReturnType<typeof sessionStore.load>>>>();
+
+async function loadFreshSession(userId: string) {
+  const stored = await sessionStore.load(userId);
+  if (!stored || new Date(stored.expiresAt).getTime() > Date.now() + 30_000) return stored;
+
+  const existing = refreshes.get(userId);
+  if (existing) return existing;
+  const refresh = (async () => {
+    const response = await fetch(`${API_BASE_URL}/v1/auth/sessions/refresh`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refreshToken: stored.refreshToken })
+    });
+    if (!response.ok) {
+      await sessionStore.remove(userId);
+      return null;
+    }
+    const next = await response.json() as {
+      accessToken: string;
+      accessTokenExpiresIn: number;
+      refreshToken: string;
+    };
+    const session = {
+      ...stored,
+      accessToken: next.accessToken,
+      refreshToken: next.refreshToken,
+      expiresAt: new Date(Date.now() + next.accessTokenExpiresIn * 1000).toISOString()
+    };
+    await sessionStore.save(session);
+    return session;
+  })().finally(() => refreshes.delete(userId));
+  refreshes.set(userId, refresh);
+  return refresh;
+}
 
 /**
  * Bridges the AccountProvider React context to the module-level
@@ -31,7 +67,7 @@ function AccountSessionBridge() {
       setActiveAccountSessionResolver(null);
       return;
     }
-    setActiveAccountSessionResolver(() => sessionStore.load(active.userId));
+    setActiveAccountSessionResolver(() => loadFreshSession(active.userId));
     return () => setActiveAccountSessionResolver(null);
   }, [active, loaded]);
 
@@ -62,6 +98,7 @@ export default function RootLayout() {
         <Stack.Screen name="countrylinqa/world" />
         <Stack.Screen name="countrylinqa/full-flow" />
         <Stack.Screen name="countrylinqa/list" />
+        <Stack.Screen name="countrylinqa/create" options={{ presentation: "modal" }} />
         <Stack.Screen name="modules/file-vault" />
         <Stack.Screen name="linqasend/index" />
         <Stack.Screen name="linqasend/recipients" />

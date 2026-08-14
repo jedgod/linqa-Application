@@ -33,6 +33,13 @@ const recommendationEventSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional()
 });
 
+const createPostSchema = z.object({ body: z.string().trim().min(1).max(5000) });
+const createEventSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  startsAt: z.coerce.date().refine((value) => value.getTime() > Date.now(), "event must start in the future"),
+  city: z.string().trim().max(120).optional()
+});
+
 export async function registerCountryLinqaGoLiveRoutes(app: FastifyInstance, config: AppConfig, db: Database) {
   const auth = createAuthenticator(config);
 
@@ -46,6 +53,42 @@ export async function registerCountryLinqaGoLiveRoutes(app: FastifyInstance, con
         cursor: z.string().uuid().optional()
       }).parse(request.query);
       return getCountryFeed(db, p.userId, query.limit, query.cursor);
+    })
+  );
+
+  app.post(
+    "/v1/countrylinqa/golive/posts",
+    withErrors(async (request, reply) => {
+      const p = await auth(request);
+      requireScope(p, "countrylinqa:write");
+      const body = createPostSchema.parse(request.body);
+      const inserted = await db.query(
+        `INSERT INTO posts (author_id,body,status,country_code,region_code)
+         SELECT u.id,$2,'PUBLISHED',u.verified_country_code,c.region_code
+         FROM users u LEFT JOIN countries c ON c.code=u.verified_country_code WHERE u.id=$1
+         RETURNING id,body,status,country_code AS "countryCode",region_code AS "regionCode",created_at AS "createdAt"`,
+        [p.userId, body.body]
+      );
+      if (inserted.rowCount !== 1) return reply.code(404).send({ error: "account_not_found" });
+      return reply.code(201).send(inserted.rows[0]);
+    })
+  );
+
+  app.post(
+    "/v1/countrylinqa/golive/events",
+    withErrors(async (request, reply) => {
+      const p = await auth(request);
+      requireScope(p, "countrylinqa:write");
+      const body = createEventSchema.parse(request.body);
+      const inserted = await db.query(
+        `INSERT INTO events (owner_user_id,title,starts_at,status,country_code,region_code,city)
+         SELECT u.id,$2,$3,'PUBLISHED',u.verified_country_code,c.region_code,$4
+         FROM users u LEFT JOIN countries c ON c.code=u.verified_country_code WHERE u.id=$1
+         RETURNING id,title,starts_at AS "startsAt",status,country_code AS "countryCode",region_code AS "regionCode",city`,
+        [p.userId, body.title, body.startsAt, body.city ?? null]
+      );
+      if (inserted.rowCount !== 1) return reply.code(404).send({ error: "account_not_found" });
+      return reply.code(201).send(inserted.rows[0]);
     })
   );
 

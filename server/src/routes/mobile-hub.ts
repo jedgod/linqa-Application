@@ -3,9 +3,54 @@ import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
 import type { RealtimeHub } from "../realtime/hub.js";
+import { createAuthenticator, requireScope } from "../auth/jwt.js";
 
 const DEMO_USER_ID = "00000000-0000-4000-8000-000000000001";
 const DEMO_DEVICE_ID = "10000000-0000-4000-8000-000000000001";
+
+async function loadHubSnapshot(db: Database, userId: string, deviceId?: string) {
+  const [profile, contacts, conversations, statuses, calls, communities, media, devices] = await Promise.all([
+    db.query(`SELECT u.id, COALESCE(p.display_name, 'Linqa User') AS display_name, p.bio
+      FROM users u LEFT JOIN user_profiles p ON p.user_id=u.id WHERE u.id=$1`, [userId]),
+    db.query(`SELECT DISTINCT p.user_id AS id, p.display_name,
+      EXISTS (SELECT 1 FROM devices d WHERE d.user_id=p.user_id AND d.status='ACTIVE'
+        AND d.last_seen_at > now() - interval '15 minutes') AS online,
+      s.body AS status_body, s.created_at AS status_created_at
+      FROM conversation_members mine
+      JOIN conversation_members peer ON peer.conversation_id=mine.conversation_id
+        AND peer.user_id<>mine.user_id AND peer.removed_at IS NULL
+      JOIN user_profiles p ON p.user_id=peer.user_id
+      LEFT JOIN LATERAL (SELECT body,created_at FROM user_status_updates
+        WHERE user_id=p.user_id AND expires_at>now() ORDER BY created_at DESC LIMIT 1) s ON TRUE
+      WHERE mine.user_id=$1 AND mine.removed_at IS NULL ORDER BY p.display_name`, [userId]),
+    db.query(`SELECT c.id,c.conversation_type,c.display_title,c.last_message_preview,c.last_message_at,
+      cm.pinned,cm.muted,cm.unread_count,
+      COALESCE(array_agg(other.user_id) FILTER (WHERE other.user_id<>$1),'{}') AS participant_ids
+      FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id
+        AND cm.user_id=$1 AND cm.removed_at IS NULL
+      LEFT JOIN conversation_members other ON other.conversation_id=c.id AND other.removed_at IS NULL
+      WHERE c.archived_at IS NULL GROUP BY c.id,cm.pinned,cm.muted,cm.unread_count
+      ORDER BY cm.pinned DESC,c.last_message_at DESC NULLS LAST`, [userId]),
+    db.query(`SELECT id,body,visibility,expires_at,created_at FROM user_status_updates
+      WHERE user_id=$1 AND expires_at>now() ORDER BY created_at DESC LIMIT 10`, [userId]),
+    db.query(`SELECT ch.id,ch.direction,ch.call_type,ch.status,ch.duration_seconds,ch.created_at,
+      p.display_name AS peer_name FROM call_history ch LEFT JOIN user_profiles p ON p.user_id=ch.peer_user_id
+      WHERE ch.user_id=$1 ORDER BY ch.created_at DESC LIMIT 25`, [userId]),
+    db.query(`SELECT c.id,c.name,c.visibility,cm.role,c.created_at FROM communities c
+      JOIN community_memberships cm ON cm.community_id=c.id
+      WHERE cm.user_id=$1 AND cm.status='ACTIVE' AND c.status='ACTIVE' ORDER BY c.created_at DESC`, [userId]),
+    db.query(`SELECT m.id,m.media_type,m.starred,m.created_at,c.display_title AS conversation_title
+      FROM media_index m LEFT JOIN conversations c ON c.id=m.conversation_id
+      WHERE m.user_id=$1 AND (m.expires_at IS NULL OR m.expires_at>now())
+      ORDER BY m.created_at DESC LIMIT 50`, [userId]),
+    db.query(`SELECT id,device_name,platform,registered_at,last_seen_at,
+      ($2::uuid IS NOT NULL AND id=$2::uuid) AS is_current FROM devices
+      WHERE user_id=$1 AND status='ACTIVE' ORDER BY is_current DESC,last_seen_at DESC NULLS LAST`, [userId, deviceId ?? null])
+  ]);
+  return { generatedAt: new Date().toISOString(), profile: profile.rows[0], contacts: contacts.rows,
+    conversations: conversations.rows, statuses: statuses.rows, calls: calls.rows,
+    communities: communities.rows, media: media.rows, devices: devices.rows };
+}
 
 function requireDevelopmentClient(request: FastifyRequest): void {
   if (request.headers["x-linqa-demo-user"] !== "galaxy") {
@@ -116,6 +161,87 @@ export async function registerMobileHubRoutes(
   db: Database,
   hub: RealtimeHub
 ) {
+  const authenticate = createAuthenticator(config);
+
+  app.get("/v1/mobile-hub", async (request, reply) => {
+    try {
+      const principal = await authenticate(request);
+      requireScope(principal, "profile:read");
+      return await loadHubSnapshot(db, principal.userId, principal.deviceId);
+    } catch (error) {
+      request.log.warn({ err: error }, "mobile hub read rejected");
+      return reply.code(401).send({ error: "unauthenticated" });
+    }
+  });
+
+  app.post("/v1/mobile-hub/statuses", async (request, reply) => {
+    try {
+      const principal = await authenticate(request);
+      requireScope(principal, "status:write");
+      const body = z.object({ body: z.string().trim().min(1).max(280) }).parse(request.body);
+      const inserted = await db.query(`INSERT INTO user_status_updates (user_id,body) VALUES ($1,$2)
+        RETURNING id,body,visibility,expires_at,created_at`, [principal.userId, body.body]);
+      hub.sendToUser(principal.userId, { type: "mobile-hub.changed", resource: "status" });
+      return reply.code(201).send(inserted.rows[0]);
+    } catch (error) {
+      request.log.warn({ err: error }, "mobile status publish rejected");
+      return reply.code(400).send({ error: "invalid_status" });
+    }
+  });
+
+  app.post("/v1/mobile-hub/conversations", async (request, reply) => {
+    try {
+      const principal = await authenticate(request);
+      requireScope(principal, "messages:send");
+      const body = z.object({ recipientUserId: z.string().uuid() }).parse(request.body);
+      if (body.recipientUserId === principal.userId) return reply.code(400).send({ error: "invalid_recipient" });
+      const recipient = await db.query(`SELECT display_name FROM user_profiles WHERE user_id=$1`, [body.recipientUserId]);
+      if (recipient.rowCount !== 1) return reply.code(404).send({ error: "recipient_not_found" });
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+        const created = await client.query(`INSERT INTO conversations
+          (conversation_type,created_by_user_id,display_title,last_message_preview,last_message_at)
+          VALUES ('DIRECT',$1,$2,'New conversation',now()) RETURNING id`,
+          [principal.userId, recipient.rows[0].display_name]);
+        await client.query(`INSERT INTO conversation_members (conversation_id,user_id,role) VALUES
+          ($1,$2,'OWNER'),($1,$3,'MEMBER')`, [created.rows[0].id, principal.userId, body.recipientUserId]);
+        await client.query("COMMIT");
+        hub.sendToUser(principal.userId, { type: "mobile-hub.changed", resource: "conversation" });
+        return reply.code(201).send({ id: created.rows[0].id });
+      } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+    } catch (error) {
+      request.log.warn({ err: error }, "mobile conversation creation rejected");
+      return reply.code(400).send({ error: "invalid_conversation" });
+    }
+  });
+
+  app.post("/v1/mobile-hub/calls", async (request, reply) => {
+    try {
+      const principal = await authenticate(request);
+      requireScope(principal, "calls:write");
+      const body = z.object({ peerUserId: z.string().uuid(), callType: z.enum(["AUDIO", "VIDEO"]).default("AUDIO") }).parse(request.body);
+      const inserted = await db.query(`INSERT INTO call_history
+        (user_id,peer_user_id,direction,call_type,status,started_at,ended_at,duration_seconds)
+        VALUES ($1,$2,'OUTGOING',$3,'CANCELLED',now(),now(),0) RETURNING id,created_at`,
+        [principal.userId, body.peerUserId, body.callType]);
+      hub.sendToUser(principal.userId, { type: "mobile-hub.changed", resource: "call" });
+      return reply.code(201).send(inserted.rows[0]);
+    } catch (error) {
+      request.log.warn({ err: error }, "mobile call creation rejected");
+      return reply.code(400).send({ error: "invalid_call" });
+    }
+  });
+
+  app.get("/v1/mobile-hub/live", { websocket: true }, async (socket, request) => {
+    try {
+      const principal = await authenticate(request);
+      const remove = hub.add({ socket, userId: principal.userId, deviceId: principal.deviceId ?? "unbound" });
+      socket.send(JSON.stringify({ type: "ready" })); socket.on("close", remove); socket.on("error", remove);
+      socket.on("message", (raw) => { if (raw.toString() === "ping") socket.send("pong"); });
+    } catch { socket.close(4001, "authentication required"); }
+  });
+
   if (config.NODE_ENV === "production") return;
 
   app.get("/v1/dev/mobile-hub", async (request, reply) => {

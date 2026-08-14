@@ -101,7 +101,11 @@ private fun LinqaApp() {
     val context = LocalContext.current
     val sessionStore = remember { SessionStore(context) }
     val deviceIdentity = remember { DeviceIdentity(context) }
-    val realApi = remember { RealApiClient(BuildConfig.API_BASE_URL, sessionStore) }
+    val realApi = remember {
+        RealApiClient(BuildConfig.API_BASE_URL, sessionStore).also { api ->
+            CoreBridge.configureAuthenticatedClient(api) { sessionStore.current()?.accessToken }
+        }
+    }
     val authApi = remember { AuthApi(realApi, sessionStore) }
     val enrollmentApi = remember { EnrollmentApi(realApi, sessionStore, deviceIdentity) }
     val keyPackageApi = remember { KeyPackageApi(realApi, sessionStore) }
@@ -145,13 +149,15 @@ private fun LinqaApp() {
         }
     }
 
-    LaunchedEffect(Unit) {
-        refreshHub()
+    LaunchedEffect(screen) {
+        if (sessionStore.current() != null) refreshHub()
     }
 
-    DisposableEffect(Unit) {
-        val socket = CoreBridge.connectRealtime { scope.launch { refreshHub() } }
-        onDispose { socket.close(1000, "screen disposed") }
+    DisposableEffect(screen, sessionStore.current()?.userId) {
+        val socket = if (sessionStore.current() != null) {
+            runCatching { CoreBridge.connectRealtime { scope.launch { refreshHub() } } }.getOrNull()
+        } else null
+        onDispose { socket?.close(1000, "screen disposed") }
     }
 
     fun endActiveCall() {

@@ -63,13 +63,17 @@ function instantMillis(value: string | null | undefined): number {
  * Field mapping matches `CoreBridge.parseSnapshot` exactly.
  */
 export class MobileHubService {
-  constructor(private readonly baseUrl: string) {}
+  constructor(
+    private readonly baseUrl: string,
+    private readonly getAccessToken: () => Promise<string>
+  ) {}
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const token = await this.getAccessToken();
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
       headers: {
-        "x-linqa-demo-user": "galaxy",
+        authorization: `Bearer ${token}`,
         ...(init.body === undefined ? {} : { "content-type": "application/json" }),
         ...(init.headers ?? {})
       }
@@ -84,7 +88,7 @@ export class MobileHubService {
   }
 
   async loadHub(): Promise<HubSnapshot> {
-    const root = await this.request<Record<string, any>>("/v1/dev/mobile-hub");
+    const root = await this.request<Record<string, any>>("/v1/mobile-hub");
     return {
       profile: { id: root.profile.id, displayName: root.profile.display_name },
       contacts: (root.contacts as any[]).map((item) => ({
@@ -136,18 +140,18 @@ export class MobileHubService {
   }
 
   publishStatus(body: string) {
-    return this.request<{ id: string }>("/v1/dev/mobile-hub/statuses", { method: "POST", body: JSON.stringify({ body }) });
+    return this.request<{ id: string }>("/v1/mobile-hub/statuses", { method: "POST", body: JSON.stringify({ body }) });
   }
 
   createConversation(recipientUserId: string) {
-    return this.request<{ id: string }>("/v1/dev/mobile-hub/conversations", {
+    return this.request<{ id: string }>("/v1/mobile-hub/conversations", {
       method: "POST",
       body: JSON.stringify({ recipientUserId })
     });
   }
 
   createCall(peerUserId: string, video = false) {
-    return this.request<{ id: string; created_at: string }>("/v1/dev/mobile-hub/calls", {
+    return this.request<{ id: string; created_at: string }>("/v1/mobile-hub/calls", {
       method: "POST",
       body: JSON.stringify({ peerUserId, callType: video ? "VIDEO" : "AUDIO" })
     });

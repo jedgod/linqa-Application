@@ -9,8 +9,14 @@ import { createServiceContainer } from "./bootstrap/service-container.js";
 import { registerAll } from "./bootstrap/register-all.js";
 import { registerMetrics } from "./observability/metrics.js";
 import { enforceProductionBoot } from "./runtime/bootstrap-gate.js";
+import { configureLinqaSendProviders, resetLinqaSendProvidersToSafeDefaults } from "./integrations/linqasend/provider.registry.js";
+import { createHttpLinqaSendProviders } from "./integrations/linqasend/http.providers.js";
 
 export async function buildApp(config: AppConfig, db: Database) {
+  resetLinqaSendProvidersToSafeDefaults();
+  if (config.LINQASEND_PROVIDER_URL && config.LINQASEND_PROVIDER_TOKEN) {
+    configureLinqaSendProviders(createHttpLinqaSendProviders(config.LINQASEND_PROVIDER_URL, config.LINQASEND_PROVIDER_TOKEN));
+  }
   const app = Fastify({
     logger: {
       level: config.LOG_LEVEL,

@@ -13,7 +13,9 @@ export async function registerRuntimeRoutes(
     const checks = {
       database: false,
       migrations: false,
-      authentication: config.NODE_ENV !== "production" || Boolean(config.JWT_JWKS_URL),
+      authentication: config.NODE_ENV !== "production" || Boolean(
+        config.JWT_SIGNING_PRIVATE_KEY_PEM && config.JWT_VERIFYING_PUBLIC_KEY_PEM
+      ),
       contactDiscoverySecret: config.CONTACT_DISCOVERY_SECRET.length >= 32,
       tokenVaultKey: config.TOKEN_VAULT_KEY_BASE64.length >= 44,
       smsDelivery: Boolean(config.TWILIO_ACCOUNT_SID && config.TWILIO_AUTH_TOKEN && config.TWILIO_FROM_NUMBER),
@@ -24,7 +26,9 @@ export async function registerRuntimeRoutes(
         config.FCM_PROJECT_ID && config.FCM_CLIENT_EMAIL && config.FCM_PRIVATE_KEY
       ),
       billingWebhook: Boolean(config.BILLING_WEBHOOK_SECRET),
+      linqaSendProviders: Boolean(config.LINQASEND_PROVIDER_URL && config.LINQASEND_PROVIDER_TOKEN),
       countryDataEncryption: Boolean(config.COUNTRYLINQA_DATA_KEY_V1),
+      countryGeoIp: Boolean(config.COUNTRYLINQA_GEOIP_URL),
       secureCoreRequired: Boolean(config.SECURE_CORE_ARTIFACT_SHA256),
       releaseIdentified: Boolean(config.PRODUCTION_RELEASE_ID)
     };

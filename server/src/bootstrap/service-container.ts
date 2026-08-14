@@ -24,7 +24,7 @@ import { CollaborationService } from "../services/collaboration.service.js";
 import { CommunityService } from "../services/community.service.js";
 import { ContactDiscoveryService } from "../services/contact-discovery.service.js";
 import { CountryLinqaService } from "../services/countrylinqa/service.js";
-import { DatabasePhoneEvidenceProvider, NoopGeoIpProvider } from "../services/countrylinqa/providers.js";
+import { DatabasePhoneEvidenceProvider, HttpGeoIpProvider, NoopGeoIpProvider } from "../services/countrylinqa/providers.js";
 import { RealSubscriptionProvider } from "../services/countrylinqa/entitlements.js";
 import { CountryReverificationService } from "../services/countrylinqa/final/reverify.js";
 import { DataResidencyService } from "../services/data-residency.service.js";
@@ -364,12 +364,16 @@ export function createServiceContainer(config: AppConfig, db: Database) {
       config,
       new RealSubscriptionProvider(db),
       new DatabasePhoneEvidenceProvider(db),
-      new NoopGeoIpProvider()
+      config.COUNTRYLINQA_GEOIP_URL
+        ? new HttpGeoIpProvider(config.COUNTRYLINQA_GEOIP_URL, config.COUNTRYLINQA_GEOIP_TOKEN)
+        : new NoopGeoIpProvider()
     ),
     countryReverification: new CountryReverificationService(
       db,
       new DatabasePhoneEvidenceProvider(db),
-      new NoopGeoIpProvider()
+      config.COUNTRYLINQA_GEOIP_URL
+        ? new HttpGeoIpProvider(config.COUNTRYLINQA_GEOIP_URL, config.COUNTRYLINQA_GEOIP_TOKEN)
+        : new NoopGeoIpProvider()
     )
   };
 }

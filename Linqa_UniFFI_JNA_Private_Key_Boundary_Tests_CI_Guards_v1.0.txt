@@ -1,36 +1,4 @@
-﻿================================================================================================================
-PACK STATUS: LIVE-SOURCE CANONICAL ALIGNMENT
-================================================================================================================
+LINQA LIVE-SOURCE COMPATIBILITY MANIFEST
+Compatibility path: Linqa_UniFFI_JNA_Private_Key_Boundary_Tests_CI_Guards_v1.0.txt
 
-This pack has been cleaned up to point to the real live implementation sources and to remove stale duplicate references.
-
-PRIMARY LIVE SOURCES
-- server/src/auth/normalize.ts
-- server/src/routes/auth.ts
-- server/src/services/auth-challenge.service.ts
-- server/src/services/session.service.ts
-- clients/android/app/src/main/java/com/linqa/app/ui/screens/LoginScreen.kt
-- clients/android/app/src/main/java/com/linqa/app/ui/screens/OtpVerifyScreen.kt
-- clients/android/app/src/main/java/com/linqa/app/network/AuthApi.kt
-- clients/android/app/src/main/java/com/linqa/app/ui/MainActivity.kt
-- clients/web/src/auth/validation.ts
-- clients/mobile/auth/validation.ts
-
-CANONICAL RULES
-- The server contract is the source of truth for identifier validation.
-- Email must be normalized to lowercase and validated as a real email.
-- Phone numbers must be normalized to an E.164-style format, e.g. +15555550100.
-- Challenge generation returns a single-use challengeId and 6-digit code flow.
-- Verification returns either accountExists:true with temporarySession or registrationRequired:true.
-- Any stale duplicate or outdated pack copy is superseded by the running implementation.
-
-DUPLICATE CLEANUP
-- Repeated pack references and duplicate implementation copies were removed from this page.
-- This text file now reflects the live codebase rather than legacy pack content.
-
-LIVE-SOURCE AUTH STACK
-This pack is no longer treated as a standalone source of truth.
-The current canonical implementation is in the active app/server code, and the UI/logic pack content should be treated as reference material only unless it is intentionally wired into the live project.
-================================================================================================================
-END OF CLEANUP PASS
-================================================================================================================
+Canonical boundary: core/src/uniffi_api.rs, core/uniffi/linqa_core.udl, core/tests/uniffi_private_key_boundary.rs, generated UniFFI Kotlin, certification/uniffi-jna-binding-allowlist.json, and certification/evidence/uniffi-jna-verdict.json. Generated bindings must not be hand-edited and private-key material must never cross the declared boundary.

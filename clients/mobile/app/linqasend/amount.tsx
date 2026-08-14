@@ -1,74 +1,11 @@
-import { useState } from "react";
-import { Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useMemo, useState } from "react";
+import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { LinqaSendService } from "../../services/linqasend.service";
+import { accessTokenProvider } from "../../services/session";
 
-export default function LinqaSendAmount() {
-  const router = useRouter();
-  const [amount, setAmount] = useState("500.00");
-
-  return (
-    <SafeAreaView style={styles.screen}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} accessibilityLabel="Back">
-          <Text style={styles.back}>←</Text>
-        </Pressable>
-        <Text style={styles.headerTitle}>Enter Amount</Text>
-      </View>
-
-      <View style={styles.content}>
-        <Text style={styles.label}>You send</Text>
-        <View style={styles.inputRow}>
-          <View style={styles.currencyBox}><Text style={styles.currency}>🇺🇸</Text><Text style={styles.currencyText}>USD</Text></View>
-          <TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" style={styles.amountInput} />
-        </View>
-
-        <Text style={styles.label}>They receive</Text>
-        <View style={styles.inputRow}>
-          <View style={styles.currencyBox}><Text style={styles.currency}>🇬🇭</Text><Text style={styles.currencyText}>GHS</Text></View>
-          <Text style={styles.amountOutput}>5,319.00</Text>
-        </View>
-
-        <View style={styles.exchangeRow}>
-          <Text style={styles.exchangeLabel}>Exchange rate (Guaranteed 30s)</Text>
-          <Text style={styles.exchangeValue}>1 USD = 10.6380 GHS</Text>
-        </View>
-
-        <View style={styles.feeRow}><Text style={styles.feeLabel}>Transfer fee</Text><Text style={styles.feeValue}>$0.00</Text></View>
-        <View style={styles.feeRow}><Text style={styles.feeLabel}>Recipient fee</Text><Text style={styles.feeValue}>$0.00</Text></View>
-
-        <View style={styles.noticeBox}>
-          <Text style={styles.noticeText}>Zero fees. Great rates. Recipient gets more.</Text>
-        </View>
-
-        <Pressable style={styles.primaryButton} onPress={() => router.push("/linqasend/review")}>
-          <Text style={styles.primaryButtonText}>Continue</Text>
-        </Pressable>
-      </View>
-    </SafeAreaView>
-  );
-}
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#F4F6FA" },
-  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 18, paddingTop: 22, paddingBottom: 8 },
-  back: { color: "#1F2A37", fontSize: 28, fontWeight: "700" },
-  headerTitle: { flex: 1, color: "#111827", fontSize: 22, fontWeight: "800" },
-  content: { paddingHorizontal: 18, paddingTop: 16 },
-  label: { color: "#475467", fontSize: 13, marginTop: 18, marginBottom: 10, fontWeight: "600" },
-  inputRow: { backgroundColor: "#FFFFFF", borderRadius: 16, borderWidth: 1, borderColor: "#E4E8F0", height: 62, flexDirection: "row", alignItems: "center", paddingHorizontal: 12 },
-  currencyBox: { flexDirection: "row", alignItems: "center", paddingRight: 8, borderRightWidth: 1, borderRightColor: "#EEF2F7", marginRight: 10 },
-  currency: { fontSize: 18 },
-  currencyText: { color: "#101828", fontWeight: "800", fontSize: 14, marginLeft: 8 },
-  amountInput: { flex: 1, color: "#101828", fontSize: 22, fontWeight: "800", textAlign: "right" },
-  amountOutput: { flex: 1, color: "#101828", fontSize: 22, fontWeight: "800", textAlign: "right" },
-  exchangeRow: { backgroundColor: "#EEF3FF", borderRadius: 12, padding: 14, marginTop: 16 },
-  exchangeLabel: { color: "#475467", fontSize: 12, fontWeight: "700" },
-  exchangeValue: { color: "#101828", fontSize: 16, fontWeight: "800", marginTop: 8 },
-  feeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#E7EDF5" },
-  feeLabel: { color: "#475467", fontSize: 13, fontWeight: "700" },
-  feeValue: { color: "#101828", fontSize: 15, fontWeight: "800" },
-  noticeBox: { marginTop: 18, borderRadius: 14, backgroundColor: "#EAF7F1", padding: 14, alignItems: "center", justifyContent: "center" },
-  noticeText: { color: "#1E4E3A", fontSize: 13, fontWeight: "700", textAlign: "center" },
-  primaryButton: { backgroundColor: "#4F46E5", height: 52, borderRadius: 14, justifyContent: "center", alignItems: "center", marginTop: 18 },
-  primaryButtonText: { color: "#fff", fontWeight: "900", fontSize: 16 }
-});
+const API=process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+export default function LinqaSendAmount(){const router=useRouter();const p=useLocalSearchParams<{recipientId:string;recipientName:string;recipientCountry:string;recipientCurrency:string}>();const client=useMemo(()=>new LinqaSendService(API,()=>accessTokenProvider.getAccessToken()),[]);const [amount,setAmount]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState<string|null>(null);
+ async function quote(){const numeric=Number(amount);if(!Number.isFinite(numeric)||numeric<=0){setError("Enter an amount greater than zero.");return}setBusy(true);setError(null);try{const q=await client.createQuote({recipientId:p.recipientId,sourceCountry:"US",destinationCountry:p.recipientCountry,sourceCurrency:"USD",destinationCurrency:p.recipientCurrency,sendAmountMinor:String(Math.round(numeric*100))});router.push({pathname:"/linqasend/review",params:{quote:JSON.stringify(q),recipientName:p.recipientName}})}catch(e){setError(e instanceof Error?e.message:"A live quote is unavailable.")}finally{setBusy(false)}}
+ return <SafeAreaView style={s.screen}><View style={s.header}><Pressable onPress={()=>router.back()}><Text style={s.back}>‹</Text></Pressable><Text style={s.title}>Enter Amount</Text></View><View style={s.content}><Text style={s.to}>To {p.recipientName}</Text><Text style={s.label}>You send</Text><View style={s.box}><Text style={s.currency}>USD</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="0.00" style={s.amount}/></View><Text style={s.label}>They receive</Text><View style={s.receive}><Text style={s.receiveText}>Calculated from the live provider rate</Text><Text style={s.currency}>{p.recipientCurrency}</Text></View><View style={s.notice}><Text style={s.noticeText}>The exact rate, spread, receive amount, and expiration appear on the review screen before authorization.</Text></View>{error&&<Text style={s.error}>{error.replace(/_/g," ")}</Text>}<Pressable style={[s.button,busy&&{opacity:.5}]} onPress={quote} disabled={busy}>{busy?<ActivityIndicator color="white"/>:<Text style={s.buttonText}>Get Live Quote</Text>}</Pressable></View></SafeAreaView>}
+const s=StyleSheet.create({screen:{flex:1,backgroundColor:"#F6F7FB"},header:{flexDirection:"row",alignItems:"center",padding:18,gap:12},back:{fontSize:34,color:"#101828"},title:{fontSize:22,fontWeight:"900",color:"#101828"},content:{padding:18},to:{color:"#5146E5",fontWeight:"800",marginBottom:20},label:{color:"#475467",fontWeight:"700",fontSize:13,marginBottom:8,marginTop:10},box:{height:68,backgroundColor:"white",borderWidth:1,borderColor:"#DDE3EC",borderRadius:16,flexDirection:"row",alignItems:"center",paddingHorizontal:16},currency:{fontWeight:"900",color:"#101828"},amount:{flex:1,textAlign:"right",fontSize:25,fontWeight:"900",color:"#101828"},receive:{height:68,backgroundColor:"white",borderWidth:1,borderColor:"#DDE3EC",borderRadius:16,flexDirection:"row",alignItems:"center",paddingHorizontal:16,gap:10},receiveText:{flex:1,color:"#667085",fontSize:12},notice:{backgroundColor:"#ECFDF3",padding:14,borderRadius:14,marginTop:18},noticeText:{color:"#166534",fontSize:12,lineHeight:18},error:{color:"#B42318",marginTop:16},button:{height:54,backgroundColor:"#5146E5",borderRadius:14,alignItems:"center",justifyContent:"center",marginTop:20},buttonText:{color:"white",fontWeight:"900",fontSize:16}});

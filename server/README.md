@@ -39,7 +39,7 @@ Foundation (auth + relay):
 - **Key packages** (`routes/key-packages.ts`): publish/rotate signed key packages, active-package-per-device uniqueness, append-only key-transparency event log (`services/key-transparency.service.ts`) with each event hash-chained to the previous one per user.
 - **Device enrollment** (`routes/enrollment.ts`): challenge/proof-of-possession handshake. Completion currently **fails closed with 503** — it does not yet call into `linqa-core`'s Ed25519 verification (`enrollment::verify_proof`), so no device can actually complete registration through the HTTP API yet. This is deliberate: accepting an unverified proof would be worse than refusing.
 - **Phone/email authentication** (`routes/auth.ts`, migration `002_authentication.sql`): OTP challenge/verify with scrypt-hashed codes and anti-enumeration responses, refresh-token rotation with reuse detection (revokes the whole token family), recovery codes, and passkeys (`routes/passkeys.ts`, `services/passkey-v2.service.ts`) backed by real `@simplewebauthn/server` registration/authentication verification against `webauthn_credentials`/`webauthn_challenges`.
-- **Auth**: JWTs (`auth/jwt.ts`) verified via remote JWKS (RS256/ES256/EdDSA) when `JWT_JWKS_URL` is configured — required in production, where the server refuses to boot without it; HS256 with a shared secret remains available as a development-only fallback.
+- **Auth**: first-party JWTs are signed and verified with an Ed25519 PKCS#8/SPKI key pair in production (`JWT_SIGNING_PRIVATE_KEY_PEM` and `JWT_VERIFYING_PUBLIC_KEY_PEM`). The server refuses to boot when either production key is absent. `JWT_JWKS_URL` can additionally verify tokens from a separate identity provider; HS256 remains development/test-only.
 
 Stages 6–10 (attachments, groups, sync, backups, operations — migration `003_stages_6_10.sql`):
 - **Attachments** (`routes/attachments.ts`, `services/attachment.service.ts`): multipart upload session creation against an `ObjectStorage` interface. No S3-compatible storage is configured, so uploads **fail closed** (`services/storage/fail-closed-object-storage.ts`) until one is wired in.
@@ -134,7 +134,7 @@ actually running requests against it, not by typechecking:
 ## Running locally
 
 ```bash
-cp .env.example .env   # then replace JWT_HS256_SECRET and CONTACT_DISCOVERY_SECRET with real random bytes
+cp .env.example .env   # then replace all placeholder secrets; production also requires the Ed25519 PEM key pair
 docker compose up -d postgres
 npm install
 npm run db:migrate     # applies every file in src/db/migrations, in order (12 as of the mobile feature packs)

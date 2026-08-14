@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import {
   PrivacyCenterService,
   type DeviceAlert,
@@ -18,6 +19,7 @@ import { accessTokenProvider } from "../services/session";
 import { LinkedDeviceAlertCard } from "../components/LinkedDeviceAlertCard";
 
 export default function PrivacyCenterScreen() {
+  const router = useRouter();
   const service = useMemo(
     () =>
       new PrivacyCenterService(
@@ -119,8 +121,20 @@ export default function PrivacyCenterScreen() {
                   platform={device.platform}
                   createdAt={device.registeredAt ?? new Date().toISOString()}
                   riskLevel={device.riskLevel}
-                  onVerify={() => Alert.alert("Not available yet", "Device verification is not wired up yet.")}
-                  onRevoke={() => Alert.alert("Not available yet", "Device revocation is not wired up yet.")}
+                  onVerify={() => router.push("/security/key-transparency")}
+                  onRevoke={() => {
+                    Alert.alert("Revoke device?", `This will disconnect ${device.deviceName}.`, [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Revoke", style: "destructive", onPress: () => {
+                        void service.revokeDevice(device.id)
+                          .then(() => setSummary((current) => current ? {
+                            ...current,
+                            devices: current.devices.filter((item) => item.id !== device.id)
+                          } : current))
+                          .catch((reason) => Alert.alert("Unable to revoke", String(reason)));
+                      } }
+                    ]);
+                  }}
                 />
               </View>
             ) : (

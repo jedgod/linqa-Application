@@ -154,8 +154,8 @@ export async function registerLinqaSendRoutes(
       const id = randomUUID();
       await db.query(
         `INSERT INTO linqasend_recipients(id, owner_user_id, recipient_type, linqa_user_id, display_name, country, preferred_currency)
-         VALUES ($1,$2,'LINQA_USER',$3,$4,'US','USD')`,
-        [id, p.userId, resolved.userId, resolved.displayName]
+         VALUES ($1,$2,'LINQA_USER',$3,$4,$5,$6)`,
+        [id, p.userId, resolved.userId, resolved.displayName, resolved.country, resolved.preferredCurrency]
       );
       return reply.code(201).send({ id, displayName: resolved.displayName });
     })

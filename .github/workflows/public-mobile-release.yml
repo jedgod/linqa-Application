@@ -21,11 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: |
-          echo "Require GA readiness API = ready"
-          echo "Require CRYPTO/PEN-TEST/PRIVACY/LEGAL gates"
-          echo "Require signed release artifacts"
-          echo "Require rollback evidence"
+      - name: Require production readiness
+        env: { LINQA_API_BASE_URL: "${{ secrets.LINQA_API_BASE_URL }}" }
+        run: |
+          test -n "$LINQA_API_BASE_URL"
+          curl --fail --silent --show-error "$LINQA_API_BASE_URL/v1/runtime/final-readiness" | jq -e '.ready == true'
 
   android:
     needs: preflight
@@ -43,10 +43,14 @@ jobs:
         working-directory: clients/mobile
       - run: npx tsc --noEmit
         working-directory: clients/mobile
-      - run: |
-          echo "Build signed Android App Bundle."
-          echo "Upload using protected Play Console credentials."
-          echo "Apply staged rollout percentage: ${{ inputs.rollout }}"
+      - name: Build, sign, and submit Android release
+        env: { EXPO_TOKEN: "${{ secrets.EXPO_TOKEN }}" }
+        working-directory: clients/mobile
+        run: |
+          test -n "$EXPO_TOKEN"
+          npx eas-cli build --platform android --profile production --auto-submit --non-interactive
+      - name: Record requested staged rollout
+        run: echo "Requested Play staged rollout is ${{ inputs.rollout }}%; release operator must confirm it in Play Console evidence."
 
   ios:
     needs: preflight
@@ -64,7 +68,11 @@ jobs:
         working-directory: clients/mobile
       - run: npx tsc --noEmit
         working-directory: clients/mobile
-      - run: |
-          echo "Build signed iOS archive."
-          echo "Upload with protected App Store Connect credentials."
-          echo "Release percentage is controlled by platform rollout process."
+      - name: Build, sign, and submit iOS release
+        env: { EXPO_TOKEN: "${{ secrets.EXPO_TOKEN }}" }
+        working-directory: clients/mobile
+        run: |
+          test -n "$EXPO_TOKEN"
+          npx eas-cli build --platform ios --profile production --auto-submit --non-interactive
+      - name: Record requested phased rollout
+        run: echo "Requested App Store phased rollout is ${{ inputs.rollout }}%; release operator must confirm it in App Store evidence."
