@@ -1,6 +1,7 @@
 export interface AccessTokenProvider {
   getAccessToken(): Promise<string>;
 }
+import { registerAccountScopeReset } from "./account-scope";
 
 /**
  * 2026-08-07 apply pass: `activeAccountSessionResolver` is a bridge between
@@ -18,6 +19,7 @@ export interface AccessTokenProvider {
 type SessionResolver = () => Promise<{ accessToken: string; expiresAt: string } | null>;
 
 let activeAccountSessionResolver: SessionResolver | null = null;
+registerAccountScopeReset("authentication", () => { activeAccountSessionResolver = null; });
 
 export function setActiveAccountSessionResolver(resolver: SessionResolver | null): void {
   activeAccountSessionResolver = resolver;

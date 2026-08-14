@@ -12,7 +12,8 @@
     "db:cleanup": "tsx src/jobs/cleanup.ts",
     "g5:materialize": "tsx src/ga/materialize-cli.ts",
     "g5:verify": "tsx src/ga/verify-ga-cli.ts",
-    "final:verify": "tsx src/release-closure/verify-final-cli.ts"
+    "final:verify": "tsx src/release-closure/verify-final-cli.ts",
+    "release:unified-onboarding": "node ../scripts/unified-onboarding-release-gate.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1105.0",

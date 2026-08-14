@@ -29,5 +29,5 @@ export default function Index() {
     );
   }
 
-  return <Redirect href={accounts.length === 0 ? "/welcome" : "/(tabs)/home"} />;
+  return <Redirect href={accounts.length === 0 ? "/welcome" : "/onboarding/resolve"} />;
 }

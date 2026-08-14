@@ -47,12 +47,14 @@ export function createAuthenticator(config: AppConfig) {
     );
 
     const deviceId = typeof payload.device_id === "string" ? payload.device_id : undefined;
+    const sessionId = typeof payload.sid === "string" ? payload.sid : undefined;
 
     return {
       subject: payload.sub,
       userId,
       scopes,
-      ...(deviceId !== undefined ? { deviceId } : {})
+      ...(deviceId !== undefined ? { deviceId } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {})
     };
   };
 }

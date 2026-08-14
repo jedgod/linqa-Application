@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Tabs, usePathname, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, View } from "react-native";
@@ -6,6 +6,11 @@ import { AccountSwitcherSheet } from "../../components/AccountSwitcherSheet";
 import { QuickCreateSheet } from "../../components/QuickCreateSheet";
 import { useAccounts } from "../../account/AccountContext";
 import { createActionsForPath } from "../../navigation/information-architecture";
+import { ActivityIndicator } from "react-native";
+import { OnboardingApiService } from "../../services/onboarding.service";
+import { accessTokenProvider } from "../../services/session";
+
+const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
 
 function AccountHeader() {
   const router = useRouter();
@@ -28,6 +33,7 @@ function AccountHeader() {
         onSwitch={(userId) => {
           activate(userId);
           setSwitcherOpen(false);
+          router.replace("/onboarding/resolve");
         }}
         onAdd={() => {
           setSwitcherOpen(false);
@@ -47,6 +53,21 @@ export default function TabsLayout() {
   const pathname = usePathname();
   const [createOpen, setCreateOpen] = useState(false);
   const actions = createActionsForPath(pathname);
+  const { active } = useAccounts();
+  const onboarding = useMemo(() => new OnboardingApiService(API, accessTokenProvider), []);
+  const [allowed, setAllowed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setAllowed(false);
+    onboarding.status().then((status) => {
+      if (cancelled) return;
+      if (status.nextStep !== "COMPLETE") router.replace("/onboarding/resolve");
+      else setAllowed(true);
+    }).catch(() => { if (!cancelled) router.replace("/onboarding/resolve"); });
+    return () => { cancelled = true; };
+  }, [active?.userId, onboarding, router]);
+
+  if (!allowed) return <View style={s.guard}><ActivityIndicator color="#6558DC" /></View>;
 
   return (
     <>
@@ -179,5 +200,6 @@ const s = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 5 },
     elevation: 8
-  }
+  },
+  guard: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#FFFFFF" }
 });

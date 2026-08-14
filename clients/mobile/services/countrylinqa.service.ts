@@ -16,6 +16,8 @@ export type CountryLinqaPreferences = {
   selectedRegions: string[];
   locationPrecision: "COUNTRY" | "STATE" | "CITY";
   showCity: boolean;
+  subscriptionTier: "FREE" | "PREMIUM" | "ELITE";
+  allowedModes: Record<DiscoveryMode, boolean>;
 };
 export type CountryPreferences = CountryLinqaPreferences;
 

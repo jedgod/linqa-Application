@@ -32,8 +32,9 @@ export default function WelcomeScreen() {
       </View>
 
       <View style={s.bottom}>
-        <PrimaryButton label="Get Started" onPress={() => router.push("/account/sign-up")} />
-        <Text style={s.footnote}>Already have an account? Just enter your number on the next screen.</Text>
+        <PrimaryButton label="Create Account" onPress={() => router.push({ pathname: "/account/sign-up", params: { purpose: "REGISTRATION" } })} />
+        <PrimaryButton label="Sign In" onPress={() => router.push({ pathname: "/account/sign-up", params: { purpose: "LOGIN" } })} />
+        <Text style={s.footnote}>One Linqa identity connects CountryLinqa, Chats, Calls, LinqaSend, Vault, AI, and your other services.</Text>
       </View>
     </SafeAreaView>
   );

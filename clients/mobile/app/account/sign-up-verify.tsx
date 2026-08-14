@@ -2,12 +2,11 @@ import { useState } from "react";
 import { SafeAreaView, StyleSheet, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { BootstrapAuthService } from "../../services/bootstrap-auth.service";
-import { generateDeviceKeyPair, canonicalEnrollmentDigest, signEnrollmentProof, base64ToBytes, bytesToBase64 } from "../../crypto/device-enrollment-proof";
+import { generateDeviceKeyPair, restoreDeviceKeyPair, canonicalEnrollmentDigest, signEnrollmentProof, base64ToBytes, bytesToBase64 } from "../../crypto/device-enrollment-proof";
 import { AccountSecureStorage } from "../../account/AccountSecureStorage";
 import { AccountSessionStore } from "../../account/AccountSessionStore";
 import { getOrCreateInstallationPublicId, currentPlatform } from "../../account/InstallationIdentity";
 import { MultiAccountApiService } from "../../services/multi-account.service";
-import { PhoneFirstIdentityService } from "../../services/phone-first.service";
 import { useAccounts } from "../../account/AccountContext";
 import { cacheInstallationServerId } from "../../account/InstallationRegistry";
 import { ScreenHeader } from "../../components/ScreenHeader";
@@ -24,7 +23,7 @@ const sessions = new AccountSessionStore(secure);
 
 export default function SignUpVerifyScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ challengeId: string; phone?: string }>();
+  const params = useLocalSearchParams<{ challengeId: string; phone?: string; purpose?: string; addAccount?: string }>();
   const { addAndActivate } = useAccounts();
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,13 +39,22 @@ export default function SignUpVerifyScreen() {
     setBusy(true); setError(null);
     try {
       const verified = await auth.verifyChallenge(params.challengeId, validation.normalized);
-      const bootstrap = verified.accountExists
-        ? verified.temporarySession
-        : (await auth.register(params.challengeId)).temporarySession;
+      const isRegistration = params.purpose !== "LOGIN";
+      if (isRegistration && verified.accountExists) throw new Error("This number already has an account. Choose Sign In.");
+      if (!isRegistration && !verified.accountExists) throw new Error("No Linqa account uses this number. Choose Create Account.");
+      const bootstrap = isRegistration
+        ? (await auth.register(params.challengeId)).temporarySession
+        : verified.temporarySession;
       if (!bootstrap) throw new Error("verified account session was not issued");
 
       const challenge = await auth.requestDeviceEnrollmentChallenge(bootstrap.accessToken);
-      const keys = generateDeviceKeyPair();
+      const [storedSigning, storedEncryption] = await Promise.all([
+        secure.get(challenge.userId, "device.signingPrivateKey"),
+        secure.get(challenge.userId, "device.encryptionPrivateKey")
+      ]);
+      const keys = storedSigning && storedEncryption
+        ? restoreDeviceKeyPair(base64ToBytes(storedSigning), base64ToBytes(storedEncryption))
+        : generateDeviceKeyPair();
       const deviceName = "Linqa Mobile";
       const platform = currentPlatform();
       const digest = canonicalEnrollmentDigest({
@@ -80,20 +88,19 @@ export default function SignUpVerifyScreen() {
         secure.put(challenge.userId, "device.encryptionPrivateKey", bytesToBase64(keys.encryptionPrivateKey)),
         secure.put(challenge.userId, "device.id", enrolled.deviceId)
       ]);
-      addAndActivate({ userId: challenge.userId, slot: 1 as const, displayName: "Linqa account" });
-
       const token = enrolled.session.accessToken;
       const installationApi = new MultiAccountApiService(API, async () => token);
       const installation = await installationApi.registerInstallation(
         await getOrCreateInstallationPublicId(), platform
       );
       await cacheInstallationServerId(installation.id);
-      const phoneFirst = new PhoneFirstIdentityService(API, async () => token);
-      const flow = await phoneFirst.start(installation.id);
-      router.replace({
-        pathname: "/auth/register-phone",
-        params: { flowId: flow.id, phone: params.phone ?? "" }
+      const attached = await installationApi.addAuthenticatedAccount(installation.id);
+      addAndActivate({
+        userId: challenge.userId,
+        slot: attached.accountSlot as 1 | 2 | 3,
+        displayName: params.phone ? `Linqa ${params.phone.slice(-4)}` : "Linqa account"
       });
+      router.replace("/onboarding/resolve");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Verification failed.");
     } finally { setBusy(false); }
@@ -105,7 +112,7 @@ export default function SignUpVerifyScreen() {
         <ScreenHeader
           eyebrow="VERIFY MOBILE NUMBER"
           title="Enter the 6-digit code"
-          copy="After verification, this device creates its cryptographic identity and continues to recovery-email setup."
+          copy="After verification, this device creates its cryptographic identity and the server resumes only the onboarding steps this account still needs."
         />
         <View style={s.field}>
           <CodeInput value={code} onChange={setCode} />

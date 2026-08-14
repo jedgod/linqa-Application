@@ -2,6 +2,9 @@ import type { Database } from "../db/pool.js";
 import { generateOtp, verifyOtp } from "../auth/otp.js";
 import { hashIp, sha256 } from "../security/hash.js";
 import type { AppConfig } from "../config.js";
+import type { PhoneNumberNormalizationService } from "./phone-number-normalization.service.js";
+import type { MobileLineIntelligenceProvider } from "./mobile-line-intelligence.service.js";
+import type { PhoneRiskService } from "./phone-risk.service.js";
 
 export interface DeliveryProvider {
   sendSms(phone: string, code: string): Promise<void>;
@@ -12,7 +15,12 @@ export class AuthChallengeService {
   constructor(
     private readonly db: Database,
     private readonly config: AppConfig,
-    private readonly delivery: DeliveryProvider
+    private readonly delivery: DeliveryProvider,
+    private readonly phone?: {
+      normalizer: PhoneNumberNormalizationService;
+      intelligence: MobileLineIntelligenceProvider;
+      risk: PhoneRiskService;
+    }
   ) {}
 
   async create(input: {
@@ -22,11 +30,50 @@ export class AuthChallengeService {
     ip: string;
     userAgent: string;
   }) {
-    const client = await this.db.connect();
     const requestingIpHash = hashIp(
       this.config.IP_HASH_SECRET ?? this.config.CONTACT_DISCOVERY_SECRET,
       input.ip
     );
+    // Rate-limit before invoking billable carrier intelligence. The locked
+    // checks below repeat this defensively before challenge insertion.
+    const preflight = await this.db.query(
+      `SELECT
+         count(*) FILTER (WHERE normalized_identifier=$1)::int AS identifier_count,
+         count(*) FILTER (WHERE requesting_ip_hash=$2)::int AS ip_count
+       FROM authentication_challenges WHERE created_at>now()-interval '1 hour'`,
+      [input.normalizedIdentifier, requestingIpHash]
+    );
+    if (Number(preflight.rows[0]?.identifier_count ?? 0) >= 5 || Number(preflight.rows[0]?.ip_count ?? 0) >= 20) {
+      throw new Error("challenge rate limit exceeded");
+    }
+    let phoneEvidence: null | {
+      countryIso2: string; lineType: string; carrierName: string | null;
+      carrierCountry: string | null; providerReference: string; riskScore: number;
+      decision: string; reasons: string[];
+    } = null;
+    if (input.identifierType === "PHONE") {
+      if (!this.phone) throw new Error("phone verification authority unavailable");
+      const normalized = this.phone.normalizer.normalize(input.normalizedIdentifier);
+      const lookup = await this.phone.intelligence.lookup(normalized.e164);
+      const decision = this.phone.risk.evaluate({
+        valid: lookup.valid, lineType: lookup.lineType,
+        ...(lookup.disposable !== undefined ? { disposable: lookup.disposable } : {}),
+        ...(lookup.voip !== undefined ? { voip: lookup.voip } : {}),
+        ...(lookup.hosted !== undefined ? { hosted: lookup.hosted } : {}),
+        ...(lookup.ported !== undefined ? { ported: lookup.ported } : {}),
+        ...(lookup.simSwapRisk !== undefined ? { simSwapRisk: lookup.simSwapRisk } : {}),
+        ...(lookup.riskScore !== undefined ? { providerRiskScore: lookup.riskScore } : {}),
+        recentOtpFailures: 0, recentNumberAttempts: 0
+      });
+      if (decision.decision !== "ALLOW") throw new Error(decision.decision === "REVIEW" ? "phone_review_required" : "phone_number_not_eligible");
+      phoneEvidence = {
+        countryIso2: normalized.countryIso2, lineType: lookup.lineType,
+        carrierName: lookup.carrierName ?? null, carrierCountry: lookup.countryIso2 ?? null,
+        providerReference: lookup.providerReference, riskScore: decision.score,
+        decision: decision.decision, reasons: decision.reasons
+      };
+    }
+    const client = await this.db.connect();
 
     try {
       await client.query("BEGIN");
@@ -80,8 +127,10 @@ export class AuthChallengeService {
            resend_after,
            attempts_remaining,
            requesting_ip_hash,
-           requesting_user_agent_hash
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,5,$9,$10)
+           requesting_user_agent_hash,phone_country_iso2,phone_line_type,
+           phone_carrier_name,phone_carrier_country,phone_provider_reference,
+           phone_risk_score,phone_risk_decision,phone_risk_reasons
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,5,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          RETURNING id, expires_at, resend_after`,
         [
           input.identifierType,
@@ -93,7 +142,11 @@ export class AuthChallengeService {
           expiresAt,
           resendAfter,
           requestingIpHash,
-          sha256(input.userAgent)
+          sha256(input.userAgent),
+          phoneEvidence?.countryIso2 ?? null, phoneEvidence?.lineType ?? null,
+          phoneEvidence?.carrierName ?? null, phoneEvidence?.carrierCountry ?? null,
+          phoneEvidence?.providerReference ?? null, phoneEvidence?.riskScore ?? null,
+          phoneEvidence?.decision ?? null, phoneEvidence?.reasons ?? []
         ]
       );
 

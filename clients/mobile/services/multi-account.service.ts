@@ -34,24 +34,10 @@ export class MultiAccountApiService {
     return this.request<{ accounts: any[] }>(`/v5/installations/${installationId}/accounts`);
   }
 
-  startPhoneVerification(input: { phoneNumber: string; defaultCountry?: string }) {
-    return this.request<{ phoneIdentityId: string; state: string; challengeId?: string; expiresAt?: string }>(
-      "/v5/phone-verification/start",
-      { method: "POST", body: input }
-    );
-  }
-
-  completePhoneVerification(input: { phoneIdentityId: string; challengeId: string; code: string }) {
-    return this.request<{ id: string; country_iso2: string; national_number_suffix: string; verified_at: string }>(
-      "/v5/phone-verification/complete",
-      { method: "POST", body: input }
-    );
-  }
-
-  addAccount(installationId: string, targetUserId: string, label?: string) {
+  addAuthenticatedAccount(installationId: string, label?: string) {
     return this.request<{ userId: string; accountSlot: number }>(`/v5/installations/${installationId}/accounts`, {
       method: "POST",
-      body: { targetUserId, label }
+      body: { label }
     });
   }
 

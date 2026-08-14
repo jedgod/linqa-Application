@@ -7,10 +7,14 @@ import { normalizeIdentifier } from "../auth/normalize.js";
 import { AuthChallengeService } from "../services/auth-challenge.service.js";
 import { SessionService } from "../services/session.service.js";
 import { hashIp, sha256 } from "../security/hash.js";
+import type { PhoneRegistrationService } from "../services/phone-registration.service.js";
+import type { OnboardingService } from "../services/onboarding.service.js";
 
 export interface AuthRouteDependencies {
   challengeService: AuthChallengeService;
   sessionService: SessionService;
+  phoneRegistration: PhoneRegistrationService;
+  onboarding: OnboardingService;
 }
 
 export const PRE_ENROLLMENT_SCOPES = ["profile:read", "devices:read"] as const;
@@ -92,6 +96,16 @@ export async function registerAuthRoutes(
 
       if (identifier.rowCount === 1) {
         const row = identifier.rows[0];
+        if (verified.purpose === "REGISTRATION") {
+          return reply.code(409).send({ error: "account_already_registered", signInRequired: true });
+        }
+        const account = await db.query(`SELECT status FROM users WHERE id=$1`, [row.user_id]);
+        if (account.rows[0]?.status !== "ACTIVE") {
+          return reply.code(403).send({ error: "account_restricted" });
+        }
+        if (verified.identifierType === "PHONE") {
+          await deps.phoneRegistration.adoptVerifiedAuthChallenge(row.user_id, body.challengeId);
+        }
         const session = await deps.sessionService.create({
           userId: row.user_id,
           subject: row.external_subject,
@@ -105,6 +119,10 @@ export async function registerAuthRoutes(
           authenticationRequired: "DEVICE_ENROLLMENT_OR_PASSKEY",
           temporarySession: session
         };
+      }
+
+      if (verified.purpose === "LOGIN") {
+        return reply.code(401).send({ error: "account_not_found", createAccountRequired: true });
       }
 
       return {
@@ -183,6 +201,11 @@ export async function registerAuthRoutes(
         );
 
         await client.query("COMMIT");
+
+        if (challenge.identifier_type === "PHONE") {
+          await deps.phoneRegistration.adoptVerifiedAuthChallenge(userId, body.challengeId);
+        }
+        await deps.onboarding.markNewRegistration(userId);
 
         const session = await deps.sessionService.create({
           userId,

@@ -64,12 +64,12 @@ import { TwilioLookupProvider } from "../services/line-intelligence/twilio-looku
 import { TwilioOtpProvider } from "../services/otp/twilio-otp-provider.js";
 import { MultiAccountService } from "../services/multi-account.service.js";
 import { NetworkRiskService } from "../services/network-risk.service.js";
+import { OnboardingService } from "../services/onboarding.service.js";
 import { OrganizationAuthorizationService } from "../services/organization-authorization.service.js";
 import { PasskeyV2Service } from "../services/passkey-v2.service.js";
 import { PhoneNumberNormalizationService } from "../services/phone-number-normalization.service.js";
 import { PhoneRegistrationService } from "../services/phone-registration.service.js";
 import { PhoneRiskService } from "../services/phone-risk.service.js";
-import { PhoneFirstRegistrationService } from "../services/phone-first-registration.service.js";
 import { PrivacyRightsService } from "../services/privacy-rights.service.js";
 import { PrivacySettingsService } from "../services/privacy-settings.service.js";
 import { ProductionKillSwitchService } from "../services/production-kill-switch.service.js";
@@ -245,17 +245,7 @@ export function createServiceContainer(config: AppConfig, db: Database) {
   const phoneRegistration = new PhoneRegistrationService(
     db,
     phoneNormalization,
-    lineIntelligenceProvider,
-    phoneRisk,
-    mobileOtp,
     tokenCipher
-  );
-  const phoneFirstRegistration = new PhoneFirstRegistrationService(
-    db,
-    phoneRegistration,
-    recoveryEmails,
-    accountLimits,
-    sessionIssuer
   );
 
   const archiveStorage =
@@ -285,7 +275,11 @@ export function createServiceContainer(config: AppConfig, db: Database) {
     ai: new AiJobService(db),
     attachmentCdn: new AttachmentCdnService(db, cdnSigner),
     attachments: new AttachmentService(db, objectStorage),
-    authChallenges: new AuthChallengeService(db, config, authDelivery),
+    authChallenges: new AuthChallengeService(db, config, authDelivery, {
+      normalizer: phoneNormalization,
+      intelligence: lineIntelligenceProvider,
+      risk: phoneRisk
+    }),
     backupIntegrity: new BackupIntegrityService(db),
     billingReconciliation: new BillingReconciliationService(db, billingVerifier),
     businesses: new BusinessProfileService(db),
@@ -324,13 +318,13 @@ export function createServiceContainer(config: AppConfig, db: Database) {
     mobileOtp,
     multiAccount: new MultiAccountService(db, accountLimits),
     networkRisk: new NetworkRiskService(db),
+    onboarding: new OnboardingService(db),
     orgAuthorization: new OrganizationAuthorizationService(db),
     passkeys: new PasskeyV2Service(db, {
       rpName: config.PASSKEY_RP_NAME,
       rpId: config.PASSKEY_RP_ID,
       origins: config.PASSKEY_ORIGINS
     }),
-    phoneFirstRegistration,
     phoneRegistration,
     privacyRights: new PrivacyRightsService(db),
     privacySettings: new PrivacySettingsService(db),

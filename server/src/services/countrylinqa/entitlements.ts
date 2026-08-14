@@ -4,6 +4,15 @@ import type { AppConfig } from "../../config.js";
 export type SubscriptionTier = "FREE" | "PREMIUM" | "ELITE";
 export type DiscoveryMode = "MY_COUNTRY" | "SELECTED_COUNTRIES" | "REGION" | "GLOBAL";
 
+export function discoveryEntitlements(tier: SubscriptionTier): Record<DiscoveryMode, boolean> {
+  return {
+    MY_COUNTRY: true,
+    SELECTED_COUNTRIES: tier === "PREMIUM" || tier === "ELITE",
+    REGION: tier === "PREMIUM" || tier === "ELITE",
+    GLOBAL: tier === "ELITE"
+  };
+}
+
 export interface SubscriptionProvider {
   getTier(userId: string): Promise<SubscriptionTier>;
 }

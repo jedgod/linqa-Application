@@ -8,6 +8,15 @@ export class MultiAccountService {
     private readonly limits: AccountLimitService
   ) {}
 
+  async isFreshAuthenticatedSession(userId: string, deviceId: string, sessionId: string): Promise<boolean> {
+    const result = await this.db.query(
+      `SELECT 1 FROM auth_sessions WHERE id=$1 AND user_id=$2 AND device_id=$3
+       AND revoked_at IS NULL AND issued_at>now()-interval '10 minutes'`,
+      [sessionId, userId, deviceId]
+    );
+    return result.rowCount === 1;
+  }
+
   /**
    * Not part of the source pack (2026-08-07 apply pass addition): nothing
    * in the pack ever creates a device_installations_v2 row, so every other
@@ -58,6 +67,11 @@ export class MultiAccountService {
   }
 
   async add(input: { installationId: string; userId: string; label?: string }) {
+    const existing = await this.db.query(
+      `SELECT account_slot FROM installation_accounts_v2 WHERE installation_id=$1 AND user_id=$2 AND state='ACTIVE'`,
+      [input.installationId, input.userId]
+    );
+    if (existing.rowCount === 1) return { userId: input.userId, accountSlot: Number(existing.rows[0].account_slot) };
     await this.limits.requireCapacity(input.installationId);
 
     const phone = await this.db.query(

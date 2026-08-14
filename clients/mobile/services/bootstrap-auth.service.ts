@@ -63,10 +63,10 @@ export class BootstrapAuthService {
     return data as T;
   }
 
-  requestChallenge(identifier: string) {
+  requestChallenge(identifier: string, purpose: "REGISTRATION" | "LOGIN") {
     return this.request<{ challengeId: string; expiresAt: string; resendAfter: string }>("/v1/auth/challenges", {
       method: "POST",
-      body: { identifier, purpose: "REGISTRATION" }
+      body: { identifier, purpose }
     });
   }
 

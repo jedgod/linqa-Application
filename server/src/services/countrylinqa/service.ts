@@ -1,7 +1,7 @@
 import type { Database } from "../../db/pool.js";
 import type { AppConfig } from "../../config.js";
 import type { SubscriptionProvider, DiscoveryMode } from "./entitlements.js";
-import { assertEntitled } from "./entitlements.js";
+import { assertEntitled, discoveryEntitlements } from "./entitlements.js";
 import type { PhoneEvidenceProvider, GeoIpProvider } from "./providers.js";
 import { evaluateCountryRisk } from "./risk.js";
 
@@ -27,7 +27,10 @@ export class CountryLinqaService {
   }
 
   async preferences(userId: string) {
-    return this.preferencesWithClient(this.db, userId);
+    const [preferences, tier] = await Promise.all([
+      this.preferencesWithClient(this.db, userId), this.subscriptions.getTier(userId)
+    ]);
+    return { ...preferences, subscriptionTier: tier, allowedModes: discoveryEntitlements(tier) };
   }
 
   private async preferencesWithClient(client: { query: Database["query"] }, userId: string) {
@@ -151,6 +154,18 @@ export class CountryLinqaService {
     input: { claimedCountryCode: string; simCountryCode?: string | undefined; localeCountryCode?: string | undefined },
     requestIp: string
   ) {
+    const current = await this.db.query(
+      `SELECT verified_country_code,country_verification_state FROM users WHERE id=$1`, [userId]
+    );
+    const currentCountry = current.rows[0]?.verified_country_code as string | null | undefined;
+    if (currentCountry && currentCountry !== input.claimedCountryCode.toUpperCase()) {
+      const error: any = new Error("Verified-country migration requires step-up authentication.");
+      error.status = 403; error.code = "COUNTRY_CHANGE_STEP_UP_REQUIRED"; throw error;
+    }
+    if (currentCountry && current.rows[0]?.country_verification_state === "VERIFIED") {
+      return { verifiedCountryCode: currentCountry, claimedCountryCode: input.claimedCountryCode,
+        verificationState: "VERIFIED", riskScore: 0, reviewRequired: false, idempotent: true };
+    }
     const trusted = await this.phoneEvidence.getEvidenceForUser(userId);
     const ipCountryCode = await this.geoIp.resolveCountry(requestIp);
 
@@ -206,13 +221,6 @@ export class CountryLinqaService {
              country_verified_at = CASE WHEN $3 = 'VERIFIED' THEN now() ELSE country_verified_at END
          WHERE id = $1`,
         [userId, trusted.phoneCountryCode, risk.state]
-      );
-
-      await client.query(
-        `INSERT INTO country_discovery_preferences (user_id, mode)
-         VALUES ($1, 'MY_COUNTRY')
-         ON CONFLICT (user_id) DO NOTHING`,
-        [userId]
       );
 
       await client.query("COMMIT");

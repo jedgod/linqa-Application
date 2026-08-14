@@ -2,13 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
-import type { PhoneRegistrationService } from "../services/phone-registration.service.js";
 import type { MultiAccountService } from "../services/multi-account.service.js";
 import type { AccountSwitchService } from "../services/account-switch.service.js";
 import type { AccountPushIsolationService } from "../services/account-push-isolation.service.js";
 
 export interface MultiAccountServices {
-  phoneRegistration: PhoneRegistrationService;
   multiAccount: MultiAccountService;
   accountSwitch: AccountSwitchService;
   pushIsolation: AccountPushIsolationService;
@@ -16,48 +14,6 @@ export interface MultiAccountServices {
 
 export async function registerMultiAccountRoutes(app: FastifyInstance, config: AppConfig, s: MultiAccountServices) {
   const auth = createAuthenticator(config);
-
-  app.post("/v5/phone-verification/start", async (request, reply) => {
-    const p = await auth(request);
-    requireScope(p, "account:write");
-
-    const body = z
-      .object({
-        phoneNumber: z.string().min(4).max(32),
-        defaultCountry: z.string().length(2).optional()
-      })
-      .parse(request.body);
-
-    const result = await s.phoneRegistration.begin({
-      userId: p.userId,
-      rawNumber: body.phoneNumber,
-      ...(body.defaultCountry !== undefined ? { defaultCountry: body.defaultCountry } : {})
-    });
-
-    return reply.code(202).send(result);
-  });
-
-  app.post("/v5/phone-verification/complete", async (request, reply) => {
-    const p = await auth(request);
-    requireScope(p, "account:write");
-
-    const body = z
-      .object({
-        phoneIdentityId: z.string().uuid(),
-        challengeId: z.string().uuid(),
-        code: z.string().regex(/^\d{6}$/)
-      })
-      .parse(request.body);
-
-    return reply.send(
-      await s.phoneRegistration.complete({
-        userId: p.userId,
-        phoneIdentityId: body.phoneIdentityId,
-        challengeId: body.challengeId,
-        code: body.code
-      })
-    );
-  });
 
   // Not part of the source pack — see MultiAccountService.registerInstallation.
   app.post("/v5/installations", async (request, reply) => {
@@ -92,18 +48,18 @@ export async function registerMultiAccountRoutes(app: FastifyInstance, config: A
 
     const params = z.object({ installationId: z.string().uuid() }).parse(request.params);
 
-    const body = z
-      .object({
-        targetUserId: z.string().uuid(),
-        label: z.string().max(60).optional()
-      })
-      .parse(request.body);
+    const body = z.object({ label: z.string().max(60).optional() }).parse(request.body ?? {});
+    if (!p.deviceId || !p.sessionId) {
+      return reply.code(401).send({ error: "fresh_device_bound_authentication_required" });
+    }
+    const fresh = await s.multiAccount.isFreshAuthenticatedSession(p.userId, p.deviceId, p.sessionId);
+    if (!fresh) return reply.code(401).send({ error: "fresh_authentication_required" });
 
-    // In production, targetUserId must come from a freshly authenticated
-    // add-account ceremony, not arbitrary client input.
+    // The fresh authenticated principal is the target identity. The API no
+    // longer accepts a client-selected user id.
     const result = await s.multiAccount.add({
       installationId: params.installationId,
-      userId: body.targetUserId,
+      userId: p.userId,
       ...(body.label !== undefined ? { label: body.label } : {})
     });
 

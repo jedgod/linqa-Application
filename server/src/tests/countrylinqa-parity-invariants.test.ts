@@ -80,7 +80,7 @@ function makeService(overrides: {
   phoneEvidence?: PhoneEvidenceProvider;
   geoIp?: GeoIpProvider;
 }) {
-  const db = { query: overrides.query ?? vi.fn(), connect: overrides.connect } as unknown as Database;
+  const db = { query: overrides.query ?? vi.fn(async () => ({ rows: [], rowCount: 0 })), connect: overrides.connect } as unknown as Database;
   const subscriptions = overrides.subscriptions ?? { getTier: vi.fn(async () => "FREE" as const) };
   const phoneEvidence =
     overrides.phoneEvidence ??

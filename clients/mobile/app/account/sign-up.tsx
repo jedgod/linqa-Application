@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { SafeAreaView, StyleSheet, TextInput, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { BootstrapAuthService } from "../../services/bootstrap-auth.service";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import { PrimaryButton } from "../../components/PrimaryButton";
@@ -13,6 +13,8 @@ const bootstrapAuth = new BootstrapAuthService(API_BASE_URL);
 
 export default function SignUpScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ purpose?: string; addAccount?: string }>();
+  const purpose = params.purpose === "LOGIN" ? "LOGIN" : "REGISTRATION";
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,10 +29,10 @@ export default function SignUpScreen() {
     setBusy(true);
     setError(null);
     try {
-      const result = await bootstrapAuth.requestChallenge(validation.normalized);
+      const result = await bootstrapAuth.requestChallenge(validation.normalized, purpose);
       router.push({
         pathname: "/account/sign-up-verify",
-        params: { challengeId: result.challengeId, phone: validation.normalized }
+        params: { challengeId: result.challengeId, phone: validation.normalized, purpose, addAccount: params.addAccount ?? "0" }
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to send a verification code.");
@@ -43,9 +45,9 @@ export default function SignUpScreen() {
     <SafeAreaView style={s.screen}>
       <View style={s.content}>
         <ScreenHeader
-          eyebrow="WELCOME TO LINQA"
-          title="Enter your mobile number"
-          copy="We'll text you a 6-digit code. If this number already has a Linqa account, this signs you in on this device instead of creating a new one."
+          eyebrow={purpose === "LOGIN" ? "SIGN IN TO LINQA" : "CREATE YOUR LINQA ACCOUNT"}
+          title={purpose === "LOGIN" ? "Welcome back" : "Enter your mobile number"}
+          copy={purpose === "LOGIN" ? "Use the verified number for your existing Linqa account." : "We'll verify this genuine mobile line once and use that evidence throughout onboarding."}
         />
         <TextInput
           value={phone}

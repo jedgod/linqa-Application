@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
+import { clearAccountScopedState } from "../services/account-scope";
 
 export type LocalAccount = {
   userId: string;
@@ -127,6 +128,7 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
         if (!accounts.some((a) => a.userId === userId)) {
           throw new Error("Account is not available on this device.");
         }
+        if (userId !== activeUserId) clearAccountScopedState();
         setActiveUserId(userId);
         void safeSetItem(ACTIVE_KEY, userId);
       },
@@ -138,6 +140,7 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
       // added. Using the functional setState form here reads the real
       // latest state instead of a stale closure.
       addAndActivate: (account) => {
+        if (account.userId !== activeUserId) clearAccountScopedState();
         setAccountsState((prev) => {
           if (prev.some((a) => a.userId === account.userId)) return prev;
           if (prev.length >= 3) {

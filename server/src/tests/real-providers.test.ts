@@ -106,7 +106,7 @@ describe("service-container provider selection (real vs fail-closed/dev-fallback
     // NODE_ENV is "test" (non-production), so OTP/line-intelligence fall back
     // to the dev-console providers rather than failing closed.
     expect((services.mobileOtp as any)["provider"]).toBeInstanceOf(DevConsoleMobileOtpDeliveryProvider);
-    expect((services.phoneRegistration as any)["intelligence"]).toBeInstanceOf(DevMobileLineIntelligenceProvider);
+    expect((services.authChallenges as any)["phone"]["intelligence"]).toBeInstanceOf(DevMobileLineIntelligenceProvider);
     expect((services.emergencyEscalation as any)["notifier"]).toBeInstanceOf(FailClosedEscalationNotifier);
     expect((services.retentionArchive as any)["archive"]).toBeInstanceOf(FailClosedArchiveStorage);
   });
@@ -170,7 +170,7 @@ describe("service-container provider selection (real vs fail-closed/dev-fallback
       { ...BASE_CONFIG, TWILIO_LOOKUP_ACCOUNT_SID: "AC_lookup", TWILIO_LOOKUP_AUTH_TOKEN: "lookup-token" },
       database
     );
-    expect((services.phoneRegistration as any)["intelligence"]).toBeInstanceOf(TwilioLookupProvider);
+    expect((services.authChallenges as any)["phone"]["intelligence"]).toBeInstanceOf(TwilioLookupProvider);
   });
 
   it("selects the real webhook escalation notifier once ESCALATION_STAFF_WEBHOOK_* is fully configured", () => {

@@ -31,9 +31,9 @@ import { registerMobileFeatureRoutes } from "../routes/mobile-features.js";
 import { registerMobileHubRoutes } from "../routes/mobile-hub.js";
 import { registerMultiAccountRoutes } from "../routes/multi-account.routes.js";
 import { registerNextMobileFeatureRoutes } from "../routes/next-mobile-features.js";
+import { registerOnboardingRoutes } from "../routes/onboarding.js";
 import { registerPasskeyRoutes } from "../routes/passkeys.js";
 import { registerPrivacyRoutes } from "../routes/privacy.js";
-import { registerPhoneFirstRoutes } from "../routes/phone-first.routes.js";
 import { registerProtocolCapabilityRoutes } from "../routes/protocol-capability.js";
 import { registerPushRoutes } from "../routes/push.js";
 import { registerRecordedVideoRoutes } from "../routes/recorded-videos.js";
@@ -66,8 +66,11 @@ export async function registerAll(
   await registerEnrollmentRoutes(app, config, db, services.sessions);
   await registerAuthRoutes(app, config, db, {
     challengeService: services.authChallenges,
-    sessionService: services.sessions
+    sessionService: services.sessions,
+    phoneRegistration: services.phoneRegistration,
+    onboarding: services.onboarding
   });
+  await registerOnboardingRoutes(app, config, services.onboarding);
   await registerAttachmentRoutes(
     app,
     config,
@@ -145,16 +148,10 @@ export async function registerAll(
     diagnosticRedaction: services.diagnosticRedaction
   });
   await registerMultiAccountRoutes(app, config, {
-    phoneRegistration: services.phoneRegistration,
     multiAccount: services.multiAccount,
     accountSwitch: services.accountSwitch,
     pushIsolation: services.accountPushIsolation
   });
-  await registerPhoneFirstRoutes(app, config, {
-    registration: services.phoneFirstRegistration,
-    switcher: services.accountSwitchV3
-  });
-
   await registerAccountIdentifierRoutes(app, config, db, services.authChallenges);
   await registerCountryLinqaRoutes(app, config, db, services.countryLinqa);
   await registerCountryLinqaGoLiveRoutes(app, config, db);

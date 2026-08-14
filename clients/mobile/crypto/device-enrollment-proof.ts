@@ -21,6 +21,15 @@ export function generateDeviceKeyPair(): DeviceKeyPair {
   };
 }
 
+export function restoreDeviceKeyPair(signingPrivateKey: Uint8Array, encryptionPrivateKey: Uint8Array): DeviceKeyPair {
+  return {
+    signingPrivateKey,
+    signingPublicKey: ed25519.getPublicKey(signingPrivateKey),
+    encryptionPrivateKey,
+    encryptionPublicKey: x25519.getPublicKey(encryptionPrivateKey)
+  };
+}
+
 function concatBytes(...arrays: Uint8Array[]): Uint8Array {
   const total = arrays.reduce((sum, a) => sum + a.length, 0);
   const out = new Uint8Array(total);
