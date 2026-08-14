@@ -14,4 +14,19 @@ export async function registerOnboardingRoutes(app: FastifyInstance, config: App
       return reply.code(401).send({ error: "unauthenticated" });
     }
   });
+  app.post("/v1/onboarding/complete", async (request, reply) => {
+    let principal;
+    try {
+      principal = await authenticate(request);
+    } catch (error) {
+      request.log.warn({ err: error }, "onboarding completion authentication rejected");
+      return reply.code(401).send({ error: "unauthenticated" });
+    }
+    try {
+      return await onboarding.acknowledgeCompletion(principal.userId, principal.deviceId);
+    } catch (error) {
+      request.log.warn({ err: error }, "onboarding completion acknowledgment rejected");
+      return reply.code(409).send({ error: "onboarding_not_complete" });
+    }
+  });
 }

@@ -178,3 +178,22 @@ describe("CountryLinqaService.confirmCountry invariants", () => {
     expect(result.verificationState).toBe("VERIFIED");
   });
 });
+
+describe("CountryLinqa country clarification invariants", () => {
+  it("records review without replacing verified-country evidence", async () => {
+    const queries: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      queries.push(sql);
+      return { rows: [], rowCount: sql.includes("SELECT 1 FROM countries") ? 1 : 1 };
+    });
+    const service = makeService({
+      query,
+      phoneEvidence: { getEvidenceForUser: vi.fn(async () => ({ phoneCountryCode: "US", phoneVerified: true })) } as PhoneEvidenceProvider
+    });
+    const result = await service.requestCountryClarification("user-1", "GB");
+    expect(result).toMatchObject({ reviewRequired: true, detectedCountryCode: "US", proposedCountryCode: "GB" });
+    expect(queries.some((sql) => sql.includes("COUNTRY_CLARIFICATION_REQUESTED"))).toBe(true);
+    expect(queries.some((sql) => sql.includes("verified_country_code IS NULL"))).toBe(true);
+    expect(queries.some((sql) => sql.includes("SET verified_country_code"))).toBe(false);
+  });
+});

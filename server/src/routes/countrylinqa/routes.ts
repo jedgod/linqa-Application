@@ -23,6 +23,7 @@ const confirmCountrySchema = z.object({
   simCountryCode: countryCode.optional(),
   localeCountryCode: countryCode.optional()
 });
+const clarifyCountrySchema = z.object({ proposedCountryCode: countryCode.optional() });
 
 const discoverySearchSchema = z.object({
   q: z.string().trim().max(100).optional(),
@@ -101,6 +102,16 @@ export async function registerCountryLinqaRoutes(
       requireScope(p, "countrylinqa:write");
       const body = confirmCountrySchema.parse(request.body);
       return service.confirmCountry(p.userId, body, request.ip);
+    })
+  );
+
+  app.post(
+    "/v1/countrylinqa/verification/request-clarification",
+    withErrors(async (request) => {
+      const p = await auth(request);
+      requireScope(p, "countrylinqa:write");
+      const body = clarifyCountrySchema.parse(request.body ?? {});
+      return service.requestCountryClarification(p.userId, body.proposedCountryCode);
     })
   );
 

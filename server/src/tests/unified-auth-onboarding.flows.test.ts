@@ -7,6 +7,7 @@ type State = {
   status?: string; phone_verified?: boolean; device_enrolled?: boolean;
   recovery_required?: boolean; recovery_ready?: boolean; verified_country_code?: string | null;
   country_verification_state?: string; discovery_configured?: boolean;
+  registration_required?: boolean; completion_screen_seen_at?: string | null;
 };
 
 function flow(state: State) {
@@ -26,6 +27,8 @@ describe("Unified Authentication + Onboarding flows", () => {
     ["device enrollment is required before profile hydration", { device_enrolled: false }, "DEVICE_ENROLLMENT"],
     ["missing CountryLinqa country is inserted into onboarding", { verified_country_code: null }, "COUNTRY_CONFIRMATION"],
     ["country confirmed without discovery resumes discovery", { discovery_configured: false }, "COUNTRY_DISCOVERY"],
+    ["new account sees completion once after discovery", { registration_required: true, completion_screen_seen_at: null }, "COMPLETION"],
+    ["acknowledged completion proceeds to Home", { registration_required: true, completion_screen_seen_at: "2026-08-14T00:00:00Z" }, "COMPLETE"],
     ["blocked account fails closed after required setup", { status: "BLOCKED" }, "SECURITY_REVIEW"],
     ["phone evidence is authoritative", { phone_verified: false }, "AUTH_REQUIRED"]
   ];
@@ -48,5 +51,31 @@ describe("Unified Authentication + Onboarding flows", () => {
     expect(discoveryEntitlements("FREE")).toEqual({ MY_COUNTRY: true, SELECTED_COUNTRIES: false, REGION: false, GLOBAL: false });
     expect(discoveryEntitlements("PREMIUM").GLOBAL).toBe(false);
     expect(discoveryEntitlements("ELITE").GLOBAL).toBe(true);
+  });
+
+  it("returns the server-derived phone country for confirmation", async () => {
+    const { service } = flow({});
+    const query = (service as any).db.query as ReturnType<typeof vi.fn>;
+    query.mockImplementation(async (sql: string) => sql.includes("FROM users u")
+      ? { rows: [{ status: "ACTIVE", phone_verified: true, device_enrolled: true, recovery_required: false,
+          recovery_ready: true, verified_country_code: null, country_verification_state: "UNVERIFIED",
+          discovery_configured: false, detected_country_code: "US", detected_country_name: "United States",
+          detected_calling_code: "+1", registration_required: true }], rowCount: 1 }
+      : { rows: [], rowCount: 1 });
+    const status = await service.status("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002");
+    expect(status.detectedCountry).toEqual({ code: "US", name: "United States", callingCode: "+1" });
+  });
+
+  it("acknowledges the completion screen idempotently only after technical completion", async () => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [{ completion_screen_seen_at: "2026-08-14T12:00:00Z" }], rowCount: 1 }));
+    const service = new OnboardingService({ query } as unknown as Database);
+    vi.spyOn(service, "status").mockResolvedValue({
+      phoneVerified: true, deviceEnrollmentRequired: false, recoveryReady: true, recoveryRequired: true,
+      countryInitialized: true, countryVerificationState: "VERIFIED", discoveryConfigured: true,
+      blockers: [], detectedCountry: { code: "US", name: "United States", callingCode: "+1" },
+      onboardingCompletedAt: "2026-08-14T11:59:00Z", completionScreenSeen: false, nextStep: "COMPLETION"
+    });
+    await expect(service.acknowledgeCompletion("user-1", "device-1")).resolves.toMatchObject({ completionScreenSeen: true });
+    expect(String(query.mock.calls[0]?.[0])).toContain("completion_screen_seen_at=COALESCE");
   });
 });

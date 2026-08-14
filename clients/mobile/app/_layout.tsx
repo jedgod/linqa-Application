@@ -119,7 +119,9 @@ export default function RootLayout() {
         <Stack.Screen name="onboarding/recovery" />
         <Stack.Screen name="onboarding/recovery-verify" />
         <Stack.Screen name="onboarding/country-confirmation" />
+        <Stack.Screen name="onboarding/country-clarification" />
         <Stack.Screen name="onboarding/country-discovery" />
+        <Stack.Screen name="onboarding/complete" />
         <Stack.Screen name="onboarding/security-review" />
       </Stack>
     </AccountProvider>

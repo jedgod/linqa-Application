@@ -9,7 +9,7 @@ const routes: Record<OnboardingNextStep, string> = {
   AUTH_REQUIRED: "/welcome", DEVICE_ENROLLMENT: "/account/sign-up?purpose=LOGIN",
   RECOVERY_SETUP: "/onboarding/recovery", COUNTRY_CONFIRMATION: "/onboarding/country-confirmation",
   COUNTRY_DISCOVERY: "/onboarding/country-discovery", SECURITY_REVIEW: "/onboarding/security-review",
-  COMPLETE: "/(tabs)/home"
+  COMPLETION: "/onboarding/complete", COMPLETE: "/(tabs)/home"
 };
 
 export default function OnboardingResolver() {

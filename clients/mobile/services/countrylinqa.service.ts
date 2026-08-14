@@ -124,6 +124,13 @@ export class CountryLinqaService {
     }>("/v1/countrylinqa/verification/confirm-country", { method: "POST", body: JSON.stringify({ claimedCountryCode }) });
   }
 
+  requestCountryClarification(proposedCountryCode?: string) {
+    return this.request<{ reviewRequired: true; detectedCountryCode: string; proposedCountryCode: string | null }>(
+      "/v1/countrylinqa/verification/request-clarification",
+      { method: "POST", body: JSON.stringify({ ...(proposedCountryCode ? { proposedCountryCode } : {}) }) }
+    );
+  }
+
   feedScope() {
     return this.request<Record<string, unknown>>("/v1/countrylinqa/feed/scope");
   }

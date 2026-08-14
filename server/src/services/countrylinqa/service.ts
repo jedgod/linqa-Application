@@ -239,4 +239,26 @@ export class CountryLinqaService {
       reviewRequired: risk.state === "REVIEW_REQUIRED" || risk.state === "RESTRICTED"
     };
   }
+
+  async requestCountryClarification(userId: string, proposedCountryCode?: string) {
+    const proposed = proposedCountryCode?.toUpperCase() ?? null;
+    if (proposed) {
+      const country = await this.db.query(`SELECT 1 FROM countries WHERE code=$1 AND enabled=TRUE`, [proposed]);
+      if (country.rowCount !== 1) {
+        const error: any = new Error("Proposed country is invalid.");
+        error.status = 422; error.code = "INVALID_COUNTRY"; throw error;
+      }
+    }
+    const trusted = await this.phoneEvidence.getEvidenceForUser(userId);
+    await this.db.query(
+      `INSERT INTO country_risk_events(user_id,event_type,severity,score_delta,details)
+       VALUES($1,'COUNTRY_CLARIFICATION_REQUESTED','MEDIUM',0,$2)`,
+      [userId, { detectedCountryCode: trusted.phoneCountryCode, proposedCountryCode: proposed }]
+    );
+    await this.db.query(
+      `UPDATE users SET country_verification_state='REVIEW_REQUIRED' WHERE id=$1 AND verified_country_code IS NULL`,
+      [userId]
+    );
+    return { reviewRequired: true, detectedCountryCode: trusted.phoneCountryCode, proposedCountryCode: proposed };
+  }
 }

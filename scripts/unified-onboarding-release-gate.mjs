@@ -14,6 +14,9 @@ const checks = [
   ["cold start is server resolved", read("clients/mobile/app/index.tsx").includes('/onboarding/resolve')],
   ["Home has a server route guard", read("clients/mobile/app/(tabs)/_layout.tsx").includes('status.nextStep !== "COMPLETE"')],
   ["CountryLinqa is in onboarding", read("clients/mobile/app/onboarding/country-confirmation.tsx").includes("confirmCountry")],
+  ["detected country comes from server state", read("server/src/services/onboarding.service.ts").includes("detected_country_code")],
+  ["country clarification cannot overwrite evidence", read("server/src/services/countrylinqa/service.ts").includes("COUNTRY_CLARIFICATION_REQUESTED")],
+  ["completion requires server acknowledgment", read("clients/mobile/app/onboarding/complete.tsx").includes("acknowledgeCompletion")],
   ["account switch clears scoped state", read("clients/mobile/account/AccountContext.tsx").includes("clearAccountScopedState")]
 ];
 const failed = checks.filter(([, ok]) => !ok);
