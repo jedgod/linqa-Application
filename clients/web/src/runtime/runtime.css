@@ -1,0 +1,95 @@
+.runtime-banner {
+  display: grid;
+  gap: 4px;
+  padding: 10px 16px;
+  border-bottom: 1px solid currentColor;
+  font-size: 0.875rem;
+}
+
+.runtime-banner--demo {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.runtime-banner--hybrid {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.runtime-banner--live {
+  background: #ecfdf5;
+  color: #065f46;
+}
+
+.runtime-banner--warning {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.stage-dashboard {
+  padding: 24px;
+}
+
+.stage-dashboard > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.stage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+}
+
+.stage-card {
+  border: 1px solid #d1d5db;
+  border-radius: 14px;
+  padding: 16px;
+  background: white;
+}
+
+.stage-card__number {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+}
+
+.stage-card h3 {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.stage-card dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.stage-card dt {
+  font-size: 0.75rem;
+  opacity: 0.65;
+}
+
+.stage-card dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+}
+
+.stage-card--ready {
+  border-color: #86efac;
+}
+
+.stage-card--demo,
+.stage-card--degraded {
+  border-color: #fdba74;
+}
+
+.stage-card--failed,
+.stage-card--unavailable {
+  border-color: #fca5a5;
+}

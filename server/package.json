@@ -1,0 +1,42 @@
+{
+  "name": "@linqa/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:cleanup": "tsx src/jobs/cleanup.ts",
+    "g5:materialize": "tsx src/ga/materialize-cli.ts",
+    "g5:verify": "tsx src/ga/verify-ga-cli.ts",
+    "final:verify": "tsx src/release-closure/verify-final-cli.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-kms": "^3.1105.0",
+    "@aws-sdk/client-s3": "^3.1105.0",
+    "@aws-sdk/s3-request-presigner": "^3.1105.0",
+    "@fastify/cors": "^10.0.0",
+    "@fastify/helmet": "^13.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "@fastify/websocket": "^11.0.0",
+    "@simplewebauthn/server": "^13.3.2",
+    "fastify": "^5.0.0",
+    "jose": "^6.0.0",
+    "libphonenumber-js": "^1.13.10",
+    "pg": "^8.13.0",
+    "pino": "^9.0.0",
+    "ws": "^8.18.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0"
+  }
+}

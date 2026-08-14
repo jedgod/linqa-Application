@@ -1,0 +1,1443 @@
+Generated: 2026-08-10T04:00:31.182107+00:00
+
+LINQA PRIVATE-KEY BOUNDARY HARDENING + TWO-DEVICE CERTIFICATION CLOSURE PACK v1.0
+
+PURPOSE
+Close the final Android 1:1 E2EE integration risks:
+1) remove broad Kotlin access to long-term Ed25519/X25519 private-key bytes;
+2) import enrolled identity through one narrow zeroizing JNI boundary;
+3) keep ML-KEM-768 secret Rust-owned;
+4) protect sealed identity material with Android Keystore;
+5) certify Alice->Bob, Bob->Alice, offline delivery, duplicate retry, tamper rejection,
+   key rotation, revoked-device isolation, DB opacity, log opacity, and exact-SHA binding;
+6) prevent README promotion unless all gates are GREEN.
+
+Scope: Android 1:1 only. Group MLS, iOS, web, desktop and independent audit remain separately gated.
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/security/DeviceIdentity.kt
+==============================================================================================================
+package com.linqa.security
+
+/**
+ * Public descriptor only. This class intentionally exposes no private-key bytes.
+ */
+data class DeviceIdentity(
+    val userId: String,
+    val deviceId: String,
+    val ed25519PublicKeyB64: String,
+    val x25519PublicKeyB64: String,
+    val identityVersion: Int,
+    val createdAtIso: String,
+    val hardwareBacked: Boolean
+)
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/security/SecretBytes.kt
+==============================================================================================================
+package com.linqa.security
+
+import java.io.Closeable
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * Narrow, zeroizable secret container.
+ * Never convert to String, log, serialize, or return from UI/repository APIs.
+ */
+class SecretBytes private constructor(private var value: ByteArray?) : Closeable {
+    private val closed = AtomicBoolean(false)
+
+    companion object {
+        fun takeOwnership(bytes: ByteArray): SecretBytes = SecretBytes(bytes)
+    }
+
+    fun <T> useBytes(block: (ByteArray) -> T): T {
+        check(!closed.get()) { "secret_closed" }
+        return block(value ?: error("secret_missing"))
+    }
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) {
+            value?.fill(0)
+            value = null
+        }
+    }
+}
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/security/AndroidKeystoreWrapKey.kt
+==============================================================================================================
+package com.linqa.security
+
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
+import android.security.keystore.KeyProperties
+import java.security.KeyStore
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
+
+class AndroidKeystoreWrapKey(
+    private val alias: String = "linqa.identity.wrap.v1"
+) {
+    private val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+
+    fun getOrCreate(): SecretKey {
+        (ks.getKey(alias, null) as? SecretKey)?.let { return it }
+
+        val generator = KeyGenerator.getInstance(
+            KeyProperties.KEY_ALGORITHM_AES,
+            "AndroidKeyStore"
+        )
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                alias,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .setRandomizedEncryptionRequired(true)
+                .build()
+        )
+        return generator.generateKey()
+    }
+
+    fun isHardwareBacked(): Boolean = runCatching {
+        val key = getOrCreate()
+        val factory = SecretKeyFactory.getInstance(key.algorithm, "AndroidKeyStore")
+        val info = factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo
+        info.isInsideSecureHardware
+    }.getOrDefault(false)
+}
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/security/IdentityEnrollmentPayload.kt
+==============================================================================================================
+package com.linqa.security
+
+import android.util.Base64
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+@Serializable
+private data class EnrollmentPayloadWire(
+    val version: Int,
+    val userId: String,
+    val deviceId: String,
+    val ed25519PrivateKeyB64: String,
+    val x25519PrivateKeyB64: String
+)
+
+object IdentityEnrollmentPayload {
+    private val json = Json { encodeDefaults = true }
+
+    /**
+     * Enrollment-only. Input private arrays are destroyed before return.
+     * The returned payload must immediately be sealed by DeviceIdentityStore.
+     */
+    fun build(
+        userId: String,
+        deviceId: String,
+        ed25519Private: ByteArray,
+        x25519Private: ByteArray
+    ): ByteArray {
+        return try {
+            val wire = EnrollmentPayloadWire(
+                version = 1,
+                userId = userId,
+                deviceId = deviceId,
+                ed25519PrivateKeyB64 = Base64.encodeToString(ed25519Private, Base64.NO_WRAP),
+                x25519PrivateKeyB64 = Base64.encodeToString(x25519Private, Base64.NO_WRAP)
+            )
+            json.encodeToString(wire).toByteArray(Charsets.UTF_8)
+        } finally {
+            ed25519Private.fill(0)
+            x25519Private.fill(0)
+        }
+    }
+}
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/security/DeviceIdentityStore.kt
+==============================================================================================================
+package com.linqa.security
+
+import android.content.Context
+import android.util.Base64
+import androidx.core.content.edit
+import java.time.Instant
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+
+/**
+ * Seals the enrollment identity payload with an AES-256 Android Keystore wrapping key.
+ * No general-purpose unseal API exists.
+ */
+class DeviceIdentityStore(
+    context: Context,
+    private val wrapKey: AndroidKeystoreWrapKey = AndroidKeystoreWrapKey()
+) {
+    private val prefs = context.getSharedPreferences(
+        "linqa_identity_secure_v1",
+        Context.MODE_PRIVATE
+    )
+
+    fun sealEnrollmentPayload(payload: ByteArray) {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, wrapKey.getOrCreate())
+
+        val ciphertext = try {
+            cipher.doFinal(payload)
+        } finally {
+            payload.fill(0)
+        }
+
+        try {
+            prefs.edit(commit = true) {
+                putInt("version", 1)
+                putString("nonce", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+                putString("ciphertext", Base64.encodeToString(ciphertext, Base64.NO_WRAP))
+                putString("createdAt", Instant.now().toString())
+            }
+        } finally {
+            ciphertext.fill(0)
+        }
+    }
+
+    /**
+     * Security/core-module-only bootstrap method.
+     * Do not make public.
+     */
+    internal fun unsealForNativeImport(): SecretBytes {
+        val nonceString = requireNotNull(prefs.getString("nonce", null)) {
+            "identity_nonce_missing"
+        }
+        val ciphertextString = requireNotNull(prefs.getString("ciphertext", null)) {
+            "identity_ciphertext_missing"
+        }
+
+        val nonce = Base64.decode(nonceString, Base64.NO_WRAP)
+        val ciphertext = Base64.decode(ciphertextString, Base64.NO_WRAP)
+
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            wrapKey.getOrCreate(),
+            GCMParameterSpec(128, nonce)
+        )
+
+        return try {
+            SecretBytes.takeOwnership(cipher.doFinal(ciphertext))
+        } finally {
+            nonce.fill(0)
+            ciphertext.fill(0)
+        }
+    }
+
+    fun hardwareBacked(): Boolean = wrapKey.isHardwareBacked()
+
+    fun clearSealedIdentity() {
+        prefs.edit(commit = true) { clear() }
+    }
+}
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/core/NativeCore.kt
+==============================================================================================================
+package com.linqa.core
+
+object NativeCore {
+    init {
+        System.loadLibrary("linqa_core")
+    }
+
+    /**
+     * The only JNI entry point permitted to receive long-term enrollment private material.
+     * Native code copies synchronously and overwrites the Java/Kotlin input array before return.
+     */
+    internal external fun importDeviceIdentitySealedPayload(
+        payload: ByteArray
+    ): NativeIdentityImportResult
+
+    external fun identityReady(): Boolean
+    external fun identityFingerprint(): String
+    external fun rotateHybridKeyPackage(): String
+    external fun runEncryptDecryptSelfTest(): Boolean
+}
+
+data class NativeIdentityImportResult(
+    val identityVersion: Int,
+    val ed25519PublicKeyB64: String,
+    val x25519PublicKeyB64: String,
+    val mlKem768PublicKeyB64: String,
+    val coreIdentityFingerprint: String
+)
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/core/NativeCoreIdentityImporter.kt
+==============================================================================================================
+package com.linqa.core
+
+import com.linqa.security.DeviceIdentityStore
+
+/**
+ * Single approved private-identity import boundary.
+ */
+class NativeCoreIdentityImporter(
+    private val store: DeviceIdentityStore
+) {
+    fun importOnce(): NativeIdentityImportResult {
+        check(!NativeCore.identityReady()) { "native_identity_already_loaded" }
+
+        store.unsealForNativeImport().use { secret ->
+            return secret.useBytes { payload ->
+                NativeCore.importDeviceIdentitySealedPayload(payload)
+            }
+        }
+    }
+}
+
+
+==============================================================================================================
+FILE: core/src/identity/device_identity.rs
+==============================================================================================================
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use parking_lot::RwLock;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
+use zeroize::{Zeroize, Zeroizing};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnrollmentPayload {
+    version: u32,
+    user_id: String,
+    device_id: String,
+    ed25519_private_key_b64: String,
+    x25519_private_key_b64: String,
+}
+
+pub struct CoreDeviceIdentity {
+    pub version: u32,
+    pub user_id: String,
+    pub device_id: String,
+
+    // Replace Vec<u8> with Linqa's exact strongly typed secret-key types.
+    ed25519_private: Zeroizing<Vec<u8>>,
+    x25519_private: Zeroizing<Vec<u8>>,
+
+    // The ML-KEM secret remains Rust-core owned.
+    ml_kem_768_private: Zeroizing<Vec<u8>>,
+
+    pub ed25519_public_b64: String,
+    pub x25519_public_b64: String,
+    pub ml_kem_768_public_b64: String,
+}
+
+static IDENTITY: OnceLock<RwLock<Option<CoreDeviceIdentity>>> = OnceLock::new();
+
+fn identity_slot() -> &'static RwLock<Option<CoreDeviceIdentity>> {
+    IDENTITY.get_or_init(|| RwLock::new(None))
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityImportResult {
+    pub identity_version: u32,
+    pub ed25519_public_key_b64: String,
+    pub x25519_public_key_b64: String,
+    pub ml_kem_768_public_key_b64: String,
+    pub core_identity_fingerprint: String,
+}
+
+pub fn import_enrollment_payload(
+    payload_bytes: &mut [u8]
+) -> Result<IdentityImportResult, String> {
+    let parsed: EnrollmentPayload = serde_json::from_slice(payload_bytes)
+        .map_err(|_| "invalid_identity_payload".to_string())?;
+
+    let mut ed = B64.decode(parsed.ed25519_private_key_b64.as_bytes())
+        .map_err(|_| "invalid_ed25519_private_key".to_string())?;
+    let mut x = B64.decode(parsed.x25519_private_key_b64.as_bytes())
+        .map_err(|_| "invalid_x25519_private_key".to_string())?;
+
+    let result = (|| {
+        let (ed_pub, x_pub) = derive_public_identity_using_existing_linqa_types(&ed, &x)?;
+        let (ml_private, ml_public) = generate_or_restore_existing_ml_kem_768()?;
+
+        let fp = identity_fingerprint(&ed_pub, &x_pub, &ml_public);
+
+        let identity = CoreDeviceIdentity {
+            version: parsed.version,
+            user_id: parsed.user_id,
+            device_id: parsed.device_id,
+            ed25519_private: Zeroizing::new(ed.clone()),
+            x25519_private: Zeroizing::new(x.clone()),
+            ml_kem_768_private: Zeroizing::new(ml_private),
+            ed25519_public_b64: B64.encode(&ed_pub),
+            x25519_public_b64: B64.encode(&x_pub),
+            ml_kem_768_public_b64: B64.encode(&ml_public),
+        };
+
+        let output = IdentityImportResult {
+            identity_version: identity.version,
+            ed25519_public_key_b64: identity.ed25519_public_b64.clone(),
+            x25519_public_key_b64: identity.x25519_public_b64.clone(),
+            ml_kem_768_public_key_b64: identity.ml_kem_768_public_b64.clone(),
+            core_identity_fingerprint: fp,
+        };
+
+        *identity_slot().write() = Some(identity);
+        Ok(output)
+    })();
+
+    ed.zeroize();
+    x.zeroize();
+    payload_bytes.zeroize();
+    result
+}
+
+pub fn identity_ready() -> bool {
+    identity_slot().read().is_some()
+}
+
+pub fn with_identity<T>(
+    f: impl FnOnce(&CoreDeviceIdentity) -> Result<T, String>
+) -> Result<T, String> {
+    let guard = identity_slot().read();
+    let identity = guard.as_ref().ok_or("device_identity_not_imported")?;
+    f(identity)
+}
+
+fn identity_fingerprint(ed: &[u8], x: &[u8], ml: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(b"linqa/device-identity/v1");
+    h.update(ed);
+    h.update(x);
+    h.update(ml);
+    hex::encode(h.finalize())
+}
+
+/*
+ * EXACT-REPOSITORY ADAPTERS:
+ * Replace these two functions with the CURRENT Linqa Ed25519/X25519/ML-KEM APIs.
+ * Do not add a second cryptographic implementation.
+ */
+fn derive_public_identity_using_existing_linqa_types(
+    _ed_private: &[u8],
+    _x_private: &[u8]
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    Err("wire_existing_ed25519_x25519_types".into())
+}
+
+fn generate_or_restore_existing_ml_kem_768()
+    -> Result<(Vec<u8>, Vec<u8>), String>
+{
+    Err("wire_existing_ml_kem_768_core_keygen".into())
+}
+
+
+==============================================================================================================
+FILE: core/src/android/identity_jni.rs
+==============================================================================================================
+use crate::identity::device_identity::import_enrollment_payload;
+use jni::{
+    objects::{JByteArray, JClass, JObject, JValue},
+    sys::jobject,
+    JNIEnv,
+};
+use std::ptr;
+use zeroize::Zeroize;
+
+#[no_mangle]
+pub extern "system"
+fn Java_com_linqa_core_NativeCore_importDeviceIdentitySealedPayload(
+    mut env: JNIEnv,
+    _class: JClass,
+    payload: JByteArray,
+) -> jobject {
+    let result = (|| -> Result<jobject, String> {
+        let mut bytes = env.convert_byte_array(&payload)
+            .map_err(|_| "jni_identity_copy_failed".to_string())?;
+
+        let imported = import_enrollment_payload(&mut bytes);
+        bytes.zeroize();
+
+        // Best-effort overwrite the Java/Kotlin array as well.
+        let len = env.get_array_length(&payload)
+            .map_err(|_| "jni_array_length_failed".to_string())?;
+        let zeros = vec![0i8; len as usize];
+        env.set_byte_array_region(&payload, 0, &zeros)
+            .map_err(|_| "jni_java_array_wipe_failed".to_string())?;
+
+        let imported = imported?;
+
+        let cls = env.find_class("com/linqa/core/NativeIdentityImportResult")
+            .map_err(|_| "jni_result_class_missing".to_string())?;
+
+        let ed = env.new_string(imported.ed25519_public_key_b64)
+            .map_err(|_| "jni_ed_public_failed".to_string())?;
+        let x = env.new_string(imported.x25519_public_key_b64)
+            .map_err(|_| "jni_x_public_failed".to_string())?;
+        let ml = env.new_string(imported.ml_kem_768_public_key_b64)
+            .map_err(|_| "jni_ml_public_failed".to_string())?;
+        let fp = env.new_string(imported.core_identity_fingerprint)
+            .map_err(|_| "jni_fp_failed".to_string())?;
+
+        let obj = env.new_object(
+            cls,
+            "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+            &[
+                JValue::Int(imported.identity_version as i32),
+                JValue::Object(&JObject::from(ed)),
+                JValue::Object(&JObject::from(x)),
+                JValue::Object(&JObject::from(ml)),
+                JValue::Object(&JObject::from(fp)),
+            ],
+        ).map_err(|_| "jni_result_construct_failed".to_string())?;
+
+        Ok(obj.into_raw())
+    })();
+
+    match result {
+        Ok(value) => value,
+        Err(code) => {
+            let _ = env.throw_new("java/lang/IllegalStateException", code);
+            ptr::null_mut()
+        }
+    }
+}
+
+
+==============================================================================================================
+FILE: core/Cargo.toml.patch
+==============================================================================================================
+# Add/confirm these dependencies in the EXISTING core/Cargo.toml:
+#
+# zeroize = { version = "1", features = ["zeroize_derive"] }
+# parking_lot = "0.12"
+# sha2 = "0.10"
+# base64 = "0.22"
+# hex = "0.4"
+# serde = { version = "1", features = ["derive"] }
+# serde_json = "1"
+#
+# Keep the repository's current Ed25519/X25519/ML-KEM crates authoritative.
+
+
+==============================================================================================================
+FILE: certification/lib/common.sh
+==============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+EVIDENCE_DIR="${LINQA_EVIDENCE_DIR:-$ROOT/certification/evidence}"
+mkdir -p "$EVIDENCE_DIR"
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+pass() { echo "PASS: $*"; }
+
+write_gate() {
+  local gate="$1" status="$2" detail="$3"
+  python3 - "$EVIDENCE_DIR/gates.json" "$gate" "$status" "$detail" <<'PY'
+import json,sys,os,datetime
+path,gate,status,detail=sys.argv[1:]
+data={}
+if os.path.exists(path):
+    with open(path,encoding="utf-8") as f:data=json.load(f)
+data[gate]={
+  "status":status,
+  "detail":detail,
+  "recordedAt":datetime.datetime.now(datetime.timezone.utc).isoformat()
+}
+tmp=path+".tmp"
+with open(tmp,"w",encoding="utf-8") as f:
+    json.dump(data,f,indent=2,sort_keys=True)
+os.replace(tmp,path)
+PY
+}
+
+
+==============================================================================================================
+FILE: certification/13_private_key_boundary_scan.sh
+==============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+OUT="$EVIDENCE_DIR/private-key-boundary-scan.txt"
+: > "$OUT"
+
+PATTERN='(privateKeyBytes|rawPrivateKey|getPrivateKeyBytes|exportPrivateKey|ed25519PrivateBytes|x25519PrivateBytes)'
+
+for root in \
+  "$ROOT/clients/android/src/main" \
+  "$ROOT/clients/android/app/src/main"
+do
+  [[ -d "$root" ]] || continue
+  grep -RniE "$PATTERN" "$root" >> "$OUT" || true
+done
+
+if [[ -s "$OUT" ]]; then
+  write_gate CPK1 FAIL "broad raw private-key exposure API found"
+  cat "$OUT"
+  exit 1
+fi
+
+write_gate CPK1 PASS "no broad Kotlin raw private-key API detected"
+pass "private-key boundary"
+
+
+==============================================================================================================
+FILE: certification/14_release_surface_scan.sh
+==============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+for f in \
+  "$ROOT/clients/android/app/src/main/AndroidManifest.xml" \
+  "$ROOT/clients/android/app/src/release/AndroidManifest.xml"
+do
+  [[ -f "$f" ]] || continue
+  if grep -Eqi \
+    '(CERT_SEND|CERT_ROTATE|CERT_REVOKE|CERT_INJECT_TAMPER|CertificationReceiver)' \
+    "$f"
+  then
+    write_gate CPK2 FAIL "certification/debug receiver exposed in release manifest"
+    fail "debug certification surface found in $f"
+  fi
+done
+
+write_gate CPK2 PASS "release manifest has no certification control"
+pass "release surface"
+
+
+==============================================================================================================
+FILE: certification/15_native_secret_log_scan.sh
+==============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+OUT="$EVIDENCE_DIR/native-secret-log-static-scan.txt"
+: > "$OUT"
+
+grep -RniE \
+  '(println!|eprintln!|log::|tracing::|android_log).*(private|secret|seed|ed25519|x25519|ml.?kem)' \
+  "$ROOT/core/src" >> "$OUT" || true
+
+if [[ -s "$OUT" ]]; then
+  write_gate CPK3 FAIL "possible native secret logging found"
+  cat "$OUT"
+  exit 1
+fi
+
+write_gate CPK3 PASS "no obvious native private-key logging found"
+pass "native secret log scan"
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/certification/CertificationEvent.kt
+==============================================================================================================
+package com.linqa.certification
+
+import org.json.JSONObject
+import java.time.Instant
+
+data class CertificationEvent(
+    val runId: String,
+    val gitSha: String,
+    val deviceRole: String,
+    val deviceId: String,
+    val userId: String,
+    val event: String,
+    val status: String,
+    val evidence: Map<String, Any?> = emptyMap()
+) {
+    fun toJson(): String {
+        val evidenceJson = JSONObject()
+        evidence.forEach { (k, v) -> evidenceJson.put(k, v) }
+
+        return JSONObject()
+            .put("schemaVersion", 1)
+            .put("runId", runId)
+            .put("gitSha", gitSha)
+            .put("deviceRole", deviceRole)
+            .put("deviceId", deviceId)
+            .put("userId", userId)
+            .put("event", event)
+            .put("status", status)
+            .put("timestamp", Instant.now().toString())
+            .put("evidence", evidenceJson)
+            .toString()
+    }
+}
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/certification/CertificationRecorder.kt
+==============================================================================================================
+package com.linqa.certification
+
+import android.content.Context
+import java.io.File
+
+class CertificationRecorder(private val context: Context) {
+    private val file: File
+        get() = File(context.filesDir, "linqa-certification-events.jsonl")
+
+    @Synchronized
+    fun record(event: CertificationEvent) {
+        // IDs, digests and result codes only. Never plaintext or key material.
+        file.appendText(event.toJson() + "\n", Charsets.UTF_8)
+    }
+}
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/certification/CertificationDigest.kt
+==============================================================================================================
+package com.linqa.certification
+
+import java.security.MessageDigest
+
+object CertificationDigest {
+    fun sha256Utf8(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+}
+
+
+==============================================================================================================
+FILE: clients/android/src/main/java/com/linqa/certification/TwoDeviceCertificationHooks.kt
+==============================================================================================================
+package com.linqa.certification
+
+class TwoDeviceCertificationHooks(
+    private val recorder: CertificationRecorder,
+    private val runId: String,
+    private val gitSha: String,
+    private val role: String,
+    private val userId: String,
+    private val deviceId: String
+) {
+    fun sendAccepted(
+        envelopeId: String,
+        clientMessageId: String,
+        recipientDeviceId: String,
+        plaintext: String
+    ) = record("SEND_ACCEPTED", mapOf(
+        "envelopeId" to envelopeId,
+        "clientMessageId" to clientMessageId,
+        "recipientDeviceId" to recipientDeviceId,
+        "plaintextSha256" to CertificationDigest.sha256Utf8(plaintext)
+    ))
+
+    fun receiveDecrypted(
+        envelopeId: String,
+        clientMessageId: String,
+        senderDeviceId: String,
+        plaintext: String
+    ) = record("RECEIVE_DECRYPTED", mapOf(
+        "envelopeId" to envelopeId,
+        "clientMessageId" to clientMessageId,
+        "senderDeviceId" to senderDeviceId,
+        "plaintextSha256" to CertificationDigest.sha256Utf8(plaintext)
+    ))
+
+    fun offlineEnter() = record("OFFLINE_ENTER")
+    fun offlineExit() = record("OFFLINE_EXIT")
+
+    fun duplicateRetry(
+        originalEnvelopeId: String,
+        retryEnvelopeId: String,
+        noDuplicateLocalMessage: Boolean
+    ) = record(
+        "DUPLICATE_RETRY",
+        mapOf(
+            "originalEnvelopeId" to originalEnvelopeId,
+            "retryEnvelopeId" to retryEnvelopeId,
+            "noDuplicateLocalMessage" to noDuplicateLocalMessage
+        ),
+        if (noDuplicateLocalMessage) "PASS" else "FAIL"
+    )
+
+    fun tamperRejected(code: String) = record(
+        "TAMPER_REJECTED",
+        mapOf("failureCode" to code),
+        if (code in setOf(
+                "authentication_failed",
+                "invalid_mac",
+                "aead_open_failed",
+                "aad_binding_mismatch"
+            )
+        ) "PASS" else "FAIL"
+    )
+
+    fun keyRotated(
+        oldPackageId: String,
+        newPackageId: String,
+        oldPackageRejected: Boolean
+    ) = record(
+        "KEY_ROTATED",
+        mapOf(
+            "oldPackageId" to oldPackageId,
+            "newPackageId" to newPackageId,
+            "oldPackageRejected" to oldPackageRejected
+        ),
+        if (oldPackageRejected && oldPackageId != newPackageId) "PASS" else "FAIL"
+    )
+
+    fun revokedDeviceBlocked(
+        revokedDeviceId: String,
+        postRevokeEnvelopeCount: Int
+    ) = record(
+        "REVOKED_DEVICE_BLOCKED",
+        mapOf(
+            "revokedDeviceId" to revokedDeviceId,
+            "postRevokeEnvelopeCount" to postRevokeEnvelopeCount
+        ),
+        if (postRevokeEnvelopeCount == 0) "PASS" else "FAIL"
+    )
+
+    private fun record(
+        event: String,
+        evidence: Map<String, Any?> = emptyMap(),
+        status: String = "PASS"
+    ) {
+        recorder.record(
+            CertificationEvent(
+                runId = runId,
+                gitSha = gitSha,
+                deviceRole = role,
+                deviceId = deviceId,
+                userId = userId,
+                event = event,
+                status = status,
+                evidence = evidence
+            )
+        )
+    }
+}
+
+
+==============================================================================================================
+FILE: certification/pull_android_evidence.sh
+==============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+APP_ID="${LINQA_ANDROID_APP_ID:-com.linqa}"
+
+for serial in "$@"; do
+  out="$EVIDENCE_DIR/device-${serial//[:\/]/_}.jsonl"
+  adb -s "$serial" shell run-as "$APP_ID" \
+    cat files/linqa-certification-events.jsonl > "$out"
+  [[ -s "$out" ]] || fail "no evidence from $serial"
+  pass "pulled evidence from $serial"
+done
+
+
+==============================================================================================================
+FILE: certification/16_validate_two_device.py
+==============================================================================================================
+#!/usr/bin/env python3
+import json, glob, os, subprocess
+from collections import defaultdict
+
+root=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+evdir=os.environ.get(
+    "LINQA_EVIDENCE_DIR",
+    os.path.join(root,"certification","evidence")
+)
+sha=subprocess.check_output(
+    ["git","-C",root,"rev-parse","HEAD"],
+    text=True
+).strip()
+
+events=[]
+for path in glob.glob(os.path.join(evdir,"device-*.jsonl")):
+    with open(path,encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                events.append(json.loads(line))
+
+if not events:
+    raise SystemExit("FAIL: no real device evidence")
+
+for e in events:
+    if e["gitSha"] != sha:
+        raise SystemExit("FAIL: device evidence SHA mismatch")
+    if e["status"] != "PASS":
+        raise SystemExit(f"FAIL: failed device event {e}")
+
+roles={e["deviceRole"] for e in events}
+if not {"alice","bob"} <= roles:
+    raise SystemExit("FAIL: Alice and Bob evidence both required")
+
+sends={}
+receives={}
+for e in events:
+    if e["event"]=="SEND_ACCEPTED":
+        sends[e["evidence"]["clientMessageId"]]=e
+    if e["event"]=="RECEIVE_DECRYPTED":
+        receives[e["evidence"]["clientMessageId"]]=e
+
+pairs=set()
+for mid,send in sends.items():
+    receive=receives.get(mid)
+    if not receive:
+        continue
+    if send["deviceRole"] == receive["deviceRole"]:
+        continue
+    if send["evidence"]["plaintextSha256"] != receive["evidence"]["plaintextSha256"]:
+        raise SystemExit(f"FAIL: digest mismatch for {mid}")
+    pairs.add((send["deviceRole"],receive["deviceRole"]))
+
+if ("alice","bob") not in pairs:
+    raise SystemExit("FAIL: Alice -> Bob not proven")
+if ("bob","alice") not in pairs:
+    raise SystemExit("FAIL: Bob -> Alice not proven")
+
+for required in [
+    "DUPLICATE_RETRY",
+    "TAMPER_REJECTED",
+    "KEY_ROTATED",
+    "REVOKED_DEVICE_BLOCKED"
+]:
+    if not any(e["event"]==required for e in events):
+        raise SystemExit(f"FAIL: {required} missing")
+
+rotation=[
+    e for e in events
+    if e["event"]=="KEY_ROTATED"
+    and e["evidence"].get("oldPackageRejected") is True
+]
+if not rotation:
+    raise SystemExit("FAIL: stale key package rejection not proven")
+
+revoked=[
+    e for e in events
+    if e["event"]=="REVOKED_DEVICE_BLOCKED"
+    and e["evidence"].get("postRevokeEnvelopeCount")==0
+]
+if not revoked:
+    raise SystemExit("FAIL: revoked-device isolation not proven")
+
+offline=False
+by_role=defaultdict(list)
+for e in events:
+    by_role[e["deviceRole"]].append(e)
+
+for role,seq in by_role.items():
+    names=[e["event"] for e in seq]
+    if "OFFLINE_ENTER" not in names or "OFFLINE_EXIT" not in names:
+        continue
+    i=names.index("OFFLINE_ENTER")
+    j=names.index("OFFLINE_EXIT",i+1)
+    if any(x=="RECEIVE_DECRYPTED" for x in names[j+1:]):
+        offline=True
+
+if not offline:
+    raise SystemExit("FAIL: offline -> reconnect -> decrypt sequence not proven")
+
+summary={
+    "gitSha":sha,
+    "status":"GREEN",
+    "requirements":{
+        "aliceToBob":True,
+        "bobToAlice":True,
+        "offlineDelivery":True,
+        "duplicateRetry":True,
+        "tamperRejected":True,
+        "keyRotation":True,
+        "revokedDeviceIsolation":True
+    }
+}
+with open(
+    os.path.join(evdir,"device-certification-summary.json"),
+    "w",
+    encoding="utf-8"
+) as f:
+    json.dump(summary,f,indent=2,sort_keys=True)
+
+print("PASS: real two-device matrix")
+
+
+==============================================================================================================
+FILE: certification/17_database_opacity.sh
+==============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+DB="${LINQA_DATABASE_URL:?LINQA_DATABASE_URL required}"
+CANARY="${LINQA_PLAINTEXT_CANARY:?LINQA_PLAINTEXT_CANARY required}"
+
+BAD="$(psql "$DB" -Atc "
+SELECT table_schema||'.'||table_name||'.'||column_name
+FROM information_schema.columns
+WHERE table_schema='public'
+AND lower(column_name) ~
+'(plaintext|cleartext|message_body|decrypted_content|content_text)';
+")"
+
+if [[ -n "$BAD" ]]; then
+  printf '%s\n' "$BAD" > "$EVIDENCE_DIR/db-forbidden-columns.txt"
+  write_gate C8 FAIL "plaintext-like database columns detected"
+  fail "DB opacity schema failure"
+fi
+
+python3 - "$DB" "$CANARY" "$EVIDENCE_DIR/db-opacity.json" <<'PY'
+import subprocess,sys,json
+db,canary,out=sys.argv[1:]
+q="""
+SELECT table_schema,table_name,column_name
+FROM information_schema.columns
+WHERE table_schema='public'
+AND data_type IN ('text','character varying','json','jsonb')
+AND lower(table_name) ~ '(message|relay|envelope|mailbox|delivery)';
+"""
+rows=subprocess.check_output(
+    ["psql",db,"-At","-F","\t","-c",q],
+    text=True
+).splitlines()
+
+hits=[]
+for row in rows:
+    if not row: continue
+    schema,table,col=row.split("\t")
+    ident=lambda s:'"'+s.replace('"','""')+'"'
+    sql=(
+      f"SELECT count(*) FROM {ident(schema)}.{ident(table)} "
+      f"WHERE CAST({ident(col)} AS text) LIKE '%' || $${canary}$$ || '%';"
+    )
+    count=int(subprocess.check_output(
+        ["psql",db,"-At","-c",sql],
+        text=True
+    ).strip() or 0)
+    if count:
+        hits.append({"table":table,"column":col,"count":count})
+
+with open(out,"w",encoding="utf-8") as f:
+    json.dump({"canaryFound":bool(hits),"hits":hits},f,indent=2)
+
+if hits:
+    raise SystemExit("plaintext canary found in database")
+PY
+
+write_gate C8 PASS "database opacity passed"
+
+
+==============================================================================================================
+FILE: certification/18_log_opacity.sh
+==============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+LOG="${LINQA_SERVER_LOG:?LINQA_SERVER_LOG required}"
+CANARY="${LINQA_PLAINTEXT_CANARY:?LINQA_PLAINTEXT_CANARY required}"
+
+[[ -f "$LOG" ]] || fail "missing server log: $LOG"
+
+if grep -Fq -- "$CANARY" "$LOG"; then
+  grep -Fn -- "$CANARY" "$LOG" > "$EVIDENCE_DIR/log-canary-hits.txt" || true
+  write_gate C9 FAIL "plaintext canary found in server log"
+  exit 1
+fi
+
+if grep -Eqi \
+  '"(plaintext|plaintextUtf8|messageBody|decryptedContent|cleartext)"[[:space:]]*:' \
+  "$LOG"
+then
+  write_gate C9 FAIL "forbidden plaintext field found in server log"
+  exit 1
+fi
+
+write_gate C9 PASS "log opacity passed"
+
+
+==============================================================================================================
+FILE: certification/19_private_key_verdict.py
+==============================================================================================================
+#!/usr/bin/env python3
+import json,os,datetime
+
+root=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+evdir=os.environ.get(
+    "LINQA_EVIDENCE_DIR",
+    os.path.join(root,"certification","evidence")
+)
+gp=os.path.join(evdir,"gates.json")
+
+with open(gp,encoding="utf-8") as f:
+    gates=json.load(f)
+
+required=["CPK1","CPK2","CPK3"]
+failed=[g for g in required if gates.get(g,{}).get("status")!="PASS"]
+
+verdict={
+    "status":"GREEN" if not failed else "RED",
+    "required":required,
+    "failed":failed,
+    "evaluatedAt":datetime.datetime.now(datetime.timezone.utc).isoformat()
+}
+
+with open(
+    os.path.join(evdir,"private-key-boundary-verdict.json"),
+    "w",
+    encoding="utf-8"
+) as f:
+    json.dump(verdict,f,indent=2)
+
+print(json.dumps(verdict,indent=2))
+if failed:
+    raise SystemExit(1)
+
+
+==============================================================================================================
+FILE: certification/20_bind_evidence.py
+==============================================================================================================
+#!/usr/bin/env python3
+import os,glob,json,hashlib,subprocess,datetime
+
+root=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+evdir=os.environ.get(
+    "LINQA_EVIDENCE_DIR",
+    os.path.join(root,"certification","evidence")
+)
+sha=subprocess.check_output(
+    ["git","-C",root,"rev-parse","HEAD"],
+    text=True
+).strip()
+
+files=[]
+for path in sorted(glob.glob(os.path.join(evdir,"*"))):
+    if os.path.isdir(path): continue
+    if os.path.basename(path) in {"manifest.json","manifest.sha256"}: continue
+    h=hashlib.sha256()
+    with open(path,"rb") as f:
+        for chunk in iter(lambda:f.read(1024*1024),b""):
+            h.update(chunk)
+    files.append({
+        "path":os.path.relpath(path,root).replace("\\","/"),
+        "bytes":os.path.getsize(path),
+        "sha256":h.hexdigest()
+    })
+
+manifest={
+    "schemaVersion":1,
+    "gitSha":sha,
+    "createdAt":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "files":files
+}
+
+mp=os.path.join(evdir,"manifest.json")
+with open(mp,"w",encoding="utf-8") as f:
+    json.dump(manifest,f,indent=2,sort_keys=True)
+
+digest=hashlib.sha256(open(mp,"rb").read()).hexdigest()
+with open(os.path.join(evdir,"manifest.sha256"),"w",encoding="utf-8") as f:
+    f.write(digest+"  manifest.json\n")
+
+print("PASS:",digest)
+
+
+==============================================================================================================
+FILE: certification/21_final_closure_gate.py
+==============================================================================================================
+#!/usr/bin/env python3
+import json,os,subprocess,datetime
+
+root=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+evdir=os.environ.get(
+    "LINQA_EVIDENCE_DIR",
+    os.path.join(root,"certification","evidence")
+)
+sha=subprocess.check_output(
+    ["git","-C",root,"rev-parse","HEAD"],
+    text=True
+).strip()
+
+def load(name):
+    path=os.path.join(evdir,name)
+    if not os.path.exists(path):
+        raise SystemExit(f"FAIL: missing {name}")
+    with open(path,encoding="utf-8") as f:
+        return json.load(f)
+
+transport=load("verdict.json")
+keys=load("private-key-boundary-verdict.json")
+device=load("device-certification-summary.json")
+manifest=load("manifest.json")
+gates=load("gates.json")
+
+conditions={
+    "transportGreen":transport.get("status")=="GREEN",
+    "privateKeyBoundaryGreen":keys.get("status")=="GREEN",
+    "twoDeviceGreen":device.get("status")=="GREEN",
+    "databaseOpacity":gates.get("C8",{}).get("status")=="PASS",
+    "logOpacity":gates.get("C9",{}).get("status")=="PASS",
+    "exactShaMatch":(
+        transport.get("gitSha")==sha
+        and device.get("gitSha")==sha
+        and manifest.get("gitSha")==sha
+    )
+}
+
+verdict={
+    "schemaVersion":1,
+    "gitSha":sha,
+    "status":"GREEN" if all(conditions.values()) else "RED",
+    "conditions":conditions,
+    "evaluatedAt":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "certifiedScope":{
+        "android1to1E2ee":True,
+        "groupMls":False,
+        "ios":False,
+        "web":False,
+        "desktop":False,
+        "independentSecurityAudit":False
+    }
+}
+
+path=os.path.join(evdir,"android-1to1-e2ee-final-verdict.json")
+with open(path,"w",encoding="utf-8") as f:
+    json.dump(verdict,f,indent=2)
+
+print(json.dumps(verdict,indent=2))
+if verdict["status"]!="GREEN":
+    raise SystemExit(1)
+
+
+==============================================================================================================
+FILE: certification/22_promote_readme.py
+==============================================================================================================
+#!/usr/bin/env python3
+import json,os,subprocess
+
+root=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+evdir=os.environ.get(
+    "LINQA_EVIDENCE_DIR",
+    os.path.join(root,"certification","evidence")
+)
+vp=os.path.join(evdir,"android-1to1-e2ee-final-verdict.json")
+
+if not os.path.exists(vp):
+    raise SystemExit("Refusing README promotion: final verdict missing")
+
+with open(vp,encoding="utf-8") as f:
+    verdict=json.load(f)
+
+sha=subprocess.check_output(
+    ["git","-C",root,"rev-parse","HEAD"],
+    text=True
+).strip()
+
+if verdict.get("status")!="GREEN":
+    raise SystemExit("Refusing README promotion: closure is RED")
+if verdict.get("gitSha")!=sha:
+    raise SystemExit("Refusing README promotion: SHA mismatch")
+
+statement=f"""Android 1:1 E2EE transport is wired and two-device certified at exact revision `{sha}`.
+Long-term Ed25519/X25519 private keys are not broadly exportable through Kotlin; enrollment
+material crosses a narrow zeroizing JNI import boundary protected at rest by Android Keystore.
+Hybrid X25519 + ML-KEM-768 key packages, ciphertext-only bidirectional delivery, offline
+delivery, idempotent retry, tamper rejection, key rotation, revoked-device isolation,
+database opacity, and log opacity passed exact-revision certification.
+Group MLS, iOS/web/desktop parity, and independent security review remain separately gated."""
+
+readme=os.path.join(root,"README.md")
+text=open(readme,encoding="utf-8").read()
+marker="## Android 1:1 E2EE Certification"
+
+if marker in text:
+    text=text.split(marker,1)[0].rstrip()+"\n\n"+marker+"\n\n"+statement+"\n"
+else:
+    text=text.rstrip()+"\n\n"+marker+"\n\n"+statement+"\n"
+
+tmp=readme+".tmp"
+with open(tmp,"w",encoding="utf-8") as f:
+    f.write(text)
+os.replace(tmp,readme)
+
+print("README promoted for",sha)
+
+
+==============================================================================================================
+FILE: certification/run_private_key_and_two_device_closure.sh
+==============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+if [[ -f certification/config.env ]]; then
+  set -a
+  source certification/config.env
+  set +a
+fi
+
+export LINQA_EVIDENCE_DIR="${LINQA_EVIDENCE_DIR:-$ROOT/certification/evidence}"
+mkdir -p "$LINQA_EVIDENCE_DIR"
+
+if [[ -z "${LINQA_PLAINTEXT_CANARY:-}" ]]; then
+  export LINQA_PLAINTEXT_CANARY="LINQA_CERT_CANARY_$(date +%s)_$RANDOM"
+fi
+
+printf '%s' "$LINQA_PLAINTEXT_CANARY" > \
+  "$LINQA_EVIDENCE_DIR/canary.txt"
+
+echo "== PRIVATE KEY BOUNDARY =="
+certification/13_private_key_boundary_scan.sh
+certification/14_release_surface_scan.sh
+certification/15_native_secret_log_scan.sh
+python3 certification/19_private_key_verdict.py
+
+echo "== EXISTING EXACT-REPOSITORY TRANSPORT GATES =="
+certification/00_repo_preflight.sh
+certification/01_compile_all.sh
+certification/04_static_plaintext_boundary_scan.sh
+certification/06_run_core_tamper_gate.sh
+
+echo
+echo "REAL ALICE/BOB DEVICE EVIDENCE IS NOW REQUIRED."
+echo "This script intentionally cannot manufacture that evidence."
+echo
+
+python3 certification/16_validate_two_device.py
+certification/17_database_opacity.sh
+certification/18_log_opacity.sh
+
+# Existing transport pack should produce verdict.json here.
+python3 certification/10_bind_evidence.py
+python3 certification/11_final_gate.py
+
+# Re-bind after all new evidence/gates are present.
+python3 certification/20_bind_evidence.py
+python3 certification/21_final_closure_gate.py
+
+echo
+echo "ANDROID 1:1 E2EE CLOSURE: GREEN"
+echo "README remains unchanged until explicitly promoted:"
+echo "  python3 certification/22_promote_readme.py"
+
+
+==============================================================================================================
+FILE: certification/TWO_DEVICE_EXECUTION_MATRIX.md
+==============================================================================================================
+# Required physical-device run
+
+Use two separately enrolled accounts/devices built from the SAME clean Git SHA.
+
+1. Alice and Bob each publish a valid hybrid X25519 + ML-KEM-768 package.
+2. Alice sends a unique certification canary to Bob.
+3. Bob receives and decrypts locally.
+4. Bob sends a different canary to Alice.
+5. Alice receives and decrypts locally.
+6. Put Bob offline.
+7. Alice sends while Bob is offline.
+8. Confirm server retains only ciphertext.
+9. Reconnect Bob.
+10. Bob fetches and decrypts.
+11. Retry one send with the same clientMessageId.
+12. Prove server/client idempotency and no duplicate local message.
+13. Mutate one ciphertext byte and one authenticated metadata/AAD value.
+14. Prove the production Rust decrypt path rejects both.
+15. Rotate Bob package K1 -> K2.
+16. Prove new sends use K2 and stale K1 is rejected/not reused.
+17. Revoke a second Bob device.
+18. Prove zero post-revocation envelopes are accepted for it.
+19. Pull device evidence using certification/pull_android_evidence.sh.
+20. Run DB opacity scan.
+21. Run server log opacity scan.
+22. Bind evidence to exact SHA.
+23. Obtain final GREEN verdict.
+24. Only then promote README.
+
+Evidence MUST NOT contain:
+- private keys
+- access tokens
+- recovery codes
+- phone numbers
+- plaintext message contents
+
+Evidence MAY contain:
+- device IDs
+- envelope IDs
+- clientMessageIds
+- package IDs
+- SHA-256 plaintext digests
+- timestamps
+- result/error codes
+- exact Git SHA
+
+
+==============================================================================================================
+FILE: certification/IMPLEMENTATION_ORDER.md
+==============================================================================================================
+PHASE A — REMOVE RAW PRIVATE-KEY EXPOSURE
+1. Replace DeviceIdentity with public-only descriptor.
+2. Remove privateKeyBytes/rawPrivateKey/exportPrivateKey style APIs.
+3. Add SecretBytes.
+4. Add AndroidKeystoreWrapKey.
+5. Add DeviceIdentityStore.
+6. Seal enrollment identity immediately after enrollment.
+7. Import only with NativeCoreIdentityImporter.
+
+PHASE B — NATIVE OWNERSHIP
+8. Add Rust core identity owner.
+9. Wire repository's existing Ed25519 secret-key constructor.
+10. Wire repository's existing X25519 secret-key constructor.
+11. Keep the repository's existing ML-KEM-768 generator/secret.
+12. Verify derived Ed25519/X25519 public keys exactly match server-enrolled keys.
+13. Verify key-package signatures still validate at server.
+14. Zeroize JNI/Kotlin/Rust temporary buffers.
+
+PHASE C — COMPILE/STATIC SECURITY
+15. Run Kotlin raw-key API scan.
+16. Run release manifest debug-surface scan.
+17. Run native secret-log scan.
+18. Run Android JNI zeroization instrumentation test.
+19. Run Rust tests/clippy/release build.
+20. Run server tests/build.
+
+PHASE D — TWO-DEVICE CERTIFICATION
+21. Enroll real Alice device/account.
+22. Enroll real Bob device/account.
+23. Execute the complete matrix in TWO_DEVICE_EXECUTION_MATRIX.md.
+24. Pull JSONL evidence.
+25. Scan DB.
+26. Scan server logs.
+27. Bind evidence to exact SHA.
+
+PHASE E — FINAL PROMOTION
+28. Private-key verdict must be GREEN.
+29. Transport verdict must be GREEN.
+30. Two-device verdict must be GREEN.
+31. Final closure verdict must be GREEN.
+32. Only then run certification/22_promote_readme.py.
+
+IMPORTANT ADAPTERS
+The Rust functions named:
+- derive_public_identity_using_existing_linqa_types
+- generate_or_restore_existing_ml_kem_768
+are intentionally NOT fake implementations.
+They must call the exact Ed25519/X25519/ML-KEM code already present in the live Linqa repository.
+Do not introduce parallel crypto just to make the pack compile.

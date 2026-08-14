@@ -1,0 +1,1336 @@
+LINQA PRODUCTION GAP CLOSURE v1.0 - CONSOLIDATED SOURCE PACK
+
+====================================================================================================
+FILE: INTEGRATION_CHECKLIST.md
+====================================================================================================
+# Mandatory Integration Checklist
+
+1. Remove production references to DemoCoreAdapter from ChatView/CoreBridge.
+2. Wire ChatView -> ProductionMessagingCoordinator.
+3. Build secure-core as versioned WASM package and native UniFFI artifacts.
+4. Implement the Rust cryptographic methods with the repository's audited primitives/protocol state; do not duplicate crypto in TypeScript/Kotlin/Swift.
+5. Add encrypted IndexedDB/SQLite repositories and account-isolated key wrapping.
+6. Register runtime probes for database, redis, secure-core, key transparency, message relay, APNs, FCM, delivery, object storage, TURN, billing, KMS, CountryLinqa risk.
+7. Refuse production startup when required provider/capability is not configured.
+8. Replace AuthChallengeService DevConsole provider with CompositeProductionDeliveryProvider in production composition root.
+9. Validate signed key packages before storage and append transparency entry.
+10. Replace all string-prefix step-up checks with StepUpService.verifyAndConsume.
+11. Migrate push v1/v2 and OTP generations behind ProviderRegistry; mark older routes deprecated until clients migrate.
+12. Use migration-runner ledger/checksum/advisory lock in startup/deploy job.
+13. Implement black-box helper functions in two-client E2E test; do not remove the failing release assertion.
+14. Hide mobile modules whose required runtime capability or workflow completion flag is false.
+15. Add clean-install + upgrade tests with PostgreSQL/Redis/S3-compatible containers.
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Production Gap Closure Pack v1.0
+
+This pack implements the highest-priority gaps identified in the Linqa audit:
+
+- Truthful runtime capability readiness with NOT_CONFIGURED / DEGRADED / READY.
+- Production SMS + email delivery provider composite with fail-closed production startup.
+- Canonical signed device key-package wire format and server-side verification.
+- Short-lived, action/user/device-bound, single-use signed step-up tokens.
+- Production-only secure-core bridge selection with no demo fallback in production.
+- Durable encrypted outbox and relay/lease/ack message path.
+- Versioned WASM and UniFFI binding surfaces for Rust secure-core.
+- Provider registry consolidation.
+- Transactional migration ledger with checksums and advisory locking.
+- Executable two-client E2E/security acceptance harness.
+- Mobile/web capability gating and release feature gating.
+
+This is an integration pack designed to merge into the existing Linqa monorepo. Adapt import aliases and ORM/DB wrappers to the repository's existing conventions.
+
+
+====================================================================================================
+FILE: RELEASE_GATES.md
+====================================================================================================
+# Linqa Release Gates
+
+## G0 Truthfulness
+No required production capability may report READY from database health alone. Production must not start with development providers.
+
+## G1 Identity
+Phone verification, device enrollment, recovery-email verification, signed key package validation, transparency append/proof, and cryptographic single-use step-up must pass.
+
+## G2 1:1 Secure Messaging
+Two fresh clients must authenticate, enroll, publish/verify keys, encrypt locally, persist durable outbox, relay ciphertext only, wake/lease, decrypt locally and ACK.
+
+Must survive: sender restart, receiver restart, server restart, offline recipient, websocket loss, duplicate submission.
+
+Must reject: replay, ciphertext tamper, sender/device substitution, expired/revoked package, unsupported version/suite, plaintext message API.
+
+## G3 Native
+G2 must pass Web<->Web plus Web<->one native platform using UniFFI secure-core and OS/hardware-protected device keys.
+
+## G4 Provider/Migration
+Provider registry consolidation and migration ledger clean-install/upgrade tests pass.
+
+## G5 GA External Assurance
+Independent crypto review, penetration test, provider/KMS/TLS deployment review, backup restore, multi-replica/multi-region testing, SLO paging, privacy/legal approval, staffed incident response, signed native release candidates, app-store validation, canary rollback and formal go/no-go.
+
+
+====================================================================================================
+FILE: clients/mobile/src/core/SecureCore.ts
+====================================================================================================
+export interface NativeSecureCore {
+  version(): Promise<string>;
+  protectionLevel(): Promise<"OS_PROTECTED" | "HARDWARE_BACKED">;
+  generateKeyPackage(userId: string, deviceId: string, expiresAt: number): Promise<string>;
+  verifyKeyPackage(packageB64: string): Promise<void>;
+  encryptMessage(requestJson: string): Promise<string>;
+  decryptMessage(envelopeB64: string): Promise<string>;
+  verifyTransparencyProof(proofB64: string): Promise<void>;
+}
+
+export function requireNativeSecureCore(module: NativeSecureCore | undefined): NativeSecureCore {
+  if (!module) throw new Error("NATIVE_SECURE_CORE_UNAVAILABLE");
+  return module;
+}
+
+
+====================================================================================================
+FILE: clients/mobile/src/messaging/outbox.ts
+====================================================================================================
+export type OutboxState = "CREATED" | "ENCRYPTED" | "QUEUED" | "SENDING" | "ACCEPTED_BY_RELAY" | "DELIVERED" | "FAILED_RETRYABLE" | "FAILED_PERMANENT";
+
+export interface MobileOutboxRow {
+  messageId: string;
+  accountId: string;
+  conversationId: string;
+  recipientDeviceId: string;
+  encryptedEnvelopeB64: string;
+  state: OutboxState;
+  attempts: number;
+  nextAttemptAt: number;
+}
+
+export interface MobileOutboxDb {
+  transaction<T>(fn: () => Promise<T>): Promise<T>;
+  insert(row: MobileOutboxRow): Promise<void>;
+  due(limit: number): Promise<MobileOutboxRow[]>;
+  update(messageId: string, patch: Partial<MobileOutboxRow>): Promise<void>;
+}
+
+export class OutboxWorker {
+  constructor(private db: MobileOutboxDb, private send: (envelopeB64: string) => Promise<void>) {}
+  async flush(limit = 50): Promise<void> {
+    for (const row of await this.db.due(limit)) {
+      try {
+        await this.db.update(row.messageId, { state: "SENDING" });
+        await this.send(row.encryptedEnvelopeB64);
+        await this.db.update(row.messageId, { state: "ACCEPTED_BY_RELAY" });
+      } catch {
+        const attempts = row.attempts + 1;
+        const backoff = Math.min(60_000, 1000 * 2 ** Math.min(attempts, 6));
+        await this.db.update(row.messageId, { state: "FAILED_RETRYABLE", attempts, nextAttemptAt: Date.now() + backoff });
+      }
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: clients/mobile/src/runtime/module-gates.ts
+====================================================================================================
+export type ModuleKey = "auth" | "chat" | "conversation" | "calls" | "contacts" | "file-vault" | "security" | "linked-devices" | "account" | "emergency" | "countrylinqa";
+
+const REQUIREMENTS: Record<ModuleKey, string[]> = {
+  auth: ["delivery"],
+  chat: ["secure-core", "message-relay", "key-transparency"],
+  conversation: ["secure-core", "message-relay", "key-transparency"],
+  calls: ["turn"],
+  contacts: [],
+  "file-vault": ["object-storage"],
+  security: ["secure-core"],
+  "linked-devices": ["secure-core", "key-transparency"],
+  account: ["delivery"],
+  emergency: ["escalation"],
+  countrylinqa: ["countrylinqa-risk"],
+};
+
+export function moduleAvailable(module: ModuleKey, caps: Record<string, { state: string }>, workflowComplete: Record<string, boolean>): boolean {
+  if (!workflowComplete[module]) return false;
+  return REQUIREMENTS[module].every(k => caps[k]?.state === "READY");
+}
+
+
+====================================================================================================
+FILE: clients/mobile/src/secure-storage/device-key-policy.ts
+====================================================================================================
+export type KeyProtection = "HARDWARE_BACKED" | "OS_PROTECTED";
+
+export interface DeviceKeyPolicy {
+  requireUserAuthentication: true;
+  invalidateOnBiometricEnrollmentChange: true;
+  exportable: false;
+  preferStrongBoxOrSecureEnclave: true;
+}
+
+export const LINQA_DEVICE_KEY_POLICY: DeviceKeyPolicy = {
+  requireUserAuthentication: true,
+  invalidateOnBiometricEnrollmentChange: true,
+  exportable: false,
+  preferStrongBoxOrSecureEnclave: true,
+};
+
+
+====================================================================================================
+FILE: clients/web/src/core/CoreBridgeFactory.ts
+====================================================================================================
+import type { SecureCoreBridge } from "./SecureCoreBridge";
+import { FailClosedCoreBridge } from "./SecureCoreBridge";
+
+export async function createProductionCoreBridge(env: { mode: string; secureCoreRequired: boolean }): Promise<SecureCoreBridge> {
+  if (env.mode === "production" && !env.secureCoreRequired) {
+    throw new Error("Production misconfiguration: secureCoreRequired must be true");
+  }
+  try {
+    const wasm = await import("linqa-secure-core-wasm");
+    const core = new wasm.WasmSecureCore();
+    return {
+      version: core.version(), protection: "BROWSER_PROTECTED",
+      generateKeyPackage: (x) => core.generate_key_package(x),
+      verifyKeyPackage: (x) => core.verify_key_package(x),
+      encryptMessage: (x) => core.encrypt_message(x),
+      decryptMessage: (x) => core.decrypt_message(x),
+      verifyTransparencyProof: (x) => core.verify_transparency_proof(x),
+    } as SecureCoreBridge;
+  } catch (e) {
+    if (env.mode === "production") throw new Error(`Secure core failed to load: ${String(e)}`);
+    return new FailClosedCoreBridge();
+  }
+}
+
+
+====================================================================================================
+FILE: clients/web/src/core/SecureCoreBridge.ts
+====================================================================================================
+export interface SecureCoreBridge {
+  readonly version: string;
+  readonly protection: "BROWSER_PROTECTED" | "OS_PROTECTED" | "HARDWARE_BACKED";
+  generateKeyPackage(input: { userId: string; deviceId: string; expiresAt: number }): Promise<Uint8Array>;
+  verifyKeyPackage(bytes: Uint8Array): Promise<void>;
+  encryptMessage(input: { conversationId: string; recipientUserId: string; recipientDeviceId: string; plaintext: Uint8Array; sequence: number }): Promise<Uint8Array>;
+  decryptMessage(envelope: Uint8Array): Promise<Uint8Array>;
+  verifyTransparencyProof(proof: Uint8Array): Promise<void>;
+}
+
+export class FailClosedCoreBridge implements SecureCoreBridge {
+  readonly version = "unavailable";
+  readonly protection = "BROWSER_PROTECTED" as const;
+  private fail(): never { throw new Error("SECURE_CORE_UNAVAILABLE"); }
+  generateKeyPackage(): Promise<Uint8Array> { return Promise.reject(this.fail()); }
+  verifyKeyPackage(): Promise<void> { return Promise.reject(this.fail()); }
+  encryptMessage(): Promise<Uint8Array> { return Promise.reject(this.fail()); }
+  decryptMessage(): Promise<Uint8Array> { return Promise.reject(this.fail()); }
+  verifyTransparencyProof(): Promise<void> { return Promise.reject(this.fail()); }
+}
+
+
+====================================================================================================
+FILE: clients/web/src/messaging/ChatSendController.ts
+====================================================================================================
+import type { ProductionMessagingCoordinator } from "./ProductionMessagingCoordinator";
+import { requireCapability, type RuntimeSnapshot } from "../runtime/capability-gate";
+
+export class ChatSendController {
+  constructor(private readonly messaging: ProductionMessagingCoordinator, private readonly capabilities: () => RuntimeSnapshot) {}
+
+  async send(input: { messageId: string; conversationId: string; recipientUserId: string; recipientDeviceId: string; text: string }) {
+    const snapshot = this.capabilities();
+    requireCapability(snapshot, "secure-core");
+    requireCapability(snapshot, "message-relay");
+    requireCapability(snapshot, "key-transparency");
+    if (!input.text.trim()) return;
+    await this.messaging.send({ ...input, text: input.text });
+  }
+}
+
+
+====================================================================================================
+FILE: clients/web/src/messaging/ProductionMessagingCoordinator.ts
+====================================================================================================
+import type { SecureCoreBridge } from "../core/SecureCoreBridge";
+
+export interface OutboxRecord {
+  messageId: string;
+  conversationId: string;
+  recipientUserId: string;
+  recipientDeviceId: string;
+  encryptedEnvelope: Uint8Array;
+  state: "ENCRYPTED" | "QUEUED" | "SENDING" | "ACCEPTED_BY_RELAY" | "FAILED_RETRYABLE" | "FAILED_PERMANENT";
+  attempts: number;
+  nextAttemptAt: number;
+}
+
+export interface EncryptedOutboxRepository {
+  nextSequence(conversationId: string, recipientDeviceId: string): Promise<number>;
+  insert(record: OutboxRecord): Promise<void>;
+  mark(messageId: string, state: OutboxRecord["state"], patch?: Partial<OutboxRecord>): Promise<void>;
+}
+
+export interface RelayApi {
+  send(envelope: Uint8Array): Promise<{ accepted: boolean; duplicate: boolean }>;
+}
+
+export class ProductionMessagingCoordinator {
+  constructor(private core: SecureCoreBridge, private outbox: EncryptedOutboxRepository, private relay: RelayApi) {}
+
+  async send(input: { messageId: string; conversationId: string; recipientUserId: string; recipientDeviceId: string; text: string }): Promise<void> {
+    const sequence = await this.outbox.nextSequence(input.conversationId, input.recipientDeviceId);
+    const encrypted = await this.core.encryptMessage({
+      conversationId: input.conversationId,
+      recipientUserId: input.recipientUserId,
+      recipientDeviceId: input.recipientDeviceId,
+      plaintext: new TextEncoder().encode(input.text),
+      sequence,
+    });
+    await this.outbox.insert({ ...input, encryptedEnvelope: encrypted, state: "ENCRYPTED", attempts: 0, nextAttemptAt: Date.now() });
+    await this.flushOne(input.messageId, encrypted);
+  }
+
+  private async flushOne(messageId: string, encrypted: Uint8Array) {
+    try {
+      await this.outbox.mark(messageId, "SENDING");
+      await this.relay.send(encrypted);
+      await this.outbox.mark(messageId, "ACCEPTED_BY_RELAY");
+    } catch {
+      await this.outbox.mark(messageId, "FAILED_RETRYABLE", { attempts: 1, nextAttemptAt: Date.now() + 2_000 });
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: clients/web/src/runtime/capability-gate.ts
+====================================================================================================
+export type CapabilityState = "NOT_CONFIGURED" | "DEGRADED" | "READY";
+export interface RuntimeSnapshot { capabilities: Record<string, { state: CapabilityState; checkedAt: string; reason?: string }> }
+
+export function requireCapability(snapshot: RuntimeSnapshot, key: string): void {
+  const cap = snapshot.capabilities[key];
+  if (!cap || cap.state !== "READY") throw new Error(`CAPABILITY_UNAVAILABLE:${key}:${cap?.state ?? "MISSING"}`);
+}
+
+export function isCapabilityReady(snapshot: RuntimeSnapshot, key: string): boolean {
+  return snapshot.capabilities[key]?.state === "READY";
+}
+
+
+====================================================================================================
+FILE: package-snippets.json
+====================================================================================================
+{
+  "serverDependencies": {
+    "express": "existing",
+    "pg": "existing"
+  },
+  "testDevDependencies": {
+    "@playwright/test": "latest-compatible",
+    "vitest": "latest-compatible"
+  },
+  "rustTargets": [
+    "wasm32-unknown-unknown",
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "aarch64-linux-android",
+    "x86_64-linux-android"
+  ]
+}
+
+
+====================================================================================================
+FILE: secure-core/Cargo.toml
+====================================================================================================
+[package]
+name = "linqa-secure-core"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+wasm = ["wasm-bindgen"]
+uniffi-bindings = ["uniffi"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+wasm-bindgen = { version = "0.2", optional = true }
+uniffi = { version = "0.29", optional = true }
+
+
+====================================================================================================
+FILE: secure-core/src/lib.rs
+====================================================================================================
+//! Linqa secure-core binding surface.
+//! Keep cryptographic protocol details inside this crate; clients call high-level operations only.
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum CoreError {
+    #[error("invalid input")]
+    InvalidInput,
+    #[error("authentication failed")]
+    AuthenticationFailed,
+    #[error("replay detected")]
+    ReplayDetected,
+    #[error("unsupported wire version")]
+    UnsupportedWireVersion,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceIdentity {
+    pub device_id: String,
+    pub identity_public_key_b64: String,
+    pub signing_public_key_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncryptRequest {
+    pub conversation_id: String,
+    pub recipient_user_id: String,
+    pub recipient_device_id: String,
+    pub plaintext: Vec<u8>,
+    pub sequence: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncryptedEnvelope {
+    pub wire_version: u8,
+    pub message_id: String,
+    pub ciphertext_b64: String,
+    pub nonce_b64: String,
+    pub aad_b64: String,
+    pub sender_signature_b64: String,
+}
+
+pub trait SecureCore: Send + Sync {
+    fn create_device_identity(&self, device_id: &str) -> Result<DeviceIdentity, CoreError>;
+    fn generate_key_package(&self, user_id: &str, device_id: &str, expires_at_ms: u64) -> Result<Vec<u8>, CoreError>;
+    fn verify_key_package(&self, bytes: &[u8]) -> Result<(), CoreError>;
+    fn encrypt_message(&self, req: EncryptRequest) -> Result<EncryptedEnvelope, CoreError>;
+    fn decrypt_message(&self, envelope: &[u8]) -> Result<Vec<u8>, CoreError>;
+    fn verify_transparency_proof(&self, proof: &[u8]) -> Result<(), CoreError>;
+}
+
+#[cfg(feature = "wasm")]
+mod wasm_api {
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen]
+    pub struct WasmSecureCore;
+
+    #[wasm_bindgen]
+    impl WasmSecureCore {
+        #[wasm_bindgen(constructor)]
+        pub fn new() -> WasmSecureCore { WasmSecureCore }
+
+        #[wasm_bindgen(js_name = version)]
+        pub fn version(&self) -> String { env!("CARGO_PKG_VERSION").to_string() }
+    }
+}
+
+// UniFFI scaffolding should export a similarly narrow object API from this crate.
+// Generate Kotlin/Swift bindings during native build; do not duplicate crypto in clients.
+
+
+====================================================================================================
+FILE: server/migrations/011_gap_closure_core.sql
+====================================================================================================
+CREATE TABLE IF NOT EXISTS message_relay (
+  message_id UUID PRIMARY KEY,
+  conversation_id UUID NOT NULL,
+  sender_user_id TEXT NOT NULL,
+  sender_device_id TEXT NOT NULL,
+  recipient_user_id TEXT NOT NULL,
+  recipient_device_id TEXT NOT NULL,
+  sequence BIGINT NOT NULL,
+  envelope JSONB NOT NULL,
+  state TEXT NOT NULL DEFAULT 'QUEUED' CHECK (state IN ('QUEUED','LEASED','ACKNOWLEDGED','EXPIRED')),
+  lease_id UUID,
+  lease_expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  acknowledged_at TIMESTAMPTZ,
+  UNIQUE(recipient_device_id, sender_device_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_message_relay_recipient_state ON message_relay(recipient_user_id, recipient_device_id, state, created_at);
+
+CREATE TABLE IF NOT EXISTS step_up_consumption (
+  jti UUID PRIMARY KEY,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS key_package_v1 (
+  user_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  package_hash TEXT NOT NULL,
+  package JSONB NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY(user_id, device_id, package_hash)
+);
+
+CREATE TABLE IF NOT EXISTS transparency_log (
+  leaf_index BIGSERIAL PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  object_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+====================================================================================================
+FILE: server/src/auth/challenge-service.ts
+====================================================================================================
+import crypto from "node:crypto";
+import type { DeliveryProvider } from "../providers/delivery";
+
+export type ChallengePurpose = "REGISTER_PHONE" | "LOGIN_PHONE" | "VERIFY_RECOVERY_EMAIL" | "RECOVER_ACCOUNT";
+
+export interface RateLimiter {
+  consume(key: string, limit: number, windowSeconds: number): Promise<boolean>;
+}
+
+export interface ChallengeStore {
+  put(input: { id: string; destinationHash: string; codeHash: string; purpose: ChallengePurpose; expiresAt: Date; attempts: number }): Promise<void>;
+  get(id: string): Promise<{ id: string; destinationHash: string; codeHash: string; purpose: ChallengePurpose; expiresAt: Date; attempts: number } | null>;
+  incrementAttempts(id: string): Promise<void>;
+  consume(id: string): Promise<void>;
+}
+
+const sha256 = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
+
+export class AuthChallengeService {
+  constructor(private delivery: DeliveryProvider, private store: ChallengeStore, private limiter: RateLimiter) {}
+
+  async issueSms(params: { e164: string; purpose: ChallengePurpose; ip: string; deviceId: string }): Promise<{ challengeId: string }> {
+    await this.enforceLimits(params.e164, params.ip, params.deviceId, params.purpose);
+    const challengeId = crypto.randomUUID();
+    const code = crypto.randomInt(100000, 1000000).toString();
+    await this.store.put({
+      id: challengeId,
+      destinationHash: sha256(params.e164),
+      codeHash: sha256(`${challengeId}:${code}`),
+      purpose: params.purpose,
+      expiresAt: new Date(Date.now() + 10 * 60_000),
+      attempts: 0,
+    });
+    await this.delivery.sendSms({
+      toE164: params.e164,
+      body: `Your Linqa verification code is ${code}. It expires in 10 minutes.`,
+      idempotencyKey: challengeId,
+    });
+    return { challengeId };
+  }
+
+  async issueEmail(params: { email: string; purpose: ChallengePurpose; ip: string; deviceId: string }): Promise<{ challengeId: string }> {
+    await this.enforceLimits(params.email.toLowerCase(), params.ip, params.deviceId, params.purpose);
+    const challengeId = crypto.randomUUID();
+    const code = crypto.randomInt(100000, 1000000).toString();
+    await this.store.put({
+      id: challengeId,
+      destinationHash: sha256(params.email.toLowerCase()),
+      codeHash: sha256(`${challengeId}:${code}`),
+      purpose: params.purpose,
+      expiresAt: new Date(Date.now() + 10 * 60_000),
+      attempts: 0,
+    });
+    await this.delivery.sendEmail({
+      to: params.email,
+      subject: "Verify your Linqa recovery email",
+      text: `Your Linqa verification code is ${code}. It expires in 10 minutes.`,
+      idempotencyKey: challengeId,
+    });
+    return { challengeId };
+  }
+
+  async verify(params: { challengeId: string; code: string }): Promise<boolean> {
+    const row = await this.store.get(params.challengeId);
+    if (!row || row.expiresAt.getTime() < Date.now() || row.attempts >= 5) return false;
+    const expected = Buffer.from(row.codeHash, "hex");
+    const actual = Buffer.from(sha256(`${params.challengeId}:${params.code}`), "hex");
+    const valid = expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+    if (!valid) { await this.store.incrementAttempts(params.challengeId); return false; }
+    await this.store.consume(params.challengeId);
+    return true;
+  }
+
+  private async enforceLimits(identifier: string, ip: string, deviceId: string, purpose: ChallengePurpose) {
+    const keys: Array<[string, number, number]> = [
+      [`auth:id:${sha256(identifier)}:${purpose}`, 5, 900],
+      [`auth:ip:${ip}:${purpose}`, 20, 900],
+      [`auth:device:${deviceId}:${purpose}`, 10, 900],
+    ];
+    for (const [key, limit, window] of keys) {
+      if (!(await this.limiter.consume(key, limit, window))) throw new Error("RATE_LIMITED");
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/auth/generic-response.ts
+====================================================================================================
+export const GENERIC_RECOVERY_RESPONSE = {
+  accepted: true,
+  message: "If an eligible Linqa account exists, verification instructions will be sent.",
+};
+
+
+====================================================================================================
+FILE: server/src/db/migration-runner.ts
+====================================================================================================
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+export interface SqlClient {
+  query(sql: string, params?: unknown[]): Promise<{ rows: any[] }>;
+}
+
+const checksum = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
+
+export async function migrate(db: SqlClient, directory: string, appVersion: string): Promise<void> {
+  await db.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    version VARCHAR(200) PRIMARY KEY,
+    checksum VARCHAR(64) NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    execution_ms INTEGER NOT NULL,
+    application_version VARCHAR(100),
+    dirty BOOLEAN NOT NULL DEFAULT FALSE
+  )`);
+  await db.query("SELECT pg_advisory_lock(hashtext('linqa-schema-migrations'))");
+  try {
+    const files = (await fs.readdir(directory)).filter(f => /^\d+.*\.sql$/.test(f)).sort();
+    for (const file of files) {
+      const sql = await fs.readFile(path.join(directory, file), "utf8");
+      const sum = checksum(sql);
+      const existing = await db.query("SELECT checksum, dirty FROM schema_migrations WHERE version=$1", [file]);
+      if (existing.rows[0]) {
+        if (existing.rows[0].dirty) throw new Error(`Dirty migration: ${file}`);
+        if (existing.rows[0].checksum !== sum) throw new Error(`Migration checksum mismatch: ${file}`);
+        continue;
+      }
+      const start = Date.now();
+      await db.query("BEGIN");
+      try {
+        await db.query("INSERT INTO schema_migrations(version, checksum, execution_ms, application_version, dirty) VALUES($1,$2,0,$3,true)", [file, sum, appVersion]);
+        await db.query(sql);
+        await db.query("UPDATE schema_migrations SET dirty=false, execution_ms=$2 WHERE version=$1", [file, Date.now() - start]);
+        await db.query("COMMIT");
+      } catch (e) {
+        await db.query("ROLLBACK");
+        throw e;
+      }
+    }
+  } finally {
+    await db.query("SELECT pg_advisory_unlock(hashtext('linqa-schema-migrations'))");
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/identity/key-package.ts
+====================================================================================================
+import crypto from "node:crypto";
+
+export const KEY_PACKAGE_WIRE_VERSION = 1 as const;
+export const SUPPORTED_KEY_PACKAGE_SUITE = "X25519_ED25519_MLKEM768_V1" as const;
+
+export interface LinqaKeyPackageV1 {
+  wireVersion: 1;
+  userId: string;
+  deviceId: string;
+  identityKeyB64: string;
+  signingKeyB64: string;
+  preKeyB64: string;
+  pqPreKeyB64: string;
+  algorithmSuite: typeof SUPPORTED_KEY_PACKAGE_SUITE;
+  createdAt: number;
+  expiresAt: number;
+  nonceB64: string;
+  signatureB64: string;
+}
+
+export function canonicalKeyPackagePayload(p: Omit<LinqaKeyPackageV1, "signatureB64">): Buffer {
+  return Buffer.from(JSON.stringify({
+    wireVersion: p.wireVersion,
+    userId: p.userId,
+    deviceId: p.deviceId,
+    identityKeyB64: p.identityKeyB64,
+    signingKeyB64: p.signingKeyB64,
+    preKeyB64: p.preKeyB64,
+    pqPreKeyB64: p.pqPreKeyB64,
+    algorithmSuite: p.algorithmSuite,
+    createdAt: p.createdAt,
+    expiresAt: p.expiresAt,
+    nonceB64: p.nonceB64,
+  }));
+}
+
+export interface EnrolledDeviceIdentity {
+  userId: string;
+  deviceId: string;
+  signingPublicKeyPem: string;
+  revokedAt?: Date | null;
+}
+
+export function verifyKeyPackage(pkg: LinqaKeyPackageV1, enrolled: EnrolledDeviceIdentity, now = Date.now()): void {
+  if (pkg.wireVersion !== KEY_PACKAGE_WIRE_VERSION) throw new Error("UNSUPPORTED_KEY_PACKAGE_VERSION");
+  if (pkg.algorithmSuite !== SUPPORTED_KEY_PACKAGE_SUITE) throw new Error("UNSUPPORTED_KEY_PACKAGE_SUITE");
+  if (pkg.userId !== enrolled.userId || pkg.deviceId !== enrolled.deviceId) throw new Error("KEY_PACKAGE_DEVICE_BINDING_FAILED");
+  if (enrolled.revokedAt) throw new Error("DEVICE_REVOKED");
+  if (pkg.createdAt > now + 5 * 60_000) throw new Error("KEY_PACKAGE_CREATED_IN_FUTURE");
+  if (pkg.expiresAt <= now) throw new Error("KEY_PACKAGE_EXPIRED");
+  if (pkg.expiresAt - pkg.createdAt > 30 * 24 * 60 * 60_000) throw new Error("KEY_PACKAGE_LIFETIME_TOO_LONG");
+
+  const { signatureB64, ...unsigned } = pkg;
+  const ok = crypto.verify(
+    null,
+    canonicalKeyPackagePayload(unsigned),
+    enrolled.signingPublicKeyPem,
+    Buffer.from(signatureB64, "base64"),
+  );
+  if (!ok) throw new Error("KEY_PACKAGE_SIGNATURE_INVALID");
+}
+
+
+====================================================================================================
+FILE: server/src/messaging/postgres-relay-repository.ts
+====================================================================================================
+import crypto from "node:crypto";
+import type { RelayRepository } from "./relay-service";
+import type { EncryptedEnvelopeV1 } from "./types";
+
+export interface PgLike { query(sql: string, params?: unknown[]): Promise<{ rows: any[]; rowCount?: number }> }
+
+export class PostgresRelayRepository implements RelayRepository {
+  constructor(private readonly db: PgLike) {}
+
+  async enqueue(env: EncryptedEnvelopeV1): Promise<"INSERTED" | "DUPLICATE"> {
+    const result = await this.db.query(
+      `INSERT INTO message_relay(
+        message_id, conversation_id, sender_user_id, sender_device_id,
+        recipient_user_id, recipient_device_id, sequence, envelope
+      ) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+      ON CONFLICT DO NOTHING RETURNING message_id`,
+      [env.messageId, env.conversationId, env.senderUserId, env.senderDeviceId,
+       env.recipientUserId, env.recipientDeviceId, env.sequence, JSON.stringify(env)],
+    );
+    return result.rows.length ? "INSERTED" : "DUPLICATE";
+  }
+
+  async lease(recipientUserId: string, recipientDeviceId: string, limit: number, leaseSeconds: number) {
+    const leaseId = crypto.randomUUID();
+    const result = await this.db.query(
+      `WITH candidates AS (
+         SELECT message_id FROM message_relay
+          WHERE recipient_user_id=$1 AND recipient_device_id=$2
+            AND (state='QUEUED' OR (state='LEASED' AND lease_expires_at < NOW()))
+          ORDER BY created_at ASC
+          FOR UPDATE SKIP LOCKED
+          LIMIT $3
+       )
+       UPDATE message_relay m
+          SET state='LEASED', lease_id=$4::uuid,
+              lease_expires_at=NOW()+($5::text || ' seconds')::interval
+         FROM candidates c
+        WHERE m.message_id=c.message_id
+       RETURNING m.envelope, m.lease_id`,
+      [recipientUserId, recipientDeviceId, limit, leaseId, leaseSeconds],
+    );
+    return result.rows.map(r => ({ ...r.envelope, leaseId: r.lease_id }));
+  }
+
+  async acknowledge(messageId: string, leaseId: string, recipientDeviceId: string): Promise<boolean> {
+    const result = await this.db.query(
+      `UPDATE message_relay SET state='ACKNOWLEDGED', acknowledged_at=NOW(), lease_id=NULL, lease_expires_at=NULL
+        WHERE message_id=$1::uuid AND lease_id=$2::uuid AND recipient_device_id=$3 AND state='LEASED'
+        RETURNING message_id`,
+      [messageId, leaseId, recipientDeviceId],
+    );
+    return result.rows.length === 1;
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/messaging/relay-service.ts
+====================================================================================================
+import type { EncryptedEnvelopeV1 } from "./types";
+
+export interface RelayRepository {
+  enqueue(env: EncryptedEnvelopeV1): Promise<"INSERTED" | "DUPLICATE">;
+  lease(recipientUserId: string, recipientDeviceId: string, limit: number, leaseSeconds: number): Promise<Array<EncryptedEnvelopeV1 & { leaseId: string }>>;
+  acknowledge(messageId: string, leaseId: string, recipientDeviceId: string): Promise<boolean>;
+}
+
+export class RelayService {
+  constructor(private repo: RelayRepository) {}
+
+  async send(env: EncryptedEnvelopeV1): Promise<{ accepted: boolean; duplicate: boolean }> {
+    if (env.wireVersion !== 1) throw new Error("UNSUPPORTED_MESSAGE_WIRE_VERSION");
+    if (!env.ciphertextB64 || !env.nonceB64 || !env.senderSignatureB64) throw new Error("ENCRYPTED_ENVELOPE_REQUIRED");
+    const result = await this.repo.enqueue(env);
+    return { accepted: true, duplicate: result === "DUPLICATE" };
+  }
+
+  lease(userId: string, deviceId: string, limit = 100) {
+    return this.repo.lease(userId, deviceId, Math.min(limit, 100), 60);
+  }
+
+  acknowledge(messageId: string, leaseId: string, deviceId: string) {
+    return this.repo.acknowledge(messageId, leaseId, deviceId);
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/messaging/types.ts
+====================================================================================================
+export interface EncryptedEnvelopeV1 {
+  wireVersion: 1;
+  messageId: string;
+  conversationId: string;
+  senderUserId: string;
+  senderDeviceId: string;
+  recipientUserId: string;
+  recipientDeviceId: string;
+  sequence: number;
+  createdAt: string;
+  ciphertextB64: string;
+  nonceB64: string;
+  aadB64: string;
+  senderSignatureB64: string;
+}
+
+export type RelayState = "QUEUED" | "LEASED" | "ACKNOWLEDGED" | "EXPIRED";
+
+
+====================================================================================================
+FILE: server/src/providers/delivery.ts
+====================================================================================================
+import crypto from "node:crypto";
+import type { Provider, ProviderHealth } from "./provider-registry";
+
+export interface SmsDelivery { toE164: string; body: string; idempotencyKey: string; }
+export interface EmailDelivery { to: string; subject: string; text: string; html?: string; idempotencyKey: string; }
+export interface DeliveryResult { providerMessageId: string; acceptedAt: string; }
+
+export interface DeliveryProvider extends Provider {
+  sendSms(input: SmsDelivery): Promise<DeliveryResult>;
+  sendEmail(input: EmailDelivery): Promise<DeliveryResult>;
+}
+
+export class DevConsoleDeliveryProvider implements DeliveryProvider {
+  readonly kind = "delivery";
+  readonly id = "dev-console";
+  readonly version = "1";
+  async health(): Promise<ProviderHealth> { return { state: "READY", identity: this.id }; }
+  async sendSms(input: SmsDelivery): Promise<DeliveryResult> {
+    console.log("[DEV SMS]", input.toE164, input.body);
+    return { providerMessageId: crypto.randomUUID(), acceptedAt: new Date().toISOString() };
+  }
+  async sendEmail(input: EmailDelivery): Promise<DeliveryResult> {
+    console.log("[DEV EMAIL]", input.to, input.subject);
+    return { providerMessageId: crypto.randomUUID(), acceptedAt: new Date().toISOString() };
+  }
+}
+
+export class CompositeProductionDeliveryProvider implements DeliveryProvider {
+  readonly kind = "delivery";
+  readonly id = "composite-production";
+  readonly version = "1";
+  constructor(
+    private readonly sms: { health(): Promise<ProviderHealth>; send(input: SmsDelivery): Promise<DeliveryResult> },
+    private readonly email: { health(): Promise<ProviderHealth>; send(input: EmailDelivery): Promise<DeliveryResult> },
+  ) {}
+  async health(): Promise<ProviderHealth> {
+    const [sms, email] = await Promise.all([this.sms.health(), this.email.health()]);
+    if (sms.state === "READY" && email.state === "READY") return { state: "READY", identity: this.id };
+    if (sms.state === "NOT_CONFIGURED" && email.state === "NOT_CONFIGURED") return { state: "NOT_CONFIGURED", identity: this.id };
+    return { state: "DEGRADED", identity: this.id, reason: `sms=${sms.state},email=${email.state}` };
+  }
+  sendSms(input: SmsDelivery): Promise<DeliveryResult> { return this.sms.send(input); }
+  sendEmail(input: EmailDelivery): Promise<DeliveryResult> { return this.email.send(input); }
+}
+
+export function assertProductionDeliveryProvider(env: string, provider: DeliveryProvider): void {
+  if (env === "production" && provider.id === "dev-console") {
+    throw new Error("Production startup refused: development delivery provider configured");
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/providers/provider-registry.ts
+====================================================================================================
+import type { CapabilityState } from "../runtime/capabilities";
+
+export interface ProviderHealth {
+  state: CapabilityState;
+  identity: string;
+  reason?: string;
+}
+
+export interface Provider {
+  readonly kind: string;
+  readonly id: string;
+  readonly version: string;
+  health(): Promise<ProviderHealth>;
+}
+
+export class ProviderRegistry {
+  private providers = new Map<string, Provider>();
+
+  register(provider: Provider): this {
+    if (this.providers.has(provider.kind)) throw new Error(`Provider already registered: ${provider.kind}`);
+    this.providers.set(provider.kind, provider);
+    return this;
+  }
+
+  get<T extends Provider>(kind: string): T {
+    const provider = this.providers.get(kind);
+    if (!provider) throw new Error(`Provider not configured: ${kind}`);
+    return provider as T;
+  }
+
+  maybe<T extends Provider>(kind: string): T | undefined {
+    return this.providers.get(kind) as T | undefined;
+  }
+
+  list(): Provider[] {
+    return [...this.providers.values()];
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/routes/key-packages.ts
+====================================================================================================
+import { Router } from "express";
+import { verifyKeyPackage, type LinqaKeyPackageV1 } from "../identity/key-package";
+
+export interface KeyPackageDeps {
+  devices: { get(userId: string, deviceId: string): Promise<any | null> };
+  keyPackages: { put(pkg: LinqaKeyPackageV1): Promise<void> };
+  transparency: { append(type: "KEY_PACKAGE", userId: string, deviceId: string, hash: string): Promise<{ leafIndex: number; treeSize: number }> };
+  hashJson(value: unknown): string;
+}
+
+export function keyPackageRouter(deps: KeyPackageDeps) {
+  const router = Router();
+  router.post("/v1/key-packages", async (req, res, next) => {
+    try {
+      const pkg = req.body as LinqaKeyPackageV1;
+      const authUserId = (req as any).auth.userId;
+      const authDeviceId = (req as any).auth.deviceId;
+      if (pkg.userId !== authUserId || pkg.deviceId !== authDeviceId) return res.status(403).json({ error: "DEVICE_BINDING_FAILED" });
+      const enrolled = await deps.devices.get(authUserId, authDeviceId);
+      if (!enrolled) return res.status(404).json({ error: "DEVICE_NOT_ENROLLED" });
+      verifyKeyPackage(pkg, enrolled);
+      await deps.keyPackages.put(pkg);
+      const proof = await deps.transparency.append("KEY_PACKAGE", pkg.userId, pkg.deviceId, deps.hashJson(pkg));
+      res.status(201).json({ stored: true, transparency: proof });
+    } catch (e) { next(e); }
+  });
+  return router;
+}
+
+
+====================================================================================================
+FILE: server/src/routes/messages.ts
+====================================================================================================
+import { Router } from "express";
+import type { RelayService } from "../messaging/relay-service";
+
+export function messagesRouter(relay: RelayService) {
+  const router = Router();
+  router.post("/v1/messages", async (req, res, next) => {
+    try {
+      if ("plaintext" in req.body || "body" in req.body || "text" in req.body) return res.status(400).json({ error: "PLAINTEXT_MESSAGES_FORBIDDEN" });
+      const auth = (req as any).auth;
+      if (req.body.senderUserId !== auth.userId || req.body.senderDeviceId !== auth.deviceId) return res.status(403).json({ error: "SENDER_BINDING_FAILED" });
+      res.status(202).json(await relay.send(req.body));
+    } catch (e) { next(e); }
+  });
+
+  router.get("/v1/messages/lease", async (req, res, next) => {
+    try {
+      const auth = (req as any).auth;
+      const rows = await relay.lease(auth.userId, auth.deviceId, Number(req.query.limit ?? 100));
+      res.json({ messages: rows });
+    } catch (e) { next(e); }
+  });
+
+  router.post("/v1/messages/:messageId/ack", async (req, res, next) => {
+    try {
+      const auth = (req as any).auth;
+      const ok = await relay.acknowledge(req.params.messageId, req.body.leaseId, auth.deviceId);
+      if (!ok) return res.status(409).json({ error: "ACK_REJECTED" });
+      res.json({ acknowledged: true });
+    } catch (e) { next(e); }
+  });
+  return router;
+}
+
+
+====================================================================================================
+FILE: server/src/routes/runtime-capabilities.ts
+====================================================================================================
+import { Router } from "express";
+import type { CapabilityRegistry } from "../runtime/capabilities";
+
+export function runtimeCapabilitiesRouter(registry: CapabilityRegistry) {
+  const router = Router();
+  router.get("/v1/runtime/capabilities", async (_req, res, next) => {
+    try {
+      const capabilities = await registry.snapshot();
+      res.json({ checkedAt: new Date().toISOString(), capabilities });
+    } catch (e) { next(e); }
+  });
+  return router;
+}
+
+
+====================================================================================================
+FILE: server/src/routes/sensitive-actions.example.ts
+====================================================================================================
+import { Router } from "express";
+import { requireStepUp } from "../security/step-up-guard";
+import type { StepUpService } from "../security/step-up";
+
+export function sensitiveActionsExample(stepUp: StepUpService, accountService: any, deviceService: any) {
+  const router = Router();
+  router.delete("/v1/account", requireStepUp(stepUp, "ACCOUNT_DELETE"), async (req, res) => {
+    await accountService.deleteAccount((req as any).auth.userId);
+    res.status(202).json({ accepted: true });
+  });
+  router.delete("/v1/devices/:deviceId", requireStepUp(stepUp, "DEVICE_REVOKE"), async (req, res) => {
+    await deviceService.revoke((req as any).auth.userId, req.params.deviceId);
+    res.json({ revoked: true });
+  });
+  return router;
+}
+
+
+====================================================================================================
+FILE: server/src/runtime/bootstrap-gate.ts
+====================================================================================================
+import type { CapabilityRegistry } from "./capabilities";
+
+export const PRODUCTION_BOOT_REQUIRED = [
+  "database", "secure-core", "delivery", "message-relay", "key-transparency",
+] as const;
+
+export async function enforceProductionBoot(env: string, registry: CapabilityRegistry): Promise<void> {
+  if (env !== "production") return;
+  await registry.requireReady([...PRODUCTION_BOOT_REQUIRED]);
+}
+
+
+====================================================================================================
+FILE: server/src/runtime/capabilities.ts
+====================================================================================================
+export type CapabilityState = "NOT_CONFIGURED" | "DEGRADED" | "READY";
+
+export interface DependencyHealth {
+  name: string;
+  state: CapabilityState;
+  identity?: string;
+  reason?: string;
+}
+
+export interface CapabilityHealth {
+  key: string;
+  state: CapabilityState;
+  provider?: string;
+  version?: string;
+  dependencies: DependencyHealth[];
+  checkedAt: string;
+  lastReadyAt?: string;
+  reason?: string;
+}
+
+export interface CapabilityProbe {
+  readonly key: string;
+  probe(): Promise<CapabilityHealth>;
+}
+
+export class CapabilityRegistry {
+  private readonly probes = new Map<string, CapabilityProbe>();
+  private readonly lastReady = new Map<string, string>();
+
+  register(probe: CapabilityProbe): this {
+    if (this.probes.has(probe.key)) throw new Error(`Duplicate capability probe: ${probe.key}`);
+    this.probes.set(probe.key, probe);
+    return this;
+  }
+
+  async snapshot(): Promise<Record<string, CapabilityHealth>> {
+    const entries = await Promise.all([...this.probes.values()].map(async (probe) => {
+      const result = await probe.probe();
+      if (result.state === "READY") {
+        const now = new Date().toISOString();
+        this.lastReady.set(probe.key, now);
+        result.lastReadyAt = now;
+      } else {
+        result.lastReadyAt = this.lastReady.get(probe.key);
+      }
+      return [probe.key, result] as const;
+    }));
+    return Object.fromEntries(entries);
+  }
+
+  async requireReady(keys: string[]): Promise<void> {
+    const snapshot = await this.snapshot();
+    const failures = keys.filter((key) => snapshot[key]?.state !== "READY");
+    if (failures.length) {
+      throw new Error(`Required capabilities not READY: ${failures.join(", ")}`);
+    }
+  }
+}
+
+export const capability = (
+  key: string,
+  state: CapabilityState,
+  dependencies: DependencyHealth[] = [],
+  extra: Partial<CapabilityHealth> = {},
+): CapabilityHealth => ({
+  key,
+  state,
+  dependencies,
+  checkedAt: new Date().toISOString(),
+  ...extra,
+});
+
+
+====================================================================================================
+FILE: server/src/runtime/database-probe.ts
+====================================================================================================
+import { capability, type CapabilityProbe } from "./capabilities";
+
+export class DatabaseProbe implements CapabilityProbe {
+  readonly key = "database";
+  constructor(private readonly db: { query(sql: string): Promise<unknown> }) {}
+  async probe() {
+    try { await this.db.query("SELECT 1"); return capability(this.key, "READY", [{ name: "postgresql", state: "READY" }]); }
+    catch (e) { return capability(this.key, "DEGRADED", [{ name: "postgresql", state: "DEGRADED", reason: String(e) }], { reason: String(e) }); }
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/runtime/provider-probe.ts
+====================================================================================================
+import type { Provider } from "../providers/provider-registry";
+import { capability, type CapabilityProbe } from "./capabilities";
+
+export class ProviderCapabilityProbe implements CapabilityProbe {
+  constructor(public readonly key: string, private readonly provider?: Provider) {}
+  async probe() {
+    if (!this.provider) return capability(this.key, "NOT_CONFIGURED", [], { reason: "provider missing" });
+    try {
+      const h = await this.provider.health();
+      return capability(this.key, h.state, [{ name: this.provider.kind, state: h.state, identity: h.identity, reason: h.reason }], {
+        provider: this.provider.id, version: this.provider.version, reason: h.reason,
+      });
+    } catch (e) {
+      return capability(this.key, "DEGRADED", [{ name: this.provider.kind, state: "DEGRADED", identity: this.provider.id, reason: String(e) }], { reason: String(e) });
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/runtime/secure-core-probe.ts
+====================================================================================================
+import { capability, type CapabilityProbe } from "./capabilities";
+
+export class SecureCoreProbe implements CapabilityProbe {
+  readonly key = "secure-core";
+  constructor(private readonly core?: { version(): Promise<string>; selfTest(): Promise<boolean> }) {}
+  async probe() {
+    if (!this.core) return capability(this.key, "NOT_CONFIGURED", [], { reason: "secure core not loaded" });
+    try {
+      const [version, ok] = await Promise.all([this.core.version(), this.core.selfTest()]);
+      return capability(this.key, ok ? "READY" : "DEGRADED", [{ name: "linqa-secure-core", state: ok ? "READY" : "DEGRADED", identity: version }], { version });
+    } catch (e) { return capability(this.key, "DEGRADED", [{ name: "linqa-secure-core", state: "DEGRADED", reason: String(e) }], { reason: String(e) }); }
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/security/step-up-guard.ts
+====================================================================================================
+import type { RequestHandler } from "express";
+import type { SensitiveAction, StepUpService } from "./step-up";
+
+export function requireStepUp(stepUp: StepUpService, action: SensitiveAction): RequestHandler {
+  return async (req, res, next) => {
+    try {
+      const auth = (req as any).auth;
+      const token = req.header("x-linqa-step-up");
+      if (!token) return res.status(401).json({ error: "STEP_UP_REQUIRED", action });
+      await stepUp.verifyAndConsume(token, { userId: auth.userId, deviceId: auth.deviceId, action });
+      next();
+    } catch (e: any) {
+      res.status(401).json({ error: e?.message ?? "STEP_UP_INVALID", action });
+    }
+  };
+}
+
+
+====================================================================================================
+FILE: server/src/security/step-up.ts
+====================================================================================================
+import crypto from "node:crypto";
+
+export type SensitiveAction =
+  | "PHONE_CHANGE" | "RECOVERY_EMAIL_CHANGE" | "ACCOUNT_RECOVERY"
+  | "DEVICE_REVOKE" | "DATA_EXPORT" | "ACCOUNT_DELETE" | "PASSKEY_REMOVE"
+  | "BACKUP_KEY_ROTATE" | "COUNTRY_OVERRIDE" | "LINQASEND_FUNDING_SOURCE_CHANGE";
+
+export interface StepUpClaims {
+  iss: "linqa";
+  aud: "linqa-sensitive-actions";
+  sub: string;
+  deviceId: string;
+  action: SensitiveAction;
+  authn: "PASSKEY" | "DEVICE_PROOF";
+  jti: string;
+  iat: number;
+  exp: number;
+}
+
+export interface StepUpConsumptionStore {
+  consumeOnce(jti: string, expiresAtSeconds: number): Promise<boolean>;
+}
+
+const b64u = (b: Buffer) => b.toString("base64url");
+
+export class StepUpService {
+  constructor(private readonly privateKeyPem: string, private readonly publicKeyPem: string, private readonly consumed: StepUpConsumptionStore) {}
+
+  issue(input: { userId: string; deviceId: string; action: SensitiveAction; authn: StepUpClaims["authn"]; ttlSeconds?: number }): string {
+    const now = Math.floor(Date.now() / 1000);
+    const claims: StepUpClaims = {
+      iss: "linqa", aud: "linqa-sensitive-actions", sub: input.userId, deviceId: input.deviceId,
+      action: input.action, authn: input.authn, jti: crypto.randomUUID(), iat: now, exp: now + Math.min(input.ttlSeconds ?? 300, 300),
+    };
+    const header = { alg: "EdDSA", typ: "JWT", kid: "stepup-v1" };
+    const signingInput = `${b64u(Buffer.from(JSON.stringify(header)))}.${b64u(Buffer.from(JSON.stringify(claims)))}`;
+    const sig = crypto.sign(null, Buffer.from(signingInput), this.privateKeyPem);
+    return `${signingInput}.${b64u(sig)}`;
+  }
+
+  async verifyAndConsume(token: string, expected: { userId: string; deviceId: string; action: SensitiveAction }): Promise<StepUpClaims> {
+    const parts = token.split(".");
+    if (parts.length !== 3) throw new Error("STEP_UP_MALFORMED");
+    const [h, p, s] = parts;
+    if (!crypto.verify(null, Buffer.from(`${h}.${p}`), this.publicKeyPem, Buffer.from(s, "base64url"))) throw new Error("STEP_UP_SIGNATURE_INVALID");
+    const claims = JSON.parse(Buffer.from(p, "base64url").toString("utf8")) as StepUpClaims;
+    const now = Math.floor(Date.now() / 1000);
+    if (claims.iss !== "linqa" || claims.aud !== "linqa-sensitive-actions") throw new Error("STEP_UP_AUDIENCE_INVALID");
+    if (claims.exp <= now || claims.iat > now + 30) throw new Error("STEP_UP_EXPIRED");
+    if (claims.sub !== expected.userId || claims.deviceId !== expected.deviceId || claims.action !== expected.action) throw new Error("STEP_UP_BINDING_FAILED");
+    if (!(await this.consumed.consumeOnce(claims.jti, claims.exp))) throw new Error("STEP_UP_REPLAYED");
+    return claims;
+  }
+}
+
+
+====================================================================================================
+FILE: tests/e2e/key-package-negative-vectors.test.ts
+====================================================================================================
+import crypto from "node:crypto";
+import { describe, it, expect } from "vitest";
+import { verifyKeyPackage } from "../../server/src/identity/key-package";
+
+describe("key package negative vectors", () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const base: any = {
+    wireVersion: 1, userId: "u1", deviceId: "d1", identityKeyB64: "AA==", signingKeyB64: "AA==",
+    preKeyB64: "AA==", pqPreKeyB64: "AA==", algorithmSuite: "X25519_ED25519_MLKEM768_V1",
+    createdAt: Date.now() - 1000, expiresAt: Date.now() + 60000, nonceB64: "AA==",
+  };
+  const sign = (p: any) => {
+    const { canonicalKeyPackagePayload } = require("../../server/src/identity/key-package");
+    return crypto.sign(null, canonicalKeyPackagePayload(p), privateKey).toString("base64");
+  };
+  const enrolled = { userId: "u1", deviceId: "d1", signingPublicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString() };
+
+  it("rejects wrong device", () => {
+    const p = { ...base, deviceId: "d2" }; p.signatureB64 = sign(p);
+    expect(() => verifyKeyPackage(p, enrolled)).toThrow(/BINDING/);
+  });
+  it("rejects expiry", () => {
+    const p = { ...base, expiresAt: Date.now() - 1 }; p.signatureB64 = sign(p);
+    expect(() => verifyKeyPackage(p, enrolled)).toThrow(/EXPIRED/);
+  });
+  it("rejects tamper", () => {
+    const p = { ...base }; p.signatureB64 = sign(p); p.preKeyB64 = "AQ==";
+    expect(() => verifyKeyPackage(p, enrolled)).toThrow(/SIGNATURE/);
+  });
+});
+
+
+====================================================================================================
+FILE: tests/e2e/two-client-secure-messaging.spec.ts
+====================================================================================================
+import { test, expect } from "@playwright/test";
+
+// The test harness is intentionally black-box: use real server endpoints and two fresh isolated browser contexts.
+test.describe("Linqa two-client encrypted vertical", () => {
+  test("fresh clients -> encrypted relay -> offline/restart/replay/tamper", async ({ browser, request }) => {
+    const alice = await browser.newContext();
+    const bob = await browser.newContext();
+    const a = await alice.newPage();
+    const b = await bob.newPage();
+
+    await a.goto(process.env.LINQA_WEB_URL!);
+    await b.goto(process.env.LINQA_WEB_URL!);
+
+    // Replace helper commands with repo-specific test APIs. The assertions below are the mandatory acceptance contract.
+    await a.evaluate(() => localStorage.clear());
+    await b.evaluate(() => localStorage.clear());
+
+    const caps = await request.get(`${process.env.LINQA_API_URL}/v1/runtime/capabilities`);
+    expect(caps.ok()).toBeTruthy();
+    const snapshot = await caps.json();
+    expect(snapshot.capabilities["secure-core"].state).toBe("READY");
+    expect(snapshot.capabilities["message-relay"].state).toBe("READY");
+    expect(snapshot.capabilities["delivery"].state).toBe("READY");
+
+    // Mandatory project helper contract:
+    // await registerFreshUser(a, ALICE_PHONE, ALICE_OTP);
+    // await registerFreshUser(b, BOB_PHONE, BOB_OTP);
+    // await enrollDevice(a); await enrollDevice(b);
+    // await publishSignedKeyPackage(a); await publishSignedKeyPackage(b);
+    // await verifyTransparency(a, bobUserId); await verifyTransparency(b, aliceUserId);
+    // await sendMessage(a, bobUserId, "hello");
+    // expect(await relayContainsPlaintext(request, "hello")).toBe(false);
+    // expect(await waitForMessage(b)).toBe("hello");
+    // await bob.setOffline(true); await sendMessage(a, bobUserId, "offline-1");
+    // await bob.close();
+    // const bobRestarted = await browser.newContext(); // restore encrypted persistent profile in native/integration variant
+    // replay/tamper endpoints must be rejected/ignored.
+
+    // This deliberately fails until repo helpers are wired, preventing checklist-only signoff.
+    expect(process.env.LINQA_E2E_HELPERS_WIRED, "Wire project-specific E2E helpers before release").toBe("1");
+
+    await alice.close();
+    await bob.close();
+  });
+});
+

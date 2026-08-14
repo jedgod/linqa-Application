@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.72s
+     Running tests\secret_canary_boundary.rs (target\debug\deps\secret_canary_boundary-3705dcd4022442f2.exe)
+
+running 1 test
+test canary_in_signing_and_encryption_secrets_never_leaks_via_key_package ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests\uniffi_private_key_boundary.rs (target\debug\deps\uniffi_private_key_boundary-f0ad8b865325007d.exe)
+
+running 3 tests
+test generate_key_package_never_contains_private_key_bytes ... ok
+test encrypt_message_output_never_contains_private_key_bytes ... ok
+test verify_key_package_round_trip_is_public_key_only ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

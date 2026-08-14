@@ -1,0 +1,1481 @@
+LINQA FINAL RELEASE CLOSURE PACK
+Generated: 2026-08-09T21:52:45.583893+00:00
+
+
+================================================================================================================
+FILE: .github/workflows/final-release-closure.yml
+================================================================================================================
+name: Linqa Final Release Closure
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*-rc*'
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_sha: ${{ steps.identity.outputs.artifact_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --run tests/release-closure
+
+      - name: Detect skipped/mock release tests
+        run: node scripts/scan-release-tests.mjs tests release-closure
+
+      - name: Build release artifact
+        run: npm run build:release
+
+      - name: Release identity
+        id: identity
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          GIT_SHA: ${{ github.sha }}
+          RELEASE_ARTIFACT: dist/linqa-release.tar.gz
+        run: |
+          node scripts/create-rc-manifest.mjs
+          HASH=$(sha256sum dist/linqa-release.tar.gz | awk '{print $1}')
+          echo "artifact_sha=$HASH" >> "$GITHUB_OUTPUT"
+
+  expo57:
+    needs: freeze
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: clients/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: clients/mobile/package-lock.json }
+      - run: npm ci
+      - run: node ../../mobile/expo57/scripts/verify-expo57.mjs
+      - run: npx expo install --check
+      - run: npx expo-doctor
+      - run: npm run test:expo57-regression
+
+  dependency-security:
+    needs: freeze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Root audit
+        run: npm audit --json > npm-audit.json || true
+      - run: node scripts/check-audit-json.mjs npm-audit.json
+      - name: Mobile audit
+        working-directory: clients/mobile
+        run: |
+          npm ci
+          npm audit --json > ../../mobile-npm-audit.json || true
+      - run: node scripts/check-audit-json.mjs mobile-npm-audit.json
+
+  g0-g5:
+    needs: [expo57, dependency-security]
+    uses: ./.github/workflows/g0-g5-combined.yml
+    secrets: inherit
+
+  physical-ios:
+    needs: g0-g5
+    runs-on: [self-hosted, macOS, linqa-ios-device-lab]
+    environment: physical-device-certification
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./ops/device-lab/run-ios-certification.sh
+        env:
+          GIT_SHA: ${{ github.sha }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+          ARTIFACT_SHA256: ${{ needs.freeze.outputs.artifact_sha }}
+
+  physical-android:
+    needs: g0-g5
+    runs-on: [self-hosted, linux, linqa-android-device-lab]
+    environment: physical-device-certification
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./ops/device-lab/run-android-certification.sh
+        env:
+          GIT_SHA: ${{ github.sha }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+          ARTIFACT_SHA256: ${{ needs.freeze.outputs.artifact_sha }}
+
+  exact-evidence:
+    needs: [physical-ios, physical-android]
+    runs-on: ubuntu-latest
+    environment: release-assurance
+    steps:
+      - uses: actions/checkout@v4
+      - run: node scripts/verify-evidence-binding.mjs
+        env:
+          GIT_SHA: ${{ github.sha }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+          ARTIFACT_SHA256: ${{ needs.freeze.outputs.artifact_sha }}
+          LINQA_EVIDENCE_ROOT: release-evidence/current
+
+  promote-canary:
+    needs: exact-evidence
+    runs-on: ubuntu-latest
+    environment: canary
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run release:promote:canary
+
+  ga-admission:
+    needs: promote-canary
+    runs-on: ubuntu-latest
+    environment: ga-approval
+    steps:
+      - uses: actions/checkout@v4
+      - run: node scripts/promote-release.mjs
+        env:
+          RELEASE_STATE_FILE: release-evidence/current/final-release-state.json
+
+================================================================================================================
+FILE: FINAL_GREEN_DEFINITION.md
+================================================================================================================
+# Final GREEN Definition
+
+Linqa is GA eligible only when:
+
+G0-G5 = GREEN
+AND Expo 57 migration = GREEN
+AND dependency security = GREEN
+AND iOS physical-device certification = GREEN
+AND Android physical-device certification = GREEN
+AND exact-SHA evidence = GREEN
+AND evidence freshness = GREEN
+AND skipped/todo release tests = 0
+AND mock-provider release evidence = 0
+AND external exact-revision reviews = APPROVED
+AND operational assurance = GREEN
+AND canary = GREEN
+AND rollback proof = GREEN
+AND formal approvals = GREEN
+
+The final promoted artifact must be the same artifact that was tested and reviewed.
+Do not rebuild after final evidence is collected; promote the already-hashed/signed artifact.
+
+================================================================================================================
+FILE: FINAL_IMPLEMENTATION_ORDER.md
+================================================================================================================
+# Final Implementation Order
+
+F0 Freeze feature expansion
+- tag current baseline
+- open dedicated Expo 57 / release-closure branch
+- prohibit unrelated feature merges into RC branch
+
+F1 Expo 52 -> Expo 57
+- install target Expo SDK
+- align Expo dependencies
+- run Expo Doctor
+- regenerate native projects where applicable
+- re-apply repository-owned native integration intentionally
+- compile signed Android/iOS release builds
+- validate runtime-version / OTA compatibility
+
+F2 Dependency closure
+- generate npm audit/SCA reports for root and mobile
+- remediate critical/high production-reachable findings
+- document any approved, expiring compensating-control exception
+- rerun full build/test set
+
+F3 Replace all evidence flags
+- delete release-blocking LINQA_*_REAL environment flags
+- execute real API/native/provider journeys
+- emit evidence JSON from tests
+
+F4 Exact release identity
+- freeze Git SHA
+- create release artifact
+- hash artifact
+- bind all new evidence to releaseVersion + gitSha + artifactSha256
+
+F5 Physical device certification
+- iOS real device signed release build
+- Android real device signed release build
+- secure key custody
+- real E2EE
+- offline/restart
+- push/background
+- revocation
+- reinstall/recovery
+- upgrade installation
+
+F6 External/operational assurance
+- independent crypto review
+- penetration test
+- privacy/legal
+- load/soak/chaos/DR
+- evidence must reference the frozen RC revision
+
+F7 RC promotion
+- RC_CANDIDATE -> RC_FROZEN -> CANARY -> LIMITED_AVAILABILITY -> GA
+- never skip a stage
+- rerun evidence if security-relevant code changes
+
+F8 GA
+- final automated GA blocker receives all true state
+- human go/no-go approvals exist
+- signed artifact promoted without rebuilding
+
+================================================================================================================
+FILE: README.md
+================================================================================================================
+# Linqa Final Release Closure Pack
+
+Purpose:
+Take a completed G0-G5 implementation and prevent GA until the exact release candidate
+has passed dependency security, Expo 57 migration verification, physical-device tests,
+exact-SHA evidence checks, freshness checks, skipped/mock test detection, RC promotion,
+and final GA admission.
+
+This is the final release-closure layer. It should not be used to manufacture GREEN status.
+
+Core rules:
+1. No environment flag can turn a release gate green.
+2. Evidence must bind to exact Git SHA, artifact SHA-256, release version, environment, and producer.
+3. Required physical-device tests may not be satisfied by simulator/emulator evidence.
+4. Skipped, todo, mock-only, or fake-provider results cannot satisfy release-blocking checks.
+5. Evidence expires according to policy.
+6. A code change after security review creates a new RC and invalidates affected evidence.
+7. GA promotion is automatic only after all exact-revision checks pass and human approvals exist.
+
+================================================================================================================
+FILE: config/evidence-freshness.json
+================================================================================================================
+{
+  "dependency-scan": 24,
+  "secret-scan": 24,
+  "sast": 24,
+  "sca": 24,
+  "container-scan": 24,
+  "physical-device-ios": 72,
+  "physical-device-android": 72,
+  "load-test": 168,
+  "chaos-test": 168,
+  "backup-restore": 168,
+  "crypto-review": 2160,
+  "pen-test": 720,
+  "privacy-legal": 4320,
+  "canary": 24,
+  "formal-approval": 24
+}
+
+================================================================================================================
+FILE: config/release-closure-policy.json
+================================================================================================================
+{
+  "releasePolicyVersion": 1,
+  "targetExpoSdk": 57,
+  "dependencySecurity": {
+    "blockReachableCritical": true,
+    "blockReachableHigh": true,
+    "requireSecurityApprovalForAcceptedRisk": true,
+    "acceptedRiskMustExpire": true
+  },
+  "evidence": {
+    "exactGitSha": true,
+    "exactArtifactSha256": true,
+    "rejectSkippedReleaseTests": true,
+    "rejectTodoReleaseTests": true,
+    "rejectMockProviderEvidence": true,
+    "requireProductionEquivalentDependencies": true
+  },
+  "devices": {
+    "iosPhysicalRequired": true,
+    "androidPhysicalRequired": true,
+    "simulatorCannotSatisfyReleaseGate": true,
+    "emulatorCannotSatisfyReleaseGate": true
+  },
+  "promotion": {
+    "sequentialStagesOnly": true,
+    "canaryRequiredBeforeGA": true,
+    "formalApprovalsRequired": [
+      "ENGINEERING",
+      "SECURITY",
+      "SRE",
+      "PRIVACY_LEGAL",
+      "PRODUCT"
+    ]
+  }
+}
+
+================================================================================================================
+FILE: mobile/device-certification/device-certification.schema.json
+================================================================================================================
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "evidenceId",
+    "gitSha",
+    "artifactSha256",
+    "platform",
+    "physicalDevice",
+    "releaseBuild",
+    "signedBuild",
+    "secureKeyCustody",
+    "privateKeyExportPrevented",
+    "phoneFirstRegistration",
+    "enrollmentPassed",
+    "keyPackagePassed",
+    "transparencyPassed",
+    "encryptedMessagingPassed",
+    "offlineRestartPassed",
+    "pushBackgroundPassed",
+    "revocationPassed",
+    "reinstallRecoveryPassed",
+    "upgradeFromPreviousReleasePassed"
+  ],
+  "properties": {
+    "physicalDevice": { "const": true },
+    "platform": { "enum": ["ios", "android"] },
+    "gitSha": { "pattern": "^[a-fA-F0-9]{40,64}$" },
+    "artifactSha256": { "pattern": "^[a-fA-F0-9]{64}$" }
+  }
+}
+
+================================================================================================================
+FILE: mobile/expo57/package-migration.example.json
+================================================================================================================
+{
+  "migration": "Expo SDK 52 -> 57",
+  "target": {
+    "expo": "^57.0.0",
+    "reactNativeLine": "0.86.x"
+  },
+  "requiredCommands": [
+    "npm install expo@^57.0.0",
+    "npx expo install --fix",
+    "npx expo-doctor",
+    "npx expo prebuild --clean"
+  ],
+  "requiredValidation": [
+    "android release build",
+    "ios release build",
+    "upgrade install from prior production build",
+    "secure key custody regression",
+    "native crypto regression",
+    "push/background receive regression",
+    "runtime-version/OTA compatibility"
+  ]
+}
+
+================================================================================================================
+FILE: mobile/expo57/scripts/verify-expo57.mjs
+================================================================================================================
+import fs from "node:fs/promises";
+
+const pkg = JSON.parse(await fs.readFile("package.json", "utf8"));
+const expo = pkg.dependencies?.expo ?? pkg.devDependencies?.expo;
+
+if (!expo) throw new Error("EXPO_DEPENDENCY_MISSING");
+
+const match = String(expo).match(/57/);
+if (!match) {
+  throw new Error(`EXPO_57_REQUIRED:found=${expo}`);
+}
+
+console.log(`Expo dependency accepted: ${expo}`);
+
+================================================================================================================
+FILE: ops/device-lab/run-android-certification.sh
+================================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${GIT_SHA:?}"
+: "${RELEASE_VERSION:?}"
+: "${ARTIFACT_SHA256:?}"
+: "${LINQA_ANDROID_SERIAL:?physical Android serial required}"
+
+OUT="release-evidence/current/devices/android"
+mkdir -p "$OUT"
+
+npm run test:device:android:release -- --serial "$LINQA_ANDROID_SERIAL" --json "$OUT/result.json"
+
+node ops/device-lab/validate-device-result.mjs "$OUT/result.json" android
+
+================================================================================================================
+FILE: ops/device-lab/run-ios-certification.sh
+================================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${GIT_SHA:?}"
+: "${RELEASE_VERSION:?}"
+: "${ARTIFACT_SHA256:?}"
+: "${LINQA_IOS_DEVICE_UDID:?physical iOS UDID required}"
+
+OUT="release-evidence/current/devices/ios"
+mkdir -p "$OUT"
+
+# Repository-specific command must:
+# - install signed RELEASE build on a physical device
+# - execute phone-first registration
+# - validate Secure Enclave/Keychain-backed signing identity
+# - prove private key is not exportable through app APIs
+# - publish/verify signed key package and transparency proof
+# - perform encrypted messaging and offline/restart flow
+# - prove background push receive and revocation
+# - prove reinstall/recovery and upgrade from previous release
+npm run test:device:ios:release -- --udid "$LINQA_IOS_DEVICE_UDID" --json "$OUT/result.json"
+
+node ops/device-lab/validate-device-result.mjs "$OUT/result.json" ios
+
+================================================================================================================
+FILE: ops/device-lab/validate-device-result.mjs
+================================================================================================================
+import fs from "node:fs/promises";
+
+const [file, expectedPlatform] = process.argv.slice(2);
+const r = JSON.parse(await fs.readFile(file, "utf8"));
+
+const required = [
+  "physicalDevice",
+  "releaseBuild",
+  "signedBuild",
+  "secureKeyCustody",
+  "privateKeyExportPrevented",
+  "phoneFirstRegistration",
+  "enrollmentPassed",
+  "keyPackagePassed",
+  "transparencyPassed",
+  "encryptedMessagingPassed",
+  "offlineRestartPassed",
+  "pushBackgroundPassed",
+  "revocationPassed",
+  "reinstallRecoveryPassed",
+  "upgradeFromPreviousReleasePassed"
+];
+
+if (r.platform !== expectedPlatform) throw new Error("DEVICE_PLATFORM_MISMATCH");
+if (r.physicalDevice !== true) throw new Error("PHYSICAL_DEVICE_REQUIRED");
+
+const failed = required.filter(k => r[k] !== true);
+if (failed.length) throw new Error(`DEVICE_CERT_FAILED:${failed.join(",")}`);
+
+console.log(`${expectedPlatform} physical-device certification GREEN`);
+
+================================================================================================================
+FILE: release-closure/src/AutomaticGABlocker.ts
+================================================================================================================
+export interface FinalReleaseState {
+  g0: boolean;
+  g1: boolean;
+  g2: boolean;
+  g3: boolean;
+  g4: boolean;
+  g5: boolean;
+  dependencySecurity: boolean;
+  expo57Migration: boolean;
+  physicalIos: boolean;
+  physicalAndroid: boolean;
+  evidenceFreshness: boolean;
+  exactShaBinding: boolean;
+  noSkippedReleaseTests: boolean;
+  noMockReleaseTests: boolean;
+  externalReviews: boolean;
+  operationalEvidence: boolean;
+  canary: boolean;
+  rollback: boolean;
+  formalApprovals: boolean;
+}
+
+export function assertGAAllowed(s: FinalReleaseState) {
+  const failures = Object.entries(s)
+    .filter(([, value]) => value !== true)
+    .map(([key]) => key);
+
+  if (failures.length) {
+    throw new Error(`LINQA_GA_AUTOMATIC_BLOCK:${failures.join(",")}`);
+  }
+}
+
+================================================================================================================
+FILE: release-closure/src/DependencySecurityGate.ts
+================================================================================================================
+export type AdvisorySeverity = "low" | "moderate" | "high" | "critical";
+
+export interface Advisory {
+  id: string;
+  packageName: string;
+  severity: AdvisorySeverity;
+  direct: boolean;
+  productionReachable: boolean;
+  patchedVersion?: string;
+  findingUrl?: string;
+  acceptedRiskId?: string;
+}
+
+export interface AcceptedRisk {
+  id: string;
+  advisoryIds: string[];
+  approvedBySecurity: boolean;
+  expiresAt: string;
+  compensatingControls: string[];
+  rationale: string;
+}
+
+export function evaluateDependencySecurity(
+  advisories: Advisory[],
+  acceptedRisks: AcceptedRisk[],
+  now = new Date(),
+) {
+  const validRisk = new Map<string, AcceptedRisk>();
+  for (const risk of acceptedRisks) {
+    if (
+      risk.approvedBySecurity &&
+      Date.parse(risk.expiresAt) > now.getTime() &&
+      risk.compensatingControls.length > 0
+    ) {
+      validRisk.set(risk.id, risk);
+    }
+  }
+
+  const blockers = advisories.filter(a => {
+    if (!a.productionReachable) return false;
+    if (!["critical", "high"].includes(a.severity)) return false;
+    if (!a.acceptedRiskId) return true;
+    const risk = validRisk.get(a.acceptedRiskId);
+    return !risk || !risk.advisoryIds.includes(a.id);
+  });
+
+  return {
+    green: blockers.length === 0,
+    blockers,
+    totals: {
+      all: advisories.length,
+      critical: advisories.filter(a => a.severity === "critical").length,
+      high: advisories.filter(a => a.severity === "high").length,
+      productionReachable: advisories.filter(a => a.productionReachable).length,
+    },
+  };
+}
+
+================================================================================================================
+FILE: release-closure/src/EvidenceFreshnessPolicy.ts
+================================================================================================================
+export const EVIDENCE_MAX_AGE_HOURS: Record<string, number> = {
+  "dependency-scan": 24,
+  "secret-scan": 24,
+  "sast": 24,
+  "sca": 24,
+  "container-scan": 24,
+  "physical-device-ios": 72,
+  "physical-device-android": 72,
+  "load-test": 168,
+  "chaos-test": 168,
+  "backup-restore": 168,
+  "crypto-review": 24 * 90,
+  "pen-test": 24 * 30,
+  "privacy-legal": 24 * 180,
+  "canary": 24,
+  "formal-approval": 24,
+};
+
+export function maxAgeFor(controlId: string): number {
+  const value = EVIDENCE_MAX_AGE_HOURS[controlId];
+  if (!value) throw new Error(`NO_FRESHNESS_POLICY:${controlId}`);
+  return value;
+}
+
+================================================================================================================
+FILE: release-closure/src/EvidencePolicy.ts
+================================================================================================================
+import { EvidenceRecord, GateEvaluation } from "./types";
+
+export interface EvidenceRequirement {
+  controlId: string;
+  maxAgeHours: number;
+  exactRevision: boolean;
+  exactArtifact: boolean;
+  physicalDeviceRequired?: boolean;
+  productionEquivalentRequired?: boolean;
+  allowedKinds: EvidenceRecord["executionKind"][];
+}
+
+export function evaluateEvidence(
+  requirement: EvidenceRequirement,
+  evidence: EvidenceRecord[],
+  release: { gitSha: string; artifactSha256: string; now?: Date },
+): GateEvaluation {
+  const now = release.now ?? new Date();
+  const reasons: string[] = [];
+  const matching = evidence.filter(e => e.controlId === requirement.controlId && e.result === "PASS");
+
+  const valid = matching.filter(e => {
+    if (requirement.exactRevision && e.gitSha !== release.gitSha) {
+      reasons.push(`${e.id}:REVISION_MISMATCH`);
+      return false;
+    }
+
+    if (requirement.exactArtifact && e.artifactSha256 !== release.artifactSha256) {
+      reasons.push(`${e.id}:ARTIFACT_MISMATCH`);
+      return false;
+    }
+
+    if (!requirement.allowedKinds.includes(e.executionKind)) {
+      reasons.push(`${e.id}:EXECUTION_KIND_NOT_ALLOWED`);
+      return false;
+    }
+
+    const produced = Date.parse(e.producedAt);
+    if (!Number.isFinite(produced)) {
+      reasons.push(`${e.id}:INVALID_TIMESTAMP`);
+      return false;
+    }
+
+    const ageHours = (now.getTime() - produced) / 3_600_000;
+    if (ageHours > requirement.maxAgeHours) {
+      reasons.push(`${e.id}:EVIDENCE_EXPIRED`);
+      return false;
+    }
+
+    if (e.expiresAt && Date.parse(e.expiresAt) <= now.getTime()) {
+      reasons.push(`${e.id}:EVIDENCE_EXPLICITLY_EXPIRED`);
+      return false;
+    }
+
+    if (requirement.physicalDeviceRequired && !e.device?.physical) {
+      reasons.push(`${e.id}:PHYSICAL_DEVICE_REQUIRED`);
+      return false;
+    }
+
+    if (e.test) {
+      if (e.test.skipped) {
+        reasons.push(`${e.id}:SKIPPED_TEST`);
+        return false;
+      }
+      if (e.test.todo) {
+        reasons.push(`${e.id}:TODO_TEST`);
+        return false;
+      }
+      if (e.test.mockProviderUsed) {
+        reasons.push(`${e.id}:MOCK_PROVIDER_USED`);
+        return false;
+      }
+      if (requirement.productionEquivalentRequired && !e.test.productionEquivalentDependencies) {
+        reasons.push(`${e.id}:NOT_PRODUCTION_EQUIVALENT`);
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  return {
+    controlId: requirement.controlId,
+    passed: valid.length > 0,
+    evidenceIds: valid.map(x => x.id),
+    reasons: valid.length ? [] : reasons.length ? reasons : ["NO_VALID_EVIDENCE"],
+  };
+}
+
+================================================================================================================
+FILE: release-closure/src/Expo57MigrationGate.ts
+================================================================================================================
+export interface ExpoMigrationEvidence {
+  fromSdk: 52;
+  toSdk: 57;
+  expoDoctorPassed: boolean;
+  dependencyAlignmentPassed: boolean;
+  nativePrebuildRegenerated: boolean;
+  androidReleaseBuildPassed: boolean;
+  iosReleaseBuildPassed: boolean;
+  upgradeInstallPassedAndroid: boolean;
+  upgradeInstallPassedIos: boolean;
+  secureStorageRegressionPassed: boolean;
+  nativeCryptoRegressionPassed: boolean;
+  backgroundReceiveRegressionPassed: boolean;
+  pushRegressionPassed: boolean;
+  deepLinkRegressionPassed: boolean;
+  otaRuntimeVersionValidated: boolean;
+}
+
+export function assertExpo57MigrationGreen(e: ExpoMigrationEvidence) {
+  const failures = Object.entries(e)
+    .filter(([k, v]) => typeof v === "boolean" && v !== true)
+    .map(([k]) => k);
+
+  if (e.fromSdk !== 52 || e.toSdk !== 57) {
+    failures.push("SDK_LINEAGE_INVALID");
+  }
+
+  if (failures.length) {
+    throw new Error(`EXPO57_MIGRATION_RED:${failures.join(",")}`);
+  }
+}
+
+================================================================================================================
+FILE: release-closure/src/ExternalEvidenceBinding.ts
+================================================================================================================
+export interface ExternalReviewEvidence {
+  id: string;
+  reviewType: "CRYPTO_REVIEW" | "PEN_TEST" | "PRIVACY_LEGAL";
+  gitSha: string;
+  artifactSha256?: string;
+  completedAt: string;
+  expiresAt?: string;
+  approved: boolean;
+  criticalOpen: number;
+  highOpen: number;
+  reportSha256: string;
+}
+
+export function assertExternalEvidenceBound(
+  e: ExternalReviewEvidence,
+  release: { gitSha: string; artifactSha256: string },
+  now = new Date(),
+) {
+  if (e.gitSha !== release.gitSha) throw new Error("EXTERNAL_REVIEW_SHA_MISMATCH");
+  if (e.artifactSha256 && e.artifactSha256 !== release.artifactSha256) {
+    throw new Error("EXTERNAL_REVIEW_ARTIFACT_MISMATCH");
+  }
+  if (!e.approved) throw new Error("EXTERNAL_REVIEW_NOT_APPROVED");
+  if (e.criticalOpen > 0) throw new Error("EXTERNAL_REVIEW_CRITICAL_OPEN");
+  if (e.reviewType === "CRYPTO_REVIEW" && e.highOpen > 0) {
+    throw new Error("CRYPTO_REVIEW_HIGH_OPEN");
+  }
+  if (e.expiresAt && Date.parse(e.expiresAt) <= now.getTime()) {
+    throw new Error("EXTERNAL_REVIEW_EXPIRED");
+  }
+}
+
+================================================================================================================
+FILE: release-closure/src/PhysicalDeviceCertification.ts
+================================================================================================================
+export interface DeviceCertification {
+  evidenceId: string;
+  gitSha: string;
+  artifactSha256: string;
+  platform: "ios" | "android";
+  physicalDevice: boolean;
+  model: string;
+  osVersion: string;
+  releaseBuild: boolean;
+  signedBuild: boolean;
+  secureKeyCustody: boolean;
+  privateKeyExportPrevented: boolean;
+  phoneFirstRegistration: boolean;
+  enrollmentPassed: boolean;
+  keyPackagePassed: boolean;
+  transparencyPassed: boolean;
+  encryptedMessagingPassed: boolean;
+  offlineRestartPassed: boolean;
+  pushBackgroundPassed: boolean;
+  revocationPassed: boolean;
+  reinstallRecoveryPassed: boolean;
+  upgradeFromPreviousReleasePassed: boolean;
+}
+
+export function assertPhysicalDeviceCertification(e: DeviceCertification) {
+  if (!e.physicalDevice) throw new Error("PHYSICAL_DEVICE_REQUIRED");
+
+  const failures = Object.entries(e)
+    .filter(([key, value]) =>
+      typeof value === "boolean" &&
+      key !== "physicalDevice" &&
+      value !== true
+    )
+    .map(([key]) => key);
+
+  if (failures.length) {
+    throw new Error(
+      `PHYSICAL_DEVICE_CERTIFICATION_FAILED:${e.platform}:${failures.join(",")}`
+    );
+  }
+}
+
+================================================================================================================
+FILE: release-closure/src/RCPromotionPolicy.ts
+================================================================================================================
+import { ReleaseStage } from "./types";
+
+export interface PromotionInput {
+  currentStage: ReleaseStage;
+  requestedStage: ReleaseStage;
+  g0g5Green: boolean;
+  dependencySecurityGreen: boolean;
+  physicalIosGreen: boolean;
+  physicalAndroidGreen: boolean;
+  exactRevisionExternalEvidenceGreen: boolean;
+  canaryGreen: boolean;
+  formalApprovalsGreen: boolean;
+}
+
+const ORDER: ReleaseStage[] = [
+  "DEVELOPMENT",
+  "RC_CANDIDATE",
+  "RC_FROZEN",
+  "CANARY",
+  "LIMITED_AVAILABILITY",
+  "GA",
+];
+
+export function assertPromotionAllowed(i: PromotionInput) {
+  const current = ORDER.indexOf(i.currentStage);
+  const requested = ORDER.indexOf(i.requestedStage);
+
+  if (current < 0 || requested < 0 || requested !== current + 1) {
+    throw new Error("INVALID_RELEASE_STAGE_TRANSITION");
+  }
+
+  if (requested >= ORDER.indexOf("RC_FROZEN") && !i.dependencySecurityGreen) {
+    throw new Error("PROMOTION_BLOCKED_DEPENDENCY_SECURITY");
+  }
+
+  if (requested >= ORDER.indexOf("CANARY")) {
+    if (!i.g0g5Green) throw new Error("PROMOTION_BLOCKED_G0_G5");
+    if (!i.physicalIosGreen || !i.physicalAndroidGreen) {
+      throw new Error("PROMOTION_BLOCKED_DEVICE_CERTIFICATION");
+    }
+    if (!i.exactRevisionExternalEvidenceGreen) {
+      throw new Error("PROMOTION_BLOCKED_EXTERNAL_EVIDENCE");
+    }
+  }
+
+  if (i.requestedStage === "GA") {
+    if (!i.canaryGreen) throw new Error("PROMOTION_BLOCKED_CANARY");
+    if (!i.formalApprovalsGreen) throw new Error("PROMOTION_BLOCKED_APPROVALS");
+  }
+}
+
+================================================================================================================
+FILE: release-closure/src/ReleaseEvidenceManifest.ts
+================================================================================================================
+import crypto from "node:crypto";
+
+export interface ReleaseEvidenceManifest {
+  releaseVersion: string;
+  gitSha: string;
+  artifactSha256: string;
+  evidence: Array<{ id: string; sha256: string }>;
+  generatedAt: string;
+  manifestSha256?: string;
+}
+
+export function canonicalManifestPayload(m: ReleaseEvidenceManifest) {
+  return JSON.stringify({
+    releaseVersion: m.releaseVersion,
+    gitSha: m.gitSha,
+    artifactSha256: m.artifactSha256,
+    evidence: [...m.evidence].sort((a,b) => a.id.localeCompare(b.id)),
+    generatedAt: m.generatedAt,
+  });
+}
+
+export function finalizeManifest(m: ReleaseEvidenceManifest) {
+  return {
+    ...m,
+    manifestSha256: crypto
+      .createHash("sha256")
+      .update(canonicalManifestPayload(m))
+      .digest("hex"),
+  };
+}
+
+================================================================================================================
+FILE: release-closure/src/ReleaseIdentityService.ts
+================================================================================================================
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+
+export class ReleaseIdentityService {
+  async fileSha256(file: string): Promise<string> {
+    const h = crypto.createHash("sha256");
+    h.update(await fs.readFile(file));
+    return h.digest("hex");
+  }
+
+  assertGitSha(value: string) {
+    if (!/^[a-f0-9]{40,64}$/i.test(value)) {
+      throw new Error("INVALID_GIT_SHA");
+    }
+  }
+
+  assertArtifactHash(value: string) {
+    if (!/^[a-f0-9]{64}$/i.test(value)) {
+      throw new Error("INVALID_ARTIFACT_SHA256");
+    }
+  }
+}
+
+================================================================================================================
+FILE: release-closure/src/ReleaseLineageService.ts
+================================================================================================================
+export interface ReleaseCandidate {
+  version: string;
+  gitSha: string;
+  parentRc?: string;
+  createdAt: string;
+  securityRelevantChanges: boolean;
+}
+
+export function affectedEvidenceMustBeRegenerated(
+  previous: ReleaseCandidate,
+  current: ReleaseCandidate,
+) {
+  if (previous.gitSha === current.gitSha) return false;
+  return current.securityRelevantChanges;
+}
+
+================================================================================================================
+FILE: release-closure/src/SkippedMockDetector.ts
+================================================================================================================
+import fs from "node:fs/promises";
+
+const RELEASE_BLOCKING_PATTERNS = [
+  /\b(it|test|describe)\.skip\b/g,
+  /\b(it|test)\.todo\b/g,
+  /\bskipIf\s*\(/g,
+  /\bLINQA_.*_REAL\s*===?\s*["']1["']/g,
+  /\bmockProviderUsed\s*:\s*true\b/g,
+  /\bFake[A-Z][A-Za-z0-9_]*(Provider|Client|Repository|Service)\b/g,
+];
+
+export interface Detection {
+  file: string;
+  line: number;
+  pattern: string;
+  text: string;
+}
+
+export async function detectForbiddenReleasePatterns(files: string[]): Promise<Detection[]> {
+  const hits: Detection[] = [];
+
+  for (const file of files) {
+    const content = await fs.readFile(file, "utf8");
+    const lines = content.split(/\r?\n/);
+
+    lines.forEach((text, index) => {
+      for (const pattern of RELEASE_BLOCKING_PATTERNS) {
+        pattern.lastIndex = 0;
+        if (pattern.test(text)) {
+          hits.push({
+            file,
+            line: index + 1,
+            pattern: pattern.toString(),
+            text: text.trim(),
+          });
+        }
+      }
+    });
+  }
+
+  return hits;
+}
+
+================================================================================================================
+FILE: release-closure/src/TestResultNormalizer.ts
+================================================================================================================
+export interface RawTestCase {
+  name: string;
+  status: "passed" | "failed" | "skipped" | "todo";
+  durationMs?: number;
+  tags?: string[];
+}
+
+export interface NormalizedTestSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  todo: number;
+  releaseBlockingSkipped: string[];
+}
+
+export function normalizeTests(cases: RawTestCase[]): NormalizedTestSummary {
+  const releaseBlockingSkipped = cases
+    .filter(t =>
+      (t.status === "skipped" || t.status === "todo") &&
+      t.tags?.includes("release-blocking")
+    )
+    .map(t => t.name);
+
+  return {
+    total: cases.length,
+    passed: cases.filter(x => x.status === "passed").length,
+    failed: cases.filter(x => x.status === "failed").length,
+    skipped: cases.filter(x => x.status === "skipped").length,
+    todo: cases.filter(x => x.status === "todo").length,
+    releaseBlockingSkipped,
+  };
+}
+
+export function assertReleaseTestsComplete(summary: NormalizedTestSummary) {
+  if (summary.failed > 0) throw new Error("RELEASE_TEST_FAILURES");
+  if (summary.releaseBlockingSkipped.length > 0) {
+    throw new Error(
+      `RELEASE_BLOCKING_TESTS_SKIPPED:${summary.releaseBlockingSkipped.join(",")}`
+    );
+  }
+}
+
+================================================================================================================
+FILE: release-closure/src/types.ts
+================================================================================================================
+export type ReleaseStage =
+  | "DEVELOPMENT"
+  | "RC_CANDIDATE"
+  | "RC_FROZEN"
+  | "CANARY"
+  | "LIMITED_AVAILABILITY"
+  | "GA";
+
+export type EvidenceResult = "PASS" | "FAIL" | "INCONCLUSIVE";
+export type ExecutionKind =
+  | "UNIT"
+  | "INTEGRATION"
+  | "E2E"
+  | "PHYSICAL_DEVICE"
+  | "SECURITY_SCAN"
+  | "EXTERNAL_REVIEW"
+  | "OPERATIONAL"
+  | "HUMAN_APPROVAL";
+
+export interface ReleaseIdentity {
+  releaseVersion: string;
+  gitSha: string;
+  sourceTreeSha256: string;
+  buildId: string;
+  artifactSha256: string;
+  generatedAt: string;
+}
+
+export interface EvidenceRecord {
+  id: string;
+  controlId: string;
+  result: EvidenceResult;
+  executionKind: ExecutionKind;
+  releaseVersion: string;
+  gitSha: string;
+  artifactSha256?: string;
+  environment: string;
+  producer: string;
+  producedAt: string;
+  expiresAt?: string;
+  device?: {
+    platform: "ios" | "android";
+    physical: boolean;
+    model?: string;
+    osVersion?: string;
+    deviceEvidenceId?: string;
+  };
+  test?: {
+    name: string;
+    skipped: boolean;
+    todo: boolean;
+    mockProviderUsed: boolean;
+    fakeClockUsed?: boolean;
+    productionEquivalentDependencies: boolean;
+  };
+  references: Array<{
+    path: string;
+    sha256: string;
+    mediaType?: string;
+  }>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface GateEvaluation {
+  controlId: string;
+  passed: boolean;
+  evidenceIds: string[];
+  reasons: string[];
+}
+
+================================================================================================================
+FILE: release-evidence/examples/final-release-state.example.json
+================================================================================================================
+{
+  "g0": false,
+  "g1": false,
+  "g2": false,
+  "g3": false,
+  "g4": false,
+  "g5": false,
+  "dependencySecurity": false,
+  "expo57Migration": false,
+  "physicalIos": false,
+  "physicalAndroid": false,
+  "evidenceFreshness": false,
+  "exactShaBinding": false,
+  "noSkippedReleaseTests": false,
+  "noMockReleaseTests": false,
+  "externalReviews": false,
+  "operationalEvidence": false,
+  "canary": false,
+  "rollback": false,
+  "formalApprovals": false
+}
+
+================================================================================================================
+FILE: scripts/check-audit-json.mjs
+================================================================================================================
+import fs from "node:fs/promises";
+
+const file = process.argv[2] ?? "npm-audit.json";
+const report = JSON.parse(await fs.readFile(file, "utf8"));
+const metadata = report.metadata?.vulnerabilities ?? {};
+
+const critical = metadata.critical ?? 0;
+const high = metadata.high ?? 0;
+
+console.log({ critical, high, total: metadata.total ?? null });
+
+if (critical > 0 || high > 0) {
+  console.error("Critical/high npm advisories remain. Produce classified reachability evidence or remediate.");
+  process.exit(2);
+}
+
+================================================================================================================
+FILE: scripts/create-rc-manifest.mjs
+================================================================================================================
+import fs from "node:fs/promises";
+import crypto from "node:crypto";
+
+const releaseVersion = process.env.RELEASE_VERSION;
+const gitSha = process.env.GIT_SHA;
+const artifact = process.env.RELEASE_ARTIFACT;
+
+if (!releaseVersion || !gitSha || !artifact) {
+  throw new Error("RELEASE_VERSION, GIT_SHA, RELEASE_ARTIFACT required");
+}
+
+const bytes = await fs.readFile(artifact);
+const artifactSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+
+const manifest = {
+  releaseVersion,
+  gitSha,
+  artifact: artifact,
+  artifactSha256,
+  generatedAt: new Date().toISOString(),
+  stage: "RC_CANDIDATE"
+};
+
+await fs.mkdir("release-evidence/current", {recursive:true});
+await fs.writeFile(
+  "release-evidence/current/release-identity.json",
+  JSON.stringify(manifest, null, 2)
+);
+
+console.log(JSON.stringify(manifest, null, 2));
+
+================================================================================================================
+FILE: scripts/promote-release.mjs
+================================================================================================================
+import fs from "node:fs/promises";
+
+const stateFile = process.env.RELEASE_STATE_FILE ?? "release-evidence/current/final-release-state.json";
+const state = JSON.parse(await fs.readFile(stateFile, "utf8"));
+
+const required = [
+  "g0","g1","g2","g3","g4","g5",
+  "dependencySecurity","expo57Migration",
+  "physicalIos","physicalAndroid",
+  "evidenceFreshness","exactShaBinding",
+  "noSkippedReleaseTests","noMockReleaseTests",
+  "externalReviews","operationalEvidence",
+  "canary","rollback","formalApprovals"
+];
+
+const failures = required.filter(k => state[k] !== true);
+
+if (failures.length) {
+  console.error(`GA BLOCKED: ${failures.join(",")}`);
+  process.exit(2);
+}
+
+console.log("LINQA GA PROMOTION AUTHORIZED");
+
+================================================================================================================
+FILE: scripts/scan-release-tests.mjs
+================================================================================================================
+import fs from "node:fs/promises";
+import path from "node:path";
+
+const roots = process.argv.slice(2);
+if (!roots.length) roots.push("tests");
+
+const patterns = [
+  ["SKIP", /\b(it|test|describe)\.skip\b/],
+  ["TODO", /\b(it|test)\.todo\b/],
+  ["SKIP_IF", /\bskipIf\s*\(/],
+  ["FAKE_PROVIDER", /\bFake[A-Z][A-Za-z0-9_]*(Provider|Client|Repository|Service)\b/],
+  ["REAL_FLAG", /\bLINQA_.*_REAL\b/]
+];
+
+const hits = [];
+
+async function walk(p) {
+  const stat = await fs.stat(p);
+  if (stat.isDirectory()) {
+    for (const entry of await fs.readdir(p)) {
+      await walk(path.join(p, entry));
+    }
+    return;
+  }
+
+  if (!/\.(ts|tsx|js|mjs|kt|swift)$/.test(p)) return;
+  const lines = (await fs.readFile(p, "utf8")).split(/\r?\n/);
+  lines.forEach((line, i) => {
+    patterns.forEach(([name, rx]) => {
+      if (rx.test(line)) hits.push({ file:p, line:i+1, type:name, text:line.trim() });
+    });
+  });
+}
+
+for (const r of roots) {
+  try { await walk(r); } catch {}
+}
+
+if (hits.length) {
+  console.error(JSON.stringify(hits, null, 2));
+  process.exit(2);
+}
+
+console.log("No forbidden release-test patterns detected");
+
+================================================================================================================
+FILE: scripts/verify-evidence-binding.mjs
+================================================================================================================
+import fs from "node:fs/promises";
+import path from "node:path";
+
+const root = process.env.LINQA_EVIDENCE_ROOT ?? "release-evidence/current";
+const gitSha = process.env.GIT_SHA;
+const artifactSha = process.env.ARTIFACT_SHA256;
+const releaseVersion = process.env.RELEASE_VERSION;
+
+if (!gitSha || !artifactSha || !releaseVersion) {
+  throw new Error("GIT_SHA, ARTIFACT_SHA256 and RELEASE_VERSION are required");
+}
+
+const failures = [];
+
+async function walk(p) {
+  for (const entry of await fs.readdir(p, { withFileTypes:true })) {
+    const full = path.join(p, entry.name);
+    if (entry.isDirectory()) await walk(full);
+    else if (entry.name.endsWith(".json")) {
+      try {
+        const x = JSON.parse(await fs.readFile(full, "utf8"));
+        if (x.gitSha && x.gitSha !== gitSha) failures.push(`${full}:gitSha`);
+        if (x.releaseVersion && x.releaseVersion !== releaseVersion) failures.push(`${full}:releaseVersion`);
+        if (x.artifactSha256 && x.artifactSha256 !== artifactSha) failures.push(`${full}:artifactSha256`);
+      } catch {}
+    }
+  }
+}
+
+await walk(root);
+
+if (failures.length) {
+  console.error("Evidence binding failures:", failures);
+  process.exit(2);
+}
+
+console.log("All discovered evidence is bound to the current release identity");
+
+================================================================================================================
+FILE: tests/release-closure/dependency-security.spec.ts
+================================================================================================================
+import { describe, expect, it } from "vitest";
+import { evaluateDependencySecurity } from "../../release-closure/src/DependencySecurityGate";
+
+describe("dependency security gate", () => {
+  it("blocks reachable critical advisory", () => {
+    const result = evaluateDependencySecurity([{
+      id:"ADV-1",
+      packageName:"example",
+      severity:"critical",
+      direct:false,
+      productionReachable:true
+    }], []);
+    expect(result.green).toBe(false);
+  });
+
+  it("does not block non-production-reachable advisory", () => {
+    const result = evaluateDependencySecurity([{
+      id:"ADV-2",
+      packageName:"dev-only",
+      severity:"high",
+      direct:false,
+      productionReachable:false
+    }], []);
+    expect(result.green).toBe(true);
+  });
+});
+
+================================================================================================================
+FILE: tests/release-closure/evidence-policy.spec.ts
+================================================================================================================
+import { describe, expect, it } from "vitest";
+import { evaluateEvidence } from "../../release-closure/src/EvidencePolicy";
+
+describe("evidence policy", () => {
+  it("rejects wrong SHA", () => {
+    const result = evaluateEvidence(
+      {
+        controlId:"physical-device-ios",
+        maxAgeHours:72,
+        exactRevision:true,
+        exactArtifact:true,
+        physicalDeviceRequired:true,
+        allowedKinds:["PHYSICAL_DEVICE"],
+      },
+      [{
+        id:"e1",
+        controlId:"physical-device-ios",
+        result:"PASS",
+        executionKind:"PHYSICAL_DEVICE",
+        releaseVersion:"1.0.0-rc1",
+        gitSha:"b".repeat(40),
+        artifactSha256:"c".repeat(64),
+        environment:"device-lab",
+        producer:"ios-lab",
+        producedAt:new Date().toISOString(),
+        device:{platform:"ios",physical:true},
+        test:{
+          name:"ios certification",
+          skipped:false,
+          todo:false,
+          mockProviderUsed:false,
+          productionEquivalentDependencies:true
+        },
+        references:[]
+      }],
+      {gitSha:"a".repeat(40),artifactSha256:"c".repeat(64)}
+    );
+    expect(result.passed).toBe(false);
+  });
+
+  it("rejects simulator evidence", () => {
+    const sha = "a".repeat(40);
+    const artifact = "c".repeat(64);
+    const result = evaluateEvidence(
+      {
+        controlId:"physical-device-ios",
+        maxAgeHours:72,
+        exactRevision:true,
+        exactArtifact:true,
+        physicalDeviceRequired:true,
+        allowedKinds:["PHYSICAL_DEVICE"],
+      },
+      [{
+        id:"e2",
+        controlId:"physical-device-ios",
+        result:"PASS",
+        executionKind:"PHYSICAL_DEVICE",
+        releaseVersion:"1.0.0-rc1",
+        gitSha:sha,
+        artifactSha256:artifact,
+        environment:"simulator",
+        producer:"ci",
+        producedAt:new Date().toISOString(),
+        device:{platform:"ios",physical:false},
+        test:{
+          name:"simulator",
+          skipped:false,
+          todo:false,
+          mockProviderUsed:false,
+          productionEquivalentDependencies:true
+        },
+        references:[]
+      }],
+      {gitSha:sha,artifactSha256:artifact}
+    );
+    expect(result.passed).toBe(false);
+  });
+});
+
+================================================================================================================
+FILE: tests/release-closure/ga-blocker.spec.ts
+================================================================================================================
+import { describe, expect, it } from "vitest";
+import { assertGAAllowed } from "../../release-closure/src/AutomaticGABlocker";
+
+const green = {
+  g0:true,g1:true,g2:true,g3:true,g4:true,g5:true,
+  dependencySecurity:true,
+  expo57Migration:true,
+  physicalIos:true,
+  physicalAndroid:true,
+  evidenceFreshness:true,
+  exactShaBinding:true,
+  noSkippedReleaseTests:true,
+  noMockReleaseTests:true,
+  externalReviews:true,
+  operationalEvidence:true,
+  canary:true,
+  rollback:true,
+  formalApprovals:true
+};
+
+describe("automatic GA blocker", () => {
+  it("permits fully green release only", () => {
+    expect(() => assertGAAllowed(green)).not.toThrow();
+  });
+
+  it("blocks one red control", () => {
+    expect(() => assertGAAllowed({...green, physicalIos:false}))
+      .toThrow("LINQA_GA_AUTOMATIC_BLOCK");
+  });
+});
+
+================================================================================================================
+FILE: tests/release-closure/physical-device.spec.ts
+================================================================================================================
+import { describe, expect, it } from "vitest";
+import { assertPhysicalDeviceCertification } from "../../release-closure/src/PhysicalDeviceCertification";
+
+describe("physical-device certification", () => {
+  it("rejects simulator", () => {
+    expect(() => assertPhysicalDeviceCertification({
+      evidenceId:"d1",
+      gitSha:"a".repeat(40),
+      artifactSha256:"b".repeat(64),
+      platform:"ios",
+      physicalDevice:false,
+      model:"Simulator",
+      osVersion:"test",
+      releaseBuild:true,
+      signedBuild:true,
+      secureKeyCustody:true,
+      privateKeyExportPrevented:true,
+      phoneFirstRegistration:true,
+      enrollmentPassed:true,
+      keyPackagePassed:true,
+      transparencyPassed:true,
+      encryptedMessagingPassed:true,
+      offlineRestartPassed:true,
+      pushBackgroundPassed:true,
+      revocationPassed:true,
+      reinstallRecoveryPassed:true,
+      upgradeFromPreviousReleasePassed:true
+    })).toThrow("PHYSICAL_DEVICE_REQUIRED");
+  });
+});

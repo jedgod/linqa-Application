@@ -1,0 +1,37 @@
+name: Additive Closure — No Duplicates
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  additive-closure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Server deps
+        working-directory: server
+        run: npm ci
+
+      - name: Web deps
+        working-directory: clients/web
+        run: npm ci
+
+      - name: Mobile deps
+        working-directory: clients/mobile
+        run: npm ci
+
+      - name: Run the full additive-closure suite
+        run: bash certification/unified/run_additive_closure.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: additive-closure-evidence
+          path: certification/evidence

@@ -1,0 +1,281 @@
+====================================================================================================================
+FILE: APPLY_GUIDE.txt
+====================================================================================================================
+LINQA UI ALL-PAGES PACK
+
+1. Copy app/ and src/ into clients/mobile.
+2. Enable Expo Router.
+3. npm install libphonenumber-js @expo/vector-icons
+4. Replace demoAccounts with GET /v6/installations/:installationId/accounts.
+5. Replace UI handlers with PhoneFirstIdentityClient + AccountRuntimeManager.
+6. Registration: Welcome -> Detect Country -> Phone -> Carrier Check -> Phone OTP -> Recovery Email -> Email OTP -> Activate -> Home.
+7. Add Account uses same identity flow and must fresh-authenticate the target account.
+8. Avatar is primary account-switch entry; Settings > Account is secondary management entry.
+9. At three accounts, disable Add Account and also handle server ACCOUNT_LIMIT_REACHED.
+10. Test at 390x844, 393x852, and 430x932 portrait viewports.
+
+
+====================================================================================================================
+FILE: README.md
+====================================================================================================================
+# Linqa UI — Full Phone-First + Multi-Account Portrait Flow
+
+React Native/Expo Router UI pack representing the complete storyboard: Welcome, country detection, phone entry, carrier check, phone OTP, recovery email, email OTP, activation, Personal/Business/Research homes, account switching, add account, manage accounts, 3-account maximum, notification account routing, account settings, and remove account.
+
+Production services are injected behind UI handlers; demo state is only for visual flow.
+
+
+====================================================================================================================
+FILE: app/_layout.tsx
+====================================================================================================================
+import React from "react";import {Stack} from "expo-router";import {AccountProvider} from "../src/context/AccountContext";export default function Layout(){return <AccountProvider><Stack screenOptions={{headerShown:false}}/></AccountProvider>}
+
+
+====================================================================================================================
+FILE: app/accounts/add-another.tsx
+====================================================================================================================
+import React from "react";import {SafeAreaView,Text,View,StyleSheet} from "react-native";import {Ionicons} from "@expo/vector-icons";import {router} from "expo-router";import {PrimaryButton} from "../../src/components/PrimaryButton";export default function S(){return <SafeAreaView style={s.x}><View style={s.art}><Ionicons name="phone-portrait-outline" size={70} color="#165DFF"/><Ionicons name="phone-portrait-outline" size={56} color="#F2B52F"/></View><Text style={s.t}>Add another account</Text><Text style={s.c}>You can add up to 3 Linqa accounts and switch between them easily.</Text>{['Up to 3 accounts per device','Separate chats and data','Private and secure'].map(v=><View style={s.r} key={v}><Ionicons name="checkmark" size={18}/><Text>{v}</Text></View>)}<View style={s.b}><PrimaryButton label="Get Started" onPress={()=>router.push('/accounts/second-phone')}/></View></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22,paddingTop:70},art:{flexDirection:'row',justifyContent:'center',alignItems:'center',marginBottom:28},t:{fontSize:24,fontWeight:'900',textAlign:'center'},c:{color:'#667085',textAlign:'center',lineHeight:19,marginTop:10,marginBottom:28},r:{flexDirection:'row',gap:10,alignItems:'center',marginBottom:14},b:{marginTop:'auto',marginBottom:22}});
+
+
+====================================================================================================================
+FILE: app/accounts/manage.tsx
+====================================================================================================================
+import React from "react";import {SafeAreaView,Text,View,Pressable,StyleSheet} from "react-native";import {Ionicons} from "@expo/vector-icons";import {router} from "expo-router";import {useAccounts} from "../../src/context/AccountContext";import {accounts as demo} from "../../src/data/demoAccounts";export default function S(){const a=useAccounts();return <SafeAreaView style={s.x}><Text style={s.t}>Manage Accounts</Text>{a.accounts.map((x:any,i:number)=><View key={x.id} style={s.r}><View style={[s.av,{backgroundColor:x.color}]}><Text style={s.avt}>{x.label[0]}</Text></View><View style={{flex:1}}><Text style={s.n}>{x.label}</Text><Text style={s.m}>{x.code} {x.phone}</Text><Text style={s.m}>{i===0?'Active now':'Active 2m ago'}</Text></View>{i===0?<Text style={s.badge}>Active</Text>:<Ionicons name="chevron-forward" size={18} color="#98A2B3"/>}</View>)}<Pressable style={[s.add,!a.canAdd&&{opacity:.4}]} onPress={()=>{if(!a.canAdd)return router.push('/accounts/max-limit');const n=demo.find((d:any)=>!a.accounts.some((x:any)=>x.id===d.id));if(n)a.add(n)}}><Ionicons name="add" size={21} color="#165DFF"/><Text style={s.addt}>Add Account</Text></Pressable><Text style={s.limit}>You can add up to 3 accounts</Text><Pressable style={s.remove} onPress={()=>router.push('/accounts/remove')}><Text style={s.remt}>Remove Account</Text></Pressable></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:20,paddingTop:48},t:{fontSize:24,fontWeight:'900',marginBottom:16},r:{minHeight:72,flexDirection:'row',alignItems:'center',gap:11,borderBottomWidth:1,borderBottomColor:'#E6EBF1'},av:{width:40,height:40,borderRadius:20,alignItems:'center',justifyContent:'center'},avt:{color:'#fff',fontWeight:'900'},n:{fontWeight:'800'},m:{color:'#697586',fontSize:10},badge:{color:'#1F9D5B',backgroundColor:'#E7F7EE',paddingHorizontal:8,paddingVertical:4,borderRadius:99,fontSize:9,fontWeight:'800'},add:{minHeight:60,flexDirection:'row',alignItems:'center',gap:9},addt:{color:'#165DFF',fontWeight:'800'},limit:{color:'#7C8793',fontSize:10,marginLeft:29,marginTop:-8},remove:{marginTop:'auto',alignItems:'center',padding:16},remt:{color:'#D92D20',fontWeight:'800'}});
+
+
+====================================================================================================================
+FILE: app/accounts/max-limit.tsx
+====================================================================================================================
+import React from "react";import {SafeAreaView,View,Text,StyleSheet} from "react-native";import {Ionicons} from "@expo/vector-icons";import {router} from "expo-router";import {PrimaryButton} from "../../src/components/PrimaryButton";export default function S(){return <SafeAreaView style={s.x}><View style={s.icon}><Ionicons name="person-outline" size={58} color="#165DFF"/></View><Text style={s.t}>Maximum of 3{"\n"}accounts reached</Text><Text style={s.c}>You have reached the limit of 3 accounts on this device.</Text><View style={s.b}><PrimaryButton label="OK" onPress={()=>router.back()}/></View></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:24,alignItems:'center',paddingTop:110},icon:{width:96,height:96,borderRadius:48,borderWidth:2,borderColor:'#165DFF',alignItems:'center',justifyContent:'center'},t:{fontSize:25,fontWeight:'900',textAlign:'center',marginTop:26},c:{color:'#667085',textAlign:'center',lineHeight:19,marginTop:12},b:{width:'100%',marginTop:'auto',marginBottom:22}});
+
+
+====================================================================================================================
+FILE: app/accounts/remove.tsx
+====================================================================================================================
+import React from "react";import {SafeAreaView,Text,View,Pressable,StyleSheet} from "react-native";import {router} from "expo-router";import {useAccounts} from "../../src/context/AccountContext";export default function S(){const a=useAccounts();return <SafeAreaView style={s.x}><Text style={s.top}>Remove Account</Text><View style={s.p}><View style={s.av}><Text style={s.avt}>B</Text></View><View><Text style={s.n}>Business</Text><Text style={s.m}>+233 241 123 456</Text></View></View><Text style={s.c}>All data for this account on this device will be removed.</Text><Pressable style={s.remove} onPress={()=>{a.remove('business');router.replace('/accounts/manage')}}><Text style={s.rt}>Remove Account</Text></Pressable><Pressable style={s.cancel} onPress={()=>router.back()}><Text style={s.ct}>Cancel</Text></Pressable></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#0D141A',padding:22,paddingTop:46},top:{color:'#FF4949',fontWeight:'800',textAlign:'center',marginBottom:28},p:{flexDirection:'row',gap:12,alignItems:'center'},av:{width:44,height:44,borderRadius:22,backgroundColor:'#5A8DEE',alignItems:'center',justifyContent:'center'},avt:{color:'#fff',fontWeight:'900'},n:{color:'#fff',fontWeight:'900'},m:{color:'#85919B',fontSize:11},c:{color:'#C9D1D7',lineHeight:20,marginVertical:28},remove:{height:52,borderRadius:12,backgroundColor:'#E53935',alignItems:'center',justifyContent:'center'},rt:{color:'#fff',fontWeight:'900'},cancel:{height:52,borderRadius:12,backgroundColor:'#2A3238',alignItems:'center',justifyContent:'center',marginTop:14},ct:{color:'#fff',fontWeight:'800'}});
+
+
+====================================================================================================================
+FILE: app/accounts/second-email-verify.tsx
+====================================================================================================================
+import React,{useState} from "react";import {SafeAreaView,Text,StyleSheet} from "react-native";import {router} from "expo-router";import {OtpBoxes} from "../../src/components/OtpBoxes";import {PrimaryButton} from "../../src/components/PrimaryButton";import {accounts} from "../../src/data/demoAccounts";import {useAccounts} from "../../src/context/AccountContext";export default function S(){const[c,setC]=useState('');const a=useAccounts();return <SafeAreaView style={s.x}><Text style={s.t}>Verify your email</Text><Text style={s.c}>We sent a 6-digit code to{"\n"}business@example.com</Text><OtpBoxes value={c} onChange={setC}/><Text style={s.r}>Resend code in 00:21</Text><PrimaryButton label="Verify & Add Account" disabled={c.length!==6} onPress={()=>{a.add(accounts[1]);router.push('/accounts/manage')}}/></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22,paddingTop:52},t:{fontSize:24,fontWeight:'900'},c:{color:'#475467',marginTop:10,marginBottom:25,lineHeight:19},r:{color:'#667085',fontSize:11,textAlign:'center',marginVertical:18}});
+
+
+====================================================================================================================
+FILE: app/accounts/second-phone.tsx
+====================================================================================================================
+import React,{useState} from "react";import {SafeAreaView,Text,StyleSheet} from "react-native";import {router} from "expo-router";import {PhoneInputCard} from "../../src/components/PhoneInputCard";import {PrimaryButton} from "../../src/components/PrimaryButton";export default function S(){const[n,setN]=useState('241 123 456');return <SafeAreaView style={s.x}><Text style={s.t}>Verify your{"\n"}mobile number</Text><PhoneInputCard country="Ghana" flag="🇬🇭" code="+233" number={n} onChange={setN}/><PrimaryButton label="Continue" onPress={()=>router.push('/accounts/second-email-verify')}/><Text style={s.f}>Carrier charges may apply</Text></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22,paddingTop:48},t:{fontSize:26,fontWeight:'900',marginBottom:28},f:{marginTop:'auto',textAlign:'center',color:'#7D8793',fontSize:10,marginBottom:18}});
+
+
+====================================================================================================================
+FILE: app/accounts/switcher.tsx
+====================================================================================================================
+import React from "react";import {SafeAreaView,Text,View,Pressable,StyleSheet} from "react-native";import {Ionicons} from "@expo/vector-icons";import {router} from "expo-router";import {accounts} from "../../src/data/demoAccounts";export default function S(){return <SafeAreaView style={s.x}><Text style={s.t}>Switch account</Text>{accounts.map((a,i)=><Pressable key={a.id} style={s.r} onPress={()=>router.replace(`/home/${a.id}` as any)}><View style={[s.av,{backgroundColor:a.color}]}><Text style={s.avt}>{a.label[0]}</Text></View><View style={{flex:1}}><Text style={s.n}>{a.label}</Text><Text style={s.m}>{a.code} {a.phone}</Text></View>{i===0&&<Ionicons name="checkmark" size={21} color="#165DFF"/>}</Pressable>)}<Pressable style={s.a} onPress={()=>router.push('/accounts/add-another')}><Ionicons name="add" size={21} color="#165DFF"/><Text style={s.at}>Add Account</Text></Pressable><Pressable style={s.a} onPress={()=>router.push('/accounts/manage')}><Ionicons name="people-outline" size={20}/><Text style={s.ad}>Manage Accounts</Text></Pressable><Pressable style={s.a} onPress={()=>router.push('/settings/account')}><Ionicons name="settings-outline" size={20}/><Text style={s.ad}>Account Settings</Text></Pressable></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:20,paddingTop:50},t:{fontSize:23,fontWeight:'900',marginBottom:14},r:{minHeight:68,flexDirection:'row',alignItems:'center',gap:11,borderBottomWidth:1,borderBottomColor:'#E5EAF0'},av:{width:38,height:38,borderRadius:19,alignItems:'center',justifyContent:'center'},avt:{color:'#fff',fontWeight:'900'},n:{fontWeight:'800'},m:{color:'#7B8794',fontSize:10},a:{minHeight:58,flexDirection:'row',alignItems:'center',gap:10},at:{color:'#165DFF',fontWeight:'800'},ad:{fontWeight:'700'}});
+
+
+====================================================================================================================
+FILE: app/auth/account-created.tsx
+====================================================================================================================
+import React from "react";import {SafeAreaView,View,Text,StyleSheet} from "react-native";import {Ionicons} from "@expo/vector-icons";import {router} from "expo-router";import {PrimaryButton} from "../../src/components/PrimaryButton";export default function S(){return <SafeAreaView style={s.x}><View style={s.check}><Ionicons name="checkmark" size={52} color="#fff"/></View><Text style={s.t}>Account created!</Text><Text style={s.c}>Your phone number and email have been verified.</Text>{[['Phone number','Verified'],['Recovery email','Verified'],['Account status','Active']].map(([a,b])=><View key={a} style={s.r}><Ionicons name="checkmark-circle" color="#20B86A" size={17}/><Text style={s.lab}>{a}</Text><Text style={s.state}>{b}</Text></View>)}<View style={s.bottom}><PrimaryButton label="Continue to Linqa" onPress={()=>router.replace('/home/personal')}/></View></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22,alignItems:'center',paddingTop:70},check:{width:84,height:84,borderRadius:42,backgroundColor:'#20B86A',alignItems:'center',justifyContent:'center'},t:{fontSize:24,fontWeight:'900',marginTop:22},c:{color:'#667085',textAlign:'center',marginTop:9,marginBottom:32},r:{width:'100%',flexDirection:'row',alignItems:'center',marginBottom:16},lab:{flex:1,marginLeft:8,color:'#344054'},state:{color:'#20B86A',fontWeight:'800',fontSize:11},bottom:{width:'100%',marginTop:'auto',marginBottom:20}});
+
+
+====================================================================================================================
+FILE: app/auth/carrier-check.tsx
+====================================================================================================================
+import React,{useEffect} from "react";import {SafeAreaView,Text,StyleSheet,View,ActivityIndicator} from "react-native";import {Ionicons} from "@expo/vector-icons";import {router} from "expo-router";export default function S(){useEffect(()=>{const t=setTimeout(()=>router.replace('/auth/verify-phone'),1600);return()=>clearTimeout(t)},[]);return <SafeAreaView style={s.x}><Text style={s.t}>Verifying number</Text><Text style={s.c}>Please wait while we check if this is a genuine mobile number.</Text><View style={s.load}><ActivityIndicator size="large" color="#165DFF"/></View>{[['Checking carrier',1],['Checking line type',1],['Checking number reputation',1],['Finalizing...',0]].map(([l,d]:any)=><View key={l} style={s.r}>{d?<Ionicons name="checkmark" color="#20B86A" size={18}/>:<ActivityIndicator size="small" color="#165DFF"/>}<Text style={s.i}>{l}</Text></View>)}</SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22,paddingTop:48},t:{fontSize:25,fontWeight:'900'},c:{color:'#475467',lineHeight:19,marginTop:8},load:{alignItems:'center',marginVertical:44},r:{flexDirection:'row',gap:10,alignItems:'center',marginBottom:15},i:{color:'#344054'}});
+
+
+====================================================================================================================
+FILE: app/auth/detect-country.tsx
+====================================================================================================================
+import React,{useState} from "react";import {SafeAreaView,Text,StyleSheet} from "react-native";import {router} from "expo-router";import {PhoneInputCard} from "../../src/components/PhoneInputCard";import {PrimaryButton} from "../../src/components/PrimaryButton";export default function S(){const[n,setN]=useState('');return <SafeAreaView style={s.x}><Text style={s.t}>Verify your{"\n"}mobile number</Text><Text style={s.c}>We’ll automatically detect your country and send you a code.</Text><PhoneInputCard country="United States" flag="🇺🇸" code="+1" number={n} onChange={setN}/><PrimaryButton label="Continue" disabled={!n.trim()} onPress={()=>router.push('/auth/enter-number')}/><Text style={s.f}>Carrier charges may apply</Text></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22,paddingTop:48},t:{fontSize:26,fontWeight:'900'},c:{color:'#475467',marginTop:10,marginBottom:24,lineHeight:19},f:{marginTop:'auto',textAlign:'center',color:'#7D8793',fontSize:10,marginBottom:18}});
+
+
+====================================================================================================================
+FILE: app/auth/enter-number.tsx
+====================================================================================================================
+import React,{useState} from "react";import {SafeAreaView,Text,StyleSheet} from "react-native";import {router} from "expo-router";import {PhoneInputCard} from "../../src/components/PhoneInputCard";import {PrimaryButton} from "../../src/components/PrimaryButton";export default function S(){const[n,setN]=useState('202 555 0123');return <SafeAreaView style={s.x}><Text style={s.t}>Verify your{"\n"}mobile number</Text><PhoneInputCard country="United States" flag="🇺🇸" code="+1" number={n} onChange={setN}/><PrimaryButton label="Continue" onPress={()=>router.push('/auth/carrier-check')}/><Text style={s.f}>Carrier charges may apply</Text></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22,paddingTop:48},t:{fontSize:26,fontWeight:'900',marginBottom:28},f:{marginTop:'auto',textAlign:'center',color:'#7D8793',fontSize:10,marginBottom:18}});
+
+
+====================================================================================================================
+FILE: app/auth/recovery-email.tsx
+====================================================================================================================
+import React,{useState} from "react";import {SafeAreaView,Text,TextInput,StyleSheet,Pressable} from "react-native";import {router} from "expo-router";import {PrimaryButton} from "../../src/components/PrimaryButton";export default function S(){const[e,setE]=useState('jerry.diabor@example.com');return <SafeAreaView style={s.x}><Text style={s.t}>Add recovery email</Text><Text style={s.c}>Use a recovery email to reset your account and keep it secure.</Text><Text style={s.lab}>Email address</Text><TextInput value={e} onChangeText={setE} keyboardType="email-address" autoCapitalize="none" style={s.i}/><PrimaryButton label="Send Code" onPress={()=>router.push('/auth/verify-email')}/><Pressable><Text style={s.l}>Why is this important?</Text></Pressable></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22,paddingTop:52},t:{fontSize:24,fontWeight:'900'},c:{color:'#475467',lineHeight:19,marginTop:10,marginBottom:22},lab:{color:'#475467',fontSize:11,marginBottom:6},i:{height:50,borderWidth:1,borderColor:'#CBD6E4',borderRadius:9,paddingHorizontal:12,marginBottom:14},l:{color:'#165DFF',textAlign:'center',fontWeight:'700',fontSize:11,marginTop:14}});
+
+
+====================================================================================================================
+FILE: app/auth/verify-email.tsx
+====================================================================================================================
+import React,{useState} from "react";import {SafeAreaView,Text,StyleSheet} from "react-native";import {router} from "expo-router";import {OtpBoxes} from "../../src/components/OtpBoxes";import {PrimaryButton} from "../../src/components/PrimaryButton";export default function S(){const[c,setC]=useState('');return <SafeAreaView style={s.x}><Text style={s.t}>Verify your email</Text><Text style={s.c}>We sent a 6-digit code to{"\n"}jerry.diabor@example.com</Text><OtpBoxes value={c} onChange={setC}/><Text style={s.r}>Resend code in 00:32</Text><PrimaryButton label="Verify Email" disabled={c.length!==6} onPress={()=>router.push('/auth/account-created')}/></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22,paddingTop:52},t:{fontSize:24,fontWeight:'900'},c:{color:'#475467',lineHeight:19,marginTop:10,marginBottom:25},r:{color:'#667085',fontSize:11,textAlign:'center',marginVertical:18}});
+
+
+====================================================================================================================
+FILE: app/auth/verify-phone.tsx
+====================================================================================================================
+import React,{useState} from "react";import {SafeAreaView,Text,StyleSheet,Pressable} from "react-native";import {router} from "expo-router";import {OtpBoxes} from "../../src/components/OtpBoxes";import {PrimaryButton} from "../../src/components/PrimaryButton";export default function S(){const[c,setC]=useState('');return <SafeAreaView style={s.x}><Text style={s.t}>Enter verification code</Text><Text style={s.c}>We sent a 6-digit code to{"\n"}+1 (202) 555-0123</Text><OtpBoxes value={c} onChange={setC}/><Text style={s.r}>Resend code in 00:28</Text><Pressable><Text style={s.l}>Didn't receive code?</Text></Pressable><PrimaryButton label="Verify Code" disabled={c.length!==6} onPress={()=>router.push('/auth/recovery-email')}/></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22,paddingTop:52},t:{fontSize:23,fontWeight:'900'},c:{color:'#475467',lineHeight:19,marginTop:10,marginBottom:25},r:{color:'#667085',fontSize:11,textAlign:'center',marginTop:18},l:{color:'#165DFF',fontWeight:'700',fontSize:11,textAlign:'center',marginVertical:10}});
+
+
+====================================================================================================================
+FILE: app/home/business.tsx
+====================================================================================================================
+import React,{useState} from "react";import {View} from "react-native";import {router} from "expo-router";import {ChatHome} from "../../src/components/ChatHome";import {AccountSwitcherSheet} from "../../src/components/AccountSwitcherSheet";import {chats} from "../../src/data/demoAccounts";import {useAccounts} from "../../src/context/AccountContext";export default function S(){const[o,setO]=useState(false);const a=useAccounts();return <View style={{flex:1}}><ChatHome label="Business" chats={chats.business} dark={true} onAvatar={()=>setO(true)}/><AccountSwitcherSheet visible={o} accounts={a.accounts} active={a.active} onClose={()=>setO(false)} onSwitch={(x:any)=>{a.switchTo(x.id);setO(false);router.replace(`/home/${x.id}` as any)}} onAdd={()=>{setO(false);router.push('/accounts/add-another')}} onManage={()=>{setO(false);router.push('/accounts/manage')}}/></View>}
+
+
+====================================================================================================================
+FILE: app/home/personal.tsx
+====================================================================================================================
+import React,{useState} from "react";import {View} from "react-native";import {router} from "expo-router";import {ChatHome} from "../../src/components/ChatHome";import {AccountSwitcherSheet} from "../../src/components/AccountSwitcherSheet";import {chats} from "../../src/data/demoAccounts";import {useAccounts} from "../../src/context/AccountContext";export default function S(){const[o,setO]=useState(false);const a=useAccounts();return <View style={{flex:1}}><ChatHome label="Personal" chats={chats.personal} dark={false} onAvatar={()=>setO(true)}/><AccountSwitcherSheet visible={o} accounts={a.accounts} active={a.active} onClose={()=>setO(false)} onSwitch={(x:any)=>{a.switchTo(x.id);setO(false);router.replace(`/home/${x.id}` as any)}} onAdd={()=>{setO(false);router.push('/accounts/add-another')}} onManage={()=>{setO(false);router.push('/accounts/manage')}}/></View>}
+
+
+====================================================================================================================
+FILE: app/home/research.tsx
+====================================================================================================================
+import React,{useState} from "react";import {View} from "react-native";import {router} from "expo-router";import {ChatHome} from "../../src/components/ChatHome";import {AccountSwitcherSheet} from "../../src/components/AccountSwitcherSheet";import {chats} from "../../src/data/demoAccounts";import {useAccounts} from "../../src/context/AccountContext";export default function S(){const[o,setO]=useState(false);const a=useAccounts();return <View style={{flex:1}}><ChatHome label="Research" chats={chats.research} dark={true} onAvatar={()=>setO(true)}/><AccountSwitcherSheet visible={o} accounts={a.accounts} active={a.active} onClose={()=>setO(false)} onSwitch={(x:any)=>{a.switchTo(x.id);setO(false);router.replace(`/home/${x.id}` as any)}} onAdd={()=>{setO(false);router.push('/accounts/add-another')}} onManage={()=>{setO(false);router.push('/accounts/manage')}}/></View>}
+
+
+====================================================================================================================
+FILE: app/index.tsx
+====================================================================================================================
+import React from "react";import {SafeAreaView,View,Text,Pressable,StyleSheet} from "react-native";import {router} from "expo-router";import {LinqaLogo} from "../src/components/LinqaLogo";import {PrimaryButton} from "../src/components/PrimaryButton";export default function Welcome(){return <SafeAreaView style={s.x}><View style={s.top}><LinqaLogo/><Text style={s.tag}>Secure. Private. Yours.</Text></View><View style={s.mid}><Text style={s.title}>Welcome to Linqa</Text><Text style={s.copy}>The secure messenger built for real connections.</Text></View><View style={s.bottom}><PrimaryButton label="Create Account" onPress={()=>router.push('/auth/detect-country')}/><Pressable><Text style={s.link}>Sign In</Text></Pressable></View></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#fff',padding:22},top:{alignItems:'center',marginTop:28},tag:{color:'#475467',fontSize:11,marginTop:7},mid:{alignItems:'center',marginTop:110},title:{fontSize:25,fontWeight:'900',color:'#111827'},copy:{color:'#475467',textAlign:'center',marginTop:12},bottom:{marginTop:'auto',gap:17,marginBottom:24},link:{color:'#165DFF',fontWeight:'800',textAlign:'center'}});
+
+
+====================================================================================================================
+FILE: app/notifications/business-preview.tsx
+====================================================================================================================
+import React from "react";import {SafeAreaView,Text,View,Pressable,StyleSheet} from "react-native";import {router} from "expo-router";import {useAccounts} from "../../src/context/AccountContext";export default function S(){const a=useAccounts();return <SafeAreaView style={s.x}><Text style={s.time}>9:41</Text><Text style={s.date}>Monday, May 20</Text><Pressable style={s.n} onPress={()=>{a.switchTo('business');router.replace('/home/business')}}><View style={s.icon}><Text style={s.it}>B</Text></View><View style={{flex:1}}><Text style={s.t}>Linqa Business</Text><Text style={s.c}>New message from John</Text><Text style={s.l}>Open Business Account</Text></View></Pressable></SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#15221F',alignItems:'center',paddingHorizontal:22,paddingTop:70},time:{color:'#fff',fontSize:66,fontWeight:'300'},date:{color:'#fff'},n:{width:'100%',backgroundColor:'#F1F3F5',borderRadius:18,marginTop:120,padding:14,flexDirection:'row',gap:10},icon:{width:38,height:38,borderRadius:19,backgroundColor:'#5A8DEE',alignItems:'center',justifyContent:'center'},it:{color:'#fff',fontWeight:'900'},t:{fontWeight:'900'},c:{color:'#475467',marginTop:3},l:{color:'#165DFF',fontWeight:'800',marginTop:10}});
+
+
+====================================================================================================================
+FILE: app/settings/account.tsx
+====================================================================================================================
+import React from "react";import {SafeAreaView,Text,View,Pressable,StyleSheet} from "react-native";import {Ionicons} from "@expo/vector-icons";import {router} from "expo-router";const items=['Profile','Username','Phone Number','Recovery Email','Passkeys','','Switch Account','Manage Accounts','','Delete Account'];export default function S(){return <SafeAreaView style={s.x}><View style={s.h}><Ionicons name="chevron-back" size={22} color="#DDE4EA"/><Text style={s.t}>Account</Text></View>{items.map((i,n)=>i===''?<View key={n} style={s.d}/>:<Pressable key={i} style={s.r} onPress={()=>{if(i==='Switch Account')router.push('/accounts/switcher');if(i==='Manage Accounts')router.push('/accounts/manage')}}><Text style={[s.i,i==='Delete Account'&&{color:'#FF4949'}]}>{i}</Text>{i!=='Delete Account'&&<Ionicons name="chevron-forward" size={17} color="#697780"/>}</Pressable>)}</SafeAreaView>}const s=StyleSheet.create({x:{flex:1,backgroundColor:'#0D141A',paddingHorizontal:18,paddingTop:16},h:{height:54,flexDirection:'row',alignItems:'center',gap:9},t:{color:'#fff',fontWeight:'900',fontSize:18},r:{minHeight:54,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},i:{color:'#E6ECF1',fontWeight:'600'},d:{height:1,backgroundColor:'#253139',marginVertical:3}});
+
+
+====================================================================================================================
+FILE: docs/SCREEN_INDEX.md
+====================================================================================================================
+# Screen Index
+
+01 Welcome — app/index.tsx
+02 Detect Country — app/auth/detect-country.tsx
+03 Enter Number — app/auth/enter-number.tsx
+04 Carrier Check — app/auth/carrier-check.tsx
+05 Phone OTP — app/auth/verify-phone.tsx
+06 Recovery Email — app/auth/recovery-email.tsx
+07 Email OTP — app/auth/verify-email.tsx
+08 Account Created — app/auth/account-created.tsx
+09 Personal Home — app/home/personal.tsx
+10 Account Switcher — app/accounts/switcher.tsx
+11 Add Another Account — app/accounts/add-another.tsx
+12 Second Account Number — app/accounts/second-phone.tsx
+13 Second Account Email Verification — app/accounts/second-email-verify.tsx
+14 Manage Accounts — app/accounts/manage.tsx
+15 Max 3 Accounts — app/accounts/max-limit.tsx
+16 Switch to Business — AccountSwitcherSheet
+17 Business Home — app/home/business.tsx
+18 Switch to Research — AccountSwitcherSheet
+19 Research Home — app/home/research.tsx
+20 Business Notification — app/notifications/business-preview.tsx
+21 Open Business from Notification — routes to Business Home
+22 Settings → Account — app/settings/account.tsx
+23 Remove Account — app/accounts/remove.tsx
+
+
+====================================================================================================================
+FILE: docs/WIRING_MAP.md
+====================================================================================================================
+# Production Wiring Map
+
+Create Account -> /v6/registration/start
+Phone entry -> /v6/registration/:flowId/phone
+Carrier check -> server line-intelligence decision
+Phone OTP -> /v6/registration/:flowId/phone/verify
+Recovery email -> /v6/registration/:flowId/recovery-email
+Email OTP -> /v6/registration/:flowId/recovery-email/verify
+Activate -> /v6/registration/:flowId/activate
+List accounts -> GET /v6/installations/:installationId/accounts
+Switch -> POST /v6/installations/:installationId/switch
+
+On secure switch: lock previous crypto namespace, close previous encrypted DB, save target session, activate target crypto namespace, open target DB, activate target push context, then reload Home/Chats/Vault.
+
+Notification taps must activate notification.accountUserId before opening the notification route.
+
+Remove Account means remove local installation membership; Delete Account is a separate server privacy/account deletion workflow.
+
+
+====================================================================================================================
+FILE: package-fragment.json
+====================================================================================================================
+{
+  "dependencies": {
+    "@expo/vector-icons": "^14.0.0",
+    "expo": "~53.0.0",
+    "expo-router": "~5.0.0",
+    "libphonenumber-js": "^1.11.20",
+    "react": "19.0.0",
+    "react-native": "0.79.0"
+  }
+}
+
+====================================================================================================================
+FILE: src/components/AccountSwitcherSheet.tsx
+====================================================================================================================
+import React from "react";import {Modal,Pressable,View,Text,StyleSheet} from "react-native";import {Ionicons} from "@expo/vector-icons";export function AccountSwitcherSheet({visible,accounts,active,onClose,onSwitch,onAdd,onManage}:{visible:boolean;accounts:any[];active:string;onClose:()=>void;onSwitch:(a:any)=>void;onAdd:()=>void;onManage:()=>void}){const full=accounts.length>=3;return <Modal visible={visible} transparent animationType="fade"><Pressable style={s.back} onPress={onClose}><View style={s.sheet}><Text style={s.title}>Switch account</Text>{accounts.map(a=><Pressable key={a.id} style={s.row} onPress={()=>onSwitch(a)}><View style={[s.av,{backgroundColor:a.color}]}><Text style={s.avt}>{a.label[0]}</Text></View><View style={{flex:1}}><Text style={s.name}>{a.label}</Text><Text style={s.meta}>{a.code} •••• {a.suffix}</Text><Text style={s.email}>Recovery: {a.email}</Text></View>{a.id===active&&<Ionicons name="checkmark-circle" size={22} color="#12D6AE"/>}</Pressable>)}<Pressable disabled={full} style={[s.action,full&&{opacity:.4}]} onPress={onAdd}><Ionicons name="person-add-outline" size={20} color="#12D6AE"/><View><Text style={s.actionText}>Add account</Text>{full&&<Text style={s.limit}>Maximum of 3 Linqa accounts reached</Text>}</View></Pressable><Pressable style={s.action} onPress={onManage}><Ionicons name="settings-outline" size={20} color="#12D6AE"/><Text style={s.actionText}>Manage accounts</Text></Pressable></View></Pressable></Modal>}const s=StyleSheet.create({back:{flex:1,backgroundColor:'rgba(0,0,0,.65)',justifyContent:'flex-end'},sheet:{backgroundColor:'#151E25',borderTopLeftRadius:26,borderTopRightRadius:26,padding:18,paddingBottom:28},title:{color:'#fff',fontSize:21,fontWeight:'900'},row:{minHeight:76,flexDirection:'row',alignItems:'center',gap:11,borderBottomWidth:1,borderBottomColor:'#2A3740'},av:{width:46,height:46,borderRadius:23,alignItems:'center',justifyContent:'center'},avt:{color:'#fff',fontWeight:'900'},name:{color:'#fff',fontWeight:'900'},meta:{color:'#8D99A3',fontSize:11},email:{color:'#687681',fontSize:10},action:{minHeight:60,flexDirection:'row',alignItems:'center',gap:10},actionText:{color:'#12D6AE',fontWeight:'900'},limit:{color:'#8D99A3',fontSize:10}});
+
+
+====================================================================================================================
+FILE: src/components/ChatHome.tsx
+====================================================================================================================
+import React from "react";import {View,Text,ScrollView,StyleSheet,Pressable} from "react-native";import {Ionicons} from "@expo/vector-icons";export function ChatHome({label,chats,dark=false,onAvatar}:{label:string;chats:any[];dark?:boolean;onAvatar?:()=>void}){const bg=dark?'#0D141A':'#F7F9FC',surface=dark?'#151E25':'#fff',text=dark?'#F5F7FA':'#111827',muted=dark?'#8D99A3':'#7B8794';return <View style={[s.screen,{backgroundColor:bg}]}><View style={s.header}><Pressable style={s.headLeft} onPress={onAvatar}><View style={s.avatar}><Text style={s.avt}>{label[0]}</Text></View><View><Text style={[s.label,{color:text}]}>{label}</Text><Text style={[s.small,{color:muted}]}>Active account</Text></View></Pressable><Ionicons name="camera-outline" size={21} color={text}/></View><View style={[s.search,{backgroundColor:surface}]}><Ionicons name="search" size={17} color={muted}/><Text style={{color:muted,fontSize:12}}>Search</Text></View><View style={s.quick}>{[['call-outline','New Call'],['chatbubble-outline','New Chat'],['people-outline','Groups'],['albums-outline','Channels']].map(([i,l])=><View key={l} style={s.qi}><View style={[s.qc,{backgroundColor:surface}]}><Ionicons name={i as any} size={19} color="#165DFF"/></View><Text style={{color:text,fontSize:9,fontWeight:'700'}}>{l}</Text></View>)}</View><ScrollView contentContainerStyle={{paddingHorizontal:14,paddingBottom:90}}><Text style={[s.section,{color:text}]}>Pinned</Text>{chats.slice(0,2).map((c:any,i:number)=><Row key={c[0]} c={c} dark={dark} initials={i?'CL':'TG'}/>)}<Text style={[s.section,{color:text}]}>Chats</Text>{chats.slice(2).map((c:any,i:number)=><Row key={c[0]} c={c} dark={dark} initials={i?'OG':'JM'}/>)}</ScrollView><View style={[s.nav,{backgroundColor:surface}]}>{[['chatbubbles','Chats'],['call-outline','Calls'],['folder-outline','Vault'],['menu-outline','More']].map(([i,l],n)=><View key={l} style={{alignItems:'center'}}><Ionicons name={i as any} size={18} color={n===0?'#165DFF':muted}/><Text style={{fontSize:8,color:n===0?'#165DFF':muted}}>{l}</Text></View>)}</View></View>}function Row({c,dark,initials}:{c:any;dark:boolean;initials:string}){return <View style={s.row}><View style={s.chatAv}><Text style={s.chatAvt}>{initials}</Text></View><View style={{flex:1}}><Text style={{color:dark?'#F5F7FA':'#111827',fontWeight:'800',fontSize:12}}>{c[0]}</Text><Text style={{color:dark?'#8D99A3':'#7B8794',fontSize:10,marginTop:2}}>{c[1]}</Text></View><Text style={{color:dark?'#697782':'#8A96A3',fontSize:9}}>{c[2]}</Text></View>}const s=StyleSheet.create({screen:{flex:1},header:{height:58,paddingHorizontal:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},headLeft:{flexDirection:'row',alignItems:'center',gap:9},avatar:{width:34,height:34,borderRadius:17,backgroundColor:'#F26D5B',alignItems:'center',justifyContent:'center'},avt:{color:'#fff',fontWeight:'900'},label:{fontWeight:'900',fontSize:13},small:{fontSize:9},search:{height:38,marginHorizontal:14,borderRadius:10,flexDirection:'row',alignItems:'center',gap:7,paddingHorizontal:11},quick:{flexDirection:'row',justifyContent:'space-around',paddingVertical:15},qi:{alignItems:'center',width:68},qc:{width:38,height:38,borderRadius:19,alignItems:'center',justifyContent:'center',marginBottom:4},section:{fontWeight:'800',fontSize:12,marginVertical:7},row:{minHeight:61,flexDirection:'row',alignItems:'center',gap:10},chatAv:{width:40,height:40,borderRadius:20,backgroundColor:'#4777DF',alignItems:'center',justifyContent:'center'},chatAvt:{color:'#fff',fontWeight:'900',fontSize:11},nav:{height:61,position:'absolute',bottom:0,left:0,right:0,flexDirection:'row',alignItems:'center',justifyContent:'space-around'}});
+
+
+====================================================================================================================
+FILE: src/components/LinqaLogo.tsx
+====================================================================================================================
+import React from "react";import {View,Text,StyleSheet} from "react-native";export function LinqaLogo(){return <View style={s.r}><View style={s.m}><Text style={s.mt}>LQ</Text></View><Text style={s.w}>LINQA</Text></View>}const s=StyleSheet.create({r:{flexDirection:'row',alignItems:'center',gap:8},m:{width:40,height:40,borderRadius:12,backgroundColor:'#165DFF',alignItems:'center',justifyContent:'center'},mt:{color:'#fff',fontWeight:'900'},w:{color:'#165DFF',fontSize:18,fontWeight:'900',letterSpacing:2}});
+
+
+====================================================================================================================
+FILE: src/components/OtpBoxes.tsx
+====================================================================================================================
+import React from "react";import {View,TextInput,StyleSheet} from "react-native";export function OtpBoxes({value,onChange}:{value:string;onChange:(v:string)=>void}){return <View style={s.r}>{[0,1,2,3,4,5].map(i=><TextInput key={i} value={value[i]??''} onChangeText={t=>{const a=value.split('');a[i]=t.replace(/\D/g,'').slice(-1);onChange(a.join('').slice(0,6))}} keyboardType="number-pad" maxLength={1} style={s.b}/>)}</View>}const s=StyleSheet.create({r:{flexDirection:'row',gap:7,justifyContent:'space-between'},b:{width:42,height:48,borderWidth:1,borderColor:'#CAD5E2',borderRadius:8,textAlign:'center',fontWeight:'800',fontSize:18,backgroundColor:'#fff'}});
+
+
+====================================================================================================================
+FILE: src/components/PhoneInputCard.tsx
+====================================================================================================================
+import React from "react";import {View,Text,TextInput,Pressable,StyleSheet} from "react-native";export function PhoneInputCard({country,flag,code,number,onChange}:{country:string;flag:string;code:string;number:string;onChange:(v:string)=>void}){return <View><Pressable style={s.c}><Text style={s.f}>{flag}</Text><Text style={s.n}>{country}</Text><Text>⌄</Text></Pressable><View style={s.r}><View style={s.code}><Text style={s.ct}>{code}</Text></View><TextInput value={number} onChangeText={onChange} keyboardType="phone-pad" placeholder="Mobile number" style={s.i}/></View></View>}const s=StyleSheet.create({c:{height:52,borderWidth:1,borderColor:'#D5DFEB',borderRadius:11,flexDirection:'row',alignItems:'center',paddingHorizontal:12,marginBottom:10},f:{fontSize:21,marginRight:8},n:{flex:1,fontWeight:'800'},r:{flexDirection:'row',gap:8},code:{width:76,height:52,borderWidth:1,borderColor:'#D5DFEB',borderRadius:11,alignItems:'center',justifyContent:'center'},ct:{fontWeight:'800'},i:{flex:1,height:52,borderWidth:1,borderColor:'#D5DFEB',borderRadius:11,paddingHorizontal:12}});
+
+
+====================================================================================================================
+FILE: src/components/PrimaryButton.tsx
+====================================================================================================================
+import React from "react";import {Pressable,Text,StyleSheet} from "react-native";export function PrimaryButton({label,onPress,disabled=false}:{label:string;onPress?:()=>void;disabled?:boolean}){return <Pressable disabled={disabled} onPress={onPress} style={[s.b,disabled&&{opacity:.4}]}><Text style={s.t}>{label}</Text></Pressable>}const s=StyleSheet.create({b:{height:52,borderRadius:12,backgroundColor:'#165DFF',alignItems:'center',justifyContent:'center'},t:{color:'#fff',fontWeight:'900'}});
+
+
+====================================================================================================================
+FILE: src/context/AccountContext.tsx
+====================================================================================================================
+import React,{createContext,useContext,useMemo,useState} from "react";import {accounts as demo} from "../data/demoAccounts";
+const X=createContext<any>(null);
+export function AccountProvider({children}:{children:React.ReactNode}){const [accounts,setAccounts]=useState<any[]>([demo[0]]);const [active,setActive]=useState('personal');const value=useMemo(()=>({accounts,active,canAdd:accounts.length<3,add:(a:any)=>setAccounts(v=>v.length>=3||v.some(x=>x.id===a.id)?v:[...v,a]),remove:(id:string)=>setAccounts(v=>v.filter(x=>x.id!==id)),switchTo:(id:string)=>setActive(id)}),[accounts,active]);return <X.Provider value={value}>{children}</X.Provider>}
+export const useAccounts=()=>{const v=useContext(X);if(!v)throw new Error('AccountProvider missing');return v};
+
+
+====================================================================================================================
+FILE: src/data/demoAccounts.ts
+====================================================================================================================
+export const accounts=[
+{id:"personal",label:"Personal",name:"Jerry Diabor",country:"US",code:"+1",phone:"202 555 0123",suffix:"0123",email:"je***@example.com",color:"#F26D5B"},
+{id:"business",label:"Business",name:"Jerry Diabor",country:"GH",code:"+233",phone:"241 123 456",suffix:"3456",email:"bu***@example.com",color:"#5A8DEE"},
+{id:"research",label:"Research",name:"Jerry Diabor",country:"GB",code:"+44",phone:"7700 900123",suffix:"0123",email:"re***@example.com",color:"#08A88A"},
+] as const;
+export const chats={personal:[['Family Group','Mom: See you at 7PM','8:30 AM'],['Best Friends','Jason: Nice!','7:15 AM'],['Alice Johnson','Hey! Let\'s catch up.','9:40 AM'],['Project Team','David: Updated file','9:10 AM']],business:[['Team Meeting','David: Meeting at 10AM','8:45 AM'],['Clients','You: Proposal sent','Yesterday'],['John Mensah','Thanks!','9:23 AM'],['Office Group','Nana: Updated doc','9:05 AM']],research:[['Study Group','Alex: Notes attached','7:30 AM'],['AI Research','Sam: Interesting read','Yesterday'],['Dr. Smith','Let\'s schedule a call','8:20 AM'],['Data Team','Maya: Results ready','7:50 AM']]};
+
+
+====================================================================================================================
+FILE: src/theme/tokens.ts
+====================================================================================================================
+export const C={light:{bg:"#F7F9FC",surface:"#FFF",text:"#111827",muted:"#6B7280",border:"#D7E0EA",accent:"#165DFF",success:"#20B86A",danger:"#E53935"},dark:{bg:"#0D141A",surface:"#151E25",text:"#F5F7FA",muted:"#8D99A3",border:"#2A3740",accent:"#4D8BFF",success:"#38D489",danger:"#FF4949"}} as const;
+export const R={sm:10,md:14,lg:18,pill:999} as const;
+

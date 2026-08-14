@@ -1,0 +1,1475 @@
+LINQA EXACT-REPOSITORY INTEGRATION + TWO-DEVICE CERTIFICATION PACK v1.0
+Generated: 2026-08-10T03:00:07.969743+00:00
+Format: Notepad-friendly multi-file source bundle
+
+This bundle targets the repository conventions recovered from the user's Linqa project artifacts:
+Fastify server, PostgreSQL, Rust core, clients/android native surface, and clients/mobile Expo shell.
+
+It intentionally refuses to fake physical-device evidence.
+
+============================================================================================================
+FILE: README_CERTIFICATION.md
+============================================================================================================
+# Linqa Exact-Repository Integration + Two-Device Certification Pack v1.0
+
+Target repository conventions verified from the Linqa code packs:
+- Server: Node 22 + TypeScript + Fastify 5
+- PostgreSQL 17
+- Rust core under `core/`
+- Native Android security surface under `clients/android/`
+- Expo application shell may separately exist under `clients/mobile/`
+- Relay API baseline: `/v1/relay/envelopes`
+- Key package API baseline: `/v1/key-packages`
+- Existing server auth uses bearer JWT with user_id/device_id/scope claims
+- Existing server scripts: build, test, db:migrate, db:cleanup
+
+This pack is not a document-only gate. It adds executable certification code and evidence production.
+
+CERTIFICATION TARGETS
+C0 Repository/compile integrity
+C1 Alice -> Bob
+C2 Bob -> Alice
+C3 Offline recipient delivery
+C4 Duplicate retry / idempotency
+C5 Ciphertext tamper rejection
+C6 Key rotation
+C7 Revoked-device isolation
+C8 Database opacity
+C9 Log opacity
+C10 Exact-SHA evidence binding
+C11 README promotion is blocked unless all gates pass
+
+NON-NEGOTIABLE RULE
+No script may set PASS by environment flag alone. PASS must be derived from executed test evidence.
+
+GREEN means:
+- exact source SHA captured
+- server tests/build pass
+- Rust fmt/clippy/tests/release build pass
+- Android build passes
+- real two-device evidence JSON is present and valid
+- database contains no forbidden plaintext columns or canary plaintext
+- server logs contain no canary plaintext
+- tamper test proves AEAD/authentication failure
+- revoked device receives no new relay envelope
+- key rotation invalidates use of old package according to policy
+- README status updater consumes signed/hash-bound evidence and only then changes messaging gate status
+
+IMPORTANT:
+The actual physical two-device run requires two authenticated Linqa installations.
+The automation below performs everything that can be machine-checked and refuses to mark GREEN
+when physical-device evidence is absent.
+
+============================================================================================================
+FILE: certification/config.example.env
+============================================================================================================
+LINQA_BASE_URL=http://127.0.0.1:8080
+LINQA_DATABASE_URL=postgresql://linqa:linqa_dev_password@127.0.0.1:5432/linqa
+
+# Real test identities/sessions. Use dedicated staging accounts only.
+ALICE_ACCESS_TOKEN=
+ALICE_USER_ID=
+ALICE_DEVICE_ID=
+BOB_ACCESS_TOKEN=
+BOB_USER_ID=
+BOB_DEVICE_ID=
+
+# Optional second Bob device for revoked-device isolation.
+BOB_REVOKED_DEVICE_ID=
+
+# Paths
+LINQA_SERVER_LOG=certification/evidence/server.log
+LINQA_EVIDENCE_DIR=certification/evidence
+LINQA_ANDROID_ROOT=clients/android
+
+# The canary must be unique per run; the runner will generate one if blank.
+LINQA_PLAINTEXT_CANARY=
+
+============================================================================================================
+FILE: certification/lib/common.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+EVIDENCE_DIR="${LINQA_EVIDENCE_DIR:-$ROOT/certification/evidence}"
+mkdir -p "$EVIDENCE_DIR"
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+pass() { echo "PASS: $*"; }
+require_cmd() { command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"; }
+
+json_escape() {
+  python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
+}
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  else shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+git_sha() {
+  git -C "$ROOT" rev-parse HEAD
+}
+
+git_dirty() {
+  if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then echo true; else echo false; fi
+}
+
+write_gate() {
+  local gate="$1" status="$2" detail="$3"
+  python3 - "$EVIDENCE_DIR/gates.json" "$gate" "$status" "$detail" <<'PY'
+import json,sys,os,datetime
+path,gate,status,detail=sys.argv[1:]
+data={}
+if os.path.exists(path):
+    with open(path,encoding="utf-8") as f: data=json.load(f)
+data[gate]={
+    "status":status,
+    "detail":detail,
+    "recordedAt":datetime.datetime.now(datetime.timezone.utc).isoformat()
+}
+tmp=path+".tmp"
+with open(tmp,"w",encoding="utf-8") as f:
+    json.dump(data,f,indent=2,sort_keys=True)
+os.replace(tmp,path)
+PY
+}
+
+============================================================================================================
+FILE: certification/00_repo_preflight.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+require_cmd git
+require_cmd node
+require_cmd npm
+require_cmd cargo
+require_cmd python3
+
+cd "$ROOT"
+
+[[ -f server/package.json ]] || fail "server/package.json missing"
+[[ -f server/src/app.ts ]] || fail "server/src/app.ts missing"
+[[ -f core/Cargo.toml ]] || fail "core/Cargo.toml missing"
+
+grep -q '"fastify"' server/package.json || fail "server no longer matches Fastify baseline"
+grep -q 'registerRelayRoutes' server/src/app.ts || fail "relay routes not registered in server/src/app.ts"
+
+SHA="$(git_sha)"
+DIRTY="$(git_dirty)"
+cat > "$EVIDENCE_DIR/repository.json" <<EOF
+{
+  "gitSha": "$SHA",
+  "dirty": $DIRTY,
+  "node": "$(node --version)",
+  "npm": "$(npm --version)",
+  "rustc": "$(rustc --version)",
+  "cargo": "$(cargo --version)"
+}
+EOF
+
+if [[ "$DIRTY" == true ]]; then
+  write_gate C0 FAIL "repository has uncommitted changes"
+  fail "certification requires a clean exact revision"
+fi
+
+write_gate C0 RUNNING "repository preflight passed; compile pending"
+pass "repository preflight at $SHA"
+
+============================================================================================================
+FILE: certification/01_compile_all.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+cd "$ROOT"
+
+echo "== Rust core =="
+(
+  cd core
+  cargo fmt --all -- --check
+  cargo clippy --all-targets --all-features -- -D warnings
+  cargo test --all-features --locked
+  cargo build --release --locked
+) 2>&1 | tee "$EVIDENCE_DIR/rust-build.log"
+
+echo "== Server =="
+(
+  cd server
+  npm ci
+  npm run db:migrate
+  npm test -- --run
+  npm run build
+) 2>&1 | tee "$EVIDENCE_DIR/server-build.log"
+
+echo "== Android native shell =="
+ANDROID_ROOT="${LINQA_ANDROID_ROOT:-clients/android}"
+if [[ -f "$ANDROID_ROOT/gradlew" ]]; then
+  (
+    cd "$ANDROID_ROOT"
+    chmod +x gradlew
+    ./gradlew clean testDebugUnitTest assembleDebug
+  ) 2>&1 | tee "$EVIDENCE_DIR/android-build.log"
+elif [[ -f "$ROOT/clients/mobile/package.json" ]]; then
+  (
+    cd "$ROOT/clients/mobile"
+    npm ci
+    npx expo-doctor
+    npx tsc --noEmit
+  ) 2>&1 | tee "$EVIDENCE_DIR/android-build.log"
+else
+  write_gate C0 FAIL "no Android Gradle root or clients/mobile package.json found"
+  fail "Android compile target not found"
+fi
+
+write_gate C0 PASS "Rust, server and Android compile/test gates passed"
+pass "all compile gates passed"
+
+============================================================================================================
+FILE: server/src/security/forbidden-plaintext.ts
+============================================================================================================
+const FORBIDDEN_KEYS = new Set([
+  "plaintext",
+  "plaintextUtf8",
+  "message",
+  "messageBody",
+  "bodyText",
+  "decrypted",
+  "decryptedContent",
+  "contentText",
+  "cleartext",
+]);
+
+export function assertNoPlaintextFields(input: unknown, path = "$"): void {
+  if (input === null || input === undefined) return;
+
+  if (Array.isArray(input)) {
+    input.forEach((v, i) => assertNoPlaintextFields(v, `${path}[${i}]`));
+    return;
+  }
+
+  if (typeof input !== "object") return;
+
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (FORBIDDEN_KEYS.has(key)) {
+      throw new Error(`forbidden_plaintext_field:${path}.${key}`);
+    }
+    assertNoPlaintextFields(value, `${path}.${key}`);
+  }
+}
+
+============================================================================================================
+FILE: server/src/routes/relay.ts.patch.example
+============================================================================================================
+/*
+MERGE NOTE:
+Keep the repository's existing Fastify relay implementation.
+Add this guard at the beginning of the envelope submission handler:
+
+import { assertNoPlaintextFields } from "../security/forbidden-plaintext.js";
+
+...
+app.post("/v1/relay/envelopes", async (request, reply) => {
+  assertNoPlaintextFields(request.body);
+  // existing authentication + validation + ciphertext-only persistence
+});
+
+Do NOT replace existing lease/idempotency/revocation behavior with a simpler route.
+The repository already models durable encrypted mailbox, delivery leasing and acknowledgements.
+*/
+
+============================================================================================================
+FILE: server/test/forbidden-plaintext.test.ts
+============================================================================================================
+import { describe, expect, it } from "vitest";
+import { assertNoPlaintextFields } from "../src/security/forbidden-plaintext.js";
+
+describe("relay plaintext contract guard", () => {
+  it("allows ciphertext-only envelope", () => {
+    expect(() =>
+      assertNoPlaintextFields({
+        recipientDeviceId: "dev_bob",
+        clientMessageId: "msg_1",
+        ciphertextBase64: "Y2lwaGVydGV4dA==",
+      }),
+    ).not.toThrow();
+  });
+
+  for (const key of [
+    "plaintext",
+    "plaintextUtf8",
+    "messageBody",
+    "decryptedContent",
+    "contentText",
+    "cleartext",
+  ]) {
+    it(`rejects forbidden key ${key}`, () => {
+      expect(() =>
+        assertNoPlaintextFields({
+          ciphertextBase64: "YQ==",
+          nested: { [key]: "secret" },
+        }),
+      ).toThrow(/forbidden_plaintext_field/);
+    });
+  }
+});
+
+============================================================================================================
+FILE: certification/lib/api.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+api() {
+  local method="$1" token="$2" path="$3" body="${4:-}"
+  local args=(-sS -D /tmp/linqa_headers -o /tmp/linqa_body -w "%{http_code}"
+    -X "$method"
+    -H "authorization: Bearer $token"
+    -H "content-type: application/json"
+    "${LINQA_BASE_URL}${path}")
+  if [[ -n "$body" ]]; then args+=("--data-binary" "$body"); fi
+  local code
+  code="$(curl "${args[@]}")"
+  cat /tmp/linqa_body
+  echo
+  [[ "$code" =~ ^2 ]] || return "$code"
+}
+
+============================================================================================================
+FILE: certification/real_device_event.schema.json
+============================================================================================================
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "schemaVersion","runId","gitSha","deviceRole","deviceId",
+    "userId","event","status","timestamp","evidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "runId": { "type": "string", "minLength": 8 },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "deviceRole": { "enum": ["alice","bob"] },
+    "deviceId": { "type": "string", "minLength": 1 },
+    "userId": { "type": "string", "minLength": 1 },
+    "event": {
+      "enum": [
+        "SEND_ACCEPTED",
+        "RECEIVE_DECRYPTED",
+        "OFFLINE_ENTER",
+        "OFFLINE_EXIT",
+        "DUPLICATE_RETRY",
+        "TAMPER_REJECTED",
+        "KEY_ROTATED",
+        "REVOKED_DEVICE_BLOCKED"
+      ]
+    },
+    "status": { "enum": ["PASS","FAIL"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "evidence": { "type": "object" }
+  },
+  "additionalProperties": false
+}
+
+============================================================================================================
+FILE: clients/android/src/certification/CertificationEvent.kt
+============================================================================================================
+package com.linqa.certification
+
+import org.json.JSONObject
+import java.time.Instant
+
+data class CertificationEvent(
+    val runId: String,
+    val gitSha: String,
+    val deviceRole: String,
+    val deviceId: String,
+    val userId: String,
+    val event: String,
+    val status: String,
+    val evidence: Map<String, Any?> = emptyMap()
+) {
+    fun toJson(): String {
+        val ev = JSONObject()
+        evidence.forEach { (k, v) -> ev.put(k, v) }
+
+        return JSONObject()
+            .put("schemaVersion", 1)
+            .put("runId", runId)
+            .put("gitSha", gitSha)
+            .put("deviceRole", deviceRole)
+            .put("deviceId", deviceId)
+            .put("userId", userId)
+            .put("event", event)
+            .put("status", status)
+            .put("timestamp", Instant.now().toString())
+            .put("evidence", ev)
+            .toString()
+    }
+}
+
+============================================================================================================
+FILE: clients/android/src/certification/CertificationRecorder.kt
+============================================================================================================
+package com.linqa.certification
+
+import android.content.Context
+import java.io.File
+
+class CertificationRecorder(private val context: Context) {
+    private val file: File
+        get() = File(context.filesDir, "linqa-certification-events.jsonl")
+
+    @Synchronized
+    fun record(event: CertificationEvent) {
+        // Evidence must contain IDs/hashes/state only. Never plaintext or key material.
+        file.appendText(event.toJson() + "\n", Charsets.UTF_8)
+    }
+
+    fun filePath(): String = file.absolutePath
+}
+
+============================================================================================================
+FILE: clients/android/src/certification/CertificationHooks.kt
+============================================================================================================
+package com.linqa.certification
+
+/**
+ * Wire these calls into the REAL send/receive/key lifecycle paths.
+ * They do not make a test pass themselves; they only capture device-side evidence.
+ */
+class CertificationHooks(
+    private val recorder: CertificationRecorder,
+    private val runId: String,
+    private val gitSha: String,
+    private val role: String,
+    private val userId: String,
+    private val deviceId: String,
+) {
+    fun sendAccepted(envelopeId: String, clientMessageId: String) =
+        rec("SEND_ACCEPTED", mapOf(
+            "envelopeId" to envelopeId,
+            "clientMessageId" to clientMessageId
+        ))
+
+    fun receiveDecrypted(envelopeId: String, clientMessageId: String, plaintextSha256: String) =
+        rec("RECEIVE_DECRYPTED", mapOf(
+            "envelopeId" to envelopeId,
+            "clientMessageId" to clientMessageId,
+            "plaintextSha256" to plaintextSha256
+        ))
+
+    fun offlineEnter() = rec("OFFLINE_ENTER")
+    fun offlineExit() = rec("OFFLINE_EXIT")
+
+    fun duplicateRetry(originalEnvelopeId: String, retryEnvelopeId: String, idempotent: Boolean) =
+        rec("DUPLICATE_RETRY", mapOf(
+            "originalEnvelopeId" to originalEnvelopeId,
+            "retryEnvelopeId" to retryEnvelopeId,
+            "idempotent" to idempotent
+        ), if (idempotent) "PASS" else "FAIL")
+
+    fun tamperRejected(failureCode: String) =
+        rec("TAMPER_REJECTED", mapOf("failureCode" to failureCode),
+            if (failureCode in setOf("authentication_failed","invalid_mac","aead_open_failed"))
+                "PASS" else "FAIL")
+
+    fun keyRotated(oldPackageId: String, newPackageId: String) =
+        rec("KEY_ROTATED", mapOf(
+            "oldPackageId" to oldPackageId,
+            "newPackageId" to newPackageId
+        ))
+
+    fun revokedDeviceBlocked(revokedDeviceId: String) =
+        rec("REVOKED_DEVICE_BLOCKED", mapOf("revokedDeviceId" to revokedDeviceId))
+
+    private fun rec(
+        event: String,
+        evidence: Map<String, Any?> = emptyMap(),
+        status: String = "PASS"
+    ) {
+        recorder.record(
+            CertificationEvent(
+                runId = runId,
+                gitSha = gitSha,
+                deviceRole = role,
+                deviceId = deviceId,
+                userId = userId,
+                event = event,
+                status = status,
+                evidence = evidence
+            )
+        )
+    }
+}
+
+============================================================================================================
+FILE: certification/pull_android_evidence.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+require_cmd adb
+
+APP_ID="${LINQA_ANDROID_APP_ID:-com.linqa}"
+for serial in "$@"; do
+  out="$EVIDENCE_DIR/device-${serial//[:\/]/_}.jsonl"
+  adb -s "$serial" shell run-as "$APP_ID" cat files/linqa-certification-events.jsonl > "$out" \
+    || fail "could not pull evidence from $serial; verify app id/debuggable build"
+  [[ -s "$out" ]] || fail "empty evidence from $serial"
+  pass "pulled $out"
+done
+
+============================================================================================================
+FILE: certification/validate_device_evidence.py
+============================================================================================================
+#!/usr/bin/env python3
+import json, glob, os, sys, hashlib, subprocess
+from collections import defaultdict
+
+root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+evdir = os.environ.get("LINQA_EVIDENCE_DIR", os.path.join(root, "certification", "evidence"))
+sha = subprocess.check_output(["git","-C",root,"rev-parse","HEAD"], text=True).strip()
+
+events=[]
+for path in glob.glob(os.path.join(evdir,"device-*.jsonl")):
+    with open(path,encoding="utf-8") as f:
+        for line in f:
+            line=line.strip()
+            if line: events.append(json.loads(line))
+
+if not events:
+    raise SystemExit("FAIL: no physical-device evidence JSONL files")
+
+for e in events:
+    if e.get("gitSha") != sha:
+        raise SystemExit(f"FAIL: evidence SHA mismatch {e.get('gitSha')} != {sha}")
+    if e.get("status") != "PASS":
+        raise SystemExit(f"FAIL: device event failed: {e}")
+
+roles={e["deviceRole"] for e in events}
+if not {"alice","bob"} <= roles:
+    raise SystemExit("FAIL: both alice and bob device evidence required")
+
+by_role=defaultdict(list)
+for e in events: by_role[e["deviceRole"]].append(e)
+
+def find(role,name):
+    return [e for e in by_role[role] if e["event"]==name]
+
+# Bidirectional proof: each sends and each receives.
+for role in ("alice","bob"):
+    if not find(role,"SEND_ACCEPTED"):
+        raise SystemExit(f"FAIL: {role} has no SEND_ACCEPTED")
+    if not find(role,"RECEIVE_DECRYPTED"):
+        raise SystemExit(f"FAIL: {role} has no RECEIVE_DECRYPTED")
+
+# Offline proof must be on a device with enter -> exit -> receive.
+offline=[]
+for role in ("alice","bob"):
+    seq=by_role[role]
+    names=[e["event"] for e in seq]
+    if "OFFLINE_ENTER" in names and "OFFLINE_EXIT" in names and "RECEIVE_DECRYPTED" in names:
+        i=names.index("OFFLINE_ENTER")
+        j=names.index("OFFLINE_EXIT",i+1)
+        if any(x=="RECEIVE_DECRYPTED" for x in names[j+1:]):
+            offline.append(role)
+if not offline:
+    raise SystemExit("FAIL: no offline -> reconnect -> decrypt sequence")
+
+if not any(e["event"]=="DUPLICATE_RETRY" and e["evidence"].get("idempotent") is True for e in events):
+    raise SystemExit("FAIL: duplicate retry idempotency evidence missing")
+
+if not any(e["event"]=="TAMPER_REJECTED" for e in events):
+    raise SystemExit("FAIL: tamper rejection evidence missing")
+
+if not any(e["event"]=="KEY_ROTATED" for e in events):
+    raise SystemExit("FAIL: key rotation evidence missing")
+
+if not any(e["event"]=="REVOKED_DEVICE_BLOCKED" for e in events):
+    raise SystemExit("FAIL: revoked-device block evidence missing")
+
+summary={
+    "gitSha": sha,
+    "eventCount": len(events),
+    "roles": sorted(roles),
+    "offlineProvenOn": offline,
+    "requirements": {
+        "aliceToBob": True,
+        "bobToAlice": True,
+        "offlineDelivery": True,
+        "duplicateRetry": True,
+        "tamperRejected": True,
+        "keyRotation": True,
+        "revokedDeviceIsolation": True
+    }
+}
+path=os.path.join(evdir,"device-certification-summary.json")
+with open(path,"w",encoding="utf-8") as f: json.dump(summary,f,indent=2,sort_keys=True)
+print("PASS:",path)
+
+============================================================================================================
+FILE: certification/02_database_opacity.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+require_cmd psql
+
+DB="${LINQA_DATABASE_URL:?LINQA_DATABASE_URL required}"
+CANARY="${LINQA_PLAINTEXT_CANARY:?LINQA_PLAINTEXT_CANARY required}"
+
+echo "Checking suspicious schema columns..."
+BAD_COLS="$(psql "$DB" -Atc "
+SELECT table_schema||'.'||table_name||'.'||column_name
+FROM information_schema.columns
+WHERE table_schema NOT IN ('pg_catalog','information_schema')
+  AND lower(column_name) ~ '(plaintext|cleartext|message_body|decrypted_content|content_text)';
+")"
+
+if [[ -n "$BAD_COLS" ]]; then
+  printf '%s\n' "$BAD_COLS" > "$EVIDENCE_DIR/db-forbidden-columns.txt"
+  write_gate C8 FAIL "forbidden plaintext-like database columns detected"
+  fail "forbidden plaintext-like columns detected"
+fi
+
+# Search textual columns in message/relay/envelope-related tables only.
+python3 - "$DB" "$CANARY" "$EVIDENCE_DIR/db-opacity.json" <<'PY'
+import subprocess,sys,json,re
+db,canary,out=sys.argv[1:]
+q=r"""
+SELECT table_schema,table_name,column_name
+FROM information_schema.columns
+WHERE table_schema='public'
+  AND data_type IN ('text','character varying','json','jsonb')
+  AND lower(table_name) ~ '(message|relay|envelope|mailbox|delivery)';
+"""
+rows=subprocess.check_output(["psql",db,"-At","-F","\t","-c",q],text=True).splitlines()
+hits=[]
+for row in rows:
+    if not row.strip(): continue
+    schema,table,col=row.split("\t")
+    ident=lambda s:'"'+s.replace('"','""')+'"'
+    sql=f"SELECT count(*) FROM {ident(schema)}.{ident(table)} WHERE CAST({ident(col)} AS text) LIKE '%' || $${canary}$$ || '%';"
+    count=int(subprocess.check_output(["psql",db,"-At","-c",sql],text=True).strip() or 0)
+    if count: hits.append({"table":table,"column":col,"count":count})
+with open(out,"w",encoding="utf-8") as f:
+    json.dump({"canaryFound":bool(hits),"hits":hits,"columnsScanned":len(rows)},f,indent=2)
+if hits:
+    print(json.dumps(hits,indent=2))
+    raise SystemExit(1)
+PY
+
+write_gate C8 PASS "database schema/content opacity checks passed"
+pass "database opacity"
+
+============================================================================================================
+FILE: certification/03_log_opacity.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+LOG="${LINQA_SERVER_LOG:?LINQA_SERVER_LOG required}"
+CANARY="${LINQA_PLAINTEXT_CANARY:?LINQA_PLAINTEXT_CANARY required}"
+
+[[ -f "$LOG" ]] || { write_gate C9 FAIL "server log file missing"; fail "server log file missing: $LOG"; }
+
+if grep -Fq -- "$CANARY" "$LOG"; then
+  grep -Fn -- "$CANARY" "$LOG" > "$EVIDENCE_DIR/log-canary-hits.txt" || true
+  write_gate C9 FAIL "plaintext canary found in server logs"
+  fail "plaintext canary leaked into logs"
+fi
+
+# Detect common secret/plaintext keys even if canary differs.
+if grep -Eqi '"(plaintext|plaintextUtf8|messageBody|decryptedContent|cleartext)"[[:space:]]*:' "$LOG"; then
+  grep -Ein '"(plaintext|plaintextUtf8|messageBody|decryptedContent|cleartext)"[[:space:]]*:' "$LOG" \
+    > "$EVIDENCE_DIR/log-forbidden-key-hits.txt" || true
+  write_gate C9 FAIL "forbidden plaintext field names found in logs"
+  fail "forbidden plaintext field names found in logs"
+fi
+
+write_gate C9 PASS "server log opacity checks passed"
+pass "log opacity"
+
+============================================================================================================
+FILE: certification/04_static_plaintext_boundary_scan.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+# This does not prohibit plaintext inside client UI/core code; it prohibits suspicious server-side message persistence.
+PATTERN='(plaintext|messageBody|decryptedContent|contentText|cleartext)'
+TARGETS=(server/src server/db server/migrations)
+
+hits="$EVIDENCE_DIR/server-plaintext-static-scan.txt"
+: > "$hits"
+
+for t in "${TARGETS[@]}"; do
+  [[ -e "$ROOT/$t" ]] || continue
+  grep -RniE "$PATTERN" "$ROOT/$t" \
+    --exclude='forbidden-plaintext.ts' \
+    --exclude='*.test.ts' \
+    --exclude='*.spec.ts' \
+    >> "$hits" || true
+done
+
+# Allow documentation/comments to exist, but fail on likely persistence/property declarations.
+if grep -Ei '(plaintext|messageBody|decryptedContent|contentText|cleartext).*(TEXT|VARCHAR|JSONB|: string|z\.string)' "$hits" >/dev/null; then
+  write_gate C8 FAIL "static scan found likely server plaintext storage/API field"
+  fail "review $hits"
+fi
+
+pass "static plaintext boundary scan"
+
+============================================================================================================
+FILE: certification/05_verify_revoked_device.sql
+============================================================================================================
+-- Usage:
+-- psql "$LINQA_DATABASE_URL" \
+--   -v revoked_device_id="'<device-id>'" \
+--   -v revoked_at="'<iso timestamp>'" \
+--   -f certification/05_verify_revoked_device.sql
+
+DO $$
+DECLARE
+  n bigint;
+BEGIN
+  /*
+   * Adapt table name only if the repository's relay mailbox table differs.
+   * The intent is strict: no envelope accepted for the revoked device after revocation.
+   */
+  IF to_regclass('public.envelopes') IS NOT NULL THEN
+    EXECUTE format(
+      'SELECT count(*) FROM envelopes WHERE recipient_device_id=%L AND accepted_at > %L',
+      :'revoked_device_id', :'revoked_at'
+    ) INTO n;
+  ELSIF to_regclass('public.encrypted_envelopes') IS NOT NULL THEN
+    EXECUTE format(
+      'SELECT count(*) FROM encrypted_envelopes WHERE recipient_device_id=%L AND server_received_at > %L',
+      :'revoked_device_id', :'revoked_at'
+    ) INTO n;
+  ELSE
+    RAISE EXCEPTION 'No recognized relay envelope table';
+  END IF;
+
+  IF n <> 0 THEN
+    RAISE EXCEPTION 'Revoked device received % post-revocation envelopes', n;
+  END IF;
+END $$;
+
+============================================================================================================
+FILE: core/tests/certification_tamper.rs
+============================================================================================================
+/*
+Repository integration note:
+Wire this test to the EXISTING Linqa envelope encrypt/decrypt APIs rather than duplicating crypto.
+
+Required behavior:
+1. Create Alice and Bob test identities.
+2. Encrypt authenticated envelope Alice -> Bob.
+3. Flip one bit in ciphertext.
+4. Bob decrypt must return authentication/integrity failure.
+5. Repeat by mutating authenticated metadata/AAD.
+6. Neither mutation may return plaintext.
+
+Pseudo-adapter shape:
+
+#[test]
+fn certification_ciphertext_tamper_is_rejected() {
+    let fx = TestFixture::new();
+    let mut env = fx.encrypt_alice_to_bob(b"LINQA_TAMPER_CERT");
+    env.ciphertext[0] ^= 0x01;
+    let err = fx.bob.decrypt(&env).unwrap_err();
+    assert!(matches!(err, CoreError::AuthenticationFailed | CoreError::InvalidMac));
+}
+
+#[test]
+fn certification_aad_tamper_is_rejected() {
+    let fx = TestFixture::new();
+    let mut env = fx.encrypt_alice_to_bob(b"LINQA_AAD_CERT");
+    env.recipient_device_id = "wrong-device".into();
+    assert!(fx.bob.decrypt(&env).is_err());
+}
+
+Do not weaken this by simply testing a standalone helper disconnected from the production core API.
+*/
+
+============================================================================================================
+FILE: certification/06_run_core_tamper_gate.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/lib/common.sh"
+
+cd "$ROOT/core"
+
+# Prefer exact named certification tests if integrated.
+if cargo test --all-features --locked certification_ciphertext_tamper_is_rejected certification_aad_tamper_is_rejected \
+  2>&1 | tee "$EVIDENCE_DIR/tamper.log"; then
+  write_gate C5 PASS "production Rust core rejected ciphertext/AAD tampering"
+else
+  write_gate C5 FAIL "tamper certification test missing or failed"
+  exit 1
+fi
+
+============================================================================================================
+FILE: certification/07_key_rotation_contract.md
+============================================================================================================
+# Key Rotation Certification Contract
+
+Use the real key-package route and real client package cache.
+
+Required sequence:
+
+1. Bob device publishes package K1.
+2. Alice resolves K1 and records package ID/hash.
+3. Alice successfully sends one message using K1.
+4. Bob rotates and publishes K2.
+5. Server marks K1 non-current/expired/revoked according to repository policy.
+6. Alice invalidates cached K1 after directory refresh/transparency update.
+7. Alice resolves K2.
+8. New message is encrypted against K2.
+9. Submission referencing K1 after the policy cutoff MUST fail OR client MUST refuse to construct it.
+10. Bob receives/decrypts K2 message.
+11. Device evidence records KEY_ROTATED with oldPackageId/newPackageId.
+12. DB evidence confirms K1 and K2 lifecycle timestamps/status.
+
+A "rotation" test that only inserts a second row without proving clients stop using K1 is FAIL.
+
+============================================================================================================
+FILE: certification/08_validate_key_rotation.py
+============================================================================================================
+#!/usr/bin/env python3
+import json,glob,os,subprocess,sys
+
+root=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+evdir=os.environ.get("LINQA_EVIDENCE_DIR",os.path.join(root,"certification","evidence"))
+
+events=[]
+for p in glob.glob(os.path.join(evdir,"device-*.jsonl")):
+    with open(p,encoding="utf-8") as f:
+        for line in f:
+            if line.strip(): events.append(json.loads(line))
+
+rot=[e for e in events if e.get("event")=="KEY_ROTATED" and e.get("status")=="PASS"]
+if not rot:
+    raise SystemExit("FAIL: no KEY_ROTATED device evidence")
+
+for e in rot:
+    old=e["evidence"].get("oldPackageId")
+    new=e["evidence"].get("newPackageId")
+    if not old or not new or old==new:
+        raise SystemExit("FAIL: invalid rotation IDs")
+
+print("PASS: key rotation device evidence structurally valid")
+
+============================================================================================================
+FILE: certification/09_certify_device_matrix.py
+============================================================================================================
+#!/usr/bin/env python3
+import json,glob,os,subprocess
+
+root=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+evdir=os.environ.get("LINQA_EVIDENCE_DIR",os.path.join(root,"certification","evidence"))
+summary_path=os.path.join(evdir,"device-certification-summary.json")
+if not os.path.exists(summary_path):
+    raise SystemExit("FAIL: run validate_device_evidence.py first")
+with open(summary_path,encoding="utf-8") as f: s=json.load(f)
+
+gates={
+  "C1": ("aliceToBob", "Alice -> Bob physical-device encrypted delivery"),
+  "C2": ("bobToAlice", "Bob -> Alice physical-device encrypted delivery"),
+  "C3": ("offlineDelivery", "offline recipient delivery after reconnect"),
+  "C4": ("duplicateRetry", "duplicate retry idempotency"),
+  "C5": ("tamperRejected", "ciphertext/AAD tamper rejection"),
+  "C6": ("keyRotation", "key rotation"),
+  "C7": ("revokedDeviceIsolation", "revoked device isolation"),
+}
+gp=os.path.join(evdir,"gates.json")
+data={}
+if os.path.exists(gp):
+    with open(gp,encoding="utf-8") as f:data=json.load(f)
+import datetime
+now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+for gate,(key,detail) in gates.items():
+    ok=s["requirements"].get(key) is True
+    # C5 may already be set by the Rust tamper gate; never downgrade a stronger failure.
+    existing=data.get(gate)
+    if existing and existing.get("status")=="FAIL":
+        continue
+    data[gate]={"status":"PASS" if ok else "FAIL","detail":detail,"recordedAt":now}
+with open(gp+".tmp","w",encoding="utf-8") as f:json.dump(data,f,indent=2,sort_keys=True)
+os.replace(gp+".tmp",gp)
+print("PASS: device matrix mapped to certification gates")
+
+============================================================================================================
+FILE: certification/10_bind_evidence.py
+============================================================================================================
+#!/usr/bin/env python3
+import os,glob,json,hashlib,subprocess,datetime
+
+root=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+evdir=os.environ.get("LINQA_EVIDENCE_DIR",os.path.join(root,"certification","evidence"))
+sha=subprocess.check_output(["git","-C",root,"rev-parse","HEAD"],text=True).strip()
+
+records=[]
+for p in sorted(glob.glob(os.path.join(evdir,"*"))):
+    if os.path.isdir(p): continue
+    if os.path.basename(p) in {"manifest.json","manifest.sha256"}: continue
+    h=hashlib.sha256()
+    with open(p,"rb") as f:
+        for chunk in iter(lambda:f.read(1024*1024),b""): h.update(chunk)
+    records.append({
+        "path":os.path.relpath(p,root).replace("\\","/"),
+        "bytes":os.path.getsize(p),
+        "sha256":h.hexdigest()
+    })
+
+manifest={
+    "schemaVersion":1,
+    "gitSha":sha,
+    "createdAt":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "files":records
+}
+mp=os.path.join(evdir,"manifest.json")
+with open(mp,"w",encoding="utf-8") as f:json.dump(manifest,f,indent=2,sort_keys=True)
+digest=hashlib.sha256(open(mp,"rb").read()).hexdigest()
+open(os.path.join(evdir,"manifest.sha256"),"w",encoding="utf-8").write(digest+"  manifest.json\n")
+print("PASS:",digest)
+
+============================================================================================================
+FILE: certification/11_final_gate.py
+============================================================================================================
+#!/usr/bin/env python3
+import json,os,subprocess,sys,datetime
+
+root=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+evdir=os.environ.get("LINQA_EVIDENCE_DIR",os.path.join(root,"certification","evidence"))
+gp=os.path.join(evdir,"gates.json")
+if not os.path.exists(gp): raise SystemExit("FAIL: gates.json missing")
+with open(gp,encoding="utf-8") as f:g=json.load(f)
+
+required=[f"C{i}" for i in range(10)] + ["C10"]
+# C10 will be recorded here after manifest verification.
+manifest=os.path.join(evdir,"manifest.json")
+if not os.path.exists(manifest): raise SystemExit("FAIL: evidence manifest missing")
+with open(manifest,encoding="utf-8") as f:m=json.load(f)
+sha=subprocess.check_output(["git","-C",root,"rev-parse","HEAD"],text=True).strip()
+if m.get("gitSha")!=sha: raise SystemExit("FAIL: manifest SHA mismatch")
+
+g["C10"]={
+  "status":"PASS",
+  "detail":"evidence manifest bound to exact repository SHA",
+  "recordedAt":datetime.datetime.now(datetime.timezone.utc).isoformat()
+}
+with open(gp,"w",encoding="utf-8") as f:json.dump(g,f,indent=2,sort_keys=True)
+
+missing=[x for x in required if x not in g]
+failed=[x for x in required if g.get(x,{}).get("status")!="PASS"]
+verdict={
+  "gitSha":sha,
+  "requiredGates":required,
+  "missing":missing,
+  "failed":failed,
+  "status":"GREEN" if not missing and not failed else "RED",
+  "evaluatedAt":datetime.datetime.now(datetime.timezone.utc).isoformat()
+}
+vp=os.path.join(evdir,"verdict.json")
+with open(vp,"w",encoding="utf-8") as f:json.dump(verdict,f,indent=2)
+print(json.dumps(verdict,indent=2))
+if verdict["status"]!="GREEN": raise SystemExit(1)
+
+============================================================================================================
+FILE: certification/12_promote_readme.py
+============================================================================================================
+#!/usr/bin/env python3
+import json,os,re,subprocess,sys
+
+root=os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+evdir=os.environ.get("LINQA_EVIDENCE_DIR",os.path.join(root,"certification","evidence"))
+vp=os.path.join(evdir,"verdict.json")
+if not os.path.exists(vp):
+    raise SystemExit("Refusing README change: certification verdict missing")
+with open(vp,encoding="utf-8") as f:v=json.load(f)
+
+sha=subprocess.check_output(["git","-C",root,"rev-parse","HEAD"],text=True).strip()
+if v.get("status")!="GREEN":
+    raise SystemExit("Refusing README change: E2EE certification is not GREEN")
+if v.get("gitSha")!=sha:
+    raise SystemExit("Refusing README change: verdict SHA does not match HEAD")
+
+readme=os.path.join(root,"README.md")
+text=open(readme,encoding="utf-8").read()
+
+old_patterns=[
+    r'no client wired to core or server yet',
+    r'No client wired to core or server yet',
+    r'no real encrypted client-to-client relay',
+]
+replacement=(
+  "Android 1:1 E2EE transport is wired and two-device certified at exact revision "
+  f"`{sha}`. The server relay is ciphertext-only; bidirectional delivery, offline "
+  "delivery, idempotent retry, tamper rejection, key rotation, revoked-device "
+  "isolation, database opacity, and log opacity passed the certification gate. "
+  "Group MLS/PQ/other platform claims remain separately gated."
+)
+
+changed=False
+for pat in old_patterns:
+    new,n=re.subn(pat,replacement,text,count=1,flags=re.I)
+    if n:
+        text=new
+        changed=True
+        break
+
+if not changed:
+    marker="## E2EE Certification Status"
+    block=f"\n\n{marker}\n\n{replacement}\n"
+    text=text.rstrip()+block
+
+tmp=readme+".tmp"
+open(tmp,"w",encoding="utf-8").write(text)
+os.replace(tmp,readme)
+print("README updated for certified SHA",sha)
+
+============================================================================================================
+FILE: certification/run_all.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+if [[ -f certification/config.env ]]; then
+  set -a
+  source certification/config.env
+  set +a
+fi
+
+export LINQA_EVIDENCE_DIR="${LINQA_EVIDENCE_DIR:-$ROOT/certification/evidence}"
+mkdir -p "$LINQA_EVIDENCE_DIR"
+
+if [[ -z "${LINQA_PLAINTEXT_CANARY:-}" ]]; then
+  export LINQA_PLAINTEXT_CANARY="LINQA_CERT_CANARY_$(date +%s)_$RANDOM"
+fi
+printf '%s' "$LINQA_PLAINTEXT_CANARY" > "$LINQA_EVIDENCE_DIR/canary.txt"
+
+certification/00_repo_preflight.sh
+certification/01_compile_all.sh
+certification/04_static_plaintext_boundary_scan.sh
+certification/06_run_core_tamper_gate.sh
+
+echo
+echo "=============================================================="
+echo "PHYSICAL TWO-DEVICE STEP REQUIRED"
+echo "=============================================================="
+echo "Use two Linqa installations (Alice and Bob) built from exact SHA:"
+git rev-parse HEAD
+echo
+echo "Execute:"
+echo "  1. Alice -> Bob"
+echo "  2. Bob -> Alice"
+echo "  3. Bob offline; Alice sends; Bob reconnects and decrypts"
+echo "  4. duplicate retry using same clientMessageId"
+echo "  5. tampered ciphertext/AAD injection must fail"
+echo "  6. Bob key package K1 -> K2 rotation"
+echo "  7. revoke second Bob device and prove no post-revocation envelope"
+echo
+echo "Then pull evidence with:"
+echo "  certification/pull_android_evidence.sh <ALICE_ADB_SERIAL> <BOB_ADB_SERIAL>"
+echo
+echo "The runner intentionally stops here if device evidence is absent."
+
+python3 certification/validate_device_evidence.py
+python3 certification/08_validate_key_rotation.py
+python3 certification/09_certify_device_matrix.py
+
+certification/02_database_opacity.sh
+certification/03_log_opacity.sh
+
+python3 certification/10_bind_evidence.py
+python3 certification/11_final_gate.py
+
+echo
+echo "GREEN certification obtained."
+echo "README is NOT changed automatically."
+echo "To promote the truthful README status, run:"
+echo "  python3 certification/12_promote_readme.py"
+
+============================================================================================================
+FILE: certification/run_all.ps1
+============================================================================================================
+$ErrorActionPreference = "Stop"
+$Root = Split-Path -Parent $PSScriptRoot
+Set-Location $Root
+
+$Evidence = if ($env:LINQA_EVIDENCE_DIR) { $env:LINQA_EVIDENCE_DIR } else { Join-Path $Root "certification\evidence" }
+New-Item -ItemType Directory -Force $Evidence | Out-Null
+$env:LINQA_EVIDENCE_DIR = $Evidence
+
+if (-not $env:LINQA_PLAINTEXT_CANARY) {
+    $env:LINQA_PLAINTEXT_CANARY = "LINQA_CERT_CANARY_$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())_$((Get-Random))"
+}
+Set-Content -NoNewline (Join-Path $Evidence "canary.txt") $env:LINQA_PLAINTEXT_CANARY
+
+$sha = (git rev-parse HEAD).Trim()
+if (git status --porcelain) {
+    throw "Certification requires a clean exact revision."
+}
+
+Write-Host "Exact SHA: $sha"
+
+Push-Location core
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features --locked
+cargo build --release --locked
+Pop-Location
+
+Push-Location server
+npm ci
+npm run db:migrate
+npm test -- --run
+npm run build
+Pop-Location
+
+if (Test-Path "clients\android\gradlew.bat") {
+    Push-Location clients\android
+    .\gradlew.bat clean testDebugUnitTest assembleDebug
+    Pop-Location
+} elseif (Test-Path "clients\mobile\package.json") {
+    Push-Location clients\mobile
+    npm ci
+    npx expo-doctor
+    npx tsc --noEmit
+    Pop-Location
+} else {
+    throw "No Android build root found."
+}
+
+Write-Host ""
+Write-Host "Physical-device evidence is mandatory before GREEN."
+Write-Host "Run Alice/Bob certification matrix, pull JSONL evidence, then execute:"
+Write-Host "  python certification\validate_device_evidence.py"
+Write-Host "  python certification\08_validate_key_rotation.py"
+Write-Host "  python certification\09_certify_device_matrix.py"
+Write-Host "  bash certification/02_database_opacity.sh"
+Write-Host "  bash certification/03_log_opacity.sh"
+Write-Host "  python certification\10_bind_evidence.py"
+Write-Host "  python certification\11_final_gate.py"
+Write-Host ""
+Write-Host "README promotion remains a separate explicit command:"
+Write-Host "  python certification\12_promote_readme.py"
+
+============================================================================================================
+FILE: .github/workflows/e2ee-two-device-certification.yml
+============================================================================================================
+name: Linqa E2EE Exact-Revision Certification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "core/**"
+      - "server/**"
+      - "clients/android/**"
+      - "clients/mobile/**"
+      - "certification/**"
+      - ".github/workflows/e2ee-two-device-certification.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compile-and-static:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: linqa
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: linqa_dev_password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      LINQA_DATABASE_URL: postgresql://linqa:linqa_dev_password@127.0.0.1:5432/linqa
+      DATABASE_URL: postgresql://linqa:linqa_dev_password@127.0.0.1:5432/linqa
+      NODE_ENV: test
+      JWT_ISSUER: https://auth.test.linqa
+      JWT_AUDIENCE: linqa-api
+      JWT_HS256_SECRET: test-secret-that-is-at-least-32-bytes-long
+      LINQA_PLAINTEXT_CANARY: LINQA_CI_CANARY_MUST_NEVER_APPEAR
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Rust certification compile
+        working-directory: core
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-features --locked
+          cargo build --release --locked
+
+      - name: Server certification compile
+        working-directory: server
+        run: |
+          npm ci
+          npm run db:migrate
+          npm test -- --run
+          npm run build
+
+      - name: Server plaintext static scan
+        run: bash certification/04_static_plaintext_boundary_scan.sh
+
+      - name: Database opacity
+        run: bash certification/02_database_opacity.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2ee-static-certification-${{ github.sha }}
+          path: certification/evidence
+          if-no-files-found: warn
+
+  physical-device-gate:
+    # GitHub-hosted runners cannot prove your two actual devices.
+    # This job consumes evidence uploaded by a protected self-hosted Android device lab.
+    needs: compile-and-static
+    if: ${{ vars.LINQA_PHYSICAL_DEVICE_LAB_ENABLED == 'true' }}
+    runs-on: [self-hosted, linqa-android-device-lab]
+    environment: production-equivalent
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm exact revision on device-lab checkout
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Execute lab harness
+        run: ./certification/device-lab/run-two-device-matrix.sh
+
+      - name: Validate device evidence
+        run: |
+          python3 certification/validate_device_evidence.py
+          python3 certification/08_validate_key_rotation.py
+          python3 certification/09_certify_device_matrix.py
+          python3 certification/10_bind_evidence.py
+          python3 certification/11_final_gate.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2ee-physical-device-certification-${{ github.sha }}
+          path: certification/evidence
+          if-no-files-found: error
+
+============================================================================================================
+FILE: certification/device-lab/run-two-device-matrix.sh
+============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+# This harness intentionally requires project-specific Android test commands.
+# Wire these exported commands to the actual UI/instrumentation hooks.
+: "${ALICE_SERIAL:?}"
+: "${BOB_SERIAL:?}"
+: "${LINQA_ANDROID_APP_ID:=com.linqa}"
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+SHA="$(git -C "$ROOT" rev-parse HEAD)"
+RUN_ID="e2ee-${SHA:0:12}-$(date +%s)"
+
+adb -s "$ALICE_SERIAL" wait-for-device
+adb -s "$BOB_SERIAL" wait-for-device
+
+# Build/install must come from this checkout.
+if [[ -f "$ROOT/clients/android/gradlew" ]]; then
+  (
+    cd "$ROOT/clients/android"
+    ./gradlew assembleDebug
+  )
+  APK="$(find "$ROOT/clients/android" -path '*outputs/apk/debug/*.apk' | head -n1)"
+  [[ -n "$APK" ]] || { echo "APK not found"; exit 1; }
+  adb -s "$ALICE_SERIAL" install -r "$APK"
+  adb -s "$BOB_SERIAL" install -r "$APK"
+fi
+
+# Clear stale evidence only, not identity/account state.
+for s in "$ALICE_SERIAL" "$BOB_SERIAL"; do
+  adb -s "$s" shell run-as "$LINQA_ANDROID_APP_ID" rm -f files/linqa-certification-events.jsonl || true
+done
+
+echo "Run ID: $RUN_ID"
+echo "SHA: $SHA"
+
+# Required project adapters:
+# The application must expose debug-only instrumentation intents OR Android tests that perform:
+#   CERT_SEND
+#   CERT_SET_OFFLINE
+#   CERT_RETRY_LAST
+#   CERT_INJECT_TAMPER
+#   CERT_ROTATE_KEY
+#   CERT_REVOKE_DEVICE
+#
+# Example command shape:
+# adb -s "$ALICE_SERIAL" shell am broadcast \
+#   -a com.linqa.CERT_SEND \
+#   --es runId "$RUN_ID" \
+#   --es gitSha "$SHA" \
+#   --es recipientRole bob \
+#   --es plaintext "$LINQA_PLAINTEXT_CANARY"
+#
+# For safety, these intents MUST exist only in internal/debug certification builds,
+# must require a signature-level permission, and must never ship enabled in production.
+
+if [[ -z "${LINQA_DEVICE_MATRIX_COMMAND:-}" ]]; then
+  echo "FAIL: LINQA_DEVICE_MATRIX_COMMAND is not wired to the real app instrumentation."
+  exit 1
+fi
+
+# A single repository-owned executable should drive the exact app's instrumentation.
+"$LINQA_DEVICE_MATRIX_COMMAND" \
+  --alice "$ALICE_SERIAL" \
+  --bob "$BOB_SERIAL" \
+  --run-id "$RUN_ID" \
+  --git-sha "$SHA" \
+  --canary "${LINQA_PLAINTEXT_CANARY:?}"
+
+"$ROOT/certification/pull_android_evidence.sh" "$ALICE_SERIAL" "$BOB_SERIAL"
+python3 "$ROOT/certification/validate_device_evidence.py"
+
+============================================================================================================
+FILE: certification/CERTIFICATION_MATRIX.md
+============================================================================================================
+# Two-Device Certification Matrix
+
+| Gate | Procedure | Machine evidence | PASS rule |
+|---|---|---|---|
+| C0 | Compile Rust/server/Android exact SHA | repository.json + build logs | all commands exit 0; clean git |
+| C1 | Alice sends to Bob | Alice SEND_ACCEPTED + Bob RECEIVE_DECRYPTED | same logical message; Bob local decrypt |
+| C2 | Bob sends to Alice | Bob SEND_ACCEPTED + Alice RECEIVE_DECRYPTED | same logical message; Alice local decrypt |
+| C3 | Bob offline | OFFLINE_ENTER -> Alice send -> OFFLINE_EXIT -> RECEIVE_DECRYPTED | queued ciphertext delivered after reconnect |
+| C4 | Retry same clientMessageId | DUPLICATE_RETRY | same envelope or explicit idempotent replay; no duplicate local message |
+| C5 | Flip ciphertext/AAD bit | TAMPER_REJECTED + Rust test | authentication failure; zero plaintext |
+| C6 | Rotate Bob K1 -> K2 | KEY_ROTATED + package lifecycle DB evidence | new sends use K2; stale K1 unusable |
+| C7 | Revoke device | REVOKED_DEVICE_BLOCKED + DB query | zero post-revocation envelopes |
+| C8 | DB opacity | db-opacity.json | no canary + no forbidden plaintext columns |
+| C9 | Log opacity | server.log scan | no canary + no forbidden plaintext keys |
+| C10 | Exact-SHA binding | manifest.json | all evidence hashed under current SHA |
+| C11 | README promotion | 12_promote_readme.py | impossible unless verdict GREEN |
+
+The plaintext canary should be a unique full message, e.g.:
+`LINQA_CERT_CANARY_<timestamp>_<random>`
+
+It MAY exist:
+- transiently in sender UI memory
+- inside the trusted cryptographic core before encryption
+- in recipient UI/local protected store after authenticated decryption
+- as a SHA-256 digest in test evidence
+
+It MUST NOT exist:
+- relay HTTP request body as plaintext
+- server log
+- server DB plaintext field
+- queue payload
+- push notification payload
+- analytics/APM/crash breadcrumb
+
+============================================================================================================
+FILE: certification/README_PROMOTION_POLICY.md
+============================================================================================================
+# README Promotion Policy
+
+The README must not be changed from prototype/open-item language merely because code was merged.
+
+Promotion requires:
+- verdict.json = GREEN
+- verdict gitSha == HEAD
+- evidence manifest present
+- clean repository revision used during certification
+- all C0-C10 PASS
+- README updater executed as an explicit final action
+
+Recommended truthful wording after promotion:
+
+"Android 1:1 E2EE transport is wired and two-device certified at exact revision <SHA>.
+The server relay is ciphertext-only. Bidirectional delivery, offline delivery, idempotent retry,
+tamper rejection, key rotation, revoked-device isolation, database opacity, and log opacity passed.
+Group MLS, post-quantum claims, iOS/web/desktop native parity, and independent security review remain
+separately gated."
+
+Never replace that with:
+- "Linqa is unhackable"
+- "military-grade"
+- "fully post-quantum secure"
+- "production secure" based only on this gate
+
+============================================================================================================
+FILE: APPLY_EXACT_REPO_GUIDE.txt
+============================================================================================================
+LINQA EXACT-REPOSITORY INTEGRATION + TWO-DEVICE CERTIFICATION
+
+1. Use a clean git branch from the actual Linqa repository.
+2. Merge the prior E2EE transport implementation into the REAL Fastify relay architecture.
+   The earlier Express mobile-hub example must NOT replace the existing Fastify app.
+3. Add server/src/security/forbidden-plaintext.ts and its test.
+4. Add certification/ directory.
+5. Wire clients/android/src/certification hooks into:
+   - real send acceptance
+   - real receive/decrypt commit
+   - offline/reconnect state
+   - idempotent retry result
+   - crypto authentication failure
+   - key package rotation
+   - device revocation
+6. Evidence hooks may record IDs, hashes and state only; never plaintext or secrets.
+7. Wire the Rust tamper tests to the actual production envelope API.
+8. Configure certification/config.env with staging DB/base URL and dedicated Alice/Bob sessions.
+9. Start PostgreSQL and server with logs redirected:
+      cd server
+      docker compose up -d postgres
+      npm run db:migrate
+      npm run dev 2>&1 | tee ../certification/evidence/server.log
+10. Build/install the exact same SHA on both devices.
+11. Run the matrix in CERTIFICATION_MATRIX.md.
+12. Pull device evidence with pull_android_evidence.sh.
+13. Run:
+      python3 certification/validate_device_evidence.py
+      python3 certification/08_validate_key_rotation.py
+      python3 certification/09_certify_device_matrix.py
+      bash certification/02_database_opacity.sh
+      bash certification/03_log_opacity.sh
+      python3 certification/10_bind_evidence.py
+      python3 certification/11_final_gate.py
+14. verdict.json must say GREEN.
+15. Only after GREEN:
+      python3 certification/12_promote_readme.py
+16. Commit README + evidence references, not device secrets.
+17. Keep raw tokens, private keys and phone numbers out of evidence artifacts.

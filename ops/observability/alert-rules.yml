@@ -1,0 +1,18 @@
+groups:
+  - name: linqa-critical
+    rules:
+      - alert: LinqaApiHighErrorRate
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 1) > 0.02
+        for: 10m
+        labels: { severity: critical }
+        annotations: { summary: "Linqa API 5xx rate above 2%" }
+      - alert: LinqaTransparencyChainFailure
+        expr: transparency_chain_valid == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "Key transparency chain verification failed" }
+      - alert: LinqaBackupChainFailure
+        expr: increase(backup_chain_verification_failures_total[5m]) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "Backup rollback protection failure" }

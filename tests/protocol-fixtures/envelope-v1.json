@@ -1,0 +1,20 @@
+{
+  "format": "linqa-protocol-envelope-v1",
+  "encoding": "bincode-2-fixed-int-big-endian",
+  "messageIdFill": 1,
+  "recipientDeviceHashFill": 2,
+  "sentAtUnix": 1700000000,
+  "expiresAtUnix": 1700086400,
+  "replayNonceFill": 3,
+  "aeadNonceFill": 4,
+  "ephemeralX25519PublicFill": 5,
+  "mlKemCiphertextFill": 6,
+  "mlKemCiphertextLength": 1088,
+  "senderCredentialFill": 7,
+  "senderCredentialLength": 128,
+  "encryptedPayloadFill": 8,
+  "encryptedPayloadLength": 256,
+  "senderSignatureFill": 9,
+  "encodedLength": 1712,
+  "sha256": "d70c6d9cd18a0ebb5f298d0e340c0189beecf8908d0200bada500f6c30c59b7e"
+}

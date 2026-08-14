@@ -1,0 +1,169 @@
+import type { FastifyInstance } from "fastify";
+import type { AppConfig } from "../config.js";
+import type { Database } from "../db/pool.js";
+import { RealtimeHub } from "../realtime/hub.js";
+import { registerRealtime } from "../realtime/register.js";
+import { registerSignaling } from "../realtime/signaling.register.js";
+import { registerAccountDeletionRoutes } from "../routes/account-deletion.js";
+import { registerAccountIdentifierRoutes } from "../routes/account-identifiers.js";
+import { registerAttachmentRoutes } from "../routes/attachments.js";
+import { registerAuthRoutes } from "../routes/auth.js";
+import { registerCallRoutes } from "../routes/calls.js";
+import { registerContactDiscoveryRoutes } from "../routes/contact-discovery.js";
+import { registerCountryLinqaRoutes } from "../routes/countrylinqa/routes.js";
+import { registerCountryLinqaGoLiveRoutes } from "../routes/countrylinqa/golive-routes.js";
+import { registerCountryLinqaFinalRoutes } from "../routes/countrylinqa/final-routes.js";
+import { registerCountryLinqaAdminRoutes } from "../routes/countrylinqa/admin-routes.js";
+import { registerCountryLinqaSecurityRoutes } from "../routes/countrylinqa/security-routes.js";
+import { registerEnrollmentRoutes } from "../routes/enrollment.js";
+import { registerEntitlementRoutes } from "../routes/entitlements.js";
+import { registerExecutionLaunchRoutes } from "../routes/execution-launch.js";
+import { registerFeatureFlagRoutes } from "../routes/feature-flags.js";
+import { registerFileVaultRoutes } from "../routes/file-vault.js";
+import { registerFinalUnwiredRoutes } from "../routes/final-unwired.js";
+import { registerGaHardeningRoutes } from "../routes/ga-hardening.routes.js";
+import { registerGapClosureRoutes } from "../routes/gap-closure.js";
+import { registerKeyPackageRoutes } from "../routes/key-packages.js";
+import { registerLinqaSendRoutes } from "../routes/linqasend/routes.js";
+import { registerMilestone3Routes } from "../routes/milestone-3.routes.js";
+import { registerMilestonePlatformRoutes } from "../routes/milestone-platform.js";
+import { registerMobileFeatureRoutes } from "../routes/mobile-features.js";
+import { registerMobileHubRoutes } from "../routes/mobile-hub.js";
+import { registerMultiAccountRoutes } from "../routes/multi-account.routes.js";
+import { registerNextMobileFeatureRoutes } from "../routes/next-mobile-features.js";
+import { registerPasskeyRoutes } from "../routes/passkeys.js";
+import { registerPrivacyRoutes } from "../routes/privacy.js";
+import { registerPhoneFirstRoutes } from "../routes/phone-first.routes.js";
+import { registerProtocolCapabilityRoutes } from "../routes/protocol-capability.js";
+import { registerPushRoutes } from "../routes/push.js";
+import { registerRecordedVideoRoutes } from "../routes/recorded-videos.js";
+import { registerRelayRoutes } from "../routes/relay.js";
+import { registerRuntimeRoutes } from "../routes/runtime.js";
+import { registerSafetyRoutes } from "../routes/safety.js";
+import { registerSyncRoutes } from "../routes/sync.js";
+import { registerUsernameRoutes } from "../routes/usernames.js";
+import { registerVertical2Routes } from "../routes/vertical-2.routes.js";
+import type { ServiceContainer } from "./service-container.js";
+
+export async function registerAll(
+  app: FastifyInstance,
+  config: AppConfig,
+  db: Database,
+  services: ServiceContainer
+) {
+  const hub = new RealtimeHub();
+
+  await registerRelayRoutes(app, config, db, hub);
+  await registerKeyPackageRoutes(app, config, db);
+  // Device enrollment: `routes/enrollment.ts` is the one wired, working
+  // mechanism (real Ed25519 proof verification via server/src/auth/
+  // enrollment-proof.ts). `routes/enrollment-v2.ts` and the device-enrollment
+  // handler that used to live in `routes/gap-closure.ts` were two other,
+  // never-finished mechanisms found registered alongside this one during the
+  // 2026-08-07 diagnostic; both are left on disk (dormant, unregistered) but
+  // intentionally not mounted here to avoid three competing, confusing
+  // enrollment paths. See claudeassess.txt, "TODAY ASSESS TXT".
+  await registerEnrollmentRoutes(app, config, db, services.sessions);
+  await registerAuthRoutes(app, config, db, {
+    challengeService: services.authChallenges,
+    sessionService: services.sessions
+  });
+  await registerAttachmentRoutes(
+    app,
+    config,
+    db,
+    services.attachments,
+    services.killSwitches
+  );
+  await registerSyncRoutes(app, config, db, services.sync);
+  await registerAccountDeletionRoutes(app, config, services.accountDeletion, services.stepUp);
+  await registerCallRoutes(app, config, services.calls, services.location);
+  await registerRecordedVideoRoutes(app, config, services.recordedVideos);
+  await registerPushRoutes(app, config, services.push);
+  await registerContactDiscoveryRoutes(app, config, services.contactDiscovery);
+  await registerSafetyRoutes(app, config, services.trustSafety);
+  await registerUsernameRoutes(app, config, services.usernames);
+  await registerPrivacyRoutes(app, config, services.privacySettings);
+  await registerEntitlementRoutes(app, config, services.entitlements);
+  await registerProtocolCapabilityRoutes(
+    app,
+    config,
+    services.protocolCapabilities
+  );
+  await registerFeatureFlagRoutes(app, config, services.featureFlags);
+  await registerRuntimeRoutes(app, config, db, services.runtimeCapabilities);
+  await registerFinalUnwiredRoutes(app, config, services);
+  await registerMilestonePlatformRoutes(app, config, {
+    milestones: services.milestones,
+    collaboration: services.collaboration,
+    ai: services.ai,
+    enterprise: services.enterprise,
+    orgAuthorization: services.orgAuthorization
+  });
+  await registerExecutionLaunchRoutes(app, config, {
+    promotions: services.promotions,
+    communities: services.communities,
+    businesses: services.businesses,
+    scim: services.scim,
+    legalHolds: services.legalHolds,
+    orgAuthorization: services.orgAuthorization
+  });
+  await registerGapClosureRoutes(app, config, db, {
+    gap: services.gap
+  });
+  await registerPasskeyRoutes(app, config, services.passkeys, services.stepUp);
+  await registerFileVaultRoutes(app, config, services.fileVault);
+  await registerMobileFeatureRoutes(app, config, db);
+  await registerNextMobileFeatureRoutes(app, config, db);
+  await registerVertical2Routes(app, config, {
+    vertical2: services.vertical2,
+    ai: services.ai,
+    entitlements: services.entitlements
+  });
+  await registerMilestone3Routes(app, config, {
+    deviceFederation: services.deviceFederation,
+    transparency: services.keyTransparency,
+    turn: services.turnRegions,
+    attachments: services.attachmentCdn,
+    enterpriseIdentity: services.enterpriseIdentityV2,
+    billingReconciliation: services.billingReconciliation,
+    mlsGroups: services.mlsGroups,
+    pushV2: services.pushV2,
+    emergencyEscalation: services.emergencyEscalation,
+    canaryReleases: services.canaryReleases
+  }, hub);
+  await registerGaHardeningRoutes(app, config, {
+    gates: services.gaGates,
+    privacyRights: services.privacyRights,
+    support: services.supportOperations,
+    residency: services.dataResidency,
+    securityAssessment: services.securityAssessment,
+    retentionArchive: services.retentionArchive,
+    incidentResponse: services.incidentResponse,
+    productionKillSwitches: services.productionKillSwitches,
+    gaRollout: services.gaRollout,
+    diagnosticRedaction: services.diagnosticRedaction
+  });
+  await registerMultiAccountRoutes(app, config, {
+    phoneRegistration: services.phoneRegistration,
+    multiAccount: services.multiAccount,
+    accountSwitch: services.accountSwitch,
+    pushIsolation: services.accountPushIsolation
+  });
+  await registerPhoneFirstRoutes(app, config, {
+    registration: services.phoneFirstRegistration,
+    switcher: services.accountSwitchV3
+  });
+
+  await registerAccountIdentifierRoutes(app, config, db, services.authChallenges);
+  await registerCountryLinqaRoutes(app, config, db, services.countryLinqa);
+  await registerCountryLinqaGoLiveRoutes(app, config, db);
+  await registerCountryLinqaFinalRoutes(app, config, db);
+  await registerCountryLinqaAdminRoutes(app, config, db);
+  await registerCountryLinqaSecurityRoutes(app, config, db, services.countryReverification);
+  await registerLinqaSendRoutes(app, config, db);
+
+  await registerRealtime(app, config, db, hub);
+  await registerSignaling(app, config, db, services.signaling, hub);
+  await registerMobileHubRoutes(app, config, db, hub);
+}

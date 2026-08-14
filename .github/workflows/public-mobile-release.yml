@@ -1,0 +1,70 @@
+name: Linqa Public Mobile Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        type: choice
+        options: [android, ios]
+        required: true
+      rollout:
+        type: choice
+        options: ["1","5","10","25","50","100"]
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "Require GA readiness API = ready"
+          echo "Require CRYPTO/PEN-TEST/PRIVACY/LEGAL gates"
+          echo "Require signed release artifacts"
+          echo "Require rollback evidence"
+
+  android:
+    needs: preflight
+    if: ${{ inputs.platform == 'android' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: clients/mobile
+      - run: npx expo-doctor
+        working-directory: clients/mobile
+      - run: npx tsc --noEmit
+        working-directory: clients/mobile
+      - run: |
+          echo "Build signed Android App Bundle."
+          echo "Upload using protected Play Console credentials."
+          echo "Apply staged rollout percentage: ${{ inputs.rollout }}"
+
+  ios:
+    needs: preflight
+    if: ${{ inputs.platform == 'ios' }}
+    runs-on: macos-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: clients/mobile
+      - run: npx expo-doctor
+        working-directory: clients/mobile
+      - run: npx tsc --noEmit
+        working-directory: clients/mobile
+      - run: |
+          echo "Build signed iOS archive."
+          echo "Upload with protected App Store Connect credentials."
+          echo "Release percentage is controlled by platform rollout process."

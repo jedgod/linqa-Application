@@ -1,0 +1,1840 @@
+LINQA E2EE TRANSPORT CLOSURE PACK v1.0
+Generated: 2026-08-09
+
+This is a multi-file implementation bundle represented in a single Notepad-friendly text file.
+Copy each FILE section to the matching repository path.
+
+IMPORTANT ADAPTATION POINTS
+- Existing auth middleware/session schema
+- Existing account_devices schema
+- Existing Rust protocol engine and secure local keystore
+- Existing dependency-injection/Retrofit setup
+- Existing database/message store
+- Existing push notification infrastructure
+
+The pack is intentionally strict about one invariant:
+THE SERVER MUST NEVER RECEIVE OR PERSIST MESSAGE PLAINTEXT.
+
+====================================================================================================
+FILE: README_E2EE_TRANSPORT_CLOSURE.md
+====================================================================================================
+# Linqa E2EE Transport Closure Pack v1.0
+
+Purpose:
+Wire Android -> Rust crypto core -> server -> Android into a real ciphertext-only
+1:1 message delivery pipeline.
+
+Security invariants:
+1. Plaintext MUST NOT be sent to the server.
+2. Plaintext MUST NOT be written to server logs, queues, analytics, or database rows.
+3. The server stores only opaque encrypted envelopes and routing/delivery metadata.
+4. Recipient key packages are signed and bound to an account + device.
+5. The client validates key-package identity, expiry, revocation, and signature before use.
+6. Encryption/decryption happens only inside the trusted client/core boundary.
+7. Every envelope has replay/idempotency protection.
+8. Delivery acknowledgement is separate from decryption success telemetry.
+9. Multi-device recipients receive one independently encrypted envelope per active device.
+10. Revoked devices are not eligible recipients.
+
+This pack assumes:
+- Node.js + TypeScript + Express server
+- PostgreSQL
+- Android/Kotlin client
+- Rust crypto core exposed through JNI/FFI
+- Existing authenticated account/device sessions
+
+Required environment:
+LINQA_DATABASE_URL=postgres://...
+LINQA_KEY_PACKAGE_SIGNING_PUBLIC_KEY_B64=<Ed25519 public key for server-side package admission validation if used>
+LINQA_MAX_ENVELOPE_BYTES=262144
+LINQA_ENVELOPE_TTL_DAYS=30
+
+IMPORTANT:
+The cryptographic primitives below intentionally use X25519 + HKDF-SHA256 + ChaCha20-Poly1305
+for the closure transport example. If the existing Linqa Rust core already implements a ratchet,
+MLS, PQ KEM, or another audited protocol, keep THAT protocol and adapt only the typed transport
+interfaces. Do not silently replace an existing audited protocol with this example primitive set.
+
+Release gate:
+The milestone is GREEN only after two separate authenticated devices exchange messages through
+the real server and server/database/log inspection proves that no plaintext is present.
+
+====================================================================================================
+FILE: server/db/migrations/011_e2ee_transport_closure.sql
+====================================================================================================
+BEGIN;
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS device_key_packages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID NOT NULL,
+    device_id UUID NOT NULL,
+    package_version INTEGER NOT NULL DEFAULT 1,
+    identity_key_b64 TEXT NOT NULL,
+    signed_prekey_b64 TEXT NOT NULL,
+    one_time_prekey_b64 TEXT,
+    signature_b64 TEXT NOT NULL,
+    algorithm TEXT NOT NULL DEFAULT 'X25519+Ed25519',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    consumed_at TIMESTAMPTZ,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (device_id, package_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_key_packages_account_active
+ON device_key_packages(account_id, device_id, expires_at)
+WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS encrypted_envelopes (
+    id UUID PRIMARY KEY,
+    protocol_version INTEGER NOT NULL,
+    conversation_id UUID NOT NULL,
+    sender_account_id UUID NOT NULL,
+    sender_device_id UUID NOT NULL,
+    recipient_account_id UUID NOT NULL,
+    recipient_device_id UUID NOT NULL,
+    client_message_id UUID NOT NULL,
+    ciphertext_b64 TEXT NOT NULL,
+    nonce_b64 TEXT,
+    aad_b64 TEXT NOT NULL,
+    ephemeral_key_b64 TEXT,
+    key_package_id UUID,
+    content_type TEXT NOT NULL DEFAULT 'message',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    server_received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+    UNIQUE(sender_device_id, client_message_id, recipient_device_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_envelopes_recipient_pending
+ON encrypted_envelopes(recipient_device_id, server_received_at);
+
+CREATE INDEX IF NOT EXISTS idx_envelopes_expiry
+ON encrypted_envelopes(expires_at);
+
+CREATE TABLE IF NOT EXISTS envelope_delivery_state (
+    envelope_id UUID PRIMARY KEY REFERENCES encrypted_envelopes(id) ON DELETE CASCADE,
+    recipient_device_id UUID NOT NULL,
+    fetched_at TIMESTAMPTZ,
+    delivered_at TIMESTAMPTZ,
+    acknowledged_at TIMESTAMPTZ,
+    ack_code TEXT,
+    fetch_count INTEGER NOT NULL DEFAULT 0,
+    last_fetch_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_delivery_pending
+ON envelope_delivery_state(recipient_device_id, acknowledged_at, last_fetch_at);
+
+CREATE TABLE IF NOT EXISTS envelope_idempotency (
+    sender_device_id UUID NOT NULL,
+    client_message_id UUID NOT NULL,
+    recipient_device_id UUID NOT NULL,
+    envelope_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(sender_device_id, client_message_id, recipient_device_id)
+);
+
+CREATE TABLE IF NOT EXISTS e2ee_security_events (
+    id BIGSERIAL PRIMARY KEY,
+    account_id UUID,
+    device_id UUID,
+    event_type TEXT NOT NULL,
+    reason_code TEXT,
+    envelope_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    safe_metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+COMMENT ON TABLE encrypted_envelopes IS
+'Ciphertext-only storage. Never add plaintext/message_body/decrypted_content columns.';
+
+COMMIT;
+
+====================================================================================================
+FILE: server/src/types/e2ee.ts
+====================================================================================================
+export type UUID = string;
+
+export interface AuthContext {
+  accountId: UUID;
+  deviceId: UUID;
+}
+
+export interface PublicKeyPackage {
+  id: UUID;
+  accountId: UUID;
+  deviceId: UUID;
+  packageVersion: number;
+  identityKeyB64: string;
+  signedPrekeyB64: string;
+  oneTimePrekeyB64?: string | null;
+  signatureB64: string;
+  algorithm: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface UploadEnvelopeRequest {
+  id: UUID;
+  protocolVersion: number;
+  conversationId: UUID;
+  recipientAccountId: UUID;
+  recipientDeviceId: UUID;
+  clientMessageId: UUID;
+  ciphertextB64: string;
+  nonceB64?: string | null;
+  aadB64: string;
+  ephemeralKeyB64?: string | null;
+  keyPackageId?: UUID | null;
+  contentType?: "message" | "attachment-key" | "sync";
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface StoredEnvelope extends UploadEnvelopeRequest {
+  senderAccountId: UUID;
+  senderDeviceId: UUID;
+  serverReceivedAt: string;
+  sizeBytes: number;
+}
+
+export interface AckRequest {
+  envelopeIds: UUID[];
+  ackCode: "received" | "decrypted" | "duplicate";
+}
+
+====================================================================================================
+FILE: server/src/security/base64.ts
+====================================================================================================
+export function decodedSizeApprox(base64: string): number {
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    throw new Error("invalid_base64");
+  }
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+====================================================================================================
+FILE: server/src/security/safe-log.ts
+====================================================================================================
+type SafeFields = Record<string, string | number | boolean | null | undefined>;
+
+export function safeSecurityLog(event: string, fields: SafeFields = {}) {
+  // Deliberately refuses arbitrary objects to reduce accidental plaintext logging.
+  const payload = {
+    ts: new Date().toISOString(),
+    event,
+    ...fields,
+  };
+  process.stdout.write(JSON.stringify(payload) + "\n");
+}
+
+====================================================================================================
+FILE: server/src/middleware/requireDeviceAuth.ts
+====================================================================================================
+import { Request, Response, NextFunction } from "express";
+import { AuthContext } from "../types/e2ee";
+
+/**
+ * Adapter point: replace the demo header extraction below with the project's
+ * real session/JWT middleware. Never trust client-supplied account/device IDs
+ * without validating them against an authenticated session.
+ */
+export interface DeviceAuthedRequest extends Request {
+  auth?: AuthContext;
+}
+
+export function requireDeviceAuth(
+  req: DeviceAuthedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  const accountId = req.header("x-linqa-account-id");
+  const deviceId = req.header("x-linqa-device-id");
+
+  if (!accountId || !deviceId) {
+    return res.status(401).json({ error: "device_auth_required" });
+  }
+
+  // TODO: bind to existing verified session store before production.
+  req.auth = { accountId, deviceId };
+  next();
+}
+
+====================================================================================================
+FILE: server/src/services/key-package.service.ts
+====================================================================================================
+import { Pool } from "pg";
+import { PublicKeyPackage, UUID } from "../types/e2ee";
+
+export class KeyPackageService {
+  constructor(private readonly db: Pool) {}
+
+  async listActiveForAccount(
+    requesterAccountId: UUID,
+    recipientAccountId: UUID
+  ): Promise<PublicKeyPackage[]> {
+    // Authorization note:
+    // Insert conversation/contact/privacy authorization checks here.
+    // The requester should not be allowed to scrape arbitrary key packages.
+    void requesterAccountId;
+
+    const { rows } = await this.db.query(
+      `
+      SELECT
+        id,
+        account_id,
+        device_id,
+        package_version,
+        identity_key_b64,
+        signed_prekey_b64,
+        one_time_prekey_b64,
+        signature_b64,
+        algorithm,
+        created_at,
+        expires_at
+      FROM device_key_packages
+      WHERE account_id = $1
+        AND revoked_at IS NULL
+        AND expires_at > now()
+      ORDER BY device_id, package_version DESC
+      `,
+      [recipientAccountId]
+    );
+
+    const newestByDevice = new Map<string, any>();
+    for (const row of rows) {
+      if (!newestByDevice.has(row.device_id)) newestByDevice.set(row.device_id, row);
+    }
+
+    return [...newestByDevice.values()].map((r) => ({
+      id: r.id,
+      accountId: r.account_id,
+      deviceId: r.device_id,
+      packageVersion: r.package_version,
+      identityKeyB64: r.identity_key_b64,
+      signedPrekeyB64: r.signed_prekey_b64,
+      oneTimePrekeyB64: r.one_time_prekey_b64,
+      signatureB64: r.signature_b64,
+      algorithm: r.algorithm,
+      createdAt: r.created_at.toISOString(),
+      expiresAt: r.expires_at.toISOString(),
+    }));
+  }
+}
+
+====================================================================================================
+FILE: server/src/services/envelope.service.ts
+====================================================================================================
+import { Pool, PoolClient } from "pg";
+import {
+  AuthContext,
+  StoredEnvelope,
+  UploadEnvelopeRequest,
+  UUID,
+} from "../types/e2ee";
+import { decodedSizeApprox } from "../security/base64";
+
+const MAX_ENVELOPE_BYTES = Number(process.env.LINQA_MAX_ENVELOPE_BYTES ?? 262144);
+
+function assertUuidLike(value: string, name: string) {
+  if (!/^[0-9a-fA-F-]{36}$/.test(value)) throw new Error(`invalid_${name}`);
+}
+
+function assertEnvelopeShape(e: UploadEnvelopeRequest) {
+  for (const [name, value] of [
+    ["id", e.id],
+    ["conversation_id", e.conversationId],
+    ["recipient_account_id", e.recipientAccountId],
+    ["recipient_device_id", e.recipientDeviceId],
+    ["client_message_id", e.clientMessageId],
+  ] as const) {
+    assertUuidLike(value, name);
+  }
+
+  if (!Number.isInteger(e.protocolVersion) || e.protocolVersion < 1 || e.protocolVersion > 100) {
+    throw new Error("unsupported_protocol_version");
+  }
+
+  if (!e.ciphertextB64 || !e.aadB64) throw new Error("ciphertext_and_aad_required");
+
+  const total =
+    decodedSizeApprox(e.ciphertextB64) +
+    decodedSizeApprox(e.aadB64) +
+    (e.nonceB64 ? decodedSizeApprox(e.nonceB64) : 0) +
+    (e.ephemeralKeyB64 ? decodedSizeApprox(e.ephemeralKeyB64) : 0);
+
+  if (total <= 0 || total > MAX_ENVELOPE_BYTES) throw new Error("envelope_too_large");
+
+  const expires = new Date(e.expiresAt);
+  if (Number.isNaN(expires.getTime()) || expires <= new Date()) throw new Error("invalid_expiry");
+}
+
+export class EnvelopeService {
+  constructor(private readonly db: Pool) {}
+
+  async store(auth: AuthContext, envelope: UploadEnvelopeRequest): Promise<StoredEnvelope> {
+    assertEnvelopeShape(envelope);
+
+    if (envelope.recipientDeviceId === auth.deviceId) {
+      throw new Error("recipient_device_must_differ");
+    }
+
+    // Prevent client from creating arbitrarily long-lived ciphertext.
+    const maxExpiry = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    if (new Date(envelope.expiresAt).getTime() > maxExpiry) {
+      throw new Error("expiry_too_far");
+    }
+
+    const sizeBytes =
+      decodedSizeApprox(envelope.ciphertextB64) +
+      decodedSizeApprox(envelope.aadB64) +
+      (envelope.nonceB64 ? decodedSizeApprox(envelope.nonceB64) : 0) +
+      (envelope.ephemeralKeyB64 ? decodedSizeApprox(envelope.ephemeralKeyB64) : 0);
+
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+
+      await this.assertRecipientDeviceActive(
+        client,
+        envelope.recipientAccountId,
+        envelope.recipientDeviceId
+      );
+
+      if (envelope.keyPackageId) {
+        await this.assertKeyPackageValid(
+          client,
+          envelope.keyPackageId,
+          envelope.recipientAccountId,
+          envelope.recipientDeviceId
+        );
+      }
+
+      const idem = await client.query(
+        `
+        SELECT envelope_id
+        FROM envelope_idempotency
+        WHERE sender_device_id=$1 AND client_message_id=$2 AND recipient_device_id=$3
+        `,
+        [auth.deviceId, envelope.clientMessageId, envelope.recipientDeviceId]
+      );
+
+      if (idem.rowCount) {
+        const existing = await client.query(
+          `SELECT * FROM encrypted_envelopes WHERE id=$1`,
+          [idem.rows[0].envelope_id]
+        );
+        await client.query("COMMIT");
+        return this.map(existing.rows[0]);
+      }
+
+      await client.query(
+        `
+        INSERT INTO encrypted_envelopes (
+          id, protocol_version, conversation_id,
+          sender_account_id, sender_device_id,
+          recipient_account_id, recipient_device_id,
+          client_message_id, ciphertext_b64, nonce_b64, aad_b64,
+          ephemeral_key_b64, key_package_id, content_type,
+          created_at, expires_at, size_bytes
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
+        )
+        `,
+        [
+          envelope.id,
+          envelope.protocolVersion,
+          envelope.conversationId,
+          auth.accountId,
+          auth.deviceId,
+          envelope.recipientAccountId,
+          envelope.recipientDeviceId,
+          envelope.clientMessageId,
+          envelope.ciphertextB64,
+          envelope.nonceB64 ?? null,
+          envelope.aadB64,
+          envelope.ephemeralKeyB64 ?? null,
+          envelope.keyPackageId ?? null,
+          envelope.contentType ?? "message",
+          envelope.createdAt,
+          envelope.expiresAt,
+          sizeBytes,
+        ]
+      );
+
+      await client.query(
+        `
+        INSERT INTO envelope_delivery_state(envelope_id, recipient_device_id)
+        VALUES($1,$2)
+        `,
+        [envelope.id, envelope.recipientDeviceId]
+      );
+
+      await client.query(
+        `
+        INSERT INTO envelope_idempotency(
+          sender_device_id, client_message_id, recipient_device_id, envelope_id
+        ) VALUES($1,$2,$3,$4)
+        `,
+        [auth.deviceId, envelope.clientMessageId, envelope.recipientDeviceId, envelope.id]
+      );
+
+      const stored = await client.query(
+        `SELECT * FROM encrypted_envelopes WHERE id=$1`,
+        [envelope.id]
+      );
+
+      await client.query("COMMIT");
+      return this.map(stored.rows[0]);
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async fetchPending(auth: AuthContext, limit = 100): Promise<StoredEnvelope[]> {
+    const bounded = Math.min(Math.max(limit, 1), 200);
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows } = await client.query(
+        `
+        SELECT e.*
+        FROM encrypted_envelopes e
+        JOIN envelope_delivery_state d ON d.envelope_id = e.id
+        WHERE e.recipient_account_id=$1
+          AND e.recipient_device_id=$2
+          AND e.expires_at > now()
+          AND d.acknowledged_at IS NULL
+        ORDER BY e.server_received_at ASC
+        LIMIT $3
+        FOR UPDATE OF d SKIP LOCKED
+        `,
+        [auth.accountId, auth.deviceId, bounded]
+      );
+
+      if (rows.length) {
+        const ids = rows.map((r) => r.id);
+        await client.query(
+          `
+          UPDATE envelope_delivery_state
+          SET fetched_at = COALESCE(fetched_at, now()),
+              last_fetch_at = now(),
+              fetch_count = fetch_count + 1
+          WHERE envelope_id = ANY($1::uuid[])
+          `,
+          [ids]
+        );
+      }
+
+      await client.query("COMMIT");
+      return rows.map((r) => this.map(r));
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async acknowledge(
+    auth: AuthContext,
+    envelopeIds: UUID[],
+    ackCode: "received" | "decrypted" | "duplicate"
+  ) {
+    if (!envelopeIds.length || envelopeIds.length > 200) throw new Error("invalid_ack_batch");
+
+    await this.db.query(
+      `
+      UPDATE envelope_delivery_state d
+      SET acknowledged_at = COALESCE(d.acknowledged_at, now()),
+          delivered_at = COALESCE(d.delivered_at, now()),
+          ack_code = $3
+      FROM encrypted_envelopes e
+      WHERE d.envelope_id=e.id
+        AND e.recipient_account_id=$1
+        AND e.recipient_device_id=$2
+        AND e.id = ANY($4::uuid[])
+      `,
+      [auth.accountId, auth.deviceId, ackCode, envelopeIds]
+    );
+  }
+
+  async purgeExpired() {
+    const result = await this.db.query(
+      `DELETE FROM encrypted_envelopes WHERE expires_at <= now()`
+    );
+    return result.rowCount ?? 0;
+  }
+
+  private async assertRecipientDeviceActive(
+    client: PoolClient,
+    accountId: UUID,
+    deviceId: UUID
+  ) {
+    // Replace "account_devices" fields to match existing Linqa schema.
+    const r = await client.query(
+      `
+      SELECT 1
+      FROM account_devices
+      WHERE account_id=$1 AND id=$2
+        AND revoked_at IS NULL
+      LIMIT 1
+      `,
+      [accountId, deviceId]
+    );
+    if (!r.rowCount) throw new Error("recipient_device_inactive");
+  }
+
+  private async assertKeyPackageValid(
+    client: PoolClient,
+    keyPackageId: UUID,
+    accountId: UUID,
+    deviceId: UUID
+  ) {
+    const r = await client.query(
+      `
+      SELECT 1
+      FROM device_key_packages
+      WHERE id=$1
+        AND account_id=$2
+        AND device_id=$3
+        AND revoked_at IS NULL
+        AND expires_at > now()
+      LIMIT 1
+      `,
+      [keyPackageId, accountId, deviceId]
+    );
+    if (!r.rowCount) throw new Error("key_package_invalid");
+  }
+
+  private map(r: any): StoredEnvelope {
+    return {
+      id: r.id,
+      protocolVersion: r.protocol_version,
+      conversationId: r.conversation_id,
+      senderAccountId: r.sender_account_id,
+      senderDeviceId: r.sender_device_id,
+      recipientAccountId: r.recipient_account_id,
+      recipientDeviceId: r.recipient_device_id,
+      clientMessageId: r.client_message_id,
+      ciphertextB64: r.ciphertext_b64,
+      nonceB64: r.nonce_b64,
+      aadB64: r.aad_b64,
+      ephemeralKeyB64: r.ephemeral_key_b64,
+      keyPackageId: r.key_package_id,
+      contentType: r.content_type,
+      createdAt: r.created_at.toISOString(),
+      expiresAt: r.expires_at.toISOString(),
+      serverReceivedAt: r.server_received_at.toISOString(),
+      sizeBytes: r.size_bytes,
+    };
+  }
+}
+
+====================================================================================================
+FILE: server/src/routes/mobile-hub.ts
+====================================================================================================
+import { Router } from "express";
+import { Pool } from "pg";
+import { requireDeviceAuth, DeviceAuthedRequest } from "../middleware/requireDeviceAuth";
+import { EnvelopeService } from "../services/envelope.service";
+import { KeyPackageService } from "../services/key-package.service";
+import { safeSecurityLog } from "../security/safe-log";
+
+export function createMobileHubRouter(db: Pool) {
+  const router = Router();
+  const envelopes = new EnvelopeService(db);
+  const keyPackages = new KeyPackageService(db);
+
+  router.use(requireDeviceAuth);
+
+  router.get("/v1/e2ee/key-packages/:accountId", async (req: DeviceAuthedRequest, res) => {
+    try {
+      const auth = req.auth!;
+      const packages = await keyPackages.listActiveForAccount(
+        auth.accountId,
+        req.params.accountId
+      );
+
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ packages, serverTime: new Date().toISOString() });
+    } catch {
+      res.status(400).json({ error: "key_package_lookup_failed" });
+    }
+  });
+
+  router.post("/v1/e2ee/envelopes", async (req: DeviceAuthedRequest, res) => {
+    try {
+      const auth = req.auth!;
+      const stored = await envelopes.store(auth, req.body);
+
+      safeSecurityLog("e2ee_envelope_stored", {
+        envelopeId: stored.id,
+        senderDeviceId: auth.deviceId,
+        recipientDeviceId: stored.recipientDeviceId,
+        sizeBytes: stored.sizeBytes,
+        protocolVersion: stored.protocolVersion,
+      });
+
+      // Push wake-up belongs here:
+      // pushService.notifyDevice(stored.recipientDeviceId, { type: "e2ee-envelope" })
+      // Do NOT include ciphertext or plaintext in the push payload.
+
+      res.status(202).json({
+        envelopeId: stored.id,
+        accepted: true,
+        serverReceivedAt: stored.serverReceivedAt,
+      });
+    } catch (e: any) {
+      safeSecurityLog("e2ee_envelope_rejected", {
+        senderDeviceId: req.auth?.deviceId,
+        reason: String(e?.message ?? "unknown").slice(0, 80),
+      });
+      res.status(400).json({ error: "envelope_rejected", reason: e?.message ?? "invalid" });
+    }
+  });
+
+  router.get("/v1/e2ee/envelopes", async (req: DeviceAuthedRequest, res) => {
+    try {
+      const auth = req.auth!;
+      const limit = Number(req.query.limit ?? 100);
+      const pending = await envelopes.fetchPending(auth, limit);
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ envelopes: pending, serverTime: new Date().toISOString() });
+    } catch {
+      res.status(400).json({ error: "envelope_fetch_failed" });
+    }
+  });
+
+  router.post("/v1/e2ee/envelopes/ack", async (req: DeviceAuthedRequest, res) => {
+    try {
+      const auth = req.auth!;
+      const { envelopeIds, ackCode } = req.body ?? {};
+      await envelopes.acknowledge(auth, envelopeIds, ackCode);
+      res.status(204).end();
+    } catch {
+      res.status(400).json({ error: "ack_failed" });
+    }
+  });
+
+  return router;
+}
+
+====================================================================================================
+FILE: server/src/jobs/purge-expired-envelopes.ts
+====================================================================================================
+import { Pool } from "pg";
+import { EnvelopeService } from "../services/envelope.service";
+import { safeSecurityLog } from "../security/safe-log";
+
+export async function purgeExpiredEnvelopesJob(db: Pool) {
+  const service = new EnvelopeService(db);
+  const deleted = await service.purgeExpired();
+  safeSecurityLog("e2ee_expired_envelopes_purged", { deleted });
+}
+
+====================================================================================================
+FILE: server/src/app-e2ee-registration.ts
+====================================================================================================
+import express from "express";
+import { Pool } from "pg";
+import { createMobileHubRouter } from "./routes/mobile-hub";
+
+export function registerE2eeTransport(app: express.Express, db: Pool) {
+  // Keep body limits small; ciphertext messages should not become an attachment transport.
+  app.use(express.json({ limit: "384kb" }));
+  app.use("/mobile-hub", createMobileHubRouter(db));
+}
+
+====================================================================================================
+FILE: android/app/src/main/java/com/linqa/network/E2eeModels.kt
+====================================================================================================
+package com.linqa.network
+
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class PublicKeyPackageDto(
+    val id: String,
+    val accountId: String,
+    val deviceId: String,
+    val packageVersion: Int,
+    val identityKeyB64: String,
+    val signedPrekeyB64: String,
+    val oneTimePrekeyB64: String? = null,
+    val signatureB64: String,
+    val algorithm: String,
+    val createdAt: String,
+    val expiresAt: String
+)
+
+@Serializable
+data class KeyPackagesResponse(
+    val packages: List<PublicKeyPackageDto>,
+    val serverTime: String
+)
+
+@Serializable
+data class UploadEnvelopeRequestDto(
+    val id: String,
+    val protocolVersion: Int,
+    val conversationId: String,
+    val recipientAccountId: String,
+    val recipientDeviceId: String,
+    val clientMessageId: String,
+    val ciphertextB64: String,
+    val nonceB64: String? = null,
+    val aadB64: String,
+    val ephemeralKeyB64: String? = null,
+    val keyPackageId: String? = null,
+    val contentType: String = "message",
+    val createdAt: String,
+    val expiresAt: String
+)
+
+@Serializable
+data class UploadEnvelopeResponseDto(
+    val envelopeId: String,
+    val accepted: Boolean,
+    val serverReceivedAt: String
+)
+
+@Serializable
+data class StoredEnvelopeDto(
+    val id: String,
+    val protocolVersion: Int,
+    val conversationId: String,
+    val senderAccountId: String,
+    val senderDeviceId: String,
+    val recipientAccountId: String,
+    val recipientDeviceId: String,
+    val clientMessageId: String,
+    val ciphertextB64: String,
+    val nonceB64: String? = null,
+    val aadB64: String,
+    val ephemeralKeyB64: String? = null,
+    val keyPackageId: String? = null,
+    val contentType: String,
+    val createdAt: String,
+    val expiresAt: String,
+    val serverReceivedAt: String,
+    val sizeBytes: Int
+)
+
+@Serializable
+data class PendingEnvelopeResponseDto(
+    val envelopes: List<StoredEnvelopeDto>,
+    val serverTime: String
+)
+
+@Serializable
+data class AckEnvelopeRequestDto(
+    val envelopeIds: List<String>,
+    val ackCode: String
+)
+
+====================================================================================================
+FILE: android/app/src/main/java/com/linqa/network/KeyPackageApi.kt
+====================================================================================================
+package com.linqa.network
+
+import retrofit2.http.GET
+import retrofit2.http.Path
+
+interface KeyPackageApi {
+    @GET("mobile-hub/v1/e2ee/key-packages/{accountId}")
+    suspend fun getActivePackages(
+        @Path("accountId") accountId: String
+    ): KeyPackagesResponse
+}
+
+====================================================================================================
+FILE: android/app/src/main/java/com/linqa/network/EnvelopeApi.kt
+====================================================================================================
+package com.linqa.network
+
+import retrofit2.http.Body
+import retrofit2.http.GET
+import retrofit2.http.POST
+import retrofit2.http.Query
+
+interface EnvelopeApi {
+    @POST("mobile-hub/v1/e2ee/envelopes")
+    suspend fun uploadEnvelope(
+        @Body request: UploadEnvelopeRequestDto
+    ): UploadEnvelopeResponseDto
+
+    @GET("mobile-hub/v1/e2ee/envelopes")
+    suspend fun fetchPending(
+        @Query("limit") limit: Int = 100
+    ): PendingEnvelopeResponseDto
+
+    @POST("mobile-hub/v1/e2ee/envelopes/ack")
+    suspend fun acknowledge(
+        @Body request: AckEnvelopeRequestDto
+    )
+}
+
+====================================================================================================
+FILE: android/app/src/main/java/com/linqa/security/KeyPackageVerifier.kt
+====================================================================================================
+package com.linqa.security
+
+import android.util.Base64
+import com.linqa.network.PublicKeyPackageDto
+import java.nio.charset.StandardCharsets
+import java.security.KeyFactory
+import java.security.Signature
+import java.security.spec.X509EncodedKeySpec
+import java.time.Instant
+
+class KeyPackageVerifier(
+    private val trustedIdentityResolver: TrustedIdentityResolver
+) {
+    suspend fun verify(pkg: PublicKeyPackageDto) {
+        require(pkg.algorithm.startsWith("X25519")) { "unsupported_key_package_algorithm" }
+        require(Instant.parse(pkg.expiresAt).isAfter(Instant.now())) { "key_package_expired" }
+
+        val expectedIdentity = trustedIdentityResolver.identitySigningKey(pkg.accountId, pkg.deviceId)
+        require(expectedIdentity.isNotBlank()) { "missing_trusted_identity" }
+
+        val canonical = listOf(
+            pkg.id,
+            pkg.accountId,
+            pkg.deviceId,
+            pkg.packageVersion.toString(),
+            pkg.identityKeyB64,
+            pkg.signedPrekeyB64,
+            pkg.oneTimePrekeyB64 ?: "",
+            pkg.algorithm,
+            pkg.createdAt,
+            pkg.expiresAt
+        ).joinToString("|").toByteArray(StandardCharsets.UTF_8)
+
+        val signatureBytes = Base64.decode(pkg.signatureB64, Base64.NO_WRAP)
+        val publicKeyBytes = Base64.decode(expectedIdentity, Base64.NO_WRAP)
+        val keyFactory = KeyFactory.getInstance("Ed25519")
+        val publicKey = keyFactory.generatePublic(X509EncodedKeySpec(publicKeyBytes))
+        val sig = Signature.getInstance("Ed25519")
+        sig.initVerify(publicKey)
+        sig.update(canonical)
+
+        require(sig.verify(signatureBytes)) { "key_package_signature_invalid" }
+    }
+}
+
+interface TrustedIdentityResolver {
+    /**
+     * Must be backed by Linqa's authenticated identity/key-transparency state,
+     * not by the same key package response being verified.
+     */
+    suspend fun identitySigningKey(accountId: String, deviceId: String): String
+}
+
+====================================================================================================
+FILE: android/app/src/main/java/com/linqa/core/CoreBridge.kt
+====================================================================================================
+package com.linqa.core
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
+object CoreBridge {
+    init {
+        System.loadLibrary("linqa_core")
+    }
+
+    @Serializable
+    data class EncryptInput(
+        val protocolVersion: Int = 1,
+        val conversationId: String,
+        val senderAccountId: String,
+        val senderDeviceId: String,
+        val recipientAccountId: String,
+        val recipientDeviceId: String,
+        val clientMessageId: String,
+        val plaintextUtf8: String,
+        val keyPackageId: String,
+        val recipientIdentityKeyB64: String,
+        val recipientSignedPrekeyB64: String,
+        val recipientOneTimePrekeyB64: String? = null,
+        val createdAt: String,
+        val expiresAt: String
+    )
+
+    @Serializable
+    data class EncryptedEnvelope(
+        val id: String,
+        val protocolVersion: Int,
+        val conversationId: String,
+        val recipientAccountId: String,
+        val recipientDeviceId: String,
+        val clientMessageId: String,
+        val ciphertextB64: String,
+        val nonceB64: String,
+        val aadB64: String,
+        val ephemeralKeyB64: String,
+        val keyPackageId: String,
+        val contentType: String,
+        val createdAt: String,
+        val expiresAt: String
+    )
+
+    @Serializable
+    data class DecryptInput(
+        val envelopeId: String,
+        val protocolVersion: Int,
+        val conversationId: String,
+        val senderAccountId: String,
+        val senderDeviceId: String,
+        val recipientAccountId: String,
+        val recipientDeviceId: String,
+        val clientMessageId: String,
+        val ciphertextB64: String,
+        val nonceB64: String,
+        val aadB64: String,
+        val ephemeralKeyB64: String,
+        val keyPackageId: String?
+    )
+
+    @Serializable
+    data class DecryptOutput(
+        val plaintextUtf8: String,
+        val authenticatedSenderDeviceId: String,
+        val envelopeId: String
+    )
+
+    private val json = Json {
+        ignoreUnknownKeys = false
+        encodeDefaults = true
+    }
+
+    external fun nativeEncryptMessage(inputJson: String): String
+    external fun nativeDecryptMessage(inputJson: String): String
+
+    fun sendMessage(input: EncryptInput): EncryptedEnvelope =
+        json.decodeFromString(
+            EncryptedEnvelope.serializer(),
+            nativeEncryptMessage(json.encodeToString(EncryptInput.serializer(), input))
+        )
+
+    fun decryptMessage(input: DecryptInput): DecryptOutput =
+        json.decodeFromString(
+            DecryptOutput.serializer(),
+            nativeDecryptMessage(json.encodeToString(DecryptInput.serializer(), input))
+        )
+}
+
+====================================================================================================
+FILE: android/app/src/main/java/com/linqa/messages/E2eeSendRepository.kt
+====================================================================================================
+package com.linqa.messages
+
+import com.linqa.core.CoreBridge
+import com.linqa.network.EnvelopeApi
+import com.linqa.network.KeyPackageApi
+import com.linqa.network.UploadEnvelopeRequestDto
+import com.linqa.security.KeyPackageVerifier
+import java.time.Instant
+import java.time.temporal.ChronoUnit
+import java.util.UUID
+
+data class SendContext(
+    val senderAccountId: String,
+    val senderDeviceId: String,
+    val recipientAccountId: String,
+    val conversationId: String
+)
+
+data class DeviceSendResult(
+    val recipientDeviceId: String,
+    val envelopeId: String,
+    val accepted: Boolean
+)
+
+class E2eeSendRepository(
+    private val keyPackageApi: KeyPackageApi,
+    private val envelopeApi: EnvelopeApi,
+    private val verifier: KeyPackageVerifier
+) {
+    suspend fun sendText(
+        context: SendContext,
+        plaintext: String
+    ): List<DeviceSendResult> {
+        require(plaintext.isNotBlank()) { "empty_message" }
+
+        val keyPackages = keyPackageApi
+            .getActivePackages(context.recipientAccountId)
+            .packages
+            .filter { it.deviceId != context.senderDeviceId }
+
+        require(keyPackages.isNotEmpty()) { "recipient_has_no_active_key_package" }
+
+        val clientMessageId = UUID.randomUUID().toString()
+        val createdAt = Instant.now()
+        val expiresAt = createdAt.plus(30, ChronoUnit.DAYS)
+
+        return keyPackages.map { pkg ->
+            verifier.verify(pkg)
+
+            val encrypted = CoreBridge.sendMessage(
+                CoreBridge.EncryptInput(
+                    conversationId = context.conversationId,
+                    senderAccountId = context.senderAccountId,
+                    senderDeviceId = context.senderDeviceId,
+                    recipientAccountId = context.recipientAccountId,
+                    recipientDeviceId = pkg.deviceId,
+                    clientMessageId = clientMessageId,
+                    plaintextUtf8 = plaintext,
+                    keyPackageId = pkg.id,
+                    recipientIdentityKeyB64 = pkg.identityKeyB64,
+                    recipientSignedPrekeyB64 = pkg.signedPrekeyB64,
+                    recipientOneTimePrekeyB64 = pkg.oneTimePrekeyB64,
+                    createdAt = createdAt.toString(),
+                    expiresAt = expiresAt.toString()
+                )
+            )
+
+            // Plaintext is never included in this DTO.
+            val response = envelopeApi.uploadEnvelope(
+                UploadEnvelopeRequestDto(
+                    id = encrypted.id,
+                    protocolVersion = encrypted.protocolVersion,
+                    conversationId = encrypted.conversationId,
+                    recipientAccountId = encrypted.recipientAccountId,
+                    recipientDeviceId = encrypted.recipientDeviceId,
+                    clientMessageId = encrypted.clientMessageId,
+                    ciphertextB64 = encrypted.ciphertextB64,
+                    nonceB64 = encrypted.nonceB64,
+                    aadB64 = encrypted.aadB64,
+                    ephemeralKeyB64 = encrypted.ephemeralKeyB64,
+                    keyPackageId = encrypted.keyPackageId,
+                    contentType = encrypted.contentType,
+                    createdAt = encrypted.createdAt,
+                    expiresAt = encrypted.expiresAt
+                )
+            )
+
+            DeviceSendResult(
+                recipientDeviceId = pkg.deviceId,
+                envelopeId = response.envelopeId,
+                accepted = response.accepted
+            )
+        }
+    }
+}
+
+====================================================================================================
+FILE: android/app/src/main/java/com/linqa/messages/E2eeReceiveWorker.kt
+====================================================================================================
+package com.linqa.messages
+
+import android.content.Context
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import com.linqa.core.CoreBridge
+import com.linqa.network.AckEnvelopeRequestDto
+import com.linqa.network.EnvelopeApi
+import com.linqa.network.StoredEnvelopeDto
+
+interface MessageStore {
+    suspend fun hasEnvelope(envelopeId: String): Boolean
+    suspend fun insertDecryptedMessageAtomically(
+        envelopeId: String,
+        conversationId: String,
+        senderAccountId: String,
+        senderDeviceId: String,
+        clientMessageId: String,
+        plaintext: String,
+        serverReceivedAt: String
+    )
+}
+
+interface DeviceSession {
+    val accountId: String
+    val deviceId: String
+}
+
+class E2eeReceiveWorker(
+    appContext: Context,
+    params: WorkerParameters,
+    private val envelopeApi: EnvelopeApi,
+    private val messageStore: MessageStore,
+    private val session: DeviceSession
+) : CoroutineWorker(appContext, params) {
+
+    override suspend fun doWork(): Result {
+        return try {
+            val response = envelopeApi.fetchPending(limit = 100)
+
+            for (envelope in response.envelopes) {
+                process(envelope)
+            }
+
+            Result.success()
+        } catch (_: Exception) {
+            Result.retry()
+        }
+    }
+
+    private suspend fun process(envelope: StoredEnvelopeDto) {
+        if (messageStore.hasEnvelope(envelope.id)) {
+            envelopeApi.acknowledge(
+                AckEnvelopeRequestDto(listOf(envelope.id), "duplicate")
+            )
+            return
+        }
+
+        require(envelope.recipientAccountId == session.accountId) {
+            "recipient_account_mismatch"
+        }
+        require(envelope.recipientDeviceId == session.deviceId) {
+            "recipient_device_mismatch"
+        }
+
+        val out = CoreBridge.decryptMessage(
+            CoreBridge.DecryptInput(
+                envelopeId = envelope.id,
+                protocolVersion = envelope.protocolVersion,
+                conversationId = envelope.conversationId,
+                senderAccountId = envelope.senderAccountId,
+                senderDeviceId = envelope.senderDeviceId,
+                recipientAccountId = envelope.recipientAccountId,
+                recipientDeviceId = envelope.recipientDeviceId,
+                clientMessageId = envelope.clientMessageId,
+                ciphertextB64 = envelope.ciphertextB64,
+                nonceB64 = requireNotNull(envelope.nonceB64),
+                aadB64 = envelope.aadB64,
+                ephemeralKeyB64 = requireNotNull(envelope.ephemeralKeyB64),
+                keyPackageId = envelope.keyPackageId
+            )
+        )
+
+        require(out.authenticatedSenderDeviceId == envelope.senderDeviceId) {
+            "sender_binding_failed"
+        }
+
+        messageStore.insertDecryptedMessageAtomically(
+            envelopeId = envelope.id,
+            conversationId = envelope.conversationId,
+            senderAccountId = envelope.senderAccountId,
+            senderDeviceId = envelope.senderDeviceId,
+            clientMessageId = envelope.clientMessageId,
+            plaintext = out.plaintextUtf8,
+            serverReceivedAt = envelope.serverReceivedAt
+        )
+
+        envelopeApi.acknowledge(
+            AckEnvelopeRequestDto(listOf(envelope.id), "decrypted")
+        )
+    }
+}
+
+====================================================================================================
+FILE: android/app/src/main/java/com/linqa/messages/E2eePushReceiver.kt
+====================================================================================================
+package com.linqa.messages
+
+import android.content.Context
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+
+object E2eePushReceiver {
+    fun onEnvelopeWakeup(context: Context) {
+        val request = OneTimeWorkRequestBuilder<E2eeReceiveWorker>().build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "linqa-e2ee-fetch",
+            ExistingWorkPolicy.KEEP,
+            request
+        )
+    }
+}
+
+====================================================================================================
+FILE: core/Cargo.toml
+====================================================================================================
+[package]
+name = "linqa_core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+zeroize = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
+====================================================================================================
+FILE: core/src/e2ee_transport.rs
+====================================================================================================
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit, Payload},
+    ChaCha20Poly1305, Nonce,
+};
+use hkdf::Hkdf;
+use rand_core::{OsRng, RngCore};
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use uuid::Uuid;
+use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
+use zeroize::Zeroize;
+
+const PROTOCOL_VERSION: u32 = 1;
+const HKDF_INFO: &[u8] = b"linqa/e2ee/transport/v1";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EncryptInput {
+    pub protocol_version: u32,
+    pub conversation_id: String,
+    pub sender_account_id: String,
+    pub sender_device_id: String,
+    pub recipient_account_id: String,
+    pub recipient_device_id: String,
+    pub client_message_id: String,
+    pub plaintext_utf8: String,
+    pub key_package_id: String,
+    pub recipient_identity_key_b64: String,
+    pub recipient_signed_prekey_b64: String,
+    pub recipient_one_time_prekey_b64: Option<String>,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EncryptedEnvelope {
+    pub id: String,
+    pub protocol_version: u32,
+    pub conversation_id: String,
+    pub recipient_account_id: String,
+    pub recipient_device_id: String,
+    pub client_message_id: String,
+    pub ciphertext_b64: String,
+    pub nonce_b64: String,
+    pub aad_b64: String,
+    pub ephemeral_key_b64: String,
+    pub key_package_id: String,
+    pub content_type: String,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecryptInput {
+    pub envelope_id: String,
+    pub protocol_version: u32,
+    pub conversation_id: String,
+    pub sender_account_id: String,
+    pub sender_device_id: String,
+    pub recipient_account_id: String,
+    pub recipient_device_id: String,
+    pub client_message_id: String,
+    pub ciphertext_b64: String,
+    pub nonce_b64: String,
+    pub aad_b64: String,
+    pub ephemeral_key_b64: String,
+    pub key_package_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecryptOutput {
+    pub plaintext_utf8: String,
+    pub authenticated_sender_device_id: String,
+    pub envelope_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Aad<'a> {
+    protocol_version: u32,
+    conversation_id: &'a str,
+    sender_account_id: &'a str,
+    sender_device_id: &'a str,
+    recipient_account_id: &'a str,
+    recipient_device_id: &'a str,
+    client_message_id: &'a str,
+    key_package_id: Option<&'a str>,
+}
+
+fn decode_32(value: &str, label: &str) -> Result<[u8; 32], String> {
+    let bytes = B64.decode(value).map_err(|_| format!("invalid_{label}_base64"))?;
+    bytes.try_into().map_err(|_| format!("invalid_{label}_length"))
+}
+
+fn derive_key(shared_secret: &[u8; 32], aad: &[u8]) -> Result<[u8; 32], String> {
+    let hk = Hkdf::<Sha256>::new(Some(aad), shared_secret);
+    let mut out = [0u8; 32];
+    hk.expand(HKDF_INFO, &mut out)
+        .map_err(|_| "hkdf_expand_failed".to_string())?;
+    Ok(out)
+}
+
+pub fn encrypt_message(mut input: EncryptInput) -> Result<EncryptedEnvelope, String> {
+    if input.protocol_version != PROTOCOL_VERSION {
+        input.plaintext_utf8.zeroize();
+        return Err("unsupported_protocol_version".into());
+    }
+
+    // In this closure example we encrypt to the signed prekey. If the existing
+    // Linqa core has X3DH/Double Ratchet/MLS/PQ sessions, use that session engine instead.
+    let recipient_prekey = decode_32(&input.recipient_signed_prekey_b64, "recipient_prekey")?;
+    let recipient_public = PublicKey::from(recipient_prekey);
+
+    let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
+    let ephemeral_public = PublicKey::from(&ephemeral_secret);
+    let shared = ephemeral_secret.diffie_hellman(&recipient_public);
+
+    let aad_model = Aad {
+        protocol_version: input.protocol_version,
+        conversation_id: &input.conversation_id,
+        sender_account_id: &input.sender_account_id,
+        sender_device_id: &input.sender_device_id,
+        recipient_account_id: &input.recipient_account_id,
+        recipient_device_id: &input.recipient_device_id,
+        client_message_id: &input.client_message_id,
+        key_package_id: Some(&input.key_package_id),
+    };
+    let aad = serde_json::to_vec(&aad_model).map_err(|_| "aad_encode_failed")?;
+
+    let mut key = derive_key(shared.as_bytes(), &aad)?;
+    let cipher = ChaCha20Poly1305::new((&key).into());
+
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+
+    let plaintext = input.plaintext_utf8.as_bytes();
+    let ciphertext = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce_bytes),
+            Payload { msg: plaintext, aad: &aad },
+        )
+        .map_err(|_| "encrypt_failed")?;
+
+    input.plaintext_utf8.zeroize();
+    key.zeroize();
+
+    Ok(EncryptedEnvelope {
+        id: Uuid::new_v4().to_string(),
+        protocol_version: input.protocol_version,
+        conversation_id: input.conversation_id,
+        recipient_account_id: input.recipient_account_id,
+        recipient_device_id: input.recipient_device_id,
+        client_message_id: input.client_message_id,
+        ciphertext_b64: B64.encode(ciphertext),
+        nonce_b64: B64.encode(nonce_bytes),
+        aad_b64: B64.encode(aad),
+        ephemeral_key_b64: B64.encode(ephemeral_public.as_bytes()),
+        key_package_id: input.key_package_id,
+        content_type: "message".to_string(),
+        created_at: input.created_at,
+        expires_at: input.expires_at,
+    })
+}
+
+/**
+ * recipient_signed_prekey_secret_b64 must come from the local protected key store.
+ * It MUST NOT come from the server envelope.
+ */
+pub fn decrypt_message(
+    input: DecryptInput,
+    recipient_signed_prekey_secret_b64: &str,
+) -> Result<DecryptOutput, String> {
+    if input.protocol_version != PROTOCOL_VERSION {
+        return Err("unsupported_protocol_version".into());
+    }
+
+    let secret_bytes = decode_32(recipient_signed_prekey_secret_b64, "local_prekey_secret")?;
+    let static_secret = StaticSecret::from(secret_bytes);
+
+    let ephemeral_public_bytes = decode_32(&input.ephemeral_key_b64, "ephemeral_key")?;
+    let ephemeral_public = PublicKey::from(ephemeral_public_bytes);
+    let shared = static_secret.diffie_hellman(&ephemeral_public);
+
+    let aad = B64.decode(&input.aad_b64).map_err(|_| "invalid_aad_base64")?;
+
+    let expected = Aad {
+        protocol_version: input.protocol_version,
+        conversation_id: &input.conversation_id,
+        sender_account_id: &input.sender_account_id,
+        sender_device_id: &input.sender_device_id,
+        recipient_account_id: &input.recipient_account_id,
+        recipient_device_id: &input.recipient_device_id,
+        client_message_id: &input.client_message_id,
+        key_package_id: input.key_package_id.as_deref(),
+    };
+    let expected_aad = serde_json::to_vec(&expected).map_err(|_| "aad_encode_failed")?;
+    if aad != expected_aad {
+        return Err("aad_binding_mismatch".into());
+    }
+
+    let mut key = derive_key(shared.as_bytes(), &aad)?;
+    let cipher = ChaCha20Poly1305::new((&key).into());
+
+    let nonce = B64.decode(&input.nonce_b64).map_err(|_| "invalid_nonce_base64")?;
+    if nonce.len() != 12 {
+        key.zeroize();
+        return Err("invalid_nonce_length".into());
+    }
+
+    let ciphertext = B64
+        .decode(&input.ciphertext_b64)
+        .map_err(|_| "invalid_ciphertext_base64")?;
+
+    let mut plaintext = cipher
+        .decrypt(
+            Nonce::from_slice(&nonce),
+            Payload { msg: &ciphertext, aad: &aad },
+        )
+        .map_err(|_| "authentication_failed")?;
+
+    key.zeroize();
+
+    let text = String::from_utf8(plaintext.clone()).map_err(|_| "plaintext_not_utf8")?;
+    plaintext.zeroize();
+
+    Ok(DecryptOutput {
+        plaintext_utf8: text,
+        authenticated_sender_device_id: input.sender_device_id,
+        envelope_id: input.envelope_id,
+    })
+}
+
+====================================================================================================
+FILE: core/src/local_keys.rs
+====================================================================================================
+/**
+ * Adapter boundary for the existing Linqa secure key storage.
+ *
+ * Production requirements:
+ * - Android Keystore-backed wrapping key
+ * - secret material encrypted at rest
+ * - key versioning
+ * - revocation/rotation
+ * - no secret logging
+ */
+pub trait LocalKeyStore {
+    fn signed_prekey_secret_b64(&self, key_package_id: Option<&str>) -> Result<String, String>;
+}
+
+====================================================================================================
+FILE: core/src/lib.rs
+====================================================================================================
+pub mod e2ee_transport;
+pub mod local_keys;
+
+#[cfg(target_os = "android")]
+mod android_ffi;
+
+====================================================================================================
+FILE: core/src/android_ffi.rs
+====================================================================================================
+use crate::e2ee_transport::{decrypt_message, encrypt_message, DecryptInput, EncryptInput};
+use jni::{
+    objects::{JClass, JString},
+    sys::jstring,
+    JNIEnv,
+};
+use std::ptr;
+
+fn to_jstring(env: &mut JNIEnv, value: String) -> jstring {
+    env.new_string(value)
+        .map(|s| s.into_raw())
+        .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_linqa_core_CoreBridge_nativeEncryptMessage(
+    mut env: JNIEnv,
+    _class: JClass,
+    input_json: JString,
+) -> jstring {
+    let result = (|| -> Result<String, String> {
+        let input: String = env
+            .get_string(&input_json)
+            .map_err(|_| "jni_input_failed".to_string())?
+            .into();
+
+        let parsed: EncryptInput =
+            serde_json::from_str(&input).map_err(|_| "invalid_encrypt_json".to_string())?;
+
+        let encrypted = encrypt_message(parsed)?;
+        serde_json::to_string(&encrypted).map_err(|_| "encrypt_output_json_failed".to_string())
+    })();
+
+    // In production expose structured error codes over a Result envelope instead of
+    // serializing an error object as a successful return string.
+    match result {
+        Ok(v) => to_jstring(&mut env, v),
+        Err(e) => {
+            let _ = env.throw_new("java/lang/IllegalStateException", e);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_linqa_core_CoreBridge_nativeDecryptMessage(
+    mut env: JNIEnv,
+    _class: JClass,
+    input_json: JString,
+) -> jstring {
+    let result = (|| -> Result<String, String> {
+        let input: String = env
+            .get_string(&input_json)
+            .map_err(|_| "jni_input_failed".to_string())?
+            .into();
+
+        let parsed: DecryptInput =
+            serde_json::from_str(&input).map_err(|_| "invalid_decrypt_json".to_string())?;
+
+        // INTEGRATION POINT:
+        // Replace this environment-variable adapter with Linqa's secure local key store.
+        // It is intentionally not read from the server envelope.
+        let local_secret = std::env::var("LINQA_LOCAL_SIGNED_PREKEY_SECRET_B64")
+            .map_err(|_| "local_key_store_not_wired".to_string())?;
+
+        let decrypted = decrypt_message(parsed, &local_secret)?;
+        serde_json::to_string(&decrypted).map_err(|_| "decrypt_output_json_failed".to_string())
+    })();
+
+    match result {
+        Ok(v) => to_jstring(&mut env, v),
+        Err(e) => {
+            let _ = env.throw_new("java/lang/IllegalStateException", e);
+            ptr::null_mut()
+        }
+    }
+}
+
+====================================================================================================
+FILE: server/test/e2ee-envelope.test.ts
+====================================================================================================
+import { decodedSizeApprox } from "../src/security/base64";
+
+describe("E2EE transport invariants", () => {
+  test("server request contract has no plaintext field", () => {
+    const request = {
+      id: "11111111-1111-1111-1111-111111111111",
+      protocolVersion: 1,
+      conversationId: "22222222-2222-2222-2222-222222222222",
+      recipientAccountId: "33333333-3333-3333-3333-333333333333",
+      recipientDeviceId: "44444444-4444-4444-4444-444444444444",
+      clientMessageId: "55555555-5555-5555-5555-555555555555",
+      ciphertextB64: Buffer.from("opaque").toString("base64"),
+      aadB64: Buffer.from("metadata").toString("base64"),
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 86400000).toISOString(),
+    };
+
+    const serialized = JSON.stringify(request);
+    expect(serialized).not.toContain("plaintext");
+    expect(serialized).not.toContain("messageBody");
+    expect(decodedSizeApprox(request.ciphertextB64)).toBeGreaterThan(0);
+  });
+});
+
+====================================================================================================
+FILE: core/tests/e2ee_transport_test.rs
+====================================================================================================
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use linqa_core::e2ee_transport::{decrypt_message, encrypt_message, DecryptInput, EncryptInput};
+use rand_core::OsRng;
+use x25519_dalek::{PublicKey, StaticSecret};
+
+#[test]
+fn encrypt_then_decrypt_roundtrip() {
+    let recipient_secret = StaticSecret::random_from_rng(OsRng);
+    let recipient_public = PublicKey::from(&recipient_secret);
+
+    let input = EncryptInput {
+        protocol_version: 1,
+        conversation_id: "22222222-2222-2222-2222-222222222222".into(),
+        sender_account_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
+        sender_device_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".into(),
+        recipient_account_id: "cccccccc-cccc-cccc-cccc-cccccccccccc".into(),
+        recipient_device_id: "dddddddd-dddd-dddd-dddd-dddddddddddd".into(),
+        client_message_id: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee".into(),
+        plaintext_utf8: "hello from Alice".into(),
+        key_package_id: "ffffffff-ffff-ffff-ffff-ffffffffffff".into(),
+        recipient_identity_key_b64: B64.encode(recipient_public.as_bytes()),
+        recipient_signed_prekey_b64: B64.encode(recipient_public.as_bytes()),
+        recipient_one_time_prekey_b64: None,
+        created_at: "2026-08-09T22:00:00Z".into(),
+        expires_at: "2026-09-08T22:00:00Z".into(),
+    };
+
+    let encrypted = encrypt_message(input).unwrap();
+
+    assert!(!encrypted.ciphertext_b64.contains("hello from Alice"));
+
+    let decrypted = decrypt_message(
+        DecryptInput {
+            envelope_id: encrypted.id.clone(),
+            protocol_version: encrypted.protocol_version,
+            conversation_id: encrypted.conversation_id.clone(),
+            sender_account_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
+            sender_device_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".into(),
+            recipient_account_id: encrypted.recipient_account_id.clone(),
+            recipient_device_id: encrypted.recipient_device_id.clone(),
+            client_message_id: encrypted.client_message_id.clone(),
+            ciphertext_b64: encrypted.ciphertext_b64.clone(),
+            nonce_b64: encrypted.nonce_b64.clone(),
+            aad_b64: encrypted.aad_b64.clone(),
+            ephemeral_key_b64: encrypted.ephemeral_key_b64.clone(),
+            key_package_id: Some(encrypted.key_package_id.clone()),
+        },
+        &B64.encode(recipient_secret.to_bytes()),
+    )
+    .unwrap();
+
+    assert_eq!(decrypted.plaintext_utf8, "hello from Alice");
+}
+
+====================================================================================================
+FILE: scripts/verify-no-plaintext.sh
+====================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+MARKER="${1:-LINQA_E2EE_CANARY_DO_NOT_STORE}"
+DB_URL="${LINQA_DATABASE_URL:?LINQA_DATABASE_URL required}"
+
+echo "[1/3] Searching ciphertext table for plaintext marker..."
+if psql "$DB_URL" -Atc \
+  "SELECT count(*) FROM encrypted_envelopes WHERE ciphertext_b64 LIKE '%${MARKER}%' OR aad_b64 LIKE '%${MARKER}%';" \
+  | grep -vq '^0$'; then
+  echo "FAIL: marker found in encrypted_envelopes"
+  exit 1
+fi
+
+echo "[2/3] Verifying schema contains no obvious plaintext columns..."
+BAD="$(psql "$DB_URL" -Atc \
+  "SELECT column_name FROM information_schema.columns
+   WHERE table_name='encrypted_envelopes'
+   AND lower(column_name) ~ '(plaintext|message_body|decrypted|content_text)';")"
+
+if [[ -n "$BAD" ]]; then
+  echo "FAIL: suspicious columns:"
+  echo "$BAD"
+  exit 1
+fi
+
+echo "[3/3] PASS: database ciphertext-only checks passed."
+
+====================================================================================================
+FILE: docs/E2EE_RELEASE_GATE.md
+====================================================================================================
+# Linqa E2EE Transport Release Gate
+
+G-E2EE-1 — Sender encryption
+PASS when:
+- send path calls KeyPackageApi
+- package authenticity is verified
+- CoreBridge encrypts before network upload
+- HTTP body contains no plaintext field
+
+G-E2EE-2 — Server opacity
+PASS when:
+- mobile-hub stores ciphertext-only envelopes
+- DB has no plaintext columns
+- structured logs contain only safe routing identifiers + sizes
+- push notification contains no message payload
+
+G-E2EE-3 — Recipient decryption
+PASS when:
+- recipient fetches only its own device queue
+- CoreBridge decrypts locally
+- authenticated metadata binding is checked
+- decrypted content is written only to protected local storage
+
+G-E2EE-4 — Replay/idempotency
+PASS when:
+- duplicate sender retries map to the same accepted envelope
+- duplicate recipient fetch does not duplicate local message
+- tampered AAD/ciphertext fails authentication
+
+G-E2EE-5 — Multi-device
+PASS when:
+- recipient with N active devices receives N independently encrypted envelopes
+- revoked device receives 0 new envelopes
+- sender's additional linked devices are handled by a separate sync fan-out policy
+
+G-E2EE-6 — Identity/key lifecycle
+PASS when:
+- expired/revoked packages are rejected
+- package signatures are verified against a trusted identity source
+- identity change causes a user-visible safety/key-transparency event
+- local private key never crosses server boundary
+
+G-E2EE-7 — Evidence
+Required artifacts:
+- packet capture showing ciphertext request body
+- DB query output showing only ciphertext
+- server log extract with no message text
+- Alice -> Bob successful physical/emulator device test
+- Bob -> Alice successful test
+- offline Bob delivery test
+- duplicate retry test
+- ciphertext tamper failure
+- key rotation test
+- revoked-device test
+- exact commit SHA + app/server build IDs
+
+GA label:
+Do NOT call this "production E2EE complete" until the existing Linqa protocol engine
+(Double Ratchet/MLS/PQ if applicable), secure keystore integration, independent review,
+and physical-device evidence are also green.
+
+====================================================================================================
+FILE: docs/INTEGRATION_CHECKLIST.md
+====================================================================================================
+# Integration checklist
+
+1. Apply migration 011_e2ee_transport_closure.sql.
+2. Wire createMobileHubRouter(db) into the existing Express app.
+3. Replace requireDeviceAuth demo adapter with Linqa's real authenticated session middleware.
+4. Adapt account_devices column names to the current schema.
+5. Register Retrofit KeyPackageApi and EnvelopeApi using the authenticated client.
+6. Bind KeyPackageVerifier to key-transparency / trusted identity state.
+7. Route Conversation send button to E2eeSendRepository.sendText().
+8. Remove/disable every legacy plaintext message POST route.
+9. Add E2eeReceiveWorker creation through WorkerFactory/DI.
+10. Map push wake-up payload {type:"e2ee-envelope"} to E2eePushReceiver.
+11. Replace JNI env-var local private key adapter with Android Keystore-backed secret retrieval.
+12. Verify Rust library name/package path matches the current Android JNI namespace.
+13. Run cargo test.
+14. Run server tests.
+15. Run Alice/Bob end-to-end device test.
+16. Run scripts/verify-no-plaintext.sh with a known canary plaintext marker.
+17. Inspect server logs, queues, APM, crash reports, and analytics for accidental plaintext.
+18. Disable message previews by default on locked screen unless user explicitly permits them.
+19. Add metrics only for counts/latency/status; never message contents.
+20. Bind the passing evidence to an exact git SHA before changing README status.

@@ -1,0 +1,296 @@
+﻿[
+    {
+        "gate":  "G0-G4",
+        "file":  ".github/workflows/g0-g4-green-gates.yml",
+        "bytes":  9055,
+        "sha256":  "69e2961901da5ca36c23322670d9b5566754fb34dcade837e31eae3b194ba991"
+    },
+    {
+        "gate":  "G0-G4",
+        "file":  "GREEN_LABEL_RULES.md",
+        "bytes":  1397,
+        "sha256":  "44e14bdc9db771d32d6e7a0ee22df1a540d82be3e8029c91e1500e7742a30cfb"
+    },
+    {
+        "gate":  "G0-G4",
+        "file":  "INTEGRATION_CHECKLIST.md",
+        "bytes":  1897,
+        "sha256":  "ce355f6a74155a462856cd1ae547ebe940508d8d1662bee4a1138c7a3344007a"
+    },
+    {
+        "gate":  "G0-G4",
+        "file":  "scripts/generate-gate-evidence.ts",
+        "bytes":  765,
+        "sha256":  "69ba70b432dab65a6dd5e96e7f1fe23f3f6134400efce68b7ae1a483c142ab84"
+    },
+    {
+        "gate":  "G0-G4",
+        "file":  "scripts/generate-ci-gate-evidence.ts",
+        "bytes":  1040,
+        "sha256":  "703d3697cf653fdc6b0e30a0d3d89e9686383a3e2401ce8aa22cbe90a74177a1"
+    },
+    {
+        "gate":  "G0-G4",
+        "file":  "scripts/verify-signed-gate-evidence.ts",
+        "bytes":  1059,
+        "sha256":  "d743b47fd90b6483567518eb28c778dc630a3bdf255d1a2e1647a7ea0a059999"
+    },
+    {
+        "gate":  "G0-G4",
+        "file":  "scripts/assert-green-gates.ts",
+        "bytes":  338,
+        "sha256":  "09fd85d774b8dc82b271a8ad0af5433bcc5bd2ce99f241f490975c997195eb43"
+    },
+    {
+        "gate":  "G0-G4",
+        "file":  "scripts/refresh-green-gate-manifest.ts",
+        "bytes":  3080,
+        "sha256":  "69690929a3c4aa3f2c0639bf85eeb6668f8a9f895fbfbcbfa7da8ad79fe6f8dd"
+    },
+    {
+        "gate":  "G0",
+        "file":  "server/src/runtime/artifact-probe.ts",
+        "bytes":  1223,
+        "sha256":  "4edfc500235957ec443db9c3270af7b598007246839b31fa13feaecd8eb1a164"
+    },
+    {
+        "gate":  "G0",
+        "file":  "server/src/runtime/bootstrap-gate.ts",
+        "bytes":  467,
+        "sha256":  "e0b7bd125023c893472131ec50418a4156446d9df372e0e36f6608dfe8516027"
+    },
+    {
+        "gate":  "G0",
+        "file":  "server/src/runtime/derived-probe.ts",
+        "bytes":  934,
+        "sha256":  "033df6c8636cdfe1dfcff4e19906f871d6c498e09a707e02f702bf28c9a82780"
+    },
+    {
+        "gate":  "G0",
+        "file":  "server/src/runtime/http-probe.ts",
+        "bytes":  1068,
+        "sha256":  "870f26b1c56ca0044a78eef6b006af77c4c597de63259746ca43e9aa4bd96cfa"
+    },
+    {
+        "gate":  "G0",
+        "file":  "server/src/runtime/redis-probe.ts",
+        "bytes":  1390,
+        "sha256":  "9eb355cbc950c8e9983b4a9d9a5553e0fcbaeea8125526f6cc060d246c84f59a"
+    },
+    {
+        "gate":  "G0",
+        "file":  "server/src/runtime/registry-factory.ts",
+        "bytes":  4671,
+        "sha256":  "df1474e681d48ac567a1a91d3f05457b5be10c6ce9aefad371fbeb453399dd31"
+    },
+    {
+        "gate":  "G0",
+        "file":  "server/src/tests/runtime-capabilities.test.ts",
+        "bytes":  2123,
+        "sha256":  "5b37f57f5156339bedadb052a0c66dd70ebf7ac66c8522315360a0c35820b599"
+    },
+    {
+        "gate":  "G0",
+        "file":  "server/src/security/step-up.ts",
+        "bytes":  3748,
+        "sha256":  "e457708cf07125e3d617e6c21974e41de46eebd8c2083e66b0a5c7704b4e03fd"
+    },
+    {
+        "gate":  "G1",
+        "file":  "server/src/routes/auth.ts",
+        "bytes":  7616,
+        "sha256":  "8d31744b3c212a08b85a7a377d07a87528253dc69d1d00441ad2feb1c3d1fdd3"
+    },
+    {
+        "gate":  "G1",
+        "file":  "server/src/routes/milestone-3.routes.ts",
+        "bytes":  10859,
+        "sha256":  "b2d2170f9ab8d74d62d647a168fd76a98b682fefec8a7f207a172e9e98810a01"
+    },
+    {
+        "gate":  "G1",
+        "file":  "server/src/routes/key-packages.ts",
+        "bytes":  4366,
+        "sha256":  "85e522eef77a425cf69703eb3aad7663edc8094b213505a94b98ab39a3621afb"
+    },
+    {
+        "gate":  "G1",
+        "file":  "server/src/services/transparency-proof.service.ts",
+        "bytes":  2643,
+        "sha256":  "65d00d3d9bc0b8c12aeec483f0925cea3f37e92a7b0bf8d1dcbc3d85c9d988be"
+    },
+    {
+        "gate":  "G1",
+        "file":  "clients/web/src/services/AuthClient.ts",
+        "bytes":  2708,
+        "sha256":  "e0dec5820a12ca33be63f3317f349d86d55e21dfcdb52993ad35f3a8078f3a07"
+    },
+    {
+        "gate":  "G1",
+        "file":  "clients/web/src/components/UnifiedAuthForm.tsx",
+        "bytes":  2509,
+        "sha256":  "101717dcf145d4b5e5309a62c52372450c9116c13e29bfc2ec31665125359eab"
+    },
+    {
+        "gate":  "G2",
+        "file":  "clients/web/src/messaging/ProductionMessagingCoordinator.ts",
+        "bytes":  5559,
+        "sha256":  "88661e5344ba16beb5d38a74e66def6f300ec3a7da76efb6d16ac7215add0ca8"
+    },
+    {
+        "gate":  "G2",
+        "file":  "clients/web/src/services/RelayClient.ts",
+        "bytes":  3886,
+        "sha256":  "2d22a7c2190b7f701ca72876d9fb8ff5fcbf5031de551849e66e43f235f15888"
+    },
+    {
+        "gate":  "G2",
+        "file":  "clients/web/src/messaging/SecureMessagingRuntime.ts",
+        "bytes":  2763,
+        "sha256":  "ceac3750d8046a7f82d1c92ec01c5793b123527bcb2a9fd2387ad76995fc1a56"
+    },
+    {
+        "gate":  "G2",
+        "file":  "clients/web/src/security/TransparencyVerifier.ts",
+        "bytes":  2759,
+        "sha256":  "83ea389d06d77174420014372ec6060d936ed9d87b6d095cf8a7a634f8228f60"
+    },
+    {
+        "gate":  "G2",
+        "file":  "clients/web/src/storage/EncryptedIndexedDbStore.ts",
+        "bytes":  6327,
+        "sha256":  "03c0fc504daddd6adab780a4405d0aa82b823dc18c795ff2e32fd0addc5d9bf7"
+    },
+    {
+        "gate":  "G2",
+        "file":  "clients/web/src/storage/EncryptedLocalStore.ts",
+        "bytes":  909,
+        "sha256":  "da473c30f6361002222d923fa16414a3a287a046b1aba231b501c1331df9272b"
+    },
+    {
+        "gate":  "G2",
+        "file":  "clients/web/src/components/ChatView.tsx",
+        "bytes":  9991,
+        "sha256":  "685d6ae2802e4fa732ce5e2a98c62fb7fed254bb14141bf91122ee8e9a4e2a4b"
+    },
+    {
+        "gate":  "G2",
+        "file":  "clients/web/src/messaging/ProductionMessagingCoordinator.test.ts",
+        "bytes":  3237,
+        "sha256":  "a19a9dff9dd39407a588f07fc1efda8eb4b0159ec3cea5ea4bb27a5bcd2ba7a0"
+    },
+    {
+        "gate":  "G2",
+        "file":  "clients/web/src/security/TransparencyVerifier.test.ts",
+        "bytes":  1772,
+        "sha256":  "32009d339b139f025901b5f5a6870a98d0bb2fe48f1896552ae274de90050afa"
+    },
+    {
+        "gate":  "G2",
+        "file":  "clients/web/src/storage/EncryptedIndexedDbStore.test.ts",
+        "bytes":  4373,
+        "sha256":  "6bbeba9b8c0f85c615eda506077086a28e9e8f7c0464e1ed5d83880263f5408a"
+    },
+    {
+        "gate":  "G3",
+        "file":  "core/src/uniffi_api.rs",
+        "bytes":  5723,
+        "sha256":  "f88485e8a0f431a07ab9511b1c1d2901a805145a73e3c27640cca0ba5d202982"
+    },
+    {
+        "gate":  "G3",
+        "file":  "core/generated/kotlin/uniffi/linqa_core/linqa_core.kt",
+        "bytes":  62575,
+        "sha256":  "d090905bf5c125198a878592e1ba3302284b5107de7acb99a817ea9cafa2a3f6"
+    },
+    {
+        "gate":  "G3",
+        "file":  "core/generated/swift/linqa_core.swift",
+        "bytes":  27002,
+        "sha256":  "1ad83add4a5eeefd9d6e452163ca9a44aa7fbb4ed8915d09118d8ecb4d4c0715"
+    },
+    {
+        "gate":  "G3",
+        "file":  "clients/android/src/security/AndroidKeyCustody.kt",
+        "bytes":  2316,
+        "sha256":  "2508d7d6235f31d687f01b5e196452d346d8735e78e96481443b34a41abf012f"
+    },
+    {
+        "gate":  "G3",
+        "file":  "clients/ios/Security/IOSKeyCustody.swift",
+        "bytes":  1801,
+        "sha256":  "59f43a354ba3877f304d1cd53b7c46d5b68f5b9a22b41b85bd657fb79183dcfa"
+    },
+    {
+        "gate":  "G3",
+        "file":  "clients/native/src/NativeSecureCore.ts",
+        "bytes":  739,
+        "sha256":  "8c8aeedee7878ef7f4b36c9eac4f01770ef6caeede359885c99c3fc44abe6a47"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/bootstrap/service-container.ts",
+        "bytes":  21273,
+        "sha256":  "f1eea9577cf548700180d52f500190ae696431df3dc1975eb7c2203c38de20fd"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/config.ts",
+        "bytes":  7789,
+        "sha256":  "018fbb67e5082fb4dbbffc2e2a72b1fd7d75ba61c97e2e7b7b82497092477471"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/db/migrate.ts",
+        "bytes":  460,
+        "sha256":  "da854ffe77024e277312d0039e912cad1e360cf99352f369b3e19b9f4f88240d"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/providers/provider-registry.ts",
+        "bytes":  2000,
+        "sha256":  "83d69546dd9c070bab66e6fe277bebd4af65c1a4a1d467897d8644849d741d15"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/gates/gate-evidence-writer.ts",
+        "bytes":  1586,
+        "sha256":  "e0587859a0e68a0d9155b3fec4a86f3648237f4e5d44ecf762caa71fc30a7007"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/gates/gate-release-controller.ts",
+        "bytes":  1388,
+        "sha256":  "1e71a905529368888073227aaea9c14335e3f0a350820230ce93ee28aa86b5e9"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/gates/signed-gate-evidence.ts",
+        "bytes":  2113,
+        "sha256":  "3ec4a0e62094cf5055f64100d44e6eef7ece7f21cdf9633f63599ecf044c92b9"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/gates/types.ts",
+        "bytes":  508,
+        "sha256":  "16985b4f5a5a6a93b67e310dbe37e18d2b047022273a944fe5f7c999983728d5"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/tests/gate-evidence.test.ts",
+        "bytes":  2680,
+        "sha256":  "a2ec07a82f4fcb34e83fe9b069d03ab747d85a2456b3853e7ba849f42186e368"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/tests/migration-runner.test.ts",
+        "bytes":  1681,
+        "sha256":  "731c090920dfad1703013466bbcd0c95173489692d9b22c3a8747020262d780f"
+    },
+    {
+        "gate":  "G4",
+        "file":  "server/src/tests/real-providers.test.ts",
+        "bytes":  10233,
+        "sha256":  "6aa0b7a893f492528fab819cefee6ae5d285b39db8cf0939a98733399badbb5f"
+    }
+]

@@ -1,0 +1,87 @@
+name: Linqa Milestone Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      milestone:
+        required: true
+        type: choice
+        options: ["1.0","2.0","3.0"]
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    # Not part of the supplied pack: `npm test` in server/ needs a real
+    # Postgres to run against (see server/src/tests/*.test.ts), so this job
+    # would fail on the first `npm test` without a database service. Added
+    # to match the same postgres:18-alpine service already used by
+    # .github/workflows/ci.yml and execution-launch.yml.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: linqa_test
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://linqa:test_password@127.0.0.1:5432/linqa_test
+      JWT_ISSUER: https://test.linqa.local
+      JWT_AUDIENCE: linqa-api
+      JWT_HS256_SECRET: test-secret-that-is-at-least-32-bytes-long
+      CONTACT_DISCOVERY_SECRET: test-secret-that-is-at-least-32-bytes-2
+      TOKEN_VAULT_KEY_BASE64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      TURN_SHARED_SECRET: test-turn-secret-that-is-at-least-32-bytes
+      TURN_URLS: turn:127.0.0.1:3478?transport=udp
+      CORS_ORIGINS: http://127.0.0.1:5173
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
+      - run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-features --locked
+        working-directory: core
+
+      - run: |
+          npm ci
+          npm run db:migrate
+          npm test
+          npm run build
+        working-directory: server
+
+      - run: |
+          npm ci
+          npm test -- --run
+          npm run build
+        working-directory: clients/web
+
+      - uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: linqa-${{ inputs.milestone }}-sbom.spdx.json
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            clients/web/dist/**
+            core/target/release/**

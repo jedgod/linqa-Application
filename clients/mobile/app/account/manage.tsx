@@ -1,0 +1,86 @@
+import { SafeAreaView, StyleSheet, Text, Pressable, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
+import { useAccounts } from "../../account/AccountContext";
+import { ScreenHeader } from "../../components/ScreenHeader";
+import { avatarColorForSlot, colors, radius } from "../../theme/tokens";
+
+export default function ManageAccountsScreen() {
+  const { accounts, active, activate } = useAccounts();
+  const canAdd = accounts.length < 3;
+
+  return (
+    <SafeAreaView style={s.screen}>
+      <View style={s.content}>
+        <ScreenHeader title="Manage Accounts" showBack />
+
+        {accounts.map((account) => {
+          const isActive = account.userId === active?.userId;
+          return (
+            <View key={account.userId} style={s.row}>
+              <Pressable style={s.rowMain} onPress={() => !isActive && activate(account.userId)}>
+                <View style={[s.avatar, { backgroundColor: avatarColorForSlot(account.slot) }]}>
+                  <Text style={s.avatarText}>{(account.label || account.displayName)[0]?.toUpperCase() ?? "?"}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.name}>{account.label || account.displayName}</Text>
+                  <Text style={s.meta}>
+                    {account.countryIso2 ?? ""}
+                    {" •••• "}
+                    {account.phoneSuffix ?? ""}
+                  </Text>
+                </View>
+              </Pressable>
+
+              {isActive ? (
+                <Text style={s.badge}>Active</Text>
+              ) : (
+                <Pressable
+                  style={s.remove}
+                  accessibilityLabel="Remove account"
+                  onPress={() =>
+                    router.push({
+                      pathname: "/account/remove",
+                      params: { userId: account.userId, displayName: account.label || account.displayName }
+                    })
+                  }
+                >
+                  <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                </Pressable>
+              )}
+            </View>
+          );
+        })}
+
+        <Pressable
+          style={[s.add, !canAdd && s.disabled]}
+          onPress={() => router.push(canAdd ? "/account/add-phone" : "/account/max-limit")}
+        >
+          <Ionicons name="add" size={21} color={colors.accent} />
+          <Text style={s.addText}>Add Account</Text>
+        </Pressable>
+        <Text style={s.limit}>You can add up to 3 accounts</Text>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const s = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.bg },
+  content: { padding: 20, paddingTop: 48 },
+  row: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 11, borderBottomWidth: 1, borderBottomColor: colors.border },
+  rowMain: { flex: 1, flexDirection: "row", alignItems: "center", gap: 11 },
+  avatar: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  avatarText: { color: "white", fontWeight: "900" },
+  name: { color: colors.text, fontWeight: "800" },
+  meta: { color: colors.textMuted, fontSize: 10 },
+  badge: {
+    color: colors.accent, backgroundColor: colors.surfaceAlt, paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: radius.pill, fontSize: 9, fontWeight: "800"
+  },
+  remove: { padding: 8 },
+  add: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 9, marginTop: 8 },
+  addText: { color: colors.accent, fontWeight: "800" },
+  disabled: { opacity: 0.4 },
+  limit: { color: colors.textMuted, fontSize: 10, marginLeft: 30, marginTop: -8 }
+});

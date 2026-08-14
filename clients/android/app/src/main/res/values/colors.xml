@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="linqa_background">#0F0F12</color>
+    <color name="linqa_surface">#1A1A22</color>
+    <color name="linqa_accent">#6E7CF6</color>
+</resources>

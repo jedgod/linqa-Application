@@ -1,0 +1,199 @@
+name: Linqa G0-G4 Green Gates
+
+on:
+  pull_request:
+  push:
+    branches: [main, "release/*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GIT_SHA: ${{ github.sha }}
+  LINQA_CI_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  component-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_DB: linqa_test, POSTGRES_USER: linqa, POSTGRES_PASSWORD: test_password }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U linqa -d linqa_test" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+        working-directory: server
+      - run: npm ci
+        working-directory: clients/web
+      - run: npm run db:migrate
+        working-directory: server
+        env: &test-env
+          NODE_ENV: test
+          DATABASE_URL: postgresql://linqa:test_password@127.0.0.1:5432/linqa_test
+          JWT_ISSUER: https://test.linqa.local
+          JWT_AUDIENCE: linqa-api
+          JWT_HS256_SECRET: test-secret-that-is-at-least-32-bytes-long
+          CONTACT_DISCOVERY_SECRET: test-secret-that-is-at-least-32-bytes-2
+          TOKEN_VAULT_KEY_BASE64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          TURN_SHARED_SECRET: test-turn-secret-that-is-at-least-32-bytes
+      - run: npm test -- --run src/tests/runtime-capabilities.test.ts src/tests/auth-security.test.ts src/tests/enrollment.route.test.ts src/tests/key-package-proof.test.ts src/tests/relay.integration.test.ts src/tests/gate-evidence.test.ts
+        working-directory: server
+      - run: npm test -- --run src/core/RawWasmCoreBridge.test.ts src/security/TransparencyVerifier.test.ts src/storage/EncryptedIndexedDbStore.test.ts src/messaging/ProductionMessagingCoordinator.test.ts
+        working-directory: clients/web
+      - run: cargo test --all-features --locked
+        working-directory: core
+      - run: node server/node_modules/tsx/dist/cli.mjs scripts/generate-ci-gate-evidence.ts G0
+      - uses: actions/upload-artifact@v4
+        with: { name: gate-G0, path: release-evidence/ }
+
+  external-evidence:
+    needs: component-tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: { gate: [G1, G2] }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: server
+      - name: Download signed production-equivalent evidence
+        env:
+          EVIDENCE_URL: ${{ matrix.gate == 'G1' && secrets.LINQA_G1_EVIDENCE_URL || secrets.LINQA_G2_EVIDENCE_URL }}
+          EVIDENCE_TOKEN: ${{ secrets.LINQA_EVIDENCE_TOKEN }}
+        run: |
+          test -n "$EVIDENCE_URL"
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $EVIDENCE_TOKEN" "$EVIDENCE_URL" --output signed-evidence.json
+      - name: Verify signature, revision, environment, and required checks
+        env:
+          LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM: ${{ secrets.LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM }}
+        run: node server/node_modules/tsx/dist/cli.mjs scripts/verify-signed-gate-evidence.ts ${{ matrix.gate }} signed-evidence.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gate-${{ matrix.gate }}
+          path: release-evidence/
+
+  g3-native-build:
+    needs: component-tests
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: server
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-ios,aarch64-apple-ios-sim }
+      - run: cargo build --release --features uniffi-bindings --target aarch64-apple-ios
+        working-directory: core
+      - run: cargo build --release --features uniffi-bindings --target aarch64-apple-ios-sim
+        working-directory: core
+      - run: swiftc -typecheck clients/ios/Security/IOSKeyCustody.swift
+      - name: Download signed device-farm evidence
+        env:
+          EVIDENCE_URL: ${{ secrets.LINQA_G3_EVIDENCE_URL }}
+          EVIDENCE_TOKEN: ${{ secrets.LINQA_EVIDENCE_TOKEN }}
+        run: |
+          test -n "$EVIDENCE_URL"
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $EVIDENCE_TOKEN" "$EVIDENCE_URL" --output signed-evidence.json
+      - name: Verify native evidence signature and revision binding
+        env:
+          LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM: ${{ secrets.LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM }}
+        run: node server/node_modules/tsx/dist/cli.mjs scripts/verify-signed-gate-evidence.ts G3 signed-evidence.json
+      - uses: actions/upload-artifact@v4
+        with: { name: gate-G3, path: release-evidence/ }
+
+  g4-migration-matrix:
+    needs: component-tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: { baseline: [clean, "009", "014", "018", "023"] }
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_DB: linqa_test, POSTGRES_USER: linqa, POSTGRES_PASSWORD: test_password }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U linqa -d linqa_test" --health-interval 5s --health-timeout 3s --health-retries 20
+    env: *test-env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: server/package-lock.json }
+      - run: npm ci
+        working-directory: server
+      - name: Install declared baseline
+        if: matrix.baseline != 'clean'
+        shell: bash
+        run: |
+          mkdir -p server/.upgrade-baseline
+          for file in server/src/db/migrations/*.sql; do
+            name="$(basename "$file")"
+            prefix="${name%%_*}"
+            if [ "$((10#$prefix))" -le "$((10#${{ matrix.baseline }}))" ]; then cp "$file" server/.upgrade-baseline/; fi
+          done
+          LINQA_MIGRATIONS_DIR=.upgrade-baseline npm --prefix server run db:migrate
+      - name: Upgrade to current and verify idempotency
+        run: npm --prefix server run db:migrate && npm --prefix server run db:migrate
+      - run: npm --prefix server test -- --run src/tests/migration-runner.test.ts src/tests/real-providers.test.ts
+      - name: Record successful baseline
+        run: mkdir -p migration-markers && touch migration-markers/${{ matrix.baseline }}.passed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: migration-${{ matrix.baseline }}
+          path: migration-markers/
+
+  g4-evidence:
+    needs: g4-migration-matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: server
+      - uses: actions/download-artifact@v4
+        with: { pattern: migration-*, path: migration-markers, merge-multiple: true }
+      - name: Require every migration baseline marker
+        run: test -f migration-markers/clean.passed && test -f migration-markers/009.passed && test -f migration-markers/014.passed && test -f migration-markers/018.passed && test -f migration-markers/023.passed
+      - name: Download signed production provider and migration evidence
+        env:
+          EVIDENCE_URL: ${{ secrets.LINQA_G4_EVIDENCE_URL }}
+          EVIDENCE_TOKEN: ${{ secrets.LINQA_EVIDENCE_TOKEN }}
+        run: |
+          test -n "$EVIDENCE_URL"
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $EVIDENCE_TOKEN" "$EVIDENCE_URL" --output signed-evidence.json
+      - name: Verify G4 signature, revision, live health, and migration checks
+        env:
+          LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM: ${{ secrets.LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM }}
+        run: node server/node_modules/tsx/dist/cli.mjs scripts/verify-signed-gate-evidence.ts G4 signed-evidence.json
+      - uses: actions/upload-artifact@v4
+        with: { name: gate-G4, path: release-evidence/ }
+
+  release-promotion:
+    needs: [component-tests, external-evidence, g3-native-build, g4-evidence]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: server
+      - uses: actions/download-artifact@v4
+        with: { pattern: gate-*, path: release-evidence, merge-multiple: true }
+      - run: node server/node_modules/tsx/dist/cli.mjs scripts/assert-green-gates.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g0-g4-release-evidence-${{ github.sha }}
+          path: release-evidence/
+          retention-days: 90

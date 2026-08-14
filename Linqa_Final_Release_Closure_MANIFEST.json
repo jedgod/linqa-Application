@@ -1,0 +1,162 @@
+[
+  {
+    "file": ".github/workflows/final-release-closure.yml",
+    "bytes": 9254,
+    "sha256": "c86baf3fec59fa12c5c1c5924dafa65035bf4a1affad8148abbb573efb2ad598"
+  },
+  {
+    "file": "FINAL_GREEN_DEFINITION.md",
+    "bytes": 850,
+    "sha256": "d40de10699b73ad84fe77a8831e0b8566a4e05e6c66cbf46827f23d3c9780ad4"
+  },
+  {
+    "file": "FINAL_IMPLEMENTATION_ORDER.md",
+    "bytes": 759,
+    "sha256": "dbf4667dc2811c6d02291c9d2e1b10cf28874166d66d1a885b692fee679aa371"
+  },
+  {
+    "file": "README.md",
+    "bytes": 14092,
+    "sha256": "e9e934a36fdffd1db7a361943767a56a6ae35266e7fe0d8068b7960070cd5731"
+  },
+  {
+    "file": "config/evidence-freshness.json",
+    "bytes": 277,
+    "sha256": "2bff20f9137a7c1b932d1ae2a69bd5bc4ba799908bb5ff5dca9003d7ef169c0e"
+  },
+  {
+    "file": "config/release-closure-policy.json",
+    "bytes": 736,
+    "sha256": "91fb1f18f3631983e5e2bc1662119c3ca8921f9223ccbde88cd8cb688d8a6d35"
+  },
+  {
+    "file": "mobile/device-certification/device-certification.schema.json",
+    "bytes": 1486,
+    "sha256": "9b46c5aee229630fd69b7e1b3f812f70090920a1271308aac761f0a801015a21"
+  },
+  {
+    "file": "mobile/expo57/scripts/verify-expo57.mjs",
+    "bytes": 595,
+    "sha256": "b015d81ca938fe42aedcb07e4d3d436fbb069bdf2ad109e246b3dbd740c45e15"
+  },
+  {
+    "file": "ops/device-lab/run-android-certification.sh",
+    "bytes": 760,
+    "sha256": "b90fedd3c913d836a798d5596e23741904f2affae172c373e090bf5f87ac2f75"
+  },
+  {
+    "file": "ops/device-lab/run-ios-certification.sh",
+    "bytes": 742,
+    "sha256": "c1c4e939a2fe9be0df7eca550f7b910151274dad7fc3fc420fb6b5d9acce2f6e"
+  },
+  {
+    "file": "ops/device-lab/validate-device-result.mjs",
+    "bytes": 1056,
+    "sha256": "a78b023b3900b16c55aab522d2b1326b3e8b5529bcdf0c4ae8fd7a795e5bede4"
+  },
+  {
+    "file": "scripts/check-audit-json.mjs",
+    "bytes": 548,
+    "sha256": "c3b42026d25f97a05c4651b17b94496d5f7e4839624a8570d31435342435a32e"
+  },
+  {
+    "file": "scripts/merge-device-certifications.mjs",
+    "bytes": 596,
+    "sha256": "5bac111002d847da37197489a7c79cc1ed92746020d53982cd18ab119ec93512"
+  },
+  {
+    "file": "scripts/refresh-final-release-manifest.mjs",
+    "bytes": 2027,
+    "sha256": "b8f4b58a30a983dc491a470dba5cada8901a94e6a903ffe48f7fd68589db3676"
+  },
+  {
+    "file": "scripts/scan-release-tests.mjs",
+    "bytes": 1219,
+    "sha256": "e330b9a57e73824850900281610335cab781d04fc0e5c19febe1cd4c4992b386"
+  },
+  {
+    "file": "server/src/release-closure/dependency-security.ts",
+    "bytes": 882,
+    "sha256": "daf8eb3fb8880740d23ec4fd24f8b5befe3319697e63455882c14f19a8d9cf3b"
+  },
+  {
+    "file": "server/src/release-closure/device-certification.ts",
+    "bytes": 677,
+    "sha256": "71cfedab1c52f6bea450a382fd5e793bdc050a61a29ce83f9d56bbcd93e35cdf"
+  },
+  {
+    "file": "server/src/release-closure/evidence-policy.ts",
+    "bytes": 2115,
+    "sha256": "00ee387b1f125caa5d991ca78ae9ab770cf0966c5c48bf19c649fd7ad51108c6"
+  },
+  {
+    "file": "server/src/release-closure/evidence-reference-integrity.ts",
+    "bytes": 1118,
+    "sha256": "fa06eef3d8dc7082169b7e36101696eef22dec22bf7afbb6c2aada64ba97bdbc"
+  },
+  {
+    "file": "server/src/release-closure/expo57-migration.ts",
+    "bytes": 385,
+    "sha256": "fc271d14da495d6a9fc0c39e9919ef820b81d9a1133fb6922d770416b0b4d726"
+  },
+  {
+    "file": "server/src/release-closure/final-release-controller.ts",
+    "bytes": 2183,
+    "sha256": "8dd25a392e86e70dc7beb2cd5b665bf6e1d4087dcaa60b5c1ca776241628e548"
+  },
+  {
+    "file": "server/src/release-closure/promotion-policy.ts",
+    "bytes": 349,
+    "sha256": "b206642f3d61fb2ae846356a9177bfd60e0ecb187c2520541643787e204d1a9a"
+  },
+  {
+    "file": "server/src/release-closure/release-identity.ts",
+    "bytes": 697,
+    "sha256": "0b7a69afb0c949dbe49135cb3c0d9f08f4491366ee51defc561401c64265b726"
+  },
+  {
+    "file": "server/src/release-closure/skipped-mock-detector.ts",
+    "bytes": 464,
+    "sha256": "52858b27396b6ef853ea9966a649bf9aadd6110ab5b51d020d31bfb4d1b4a0dd"
+  },
+  {
+    "file": "server/src/release-closure/types.ts",
+    "bytes": 2136,
+    "sha256": "9bb3029afa471ab2be14f36f1213d0ff08094170006cd9b3a441958a07842b0c"
+  },
+  {
+    "file": "server/src/release-closure/verify-final-cli.ts",
+    "bytes": 1644,
+    "sha256": "7551391b81da47a87e255257c80fab57ec4572b46182ffea0a83aa38595139d3"
+  },
+  {
+    "file": "server/src/tests/final-release-closure.test.ts",
+    "bytes": 6347,
+    "sha256": "6c387a576e09edade6aee1616b3fe7f5aa2a51252f27102a37957ad5539e093a"
+  },
+  {
+    "file": "server/package.json",
+    "bytes": 1198,
+    "sha256": "68256501dec4cbf1c0b46095c027c1a2291bc2f6de32b40e8cdb44fb811d7eba"
+  },
+  {
+    "file": "clients/mobile/package.json",
+    "bytes": 1217,
+    "sha256": "075bdafd98d52a657b9dc3ff4e89fd79bef1f7f31045434de651bdd010ee0040"
+  },
+  {
+    "file": "clients/mobile/package-lock.json",
+    "bytes": 297417,
+    "sha256": "40d56bf33c39facc5b36455588fc43797ef8c2d019cf166e610da2959dd5d5b2"
+  },
+  {
+    "file": "clients/mobile/crypto/random-polyfill.ts",
+    "bytes": 929,
+    "sha256": "e9fbfd4d137a56776750a91aa9e1231dcb56c8143244ae65a7dd31fd43fa20ec"
+  },
+  {
+    "file": "clients/android/app/build.gradle.kts",
+    "bytes": 3438,
+    "sha256": "8491ab50cbcc85227547af35db5acfd1ae3961390e1dd9653fe8533585bfcd10"
+  }
+]

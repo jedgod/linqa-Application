@@ -1,0 +1,10 @@
+{
+  "status": "GREEN",
+  "required": [
+    "CPK1",
+    "CPK2",
+    "CPK3"
+  ],
+  "failed": [],
+  "evaluatedAt": "2026-08-10T04:19:03.231971+00:00"
+}

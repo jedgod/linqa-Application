@@ -1,0 +1,82 @@
+{
+  "CL1": {
+    "detail": "real CountryLinqa backend present",
+    "recordedAt": "2026-08-11T01:11:33.336334+00:00",
+    "status": "PASS"
+  },
+  "CL2": {
+    "detail": "Android and Expo CountryLinqa clients share the real mode enum and world-surface terms",
+    "recordedAt": "2026-08-11T01:11:33.932920+00:00",
+    "status": "PASS"
+  },
+  "CL3": {
+    "detail": "countrylinqa readiness.json claims are all backed by real files",
+    "recordedAt": "2026-08-11T01:11:34.499383+00:00",
+    "status": "PASS"
+  },
+  "CPK1": {
+    "detail": "no broad Kotlin raw private-key API detected",
+    "recordedAt": "2026-08-10T04:19:00.975610+00:00",
+    "status": "PASS"
+  },
+  "CPK2": {
+    "detail": "release manifest has no certification control",
+    "recordedAt": "2026-08-10T04:19:01.940163+00:00",
+    "status": "PASS"
+  },
+  "CPK3": {
+    "detail": "no obvious native private-key logging found",
+    "recordedAt": "2026-08-10T04:19:02.759884+00:00",
+    "status": "PASS"
+  },
+  "LS0": {
+    "detail": "existing Fastify LinqaSend implementation remains authoritative, no duplicate backend",
+    "recordedAt": "2026-08-11T01:11:43.079273+00:00",
+    "status": "PASS"
+  },
+  "LS1": {
+    "detail": "linqasend provider-readiness.json matches actual runtime/config state",
+    "recordedAt": "2026-08-11T01:11:43.652974+00:00",
+    "status": "PASS"
+  },
+  "ND1": {
+    "detail": "no parallel backend/native-binding/web-framework/service-directory duplication detected",
+    "recordedAt": "2026-08-11T01:11:32.711620+00:00",
+    "status": "PASS"
+  },
+  "UJB1": {
+    "detail": "no parallel raw-JNI binding; UniFFI/JNA is the sole native binding",
+    "recordedAt": "2026-08-10T14:01:28.795463+00:00",
+    "status": "PASS"
+  },
+  "UJB2": {
+    "detail": "binding surface matches allowlist exactly: ['decryptMessage', 'encryptMessage', 'exportKeyMaterial', 'generateKeyPackage', 'protectionLevel', 'verifyKeyPackage', 'verifyTransparencyProof', 'version']",
+    "recordedAt": "2026-08-10T14:01:29.256353+00:00",
+    "status": "PASS"
+  },
+  "UJB3": {
+    "detail": "DeviceIdentity.kt/NativeCore.kt expose no non-private raw-key accessor",
+    "recordedAt": "2026-08-10T14:01:29.791628+00:00",
+    "status": "PASS"
+  },
+  "UJB4": {
+    "detail": "DeviceSecrets keeps all fields non-pub; only DeviceKeyMaterial is the deliberate export DTO",
+    "recordedAt": "2026-08-10T14:01:30.214096+00:00",
+    "status": "PASS"
+  },
+  "UJB5": {
+    "detail": "uniffi_private_key_boundary + secret_canary_boundary Rust tests pass",
+    "recordedAt": "2026-08-10T14:01:51.421020+00:00",
+    "status": "PASS"
+  },
+  "V1": {
+    "detail": "real vault backend/client present",
+    "recordedAt": "2026-08-11T01:11:44.212218+00:00",
+    "status": "PASS"
+  },
+  "V2": {
+    "detail": "vault integration-readiness.json matches safe-default.adapters.ts",
+    "recordedAt": "2026-08-11T01:11:44.680020+00:00",
+    "status": "PASS"
+  }
+}

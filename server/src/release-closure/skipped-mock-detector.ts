@@ -1,0 +1,2 @@
+const FORBIDDEN=[/\b(it|test|describe)\.skip\b/,/\b(it|test)\.todo\b/,/\bskipIf\s*\(/,/\bLINQA_.*_REAL\b/,/\bmockProviderUsed\s*:\s*true\b/,/\bFake[A-Z][A-Za-z0-9_]*(Provider|Client|Repository|Service)\b/];
+export function detectForbiddenReleasePatterns(file:string,content:string){return content.split(/\r?\n/).flatMap((text,index)=>FORBIDDEN.filter((pattern)=>pattern.test(text)).map((pattern)=>({file,line:index+1,pattern:String(pattern),text:text.trim()})));}

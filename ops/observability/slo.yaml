@@ -1,0 +1,21 @@
+service: linqa-api
+claim_status: proposed-not-deployed
+slos:
+  - name: API availability
+    target: 99.95
+    window: 30d
+    indicator:
+      success: http_requests_total{status=~"2..|3.."}
+      total: http_requests_total
+  - name: Relay acceptance latency
+    target: 99.0
+    window: 30d
+    objective:
+      percentile: 99
+      threshold_ms: 500
+  - name: Message delivery success
+    target: 99.9
+    window: 30d
+    indicator:
+      success: relay_acknowledgements_total
+      total: relay_envelopes_accepted_total

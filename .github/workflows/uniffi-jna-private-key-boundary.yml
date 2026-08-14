@@ -1,0 +1,49 @@
+name: UniFFI/JNA Private-Key Boundary
+
+on:
+  push:
+    paths:
+      - "core/src/**"
+      - "core/tests/uniffi_private_key_boundary.rs"
+      - "core/tests/secret_canary_boundary.rs"
+      - "clients/android/app/src/main/java/uniffi/**"
+      - "clients/android/app/src/main/java/com/linqa/app/crypto/**"
+      - "certification/1*_*.py"
+      - "certification/1*_*.sh"
+      - "certification/2*_uniffi_*"
+      - "certification/uniffi-jna-binding-allowlist.json"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  static-and-rust-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Existing private-key-boundary gates (CPK1-3)
+        run: |
+          bash certification/13_private_key_boundary_scan.sh
+          bash certification/14_release_surface_scan.sh
+          bash certification/15_native_secret_log_scan.sh
+          python3 certification/19_private_key_verdict.py
+
+      - name: UniFFI/JNA boundary gates (UJB1-5)
+        run: bash certification/run_uniffi_jna_suite.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uniffi-jna-boundary-evidence
+          path: certification/evidence
+
+  android-instrumentation-note:
+    runs-on: ubuntu-latest
+    needs: static-and-rust-gates
+    steps:
+      - name: Instrumentation test reminder
+        run: |
+          echo "IdentityImportBoundaryInstrumentationTest requires a real device/emulator (loads liblinqa_core.so via JNA)."
+          echo "Run locally or on a device farm: ./gradlew connectedDebugAndroidTest --tests com.linqa.app.crypto.IdentityImportBoundaryInstrumentationTest"
+          echo "NativeBindingSurfaceTest (pure JVM reflection, no device needed) runs via: ./gradlew testDebugUnitTest --tests com.linqa.app.crypto.NativeBindingSurfaceTest"

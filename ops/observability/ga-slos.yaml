@@ -1,0 +1,35 @@
+slos:
+  - key: api_availability
+    service: api
+    target: 0.9995
+    window_days: 30
+
+  - key: auth_success
+    service: auth
+    target: 0.999
+    window_days: 30
+
+  - key: relay_delivery
+    service: relay
+    target: 0.999
+    window_days: 30
+
+  - key: call_setup
+    service: calls
+    target: 0.995
+    window_days: 30
+
+  - key: vault_download
+    service: vault
+    target: 0.999
+    window_days: 30
+
+  - key: billing_reconciliation
+    service: billing
+    target: 0.9999
+    window_days: 30
+
+  - key: emergency_notification
+    service: emergency
+    target: 0.9999
+    window_days: 30

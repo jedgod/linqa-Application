@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: linqa
+      POSTGRES_USER: linqa
+      POSTGRES_PASSWORD: linqa_dev_password
+    ports:
+      - "${LINQA_DATABASE_PORT:-5432}:5432"
+    volumes:
+      # Postgres 18's image expects a single mount at /var/lib/postgresql (not
+      # .../data) so it can lay out version-specific subdirectories itself —
+      # mounting straight at .../data (the pre-18 convention) makes the
+      # container refuse to start ("Error: in 18+, these Docker images are
+      # configured to store database data in a format which is compatible
+      # with pg_ctlcluster...").
+      - linqa_postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U linqa -d linqa"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${LINQA_REDIS_PORT:-6379}:6379"
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: linqa
+      MINIO_ROOT_PASSWORD: linqa_minio_password
+    ports:
+      - "${LINQA_MINIO_PORT:-9000}:9000"
+      - "${LINQA_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - linqa_minio:/data
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    ports:
+      - "${LINQA_TURN_PORT:-3478}:3478/udp"
+      - "${LINQA_TURN_PORT:-3478}:3478/tcp"
+      - "49160-49200:49160-49200/udp"
+    command:
+      - -n
+      - --log-file=stdout
+      - --fingerprint
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SHARED_SECRET:-replace-with-at-least-32-random-bytes}
+      - --realm=linqa.local
+      - --min-port=49160
+      - --max-port=49200
+
+volumes:
+  linqa_postgres:
+  linqa_minio:

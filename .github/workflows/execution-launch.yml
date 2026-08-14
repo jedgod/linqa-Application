@@ -1,0 +1,66 @@
+name: Linqa Execution and Launch
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: linqa_test
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://linqa:test_password@127.0.0.1:5432/linqa_test
+      JWT_ISSUER: https://test.linqa.local
+      JWT_AUDIENCE: linqa-api
+      JWT_HS256_SECRET: test-secret-that-is-at-least-32-bytes-long
+      CONTACT_DISCOVERY_SECRET: test-contact-discovery-secret-value
+      TOKEN_VAULT_KEY_BASE64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      CORS_ORIGINS: http://127.0.0.1:5173
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+        working-directory: server
+
+      - run: npm run db:migrate
+        working-directory: server
+
+      - run: npm test
+        working-directory: server
+
+      - run: npm run build
+        working-directory: server
+
+      - run: npm ci
+        working-directory: clients/web
+
+      - run: npm test -- --run
+        working-directory: clients/web
+
+      - run: npm run build
+        working-directory: clients/web

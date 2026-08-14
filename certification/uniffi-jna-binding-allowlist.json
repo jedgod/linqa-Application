@@ -1,0 +1,18 @@
+{
+  "_comment": "UJB-02: the exact, complete public method surface of uniffi.linqa_core.NativeSecureCoreInterface, generated from core/src/uniffi_api.rs. Any method appearing in the generated Kotlin bindings that is NOT in this list fails the gate — either the allowlist is stale (update it deliberately, together with the private-key-boundary Rust tests in core/tests/) or a new export leaks something it shouldn't.",
+  "interface": "uniffi.linqa_core.NativeSecureCoreInterface",
+  "allowedMethods": [
+    "decryptMessage",
+    "encryptMessage",
+    "exportKeyMaterial",
+    "generateKeyPackage",
+    "protectionLevel",
+    "verifyKeyPackage",
+    "verifyTransparencyProof",
+    "version"
+  ],
+  "allowedConstructors": [
+    "NativeSecureCore()",
+    "NativeSecureCore.fromKeyMaterial(keyMaterialB64: String)"
+  ]
+}

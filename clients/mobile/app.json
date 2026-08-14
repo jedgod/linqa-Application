@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Linqa",
+    "slug": "linqa-mobile",
+    "scheme": "linqa",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": false,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.linqa.mobile"
+    },
+    "android": {
+      "package": "com.linqa.mobile"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-asset",
+      "expo-secure-store",
+      "expo-sqlite"
+    ]
+  }
+}

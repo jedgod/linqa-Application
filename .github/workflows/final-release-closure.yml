@@ -1,0 +1,213 @@
+name: Linqa Final Release Closure
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Frozen SemVer release identifier (for example v1.2.3-rc.1)
+        required: true
+        type: string
+      artifact_url:
+        description: Immutable signed release artifact URL
+        required: true
+        type: string
+      artifact_sha256:
+        description: SHA-256 of that exact artifact
+        required: true
+        type: string
+  push:
+    tags: ["v*", "v*-rc*"]
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+env:
+  GIT_SHA: ${{ github.sha }}
+  RELEASE_VERSION: ${{ inputs.release_version || github.ref_name }}
+  RELEASE_ARTIFACT_URL: ${{ inputs.artifact_url || secrets.LINQA_RELEASE_ARTIFACT_URL }}
+  ARTIFACT_SHA256: ${{ inputs.artifact_sha256 || secrets.LINQA_RELEASE_ARTIFACT_SHA256 }}
+
+jobs:
+  repository-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: server/package-lock.json }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt,clippy }
+      - run: cargo fmt --all -- --check
+        working-directory: core
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+        working-directory: core
+      - run: cargo test --all-features --locked
+        working-directory: core
+      - run: npm ci
+        working-directory: server
+      - run: npm run build && npm test
+        working-directory: server
+      - run: node scripts/scan-release-tests.mjs server/src/tests
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: clients/mobile/package-lock.json }
+      - run: npm ci
+        working-directory: clients/mobile
+      - run: node ../../mobile/expo57/scripts/verify-expo57.mjs
+        working-directory: clients/mobile
+      - run: npx expo install --check
+        working-directory: clients/mobile
+      - run: npx expo-doctor
+        working-directory: clients/mobile
+      - run: npx tsc --noEmit
+        working-directory: clients/mobile
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.13" }
+      - name: Compile the sole official Android launcher
+        run: gradle -p clients/android assembleDebug --no-daemon
+
+  dependency-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: server
+      - run: npm audit --omit=dev --json > ../server-audit.json || true
+        working-directory: server
+      - run: node scripts/check-audit-json.mjs server-audit.json
+      - run: npm ci
+        working-directory: clients/mobile
+      - run: npm audit --omit=dev --json > ../../mobile-audit.json || true
+        working-directory: clients/mobile
+      - run: node scripts/check-audit-json.mjs mobile-audit.json
+
+  frozen-artifact:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_sha256: ${{ steps.identity.outputs.artifact_sha256 }}
+    steps:
+      - name: Download without rebuilding
+        env:
+          ARTIFACT_TOKEN: ${{ secrets.LINQA_RELEASE_ARTIFACT_TOKEN }}
+        run: |
+          test -n "$RELEASE_ARTIFACT_URL" && test -n "$ARTIFACT_SHA256"
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $ARTIFACT_TOKEN" "$RELEASE_ARTIFACT_URL" --output linqa-release.bin
+          echo "$ARTIFACT_SHA256  linqa-release.bin" | sha256sum --check --strict
+      - id: identity
+        run: echo "artifact_sha256=$ARTIFACT_SHA256" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frozen-release-${{ github.sha }}
+          path: linqa-release.bin
+          retention-days: 90
+      - uses: actions/attest-build-provenance@v2
+        with: { subject-path: linqa-release.bin }
+
+  physical-android:
+    needs: [repository-verification, dependency-security, frozen-artifact]
+    runs-on: [self-hosted, linux, linqa-android-device-lab]
+    environment: physical-device-certification
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/download-artifact@v4
+        with: { name: "frozen-release-${{ github.sha }}", path: frozen }
+      - run: ./ops/device-lab/run-android-certification.sh
+        env:
+          RELEASE_ARTIFACT: frozen/linqa-release.bin
+          LINQA_ANDROID_SERIAL: ${{ vars.LINQA_ANDROID_SERIAL }}
+          LINQA_DEVICE_CERT_RUNNER: ${{ vars.LINQA_ANDROID_DEVICE_CERT_RUNNER }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-device-android-${{ github.sha }}
+          path: release-evidence/current/devices/android/result.json
+
+  physical-ios:
+    needs: [repository-verification, dependency-security, frozen-artifact]
+    runs-on: [self-hosted, macOS, linqa-ios-device-lab]
+    environment: physical-device-certification
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/download-artifact@v4
+        with: { name: "frozen-release-${{ github.sha }}", path: frozen }
+      - run: ./ops/device-lab/run-ios-certification.sh
+        env:
+          RELEASE_ARTIFACT: frozen/linqa-release.bin
+          LINQA_IOS_DEVICE_UDID: ${{ vars.LINQA_IOS_DEVICE_UDID }}
+          LINQA_DEVICE_CERT_RUNNER: ${{ vars.LINQA_IOS_DEVICE_CERT_RUNNER }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-device-ios-${{ github.sha }}
+          path: release-evidence/current/devices/ios/result.json
+
+  final-admission:
+    needs: [frozen-artifact, physical-android, physical-ios]
+    runs-on: ubuntu-latest
+    environment: ga-approval
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: server
+      - uses: actions/download-artifact@v4
+        with: { name: "frozen-release-${{ github.sha }}", path: frozen }
+      - uses: actions/download-artifact@v4
+        with: { name: "final-device-android-${{ github.sha }}", path: device-android }
+      - uses: actions/download-artifact@v4
+        with: { name: "final-device-ios-${{ github.sha }}", path: device-ios }
+      - name: Download exact-revision G0-G4 evidence
+        env:
+          URL: ${{ secrets.LINQA_G0_G4_EVIDENCE_URL }}
+          SHA: ${{ secrets.LINQA_G0_G4_EVIDENCE_SHA256 }}
+          TOKEN: ${{ secrets.LINQA_EVIDENCE_TOKEN }}
+        run: |
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $TOKEN" "$URL" --output g0-g4.zip
+          echo "$SHA  g0-g4.zip" | sha256sum --check --strict
+          bash scripts/extract-evidence-zip.sh g0-g4.zip release-evidence
+      - name: Download and materialize signed G5 evidence
+        env:
+          URL: ${{ secrets.LINQA_G5_EVIDENCE_BUNDLE_URL }}
+          SHA: ${{ secrets.LINQA_G5_EVIDENCE_BUNDLE_SHA256 }}
+          TOKEN: ${{ secrets.LINQA_EVIDENCE_TOKEN }}
+          LINQA_G5_SIGNED_ENVELOPE: ../g5-bundle/signed-assurance.json
+          LINQA_G5_EVIDENCE_ROOT: ../release-evidence/g5
+          LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM: ${{ secrets.LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM }}
+        run: |
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $TOKEN" "$URL" --output g5.zip
+          echo "$SHA  g5.zip" | sha256sum --check --strict
+          bash scripts/extract-evidence-zip.sh g5.zip g5-bundle
+          cd server && npm run g5:materialize
+      - name: Download final exact-SHA evidence bundle
+        env:
+          URL: ${{ secrets.LINQA_FINAL_EVIDENCE_URL }}
+          SHA: ${{ secrets.LINQA_FINAL_EVIDENCE_SHA256 }}
+          TOKEN: ${{ secrets.LINQA_EVIDENCE_TOKEN }}
+        run: |
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $TOKEN" "$URL" --output final.zip
+          echo "$SHA  final.zip" | sha256sum --check --strict
+          bash scripts/extract-evidence-zip.sh final.zip release-evidence/current
+      - run: node scripts/merge-device-certifications.mjs release-evidence/current/final-release-input.json device-android/result.json device-ios/result.json
+      - name: Final G0-G5, identity, freshness, security, device, canary, and approval admission
+        working-directory: server
+        env:
+          LINQA_RELEASE_ARTIFACT: ../frozen/linqa-release.bin
+          LINQA_FINAL_RELEASE_INPUT: ../release-evidence/current/final-release-input.json
+          LINQA_FINAL_EVIDENCE_ROOT: ../release-evidence/current
+          LINQA_G0_G4_EVIDENCE_ROOT: ../release-evidence
+          LINQA_G5_EVIDENCE_ROOT: ../release-evidence/g5
+          LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM: ${{ secrets.LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM }}
+        run: npm run final:verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-release-green-evidence-${{ github.sha }}
+          path: release-evidence/
+          retention-days: 365

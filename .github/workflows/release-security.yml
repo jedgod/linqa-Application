@@ -1,0 +1,81 @@
+name: Linqa Release Security
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  build-and-attest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+
+      - name: Rust checks
+        working-directory: core
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-features --locked
+          cargo build --release --locked
+
+      - name: Server checks
+        working-directory: server
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+          npm test
+          npm run build
+
+      - name: Web checks
+        working-directory: clients/web
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+          npm test -- --run
+          npm run build
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: linqa-sbom.spdx.json
+
+      - name: Hash artifacts
+        run: |
+          sha256sum core/target/release/* > SHA256SUMS.txt || true
+          sha256sum clients/web/dist/* >> SHA256SUMS.txt || true
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            clients/web/dist/**
+            core/target/release/**
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linqa-release-security
+          path: |
+            linqa-sbom.spdx.json
+            SHA256SUMS.txt
+            clients/web/dist
+            core/target/release

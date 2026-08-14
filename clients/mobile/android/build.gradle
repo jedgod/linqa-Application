@@ -1,0 +1,33 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+  }
+  dependencies {
+    classpath('com.android.tools.build:gradle')
+    classpath('com.facebook.react:react-native-gradle-plugin')
+    classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
+  }
+}
+
+allprojects {
+  repositories {
+    google()
+    mavenCentral()
+    maven { url 'https://www.jitpack.io' }
+  }
+}
+
+apply plugin: "expo-root-project"
+apply plugin: "com.facebook.react.rootproject"
+
+// Windows + OneDrive fix, take 2: a blanket rootProject/subprojects buildDir
+// redirect (tried first) broke `generateAutolinkingNewArchitectureFiles`,
+// which has an internal hardcoded expectation about the default build
+// path. The correct, narrower fix lives in the two native modules that
+// actually hit the OneDrive/Ninja race — see `buildStagingDirectory` in
+// node_modules/react-native-reanimated/android/build.gradle.kts and
+// node_modules/react-native-worklets/android/build.gradle.kts, which use
+// the CMake option Android Gradle Plugin explicitly supports for this.

@@ -1,0 +1,40 @@
+receivers:
+  otlp:
+    protocols:
+      grpc: {}
+      http: {}
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 1024
+  batch: {}
+  attributes/redact:
+    actions:
+      - key: http.request.header.authorization
+        action: delete
+      - key: enduser.id
+        action: hash
+      - key: user.phone
+        action: delete
+      - key: message.body
+        action: delete
+      - key: location.precise
+        action: delete
+
+exporters:
+  otlp:
+    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+    tls:
+      insecure: false
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, batch]
+      exporters: [otlp]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp]

@@ -1,0 +1,107 @@
+LINQA — HOW TO LAUNCH THE APP (NATIVE ANDROID CLIENT, clients/android, com.linqa.app)
+=======================================================================================
+Verified working end-to-end on a physical Samsung Galaxy A03 (SM-A037U) over USB, 2026-08-08.
+This is the "Copilot" native Kotlin/Compose app — the more mature client, distinct from the
+separate Expo app at clients/mobile (com.linqa.mobile).
+
+--------------------------------------------------------------------------------
+0. PREREQUISITES (one-time / per machine)
+--------------------------------------------------------------------------------
+- Android SDK platform-tools installed, adb.exe available at e.g.:
+    C:\Users\<you>\AppData\Local\Android\Sdk\platform-tools\adb.exe
+- Android Studio installed (its bundled JBR is used as JAVA_HOME for Gradle —
+  JDK 21, required; a system JAVA_HOME pointing at JDK 21 will fail the build):
+    C:\Program Files\Android\Android Studio\jbr
+- A Gradle 21.13 distribution available. clients/android has no gradlew wrapper
+  checked in, so either:
+    (a) open the project in Android Studio and let it manage Gradle, or
+    (b) use a cached Gradle 8.13 binary directly, e.g.:
+    C:\Users\<you>\.gradle\wrapper\dists\gradle-21.13-bin\<hash>\gradle-8.13\bin\gradle.bat
+- Physical device with USB debugging enabled, connected via USB, and authorized
+  (accept the "Allow USB debugging?" prompt on the device).
+
+--------------------------------------------------------------------------------
+1. CONFIRM THE DEVICE IS CONNECTED
+--------------------------------------------------------------------------------
+    adb devices -l
+
+  Expect one line with state "device" (not "unauthorized" or "offline").
+
+--------------------------------------------------------------------------------
+2. START THE BACKEND SERVER
+--------------------------------------------------------------------------------
+  From server/:
+    npm run dev
+
+  This listens on port 8080 by default (server/src/config/ports.ts). On Windows,
+  if port 8080 is reserved by the OS, set LINQA_API_PORT=8088 instead — but if
+  you do, you must also change clients/android/app/build.gradle.kts's debug
+  HUB_BASE_URL / API_BASE_URL constants to match (see NOTES below; both must
+  always point at the same port, there is only one server process/port).
+
+  Confirm it's actually listening before moving on, e.g. (PowerShell):
+    Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -eq 8080 }
+
+--------------------------------------------------------------------------------
+3. FORWARD THE DEVICE'S LOCALHOST TO YOUR DEV MACHINE
+--------------------------------------------------------------------------------
+  The app talks to http://127.0.0.1:8080 from the *device's* point of view, so
+  that must be forwarded to your dev machine's real server:
+
+    adb reverse tcp:8080 tcp:8080
+
+  (Re-run this after every device reboot/reconnect — reverse forwards don't
+  persist.)
+
+--------------------------------------------------------------------------------
+4. BUILD THE APK
+--------------------------------------------------------------------------------
+  From clients/android/, using the cached Gradle binary and Android Studio's JBR
+  (git-bash / WSL style paths shown; adjust for your shell):
+
+    GRADLE="/c/Users/<you>/.gradle/wrapper/dists/gradle-.13-bin/<hash>/gradle-21.13/bin/gradle.bat"
+    JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" "$GRADLE" assembleDebug --no-daemon
+
+  A full build takes several minutes. On success you'll see "BUILD SUCCESSFUL"
+  and the APK at:
+
+    clients/android/app/build/outputs/apk/debug/app-debug.apk
+
+  (Simpler alternative: open clients/android in Android Studio, select the
+  connected device, and click Run — Android Studio handles Gradle/JDK itself.)
+
+--------------------------------------------------------------------------------
+5. INSTALL THE APK ON THE DEVICE
+--------------------------------------------------------------------------------
+    adb install -r "clients/android/app/build/outputs/apk/debug/app-debug.apk"
+
+--------------------------------------------------------------------------------
+6. LAUNCH THE APP
+--------------------------------------------------------------------------------
+    adb shell monkey -p com.linqa.app -c android.intent.category.LAUNCHER 1
+
+  Confirm it's in the foreground:
+    adb shell dumpsys window | findstr mCurrentFocus
+  (expect: com.linqa.app/com.linqa.app.ui.MainActivity)
+
+  Optional screenshot:
+    adb exec-out screencap -p > linqa-screenshot.png
+
+--------------------------------------------------------------------------------
+NOTES / KNOWN GAPS
+--------------------------------------------------------------------------------
+- The app opens to a real "Sign in to Linqa" screen (phone/email + OTP) backed
+  by the live server — not a demo/mock screen.
+- After login, device enrollment and the conversation list/chat/calls/settings
+  screens are functional against the live backend. The conversation list itself
+  currently reads through a development-only, single-seeded-demo-user bridge
+  (server's /v1/dev/mobile-hub route, disabled outside development) until the
+  Rust crypto core (linqa-core) is linked for real per-user end-to-end sync —
+  see clients/android/README.md "Current Blockers" for the honest status.
+- If the app shows "Live service unavailable" on the conversation list, it
+  means the app couldn't reach the server — check step 2 (server actually
+  listening) and step 3 (adb reverse still active; it drops on device
+  reconnect/reboot).
+- There is no gradlew wrapper committed in clients/android/ — adding one
+  (`gradle wrapper --gradle-version 8.13`) would remove the need to hardcode a
+  path to a locally cached Gradle distribution in step 4.

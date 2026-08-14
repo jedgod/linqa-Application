@@ -1,0 +1,24 @@
+{
+  "$comment": "Format description for linqa-core v1 MessageEnvelope (see core/src/envelope.rs). Byte array values below are placeholders illustrating shape/length, not a real captured ciphertext — see README.md in this directory.",
+  "fixtureVersion": 1,
+  "envelopeVersion": 1,
+  "domain": "linqa:message-envelope:v1",
+  "header": {
+    "version": 1,
+    "message_id": "018f6bf4-44d5-7e15-a6fa-030f0f6fe001",
+    "sender_user_id": "alice",
+    "sender_device_id": "alice-phone",
+    "recipient_user_id": "bob",
+    "recipient_device_id": "bob-phone",
+    "created_at_unix": 1700000000,
+    "expires_at_unix": 1700000600,
+    "ephemeral_public_key": { "type": "bytes", "length": 32 },
+    "nonce": { "type": "bytes", "length": 24 }
+  },
+  "ciphertext": { "type": "bytes", "length": "variable (plaintext length + 16-byte AEAD tag)" },
+  "sender_signature": { "type": "bytes", "length": 64 },
+  "keyAgreement": "X25519 ephemeral-static Diffie-Hellman",
+  "keyDerivation": "HKDF-SHA256, salt = SHA-256(postcard(header)), info = domain",
+  "aead": "XChaCha20-Poly1305, AAD = postcard(header)",
+  "signature": "Ed25519 over postcard(header) || ciphertext"
+}

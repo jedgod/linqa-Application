@@ -1,0 +1,9 @@
+Copyright (c) 2026 Linqa Project
+
+This project is intended to be released under the GNU Affero General Public License v3.0 (AGPL-3.0) for clients and core components that interact with users.
+
+Cryptographic libraries and pure protocol specifications may use more permissive licenses (MIT, Apache-2.0, or BSD) to encourage independent implementations and audits.
+
+The exact license text and any dual-licensing decisions will be finalized before the first public release.
+
+Until then, all rights are reserved by the project maintainers.

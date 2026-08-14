@@ -1,0 +1,98 @@
+:root {
+  --sidebar-width: 320px;
+  --safe-gap: 16px;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.app-shell {
+  width: 100%;
+  min-width: 0;
+  max-width: 100vw;
+  display: grid;
+  grid-template-columns: minmax(260px, var(--sidebar-width)) minmax(0, 1fr);
+}
+
+.app-sidebar,
+.app-main,
+.chat-view,
+.message-list,
+.composer {
+  min-width: 0;
+}
+
+.security-banner {
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px;
+  border-bottom: 1px solid currentColor;
+  font-size: 0.875rem;
+}
+
+.security-banner--warning {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.security-banner--ready {
+  background: #ecfdf5;
+  color: #065f46;
+}
+
+.mobile-back-button {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    display: block;
+    min-height: 100dvh;
+  }
+
+  .app-shell[data-mobile-pane="list"] .app-main {
+    display: none;
+  }
+
+  .app-shell[data-mobile-pane="chat"] .app-sidebar {
+    display: none;
+  }
+
+  .app-sidebar,
+  .app-main {
+    width: 100%;
+    max-width: 100%;
+    min-height: 100dvh;
+  }
+
+  .mobile-back-button {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .composer {
+    position: sticky;
+    bottom: 0;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .message-bubble {
+    max-width: min(86%, 34rem);
+    overflow-wrap: anywhere;
+  }
+}

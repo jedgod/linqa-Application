@@ -1,0 +1,13 @@
+{
+  "status": "GREEN",
+  "required": [
+    "UJB1",
+    "UJB2",
+    "UJB3",
+    "UJB4",
+    "UJB5"
+  ],
+  "failed": [],
+  "note": "UJB1-5 cover the real UniFFI/JNA binding surface only (clients/android app/src/main/java/uniffi/linqa_core), not raw JNI, which does not exist in this repo. Instrumentation test results (IdentityImportBoundaryInstrumentationTest) are recorded separately under app/build/outputs/androidTest-results since they require a connected device/emulator and aren't run by this static suite.",
+  "evaluatedAt": "2026-08-10T14:01:51.842304+00:00"
+}

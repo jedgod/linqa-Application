@@ -1,0 +1,9 @@
+{
+  "releasePolicyVersion": 1,
+  "targetExpoSdk": 57,
+  "officialAndroidLauncher": {"project":"clients/android","applicationId":"com.linqa.app"},
+  "dependencySecurity": {"blockReachableCritical":true,"blockReachableHigh":true,"acceptedRiskRequiresSecurityApproval":true,"acceptedRiskMustExpire":true},
+  "evidence": {"exactGitSha":true,"exactArtifactSha256":true,"rejectSkipped":true,"rejectTodo":true,"rejectMockProvider":true,"productionEquivalentRequired":true},
+  "devices": {"iosPhysicalRequired":true,"androidPhysicalRequired":true,"simulatorRejected":true,"emulatorRejected":true},
+  "promotion": {"sequentialStagesOnly":true,"canaryRequired":true,"formalApprovals":["ENGINEERING","SECURITY","SRE","PRIVACY_LEGAL","PRODUCT"]}
+}

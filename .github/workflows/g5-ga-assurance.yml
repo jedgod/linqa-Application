@@ -1,0 +1,131 @@
+name: Linqa G5 Production GA Assurance
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: SemVer release identifier, for example v1.2.3-rc.1
+        required: true
+        type: string
+  push:
+    tags: ["v*", "v*-rc*"]
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+env:
+  GIT_SHA: ${{ github.sha }}
+  RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version || github.ref_name }}
+
+jobs:
+  local-assurance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt,clippy }
+      - run: cargo fmt --all -- --check
+        working-directory: core
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+        working-directory: core
+      - run: cargo test --all-features --locked
+        working-directory: core
+      - run: npm ci
+        working-directory: server
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: server
+      - run: npm run build && npm test
+        working-directory: server
+      - run: npm ci
+        working-directory: clients/web
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: clients/web
+      - run: npm run build && npm test -- --run
+        working-directory: clients/web
+      - run: npm ci
+        working-directory: clients/mobile
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: clients/mobile
+      - run: npx expo-doctor && npx tsc --noEmit
+        working-directory: clients/mobile
+      - uses: gitleaks/gitleaks-action@v2
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: 1
+          output: artifacts-trivy.txt
+      - uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: linqa.cdx.json
+      - uses: actions/attest-build-provenance@v2
+        with: { subject-path: linqa.cdx.json }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g5-local-assurance-${{ github.sha }}
+          path: |
+            linqa.cdx.json
+            artifacts-trivy.txt
+          retention-days: 90
+
+  production-assurance:
+    needs: local-assurance
+    runs-on: ubuntu-latest
+    environment: ga-approval
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: server
+      - name: Download exact-revision G0-G4 evidence archive
+        env:
+          EVIDENCE_URL: ${{ secrets.LINQA_G0_G4_EVIDENCE_URL }}
+          EVIDENCE_TOKEN: ${{ secrets.LINQA_EVIDENCE_TOKEN }}
+          EVIDENCE_SHA256: ${{ secrets.LINQA_G0_G4_EVIDENCE_SHA256 }}
+        run: |
+          test -n "$EVIDENCE_URL" && test -n "$EVIDENCE_SHA256"
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $EVIDENCE_TOKEN" "$EVIDENCE_URL" --output g0-g4.zip
+          echo "$EVIDENCE_SHA256  g0-g4.zip" | sha256sum --check --strict
+          bash ./scripts/extract-evidence-zip.sh g0-g4.zip release-evidence
+      - run: node server/node_modules/tsx/dist/cli.mjs scripts/assert-green-gates.ts
+      - name: Download signed G5 evidence bundle
+        env:
+          EVIDENCE_URL: ${{ secrets.LINQA_G5_EVIDENCE_BUNDLE_URL }}
+          EVIDENCE_TOKEN: ${{ secrets.LINQA_EVIDENCE_TOKEN }}
+          EVIDENCE_SHA256: ${{ secrets.LINQA_G5_EVIDENCE_BUNDLE_SHA256 }}
+        run: |
+          test -n "$EVIDENCE_URL" && test -n "$EVIDENCE_SHA256"
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $EVIDENCE_TOKEN" "$EVIDENCE_URL" --output g5-bundle.zip
+          echo "$EVIDENCE_SHA256  g5-bundle.zip" | sha256sum --check --strict
+          bash ./scripts/extract-evidence-zip.sh g5-bundle.zip g5-bundle
+          test -f g5-bundle/signed-assurance.json
+      - name: Verify and materialize G5-A through G5-K
+        working-directory: server
+        env:
+          LINQA_G5_SIGNED_ENVELOPE: ../g5-bundle/signed-assurance.json
+          LINQA_G5_EVIDENCE_ROOT: ../release-evidence/g5
+          LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM: ${{ secrets.LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM }}
+        run: npm run g5:materialize
+      - name: Final G0-G5 production admission
+        working-directory: server
+        env:
+          LINQA_G0_G4_EVIDENCE_ROOT: ../release-evidence
+          LINQA_G5_EVIDENCE_ROOT: ../release-evidence/g5
+          LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM: ${{ secrets.LINQA_EVIDENCE_SIGNING_PUBLIC_KEY_PEM }}
+        run: npm run g5:verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g0-g5-production-ga-evidence-${{ github.sha }}
+          path: release-evidence/
+          retention-days: 365
+      - uses: actions/attest-build-provenance@v2
+        with: { subject-path: release-evidence/g5/signed-assurance.json }

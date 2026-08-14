@@ -1,0 +1,81 @@
+name: Linqa GA Security Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: linqa_test
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://linqa:test_password@127.0.0.1:5432/linqa_test
+      JWT_ISSUER: https://test.linqa.local
+      JWT_AUDIENCE: linqa-api
+      JWT_HS256_SECRET: test-secret-that-is-at-least-32-bytes-long
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
+      - run: cargo fmt --all -- --check
+        working-directory: core
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+        working-directory: core
+      - run: cargo test --all-features --locked
+        working-directory: core
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+        working-directory: server
+      - run: npm run db:migrate
+        working-directory: server
+      - run: npm test -- --run
+        working-directory: server
+      - run: npm audit --omit=dev
+        working-directory: server
+      - run: npm run build
+        working-directory: server
+
+      - run: npm ci
+        working-directory: clients/web
+      - run: npm audit --omit=dev
+        working-directory: clients/web
+      - run: npm run build
+        working-directory: clients/web
+
+      - uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: linqa-ga-sbom.spdx.json
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: linqa-ga-sbom.spdx.json

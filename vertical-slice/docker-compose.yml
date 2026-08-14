@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: linqa
+      POSTGRES_USER: linqa
+      POSTGRES_PASSWORD: linqa_dev_password
+    ports:
+      - "${LINQA_DATABASE_PORT:-5432}:5432"
+    volumes:
+      # Postgres 18's image expects a single mount at /var/lib/postgresql (not
+      # .../data) so it can lay out version-specific subdirectories itself —
+      # mounting straight at .../data (the pre-18 convention) makes the
+      # container refuse to start.
+      - linqa_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U linqa -d linqa"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  linqa_pgdata:

@@ -1,0 +1,21 @@
+release:
+  initial_rollout_percent: 5
+  promotion_steps: [5, 10, 25, 50, 100]
+
+health:
+  observation_window_minutes: 20
+
+rollback:
+  automatic: true
+  triggers:
+    api_5xx_rate: 0.02
+    auth_failure_delta: 0.05
+    relay_delivery_failure_rate: 0.01
+    call_setup_failure_rate: 0.03
+    crash_free_sessions_below: 0.995
+
+security_blockers:
+  - key_transparency_verification_failure
+  - cross_tenant_access
+  - billing_signature_failure_spike
+  - emergency_authorization_failure

@@ -1,0 +1,63 @@
+# Build artifacts
+target/
+build/
+dist/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Dependencies
+node_modules/
+vendor/
+Cargo.lock  # decide later whether to commit
+
+# Local Expo state
+.expo/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+secrets/
+
+# Logs & temporary
+*.log
+tmp/
+temp/
+
+# Mobile
+*.apk
+*.aab
+*.ipa
+*.keystore
+DerivedData/
+xcuserdata/
+.gradle/
+local.properties
+clients/mobile/dist-android-check/
+
+# Local device/emulator evidence
+screenshots-now/
+device_*.xml
+galaxy*.xml
+galaxy*.png
+linqa_*.xml
+linqaAndroid.png
+linqa-device-screen.png
+
+# Python / misc
+__pycache__/
+*.pyc
+.venv/

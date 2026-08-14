@@ -1,0 +1,71 @@
+// UniFFI interface definition for linqa-core
+// This file drives the generation of Kotlin, Swift, and Python bindings.
+//
+// Kept in sync with the "Stages 1-5" core (enrollment, key_package, envelope,
+// replay). Not yet wired to a build.rs / uniffi-bindgen invocation — this is
+// the target surface for when FFI bindings are generated.
+
+namespace linqa_core {
+    string version();
+};
+
+[Error]
+enum LinqaError {
+    "InvalidInput",
+    "ValidationFailed",
+    "AuthenticationFailed",
+    "Expired",
+    "ReplayDetected",
+    "CryptoFailure",
+    "SerializationFailure",
+    "InvalidState",
+};
+
+dictionary DevicePublicIdentity {
+    sequence<u8> signing_public_key;
+    sequence<u8> encryption_public_key;
+};
+
+interface DeviceSecretsHandle {
+    constructor();
+    DevicePublicIdentity public_identity();
+};
+
+dictionary KeyPackage {
+    u16 version;
+    string user_id;
+    string device_id;
+    sequence<u8> signing_public_key;
+    sequence<u8> encryption_public_key;
+    i64 created_at_unix;
+    i64 expires_at_unix;
+    sequence<u8> signature;
+};
+
+dictionary EnrollmentChallenge {
+    string challenge_id;
+    string user_id;
+    sequence<u8> nonce;
+    i64 expires_at_unix;
+};
+
+dictionary EnrollmentProof {
+    string challenge_id;
+    string user_id;
+    string device_name;
+    string platform;
+    sequence<u8> signing_public_key;
+    sequence<u8> encryption_public_key;
+    sequence<u8> signature;
+};
+
+dictionary MessageEnvelope {
+    sequence<u8> header_bytes;
+    sequence<u8> ciphertext;
+    sequence<u8> sender_signature;
+};
+
+// Placeholder for future MLS, hybrid post-quantum, and sealed-sender
+// interfaces — deferred past this stage. See docs/protocol.md for the
+// longer-term target architecture; this core currently implements 1:1
+// X25519 + Ed25519 + XChaCha20-Poly1305 envelopes only.

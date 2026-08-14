@@ -1,0 +1,11 @@
+{
+  "_comment": "Real, honest provider-configuration state — all false until a real KYC/compliance/funding/payout partner is actually wired into server/src/integrations/linqasend/provider.registry.ts via configureLinqaSendProviders().",
+  "kycConfigured": false,
+  "complianceConfigured": false,
+  "fundingConfigured": false,
+  "payoutConfigured": false,
+  "fxRateConfigured": false,
+  "webhookSignatureVerificationImplemented": true,
+  "webhookSecretConfigured": false,
+  "reconciliationJobImplemented": true
+}

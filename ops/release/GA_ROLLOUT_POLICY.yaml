@@ -1,0 +1,23 @@
+ga:
+  steps: [1, 5, 10, 25, 50, 100]
+  observation_minutes:
+    1: 30
+    5: 60
+    10: 120
+    25: 240
+    50: 480
+
+  automatic_pause:
+    api_5xx_rate_above: 0.01
+    auth_failure_delta_above: 0.03
+    crash_free_sessions_below: 0.997
+    relay_delivery_failure_above: 0.005
+    call_setup_failure_above: 0.02
+
+  automatic_rollback:
+    cross_tenant_access_detected: true
+    crypto_verification_failure: true
+    key_transparency_failure: true
+    billing_signature_anomaly: true
+    emergency_authorization_failure: true
+    data_residency_violation: true

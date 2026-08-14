@@ -1,0 +1,11 @@
+{
+  "_comment": "Matches server/src/integrations/vault/safe-default.adapters.ts's currentVaultIntegrationStatus() exactly — this file exists so the check below can catch drift between the two.",
+  "encryptedStorage": true,
+  "hashVerification": true,
+  "privateVaultSessionLock": true,
+  "quotaMetering": false,
+  "securityScanner": false,
+  "sharing": false,
+  "socialImport": false,
+  "billingEntitlements": false
+}

@@ -1,0 +1,42 @@
+LINQA REAL VERTICAL SLICE - RUN GUIDE
+
+1. Copy .env.example to .env.
+2. Replace JWT_HS256_SECRET with a random value of at least 32 bytes.
+3. Start PostgreSQL:
+   docker compose up -d postgres
+
+4. Install:
+   npm install
+
+5. Migrate:
+   npm run db:migrate
+
+6. Seed:
+   npm run db:seed
+
+7. Start:
+   npm run dev
+
+8. Readiness:
+   GET http://127.0.0.1:8080/health/ready
+
+9. Use the IDs printed by db:seed to create demo tokens:
+   npm run token:demo -- demo-alice <ALICE_USER_ID> <ALICE_DEVICE_ID>
+   npm run token:demo -- demo-bob <BOB_USER_ID> <BOB_DEVICE_ID>
+
+10. Windows local conflicts:
+    set LINQA_DATABASE_PORT=55432
+    set LINQA_API_PORT=8088
+
+11. Do not send plaintext to /v1/relay/envelopes.
+    The ciphertext must come from the Linqa cryptographic core.
+
+12. Before production:
+    - replace HS256 development tokens with OIDC/JWKS
+    - validate KeyPackage signatures server-side
+    - use TLS
+    - configure database TLS and backups
+    - add Redis/pub-sub for multi-instance WebSocket fan-out
+    - add push notifications
+    - add metrics and alerting
+    - run independent review

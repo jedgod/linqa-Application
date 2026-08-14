@@ -1,0 +1,79 @@
+LINQA MULTI-ACCOUNT + GENUINE MOBILE VERIFICATION
+
+Renamed from the pack's root-level APPLY_GUIDE.txt (2026-08-07 apply pass)
+to avoid colliding with the other packs applied in this same session — see
+docs/APPLY_GUIDE_MILESTONE_3.txt for why.
+
+1. Apply migration:
+   019_multi_account_mobile_verification.sql
+
+2. Install:
+   libphonenumber-js
+
+3. Register:
+   PhoneNumberNormalizationService
+   MobileLineIntelligenceProvider
+   PhoneRiskService
+   MobileOtpService
+   AccountLimitService
+   MultiAccountService
+   AccountSwitchService
+   PhoneRegistrationService
+   AccountPushIsolationService
+
+4. Register registerMultiAccountRoutes().
+
+5. Configure a production carrier/line-intelligence provider.
+
+6. Configure SMS OTP and eligible voice OTP provider.
+
+7. Never mark a number VERIFIED_MOBILE when:
+   provider is unavailable;
+   line type is UNKNOWN without review;
+   number is identified as VoIP/virtual/disposable/temporary;
+   OTP has not been completed.
+
+8. Mobile:
+   mount AccountProvider.
+   mount AccountSwitcherSheet.
+   mount add-phone and verify-phone screens.
+   store each account session in AccountSecureStorage.
+   maintain one secure namespace per user ID.
+
+9. Account-switch workflow:
+   authenticate target account
+   -> verify installation membership
+   -> issue account-scoped session
+   -> save session to target namespace
+   -> activate account
+   -> reload home/chat state
+   -> audit switch
+
+10. Push:
+    bind provider token per installation + user account.
+    route notification taps to their user/account context.
+
+11. Enforce MAX_ACCOUNTS_PER_INSTALLATION = 3 server-side.
+
+12. Execute MULTI_ACCOUNT_ACCEPTANCE.md.
+
+13. Do not enable production registration until genuine-mobile detection,
+    OTP delivery, risk checks, and 4th-account rejection all pass.
+
+## Status in this repository (2026-08-07 apply pass)
+
+Two gaps the pack itself did not cover were closed while applying it (see
+service-container.ts / routes/multi-account.routes.ts comments):
+- nothing in the pack ever creates the device_installations_v2 row every
+  other endpoint depends on — POST /v5/installations was added;
+- AccountPushIsolationService had no HTTP caller — PUT /v5/installations/
+  :installationId/push-bindings was added.
+
+One structural limitation remains, inherited from the rest of this
+codebase rather than introduced by this pack: there is no separate
+signup/first-login flow anywhere in this repository yet (web's own
+AuthClient/OTP UI is written but still unmounted — see claudeassess.txt).
+Every /v5/* endpoint requires an authenticated principal, so "add account"
+can only register/reactivate the currently authenticated identity into an
+installation's slot list; it cannot yet onboard a genuinely different
+person without that separate login mechanism being built and wired first.

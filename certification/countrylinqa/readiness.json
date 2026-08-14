@@ -1,0 +1,11 @@
+{
+  "_comment": "Real, honest state of CountryLinqa as of this checkout — checked against server/src/services/countrylinqa/**, clients/android LinqaWorldScreen/CountryLinqaListScreen, and clients/mobile app/countrylinqa/*.",
+  "backendDiscoveryPreferences": true,
+  "backendCountryVerification": true,
+  "backendEntitlements": true,
+  "backendGoLiveFeatures": true,
+  "backendSecurityFeatures": true,
+  "androidWorldSurface": true,
+  "expoWorldSurface": true,
+  "adminModeration": true
+}

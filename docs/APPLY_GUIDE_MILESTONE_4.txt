@@ -1,0 +1,71 @@
+LINQA MILESTONE 4 — GENERAL AVAILABILITY HARDENING
+
+Renamed from the pack's root-level APPLY_GUIDE.txt (2026-08-07 apply pass)
+to avoid colliding with the other packs applied in this same session — see
+docs/APPLY_GUIDE_MILESTONE_3.txt for why.
+
+1. Apply migration 018_ga_hardening.sql.
+
+2. Register services:
+   GaReleaseGateService
+   SecurityAssessmentService
+   PrivacyRightsService
+   DataResidencyService
+   RetentionArchiveService
+   IncidentResponseService
+   SupportOperationsService
+   DiagnosticRedactionService
+   ProductionKillSwitchService
+   GaRolloutService
+
+3. Register registerGaHardeningRoutes().
+
+4. Configure:
+   immutable compliance evidence storage;
+   regional database/object-storage/KMS catalog;
+   archive storage;
+   observability backend;
+   paging/on-call;
+   support staff RBAC;
+   app-store production credentials.
+
+5. Import all independent audit and penetration findings into
+   security_findings_v2.
+
+6. Keep CRITICAL findings as hard GA blockers.
+
+7. Configure SOC 2 engineering controls and evidence collectors.
+
+8. Wire Privacy Center:
+   Access
+   Portability
+   Correction
+   Deletion
+   CCPA opt-out
+   sensitive-use limitation
+
+9. Assign residency regions to every user/organization before enabling
+   strict regional routing.
+
+10. Test partition/archive/deletion against a staging copy.
+
+11. Execute:
+    SEV0 tabletop
+    SEV1 outage drill
+    restore drill
+    DSAR drill
+    support escalation drill
+    kill-switch drill
+    GA rollback drill
+
+12. Run GA_ACCEPTANCE.md.
+
+13. Start public rollout:
+    1% → 5% → 10% → 25% → 50% → 100%
+
+14. Pause or rollback automatically on security, privacy, residency,
+    emergency, billing, crash, or reliability blockers.
+
+15. GA is complete only when FINAL_GA_CHECKLIST.md is signed off by
+    independent owners for Security, Privacy/Legal, Operations,
+    Product, and Release Engineering.

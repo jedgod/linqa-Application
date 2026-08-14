@@ -1,0 +1,11 @@
+export interface RecoveryMeasurement { rpoSeconds:number;rtoSeconds:number;dataIntegrityPassed:boolean }
+export function assertRecoveryObjectives(actual:RecoveryMeasurement,target:{maxRpoSeconds:number;maxRtoSeconds:number}){if(!actual.dataIntegrityPassed)throw new Error("DR_DATA_INTEGRITY_FAILED");if(actual.rpoSeconds>target.maxRpoSeconds)throw new Error("DR_RPO_EXCEEDED");if(actual.rtoSeconds>target.maxRtoSeconds)throw new Error("DR_RTO_EXCEEDED");}
+export interface LoadResult {scenario:"auth"|"relay"|"websocket_connect";errorRate:number;p95Ms:number;p99Ms:number;sustainedMinutes:number}
+const LOAD_LIMITS={auth:{errorRate:.01,p95Ms:1500,p99Ms:3000,minMinutes:30},relay:{errorRate:.005,p95Ms:1000,p99Ms:2500,minMinutes:60},websocket_connect:{errorRate:.01,p95Ms:2000,p99Ms:4000,minMinutes:30}};
+export function assertLoadGate(result:LoadResult){const limit=LOAD_LIMITS[result.scenario];if(result.errorRate>limit.errorRate)throw new Error(`LOAD_ERROR_RATE_EXCEEDED:${result.scenario}`);if(result.p95Ms>limit.p95Ms||result.p99Ms>limit.p99Ms)throw new Error(`LOAD_LATENCY_EXCEEDED:${result.scenario}`);if(result.sustainedMinutes<limit.minMinutes)throw new Error(`LOAD_DURATION_TOO_SHORT:${result.scenario}`);}
+export interface CanaryMetrics {errorRate:number;authFailureDelta:number;relayFailureDelta:number;crashFreeSessions:number;securityAlertCount:number}
+export type CanaryDecision="CONTINUE"|"HOLD"|"ROLLBACK";
+export function decideCanary(metrics:CanaryMetrics):CanaryDecision{if(metrics.securityAlertCount>0||metrics.errorRate>.02||metrics.crashFreeSessions<.995)return"ROLLBACK";if(metrics.authFailureDelta>.25||metrics.relayFailureDelta>.25)return"HOLD";return"CONTINUE";}
+export interface CompatibilityInput {deployedSchemaVersion:number;previousAppMinSchema:number;previousAppMaxSchema:number;destructiveMigrationApplied:boolean}
+export function assertRollbackCompatible(input:CompatibilityInput){if(input.destructiveMigrationApplied)throw new Error("ROLLBACK_BLOCKED_DESTRUCTIVE_MIGRATION");if(input.deployedSchemaVersion<input.previousAppMinSchema||input.deployedSchemaVersion>input.previousAppMaxSchema)throw new Error("ROLLBACK_SCHEMA_INCOMPATIBLE");}
+export const CHAOS_SCENARIOS=["postgres-primary-loss","redis-loss","relay-restart","websocket-restart","kms-outage","sms-provider-loss","object-store-loss"] as const;

@@ -1,0 +1,5 @@
+export interface SecurityEvent {id:string;type:string;occurredAt:string;actorUserId?:string;actorDeviceId?:string;severity:"LOW"|"MEDIUM"|"HIGH"|"CRITICAL";metadata?:Record<string,unknown>}
+export interface SiemSink {send(batch:SecurityEvent[]):Promise<void>}
+const blocked=new Set(["plaintext","otp","token","privatekey","authorization","cvc","cardnumber","password","secret"]);
+function redact(value:unknown,key=""):unknown{if(blocked.has(key.toLowerCase()))return"[REDACTED]";if(Array.isArray(value))return value.map((item)=>redact(item));if(value&&typeof value==="object")return Object.fromEntries(Object.entries(value as Record<string,unknown>).map(([childKey,child])=>[childKey,redact(child,childKey)]));return value;}
+export class SecurityEventExporter {constructor(private readonly sink:SiemSink){}async export(events:SecurityEvent[]){if(events.length===0)return;await this.sink.send(events.map((event)=>({...event,...(event.metadata?{metadata:redact(event.metadata) as Record<string,unknown>}:{})})));}}

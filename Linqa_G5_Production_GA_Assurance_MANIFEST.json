@@ -1,0 +1,182 @@
+﻿[
+    {
+        "gate":  "G5",
+        "file":  ".github/workflows/g5-ga-assurance.yml",
+        "bytes":  5141,
+        "sha256":  "de28ac0d0830a1e4cddb8596d85a0c213049ef79b5b356263a5fa3bbe9638320"
+    },
+    {
+        "gate":  "G5",
+        "file":  "G5_GREEN_LABEL_RULES.md",
+        "bytes":  1093,
+        "sha256":  "9f437594b2ba1a9eb78130845108b7ee6d625f67de7e5fd98828c917f9ee4b13"
+    },
+    {
+        "gate":  "G5",
+        "file":  "INTEGRATION_ORDER.md",
+        "bytes":  869,
+        "sha256":  "a195d4fd3efa60a35295b700f46c11f4f03291364ebe549478a1ab8570e16fa3"
+    },
+    {
+        "gate":  "G5",
+        "file":  "README.md",
+        "bytes":  13002,
+        "sha256":  "a62d914ec19cf151dd473652e9dc4c50e972c5a996c51e1d4d77934e2784ade6"
+    },
+    {
+        "gate":  "G5",
+        "file":  "docs/G5_PRODUCTION_GA_ASSURANCE_STATUS.md",
+        "bytes":  2380,
+        "sha256":  "88c9a2f3c749563ceb32663337326834a5360e2b4b2892300080a6ff9e87bd8f"
+    },
+    {
+        "gate":  "G5",
+        "file":  "config/g5-gates.example.json",
+        "bytes":  1076,
+        "sha256":  "6978646cb13de0461b11cec7adca73644e92bb7989024c7a6aa51935b48ad62d"
+    },
+    {
+        "gate":  "G5",
+        "file":  "scripts/create-sbom.sh",
+        "bytes":  268,
+        "sha256":  "eacd84395c559ce073bdab1ced4f501bd48b123239513e807593233c08d0fd03"
+    },
+    {
+        "gate":  "G5",
+        "file":  "scripts/sign-release.sh",
+        "bytes":  350,
+        "sha256":  "cffbd3bb89ae7b1a92f4fb772f61fdd68cff09d2b187a2185566db434969c55a"
+    },
+    {
+        "gate":  "G5",
+        "file":  "scripts/extract-evidence-zip.sh",
+        "bytes":  677,
+        "sha256":  "7d047fe10f6b0152fad399b5798c56a3969426bf1f528c0592e340d7781d41e9"
+    },
+    {
+        "gate":  "G5",
+        "file":  "scripts/refresh-g5-manifest.ts",
+        "bytes":  1544,
+        "sha256":  "9050a3e148393aabaed66e6fd22d97edb8c452968e76c6774cbe8b8824c3322e"
+    },
+    {
+        "gate":  "G5",
+        "file":  "clients/mobile/src/release/MobileReleaseAssurance.ts",
+        "bytes":  823,
+        "sha256":  "7a7e13806d0aa8533978a99ecf7f61b98018be15740d18712baecb72a7b723a3"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/package.json",
+        "bytes":  1131,
+        "sha256":  "2ae1d4fd995e38557fc1203ce76ebd9914c98ad0dad3edff4ed97d879638552e"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/package-lock.json",
+        "bytes":  120704,
+        "sha256":  "f15a2f1418bc17d4a9c0b59f0f650bbb6194045f6ae64e4269ea79a2fcb2e098"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/types.ts",
+        "bytes":  1542,
+        "sha256":  "8190deee6de251462ccc6ec5caa5016c6eb2cac205d53f89df35fabd9dea68a6"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/requirements.ts",
+        "bytes":  1145,
+        "sha256":  "a1d6c69f17957c1da8910ff5424aaa3f4ee44e1ac6c0362e825422b36c3a4a45"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/evidence-registry.ts",
+        "bytes":  3804,
+        "sha256":  "6e5acf101b20a0dd87a42c07e7a0827182788b4f7bdf6543a0a8d20b59c1bf66"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/g5-evidence-writer.ts",
+        "bytes":  1980,
+        "sha256":  "2e244aa6d1f62ab032074128dd0147ccff140337b4e7282e11a25544badd43f6"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/signed-assurance-verifier.ts",
+        "bytes":  4732,
+        "sha256":  "c85d2595d5dbda7ccbbf7a3cbf71f0e2ac15d770a152206845e28cd151062034"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/materialize-g5-assurance.ts",
+        "bytes":  1554,
+        "sha256":  "ff268f8c1ac189f9423f82c1cd817136d45f72846941854abd1c7f070a19d7bd"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/materialize-cli.ts",
+        "bytes":  725,
+        "sha256":  "5a451992c152053128595eace444d94626fa572a75fe6dd7df9f3e80865947d4"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/ga-release-controller.ts",
+        "bytes":  2795,
+        "sha256":  "177737070d5ce68b845f6fa15be57ba43d48ea06359dbc5660cdd179ad56a4b9"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/verify-ga-cli.ts",
+        "bytes":  650,
+        "sha256":  "f7d0200543be21c68f5cf3935cda85a186a699b9ea1f566202d4fb1006237f86"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/deployment-admission-policy.ts",
+        "bytes":  949,
+        "sha256":  "1580cf1fbf16e321e1fed5c4c67c7d987ccdb1753515f2b39768328a4839fcd9"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/ga/assurance-policies.ts",
+        "bytes":  2341,
+        "sha256":  "60377958f6a83957d6b281257b36405e02539c591ec3b866279dfae49482087d"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/observability/ga-assurance.ts",
+        "bytes":  1909,
+        "sha256":  "562eab32980f1fed50525a9d33e127fac67eaa679024fe7284f216c358b9c789"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/security/kms/production-kms-provider.ts",
+        "bytes":  2396,
+        "sha256":  "06ab81cd722ab2b4ec48c57959ab6f6241e19dab893ebb17ac9bf02a786e44f9"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/security/secrets/secret-rotation-coordinator.ts",
+        "bytes":  1099,
+        "sha256":  "086d7c450cd35d3f7f71192bc037429f53d9cfc01335c27f40fb42c2569d9fcd"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/security/siem/security-event-exporter.ts",
+        "bytes":  1013,
+        "sha256":  "126e7b0972850547d33683e87a6a9c2d5d42be9a6c3a3ee037b8cff652af6778"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/tests/g5-assurance.test.ts",
+        "bytes":  6732,
+        "sha256":  "67c4fa9c6f1efd97aa36b83c2d85a802a2f70e5e6f368f1542d69c5edc279672"
+    },
+    {
+        "gate":  "G5",
+        "file":  "server/src/tests/g5-operations.test.ts",
+        "bytes":  2882,
+        "sha256":  "df7e14de29eac76e321a3e2ca4a1fd9f0e1f77277f8b6a8f6cd5902fa17df06b"
+    }
+]

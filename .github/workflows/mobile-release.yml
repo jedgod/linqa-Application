@@ -1,0 +1,56 @@
+name: Linqa Mobile Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        type: choice
+        options: [android, ios]
+        required: true
+      channel:
+        type: choice
+        options: [internal, beta, production]
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  android:
+    if: ${{ inputs.platform == 'android' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: clients/mobile
+      - run: npx expo-doctor
+        working-directory: clients/mobile
+      - run: npx tsc --noEmit
+        working-directory: clients/mobile
+      - run: |
+          echo "Inject Android signing credentials from protected CI secrets."
+          echo "Run EAS or Gradle production build here."
+          echo "Upload to Play Console internal/beta/production track."
+
+  ios:
+    if: ${{ inputs.platform == 'ios' }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: clients/mobile
+      - run: npx expo-doctor
+        working-directory: clients/mobile
+      - run: npx tsc --noEmit
+        working-directory: clients/mobile
+      - run: |
+          echo "Inject App Store Connect and signing credentials from protected CI secrets."
+          echo "Run EAS/Xcode archive here."
+          echo "Upload to TestFlight/App Store."

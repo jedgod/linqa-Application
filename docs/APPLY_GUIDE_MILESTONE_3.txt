@@ -1,0 +1,66 @@
+LINQA MILESTONE 3 — PRODUCTION FEDERATION & SCALE
+
+Renamed from the pack's root-level APPLY_GUIDE.txt (2026-08-07 apply pass):
+this repo has applied 19+ prior packs that all targeted the same root
+filename, so at most one could ever survive on disk. See claudeassess.txt,
+"TODAY ASSESS TXT", recommendation 1. This and the other two packs applied
+in this session keep their own distinctly-named guide instead of
+overwriting each other.
+
+1. Apply migration 017_milestone_3_scale.sql.
+
+2. Register:
+   DeviceFederationService
+   MlsGroupService
+   KeyTransparencyV2Service
+   PushV2Service
+   TurnRegionService
+   AttachmentCdnService
+   EnterpriseIdentityV2Service
+   BillingReconciliationService
+   EmergencyEscalationService
+   CanaryReleaseService
+
+3. Register registerMilestone3Routes().
+
+4. Configure production providers:
+   APNs
+   FCM
+   Redis
+   at least 2 TURN regions
+   private object storage
+   CDN signing
+   SSO/SCIM
+   billing provider
+   emergency notifier
+
+5. Replace any FailClosedMlsProvider only after selecting and reviewing an MLS implementation.
+
+6. Mobile:
+   instantiate Milestone3Client.
+   wire Linked Devices and Key Transparency pages.
+   load TURN credentials before call setup.
+   use push only as a wake-up signal.
+
+7. Add production background jobs:
+   push retry
+   emergency escalation
+   TURN health checks
+   transparency proof generation
+   expired attachment cleanup
+   billing reconciliation audit
+
+8. Run:
+   MILESTONE_3_ACCEPTANCE.md
+   k6-message-relay.js
+   CHAOS_MATRIX.md
+   canary policy
+
+9. Build Android/iOS internal releases first.
+
+10. Promote canary:
+    5% → 10% → 25% → 50% → 100%
+
+11. Auto-rollback if canary thresholds fail.
+
+12. Proceed to Milestone 4 only after acceptance evidence is archived.
