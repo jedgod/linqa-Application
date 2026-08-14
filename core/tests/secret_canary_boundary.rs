@@ -48,11 +48,10 @@ fn canary_in_signing_and_encryption_secrets_never_leaks_via_key_package() {
             // constructed to leak from). Re-run with only the classical
             // secrets canaried, leaving a real PQ seed untouched.
             let mut material = canary_key_material();
-            material.pq_encryption_secret =
-                linqa_core::identity::DeviceSecrets::generate()
-                    .export_key_material()
-                    .pq_encryption_secret
-                    .clone();
+            material.pq_encryption_secret = linqa_core::identity::DeviceSecrets::generate()
+                .export_key_material()
+                .pq_encryption_secret
+                .clone();
             let material_b64 = STANDARD.encode(serde_json::to_vec(&material).unwrap());
             NativeSecureCore::from_key_material(material_b64)
                 .expect("classical-only canary material constructs")
@@ -69,13 +68,19 @@ fn canary_in_signing_and_encryption_secrets_never_leaks_via_key_package() {
         "canary secret bytes leaked into generated key package"
     );
     assert!(
-        !package_b64.as_bytes().windows(CANARY.len()).any(|w| w == CANARY),
+        !package_b64
+            .as_bytes()
+            .windows(CANARY.len())
+            .any(|w| w == CANARY),
         "canary secret bytes leaked into base64-encoded key package"
     );
 
     let version_string = core.version();
     assert!(
-        !version_string.as_bytes().windows(CANARY.len()).any(|w| w == CANARY),
+        !version_string
+            .as_bytes()
+            .windows(CANARY.len())
+            .any(|w| w == CANARY),
         "canary secret bytes leaked into version() output"
     );
 }

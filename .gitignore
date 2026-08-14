@@ -31,6 +31,8 @@ Cargo.lock  # decide later whether to commit
 *.pem
 *.key
 secrets/
+!server/src/security/secrets/
+!server/src/security/secrets/**
 
 # Logs & temporary
 *.log

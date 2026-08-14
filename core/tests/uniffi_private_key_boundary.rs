@@ -40,8 +40,8 @@ fn generate_key_package_never_contains_private_key_bytes() {
         serde_json::from_slice(&secret_material).expect("material is JSON");
     for field in ["signing_key", "encryption_secret", "pq_encryption_secret"] {
         let value = &material_json[field];
-        let raw_bytes: Vec<u8> = serde_json::from_value::<Vec<u8>>(value.clone())
-            .expect("field is a byte array");
+        let raw_bytes: Vec<u8> =
+            serde_json::from_value::<Vec<u8>>(value.clone()).expect("field is a byte array");
         if raw_bytes.len() < 8 {
             continue; // too short to meaningfully assert non-containment
         }
@@ -115,7 +115,11 @@ fn verify_key_package_round_trip_is_public_key_only() {
         "created_at_unix",
         "expires_at_unix",
     ];
-    for key in package_json.as_object().expect("package is an object").keys() {
+    for key in package_json
+        .as_object()
+        .expect("package is an object")
+        .keys()
+    {
         assert!(
             allowed_fields.contains(&key.as_str()),
             "key package exposes unexpected field `{key}` outside the public-key allowlist"
