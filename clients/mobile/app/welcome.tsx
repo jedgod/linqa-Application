@@ -1,63 +1,74 @@
-import { SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { Pressable, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { PrimaryButton } from "../components/PrimaryButton";
-import { colors, radius } from "../theme/tokens";
+import { DottedGlobe } from "../components/DottedGlobe";
 
-/**
- * The one screen every fresh install was missing: `index.tsx` used to
- * redirect straight to `/(tabs)/home` unconditionally, so a cold start
- * with zero local accounts had no landing page at all — see index.tsx's
- * account-count check, which now routes here instead. "Create Account"
- * and "Sign In" are the same real entry point (`/account/sign-up`)
- * because the real backend unifies them: submitting a phone number either
- * signs in an existing account or creates a new one, whichever applies
- * (see that screen's own copy) — there's no separate "returning user"
- * flow to link to here.
- */
 export default function WelcomeScreen() {
   const router = useRouter();
+  const { width, height } = useWindowDimensions();
+  const globeSize = Math.max(220, Math.min(width - 42, height * 0.39, 340));
+
   return (
-    <SafeAreaView style={s.screen}>
-      <View style={s.top}>
-        <View style={s.mark}>
-          <Text style={s.markText}>LQ</Text>
+    <LinearGradient
+      colors={["#7148FF", "#5531DC", "#3925A7", "#21156B"]}
+      locations={[0, 0.34, 0.68, 1]}
+      start={{ x: 0.52, y: 0 }}
+      end={{ x: 0.48, y: 1 }}
+      style={styles.gradient}
+    >
+      <View style={styles.glowTop} />
+      <View style={styles.glowBottom} />
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.content}>
+          <View style={styles.hero}>
+            <Ionicons name="location-outline" size={62} color="#FFFFFF" accessibilityElementsHidden />
+            <Text accessibilityRole="header" style={styles.title}>Linqa World</Text>
+            <Text style={styles.tagline}>Connect Locally. Connect Globally.</Text>
+            <View style={styles.globeWrap}><DottedGlobe size={globeSize} /></View>
+          </View>
+
+          <View style={styles.actions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Get Started, create a Linqa account"
+              style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
+              onPress={() => router.push({ pathname: "/account/sign-up", params: { purpose: "REGISTRATION" } })}
+            >
+              <Text style={styles.primaryText}>Get Started</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Log in to an existing Linqa account"
+              style={({ pressed }) => [styles.login, pressed && styles.loginPressed]}
+              onPress={() => router.push({ pathname: "/account/sign-up", params: { purpose: "LOGIN" } })}
+            >
+              <Text style={styles.loginText}>Log In</Text>
+            </Pressable>
+          </View>
         </View>
-        <Text style={s.wordmark}>LINQA</Text>
-        <Text style={s.tagline}>Secure. Private. Yours.</Text>
-      </View>
-
-      <View style={s.mid}>
-        <Text style={s.title}>Welcome to Linqa</Text>
-        <Text style={s.copy}>The secure messenger built for real connections.</Text>
-      </View>
-
-      <View style={s.bottom}>
-        <PrimaryButton label="Create Account" onPress={() => router.push({ pathname: "/account/sign-up", params: { purpose: "REGISTRATION" } })} />
-        <PrimaryButton label="Sign In" onPress={() => router.push({ pathname: "/account/sign-up", params: { purpose: "LOGIN" } })} />
-        <Text style={s.footnote}>One Linqa identity connects CountryLinqa, Chats, Calls, LinqaSend, Vault, AI, and your other services.</Text>
-      </View>
-    </SafeAreaView>
+        <View style={styles.homeIndicator} />
+      </SafeAreaView>
+    </LinearGradient>
   );
 }
 
-const s = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#FFFFFF", padding: 24 },
-  top: { alignItems: "center", marginTop: 36 },
-  mark: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.lg,
-    backgroundColor: "#165DFF",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 10
-  },
-  markText: { color: "#FFFFFF", fontWeight: "900", fontSize: 18 },
-  wordmark: { color: "#165DFF", fontSize: 20, fontWeight: "900", letterSpacing: 3 },
-  tagline: { color: "#475467", fontSize: 12, marginTop: 8 },
-  mid: { alignItems: "center", marginTop: 116 },
-  title: { fontSize: 26, fontWeight: "900", color: "#111827" },
-  copy: { color: "#475467", textAlign: "center", marginTop: 12, lineHeight: 20, paddingHorizontal: 12 },
-  bottom: { marginTop: "auto", marginBottom: 28, gap: 14 },
-  footnote: { color: "#667085", textAlign: "center", fontSize: 11, lineHeight: 16 }
+const styles = StyleSheet.create({
+  gradient: { flex: 1 },
+  safeArea: { flex: 1 },
+  glowTop: { position: "absolute", top: -120, left: -40, right: -40, height: 360, borderRadius: 180, backgroundColor: "rgba(119,76,255,0.25)" },
+  glowBottom: { position: "absolute", bottom: -180, left: -90, width: 330, height: 420, borderRadius: 210, backgroundColor: "rgba(19,20,91,0.27)" },
+  content: { flex: 1, paddingHorizontal: 28, paddingTop: 36, paddingBottom: 18 },
+  hero: { flex: 1, alignItems: "center" },
+  title: { marginTop: 18, color: "#FFFFFF", fontSize: 42, lineHeight: 50, fontWeight: "700", letterSpacing: -1.7, textAlign: "center" },
+  tagline: { marginTop: 14, color: "rgba(255,255,255,0.68)", fontSize: 18, lineHeight: 25, fontWeight: "500", letterSpacing: -0.35, textAlign: "center" },
+  globeWrap: { flex: 1, minHeight: 235, justifyContent: "center", alignItems: "center", marginTop: 8 },
+  actions: { gap: 8 },
+  primary: { height: 66, borderRadius: 20, backgroundColor: "#FFFFFF", justifyContent: "center", alignItems: "center", shadowColor: "#09092B", shadowOpacity: 0.22, shadowRadius: 20, shadowOffset: { width: 0, height: 10 }, elevation: 7 },
+  primaryText: { color: "#4E2BD4", fontSize: 22, fontWeight: "800", letterSpacing: -0.3 },
+  pressed: { opacity: 0.93, transform: [{ scale: 0.992 }] },
+  login: { height: 54, borderRadius: 16, justifyContent: "center", alignItems: "center" },
+  loginPressed: { backgroundColor: "rgba(255,255,255,0.08)" },
+  loginText: { color: "#FFFFFF", fontSize: 20, fontWeight: "600", letterSpacing: -0.2 },
+  homeIndicator: { alignSelf: "center", width: 132, height: 5, borderRadius: 3, backgroundColor: "rgba(255,255,255,0.96)", marginBottom: 8 }
 });
