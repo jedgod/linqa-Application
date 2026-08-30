@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useRouter, useSegments } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   View
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { actionLabel, getModule, LINQA_MODULES } from "../modules/catalog";
 import { isGatedModule, moduleAvailable, type ModuleKey } from "../src/runtime/module-gates";
 import { RuntimeCapabilitiesService, type MobileCapabilitySnapshot } from "../services/runtime-capabilities.service";
@@ -273,6 +273,8 @@ function colorForAction(actionKey: string): string {
 
 export function ModuleRouteScreen({ moduleKey }: { moduleKey: string }) {
   const router = useRouter();
+  const segments = useSegments();
+  const inTabs = segments[0] === "(tabs)";
   const [pendingAction, setPendingAction] = useState<string>();
   const [capabilities, setCapabilities] = useState<MobileCapabilitySnapshot>({});
   const [capabilitiesLoaded, setCapabilitiesLoaded] = useState(false);
@@ -288,20 +290,8 @@ export function ModuleRouteScreen({ moduleKey }: { moduleKey: string }) {
 
   if (!selectedModule) {
     return (
-      <SafeAreaView style={styles.screen}>
+      <SafeAreaView edges={inTabs ? ["left", "right"] : ["top", "right", "bottom", "left"]} style={styles.screen}>
         <Text style={styles.title}>Module unavailable</Text>
-      </SafeAreaView>
-    );
-  }
-
-  if (capabilitiesLoaded && !currentAvailable) {
-    return (
-      <SafeAreaView style={styles.screen}>
-        <View style={styles.content}>
-          <Text style={styles.eyebrow}>CAPABILITY UNAVAILABLE</Text>
-          <Text style={styles.title}>{selectedModule.title}</Text>
-          <Text style={styles.subtitle}>This production workflow is hidden until its secure runtime dependencies and release flag are READY.</Text>
-        </View>
       </SafeAreaView>
     );
   }
@@ -329,15 +319,12 @@ export function ModuleRouteScreen({ moduleKey }: { moduleKey: string }) {
     );
   }
 
-  const availableActions = selectedModule.actions.filter((actionKey) => {
-    const target = MODULE_ALIASES[actionKey] ?? actionKey;
-    return !isGatedModule(target) || moduleAvailable(target, capabilities, WORKFLOW_COMPLETE);
-  });
+  const availableActions = selectedModule.actions;
   const searchAction = availableActions.find((actionKey) => actionKey === "search");
   const listedActions = availableActions.filter((actionKey) => actionKey !== searchAction);
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView edges={inTabs ? ["left", "right"] : ["top", "right", "bottom", "left"]} style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.heading}>
           <View style={{ flex: 1 }}>
@@ -356,6 +343,15 @@ export function ModuleRouteScreen({ moduleKey }: { moduleKey: string }) {
             </Pressable>
           )}
         </View>
+        {capabilitiesLoaded && !currentAvailable ? (
+          <View style={styles.runtimeNotice}>
+            <View style={styles.runtimeIcon}><Ionicons name="shield-outline" size={19} color="#FFCA57" /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.runtimeTitle}>Interface available · secure actions limited</Text>
+              <Text style={styles.runtimeCopy}>You can browse this page now. Provider-backed actions remain protected until their production dependencies are ready.</Text>
+            </View>
+          </View>
+        ) : null}
         <View style={styles.grid}>
           {listedActions.map((actionKey) => (
             <Pressable
@@ -399,6 +395,10 @@ const styles = StyleSheet.create({
     justifyContent: "center"
   },
   grid: { gap: spacing.xs + 3 },
+  runtimeNotice: { marginBottom: spacing.lg, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: "#6B5521", backgroundColor: "#2B2517", flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  runtimeIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: "#493B1B", alignItems: "center", justifyContent: "center" },
+  runtimeTitle: { color: "#FFE39A", fontSize: 13, fontWeight: "900" },
+  runtimeCopy: { color: "#C8B983", fontSize: 11, lineHeight: 16, marginTop: 3 },
   action: {
     minHeight: 60,
     borderRadius: radius.md,

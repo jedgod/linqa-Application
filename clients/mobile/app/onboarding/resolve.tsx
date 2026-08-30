@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, SafeAreaView, StyleSheet, Text } from "react-native";
+import { ActivityIndicator, StyleSheet, Text } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { OnboardingApiService, type OnboardingNextStep } from "../../services/onboarding.service";
 import { accessTokenProvider } from "../../services/session";
@@ -20,7 +21,15 @@ export default function OnboardingResolver() {
     let cancelled = false;
     const timer = setTimeout(() => client.status().then((status) => {
       if (!cancelled) router.replace(routes[status.nextStep] as never);
-    }).catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Unable to resume onboarding."); }), 0);
+    }).catch((cause) => {
+      if (cancelled) return;
+      const message = cause instanceof Error ? cause.message : "Unable to resume onboarding.";
+      if (/unauthenticated|authenticated session|auth_required/i.test(message)) {
+        router.replace("/welcome");
+        return;
+      }
+      setError(message);
+    }), 0);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [client, router]);
   return <SafeAreaView style={s.screen}><ActivityIndicator color="#6558DC" /><Text style={s.text}>{error ?? "Securely resuming your Linqa account…"}</Text></SafeAreaView>;

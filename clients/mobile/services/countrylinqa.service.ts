@@ -7,6 +7,7 @@ export type CountryCatalog = CountryLinqaCatalog;
 
 export type DiscoveryMode = "MY_COUNTRY" | "SELECTED_COUNTRIES" | "REGION" | "GLOBAL";
 export type CountryMode = DiscoveryMode;
+export type InboundReach = DiscoveryMode | "CONTACTS_ONLY";
 
 export type CountryLinqaPreferences = {
   mode: DiscoveryMode;
@@ -14,10 +15,21 @@ export type CountryLinqaPreferences = {
   verificationState: string;
   selectedCountries: string[];
   selectedRegions: string[];
+  inboundReach: InboundReach;
+  inboundSelectedCountries: string[];
+  inboundSelectedRegions: string[];
   locationPrecision: "COUNTRY" | "STATE" | "CITY";
   showCity: boolean;
+  showState: boolean;
+  showCountry: boolean;
+  verifiedOnly: boolean;
+  allowBusinesses: boolean;
+  allowCommunities: boolean;
+  allowEvents: boolean;
+  paused: boolean;
   subscriptionTier: "FREE" | "PREMIUM" | "ELITE";
   allowedModes: Record<DiscoveryMode, boolean>;
+  selectionLimits: { countries: number; regions: number };
 };
 export type CountryPreferences = CountryLinqaPreferences;
 
@@ -65,16 +77,20 @@ export class CountryLinqaService {
     selectedRegions?: string[];
     locationPrecision?: "COUNTRY" | "STATE" | "CITY";
     showCity?: boolean;
+    inboundReach?: InboundReach;
+    inboundSelectedCountries?: string[];
+    inboundSelectedRegions?: string[];
+    showState?: boolean;
+    showCountry?: boolean;
+    verifiedOnly?: boolean;
+    allowBusinesses?: boolean;
+    allowCommunities?: boolean;
+    allowEvents?: boolean;
+    paused?: boolean;
   }) {
     return this.request<CountryLinqaPreferences>("/v1/countrylinqa/preferences", {
       method: "PUT",
-      body: JSON.stringify({
-        mode: input.mode,
-        selectedCountries: input.selectedCountries ?? [],
-        selectedRegions: input.selectedRegions ?? [],
-        locationPrecision: input.locationPrecision ?? "COUNTRY",
-        showCity: input.showCity ?? false
-      })
+      body: JSON.stringify(input)
     });
   }
 

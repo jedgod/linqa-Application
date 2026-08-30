@@ -9,16 +9,18 @@ import { createActionsForPath } from "../../navigation/information-architecture"
 import { ActivityIndicator } from "react-native";
 import { OnboardingApiService } from "../../services/onboarding.service";
 import { accessTokenProvider } from "../../services/session";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
 
 function AccountHeader() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { accounts, active, activate } = useAccounts();
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
   return (
-    <View style={s.header}>
+    <View style={[s.header, { height: 58 + insets.top, paddingTop: insets.top }] }>
       <Text style={s.brand}>Linqa</Text>
       <Pressable style={s.avatarBtn} onPress={() => setSwitcherOpen(true)} accessibilityLabel="Switch account">
         <Ionicons name="person-circle-outline" size={26} color="#12D6AE" />
@@ -52,6 +54,7 @@ export default function TabsLayout() {
   const router = useRouter();
   const pathname = usePathname();
   const [createOpen, setCreateOpen] = useState(false);
+  const insets = useSafeAreaInsets();
   const actions = createActionsForPath(pathname);
   const { active } = useAccounts();
   const onboarding = useMemo(() => new OnboardingApiService(API, accessTokenProvider), []);
@@ -75,7 +78,7 @@ export default function TabsLayout() {
         screenOptions={{
           headerShown: true,
           header: () => <AccountHeader />,
-          tabBarStyle: s.tabBar,
+          tabBarStyle: [s.tabBar, { height: 64 + Math.max(insets.bottom, 8), paddingBottom: Math.max(insets.bottom, 8) }],
           tabBarLabelStyle: s.tabLabel,
           tabBarActiveTintColor: "#5B4CFF",
           tabBarInactiveTintColor: "#596078"
@@ -157,8 +160,7 @@ export default function TabsLayout() {
 
 const s = StyleSheet.create({
   header: {
-    height: 52,
-    paddingTop: 4,
+    minHeight: 58,
     paddingHorizontal: 16,
     backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,

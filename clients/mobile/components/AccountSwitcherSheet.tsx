@@ -1,6 +1,7 @@
 import React from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { LocalAccount } from "../account/AccountContext";
 import { avatarColorForSlot, colors, radius } from "../theme/tokens";
 
@@ -25,10 +26,11 @@ export function AccountSwitcherSheet({
   onAdd(): void;
   onManage(): void;
 }) {
+  const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={s.backdrop} onPress={onClose}>
-        <View style={s.sheet}>
+        <View style={[s.sheet, { paddingBottom: Math.max(insets.bottom + 18, 30) }]}>
           <Text style={s.title}>Switch account</Text>
 
           {accounts.map((account) => {

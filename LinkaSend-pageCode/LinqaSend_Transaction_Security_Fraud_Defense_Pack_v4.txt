@@ -1,0 +1,2097 @@
+
+================================================================================
+LINQASEND™ — TRANSACTION SECURITY & FRAUD DEFENSE PACK v4
+Production Security Layer
+================================================================================
+
+POSITION
+Authenticated User
+  -> Sender Context
+  -> Recipient Resolver
+  -> Transfer Classifier
+  -> Country / Corridor Capability Engine v3
+  -> Persisted Quote
+  -> [ v4 TRANSACTION SECURITY & FRAUD DEFENSE ]
+  -> Funding Authorization
+  -> Transfer-Class Router
+  -> Immutable Ledger
+  -> Recipient Credit
+  -> Reconciliation
+  -> Completion
+
+PRIMARY DOMAINS
+1. Account Takeover protection
+2. Trusted device binding
+3. Security-change cooldowns
+4. Transaction hash + challenge
+5. Passkey/biometric/device assertion
+6. Single-use authorization token
+7. Payment-specific risk engine
+8. Velocity controls
+9. Recipient trust/scam controls
+10. Funding-source fraud controls
+11. Webhook authenticity/replay protection
+12. Provider state-transition guard
+13. Ledger integrity seal/hash chain
+14. Admin maker-checker
+15. Audit evidence
+16. Mobile security states
+
+SECURITY PRINCIPLE
+No real-money execution may start unless BOTH:
+- v3 regulatory/country/corridor capability approval passed.
+- v4 security/fraud authorization passed.
+================================================================================
+
+
+================================================================================
+FILE: server/migrations/20260820_linqasend_security_fraud_v4.sql
+================================================================================
+
+BEGIN;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS linqasend_trusted_payment_devices_v4 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  installation_id UUID NOT NULL,
+  device_id UUID NOT NULL,
+  device_binding_key_id TEXT NOT NULL,
+  trust_state TEXT NOT NULL CHECK (
+    trust_state IN ('TRUSTED','UNKNOWN','RISKY','REVOKED')
+  ),
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_step_up_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  revocation_reason TEXT,
+  UNIQUE(user_id, installation_id, device_id)
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_security_change_events_v4 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  event_type TEXT NOT NULL CHECK (
+    event_type IN (
+      'PASSWORD_RESET',
+      'RECOVERY_EMAIL_CHANGED',
+      'RECOVERY_PHONE_CHANGED',
+      'PRIMARY_PHONE_CHANGED',
+      'DEVICE_ENROLLED',
+      'DEVICE_REVOKED',
+      'PASSKEY_ADDED',
+      'PASSKEY_REMOVED',
+      'ACCOUNT_RECOVERY_COMPLETED'
+    )
+  ),
+  severity TEXT NOT NULL CHECK (
+    severity IN ('LOW','MEDIUM','HIGH','CRITICAL')
+  ),
+  event_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_linqasend_security_changes_user_time_v4
+  ON linqasend_security_change_events_v4(user_id, event_at DESC);
+
+CREATE TABLE IF NOT EXISTS linqasend_payment_risk_assessments_v4 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transfer_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  score INTEGER NOT NULL CHECK (score BETWEEN 0 AND 100),
+  decision TEXT NOT NULL CHECK (
+    decision IN ('ALLOW','STEP_UP','WARN','REVIEW','HOLD','DECLINE','FREEZE')
+  ),
+  model_version TEXT NOT NULL,
+  reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+  signals JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_recipient_trust_v4 (
+  sender_user_id UUID NOT NULL,
+  recipient_id TEXT NOT NULL,
+  first_transfer_at TIMESTAMPTZ,
+  last_transfer_at TIMESTAMPTZ,
+  successful_transfer_count INTEGER NOT NULL DEFAULT 0,
+  failed_transfer_count INTEGER NOT NULL DEFAULT 0,
+  total_sent_minor BIGINT NOT NULL DEFAULT 0,
+  last_currency CHAR(3),
+  trust_state TEXT NOT NULL DEFAULT 'NEW' CHECK (
+    trust_state IN ('NEW','ESTABLISHED','RESTRICTED','BLOCKED')
+  ),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(sender_user_id, recipient_id)
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_scam_warning_events_v4 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transfer_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  warning_code TEXT NOT NULL,
+  severity TEXT NOT NULL CHECK (
+    severity IN ('INFO','WARN','HIGH','CRITICAL')
+  ),
+  acknowledged BOOLEAN NOT NULL DEFAULT FALSE,
+  displayed_at TIMESTAMPTZ,
+  acknowledged_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_transaction_challenges_v4 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transfer_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  challenge_nonce TEXT NOT NULL UNIQUE,
+  challenge_hash TEXT NOT NULL,
+  expected_transaction_hash TEXT NOT NULL,
+  device_id UUID NOT NULL,
+  installation_id UUID NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_transaction_authorizations_v4 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transfer_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  jti TEXT NOT NULL UNIQUE,
+  transaction_hash TEXT NOT NULL,
+  device_binding_key_id TEXT NOT NULL,
+  auth_method TEXT NOT NULL CHECK (
+    auth_method IN (
+      'PASSKEY',
+      'BIOMETRIC_DEVICE_ASSERTION',
+      'DEVICE_CREDENTIAL',
+      'PROVIDER_3DS'
+    )
+  ),
+  authorized_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_funding_fingerprints_v4 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  funding_source_id UUID NOT NULL,
+  provider TEXT NOT NULL,
+  provider_fingerprint TEXT NOT NULL,
+  owner_user_id UUID NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(provider, provider_fingerprint, owner_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_linqasend_funding_fingerprint_global_v4
+  ON linqasend_funding_fingerprints_v4(provider, provider_fingerprint);
+
+CREATE TABLE IF NOT EXISTS linqasend_provider_webhook_events_v4 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider TEXT NOT NULL,
+  provider_event_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  signature_verified BOOLEAN NOT NULL,
+  timestamp_verified BOOLEAN NOT NULL,
+  payload_hash TEXT NOT NULL,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ,
+  replay_detected BOOLEAN NOT NULL DEFAULT FALSE,
+  UNIQUE(provider, provider_event_id)
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_ledger_integrity_v4 (
+  journal_id UUID PRIMARY KEY,
+  previous_hash TEXT,
+  journal_hash TEXT NOT NULL UNIQUE,
+  posting_count INTEGER NOT NULL,
+  computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_privileged_money_actions_v4 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  action_type TEXT NOT NULL CHECK (
+    action_type IN (
+      'RELEASE_HOLD','REFUND','REVERSAL','LIMIT_OVERRIDE',
+      'RISK_OVERRIDE','COMPLIANCE_OVERRIDE','PROVIDER_RETRY'
+    )
+  ),
+  transfer_id UUID,
+  requested_by UUID NOT NULL,
+  approved_by UUID,
+  status TEXT NOT NULL CHECK (
+    status IN ('REQUESTED','APPROVED','REJECTED','EXECUTED','CANCELED')
+  ),
+  reason_code TEXT NOT NULL,
+  notes TEXT,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  approved_at TIMESTAMPTZ,
+  executed_at TIMESTAMPTZ,
+  CHECK (approved_by IS NULL OR approved_by <> requested_by)
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_security_audit_v4 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  transfer_id UUID,
+  event_type TEXT NOT NULL,
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  prev_event_hash TEXT,
+  event_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMIT;
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/types.ts
+================================================================================
+
+export type PaymentRiskDecision =
+  | "ALLOW"
+  | "STEP_UP"
+  | "WARN"
+  | "REVIEW"
+  | "HOLD"
+  | "DECLINE"
+  | "FREEZE";
+
+export type DeviceTrustState =
+  | "TRUSTED"
+  | "UNKNOWN"
+  | "RISKY"
+  | "REVOKED";
+
+export interface PaymentRiskSignals {
+  accountAgeDays: number;
+  deviceTrust: DeviceTrustState;
+  deviceAgeDays: number;
+
+  recentPasswordReset: boolean;
+  recentRecoveryChange: boolean;
+  recentPhoneChange: boolean;
+  recentDeviceEnrollment: boolean;
+
+  recipientIsNew: boolean;
+  priorSuccessfulTransfers: number;
+  relationshipAgeDays: number;
+
+  transferCount1h: number;
+  transferCount24h: number;
+  amountSent24hMinor: bigint;
+  amountDeviationRatio: number;
+
+  fundingSourceAgeDays: number;
+  fundingSourceReuseAcrossAccounts: number;
+
+  countryMismatch: boolean;
+  impossibleTravelSignal: boolean;
+
+  priorChargebacks: number;
+  priorFailedFundingAttempts: number;
+
+  quoteAgeSeconds: number;
+  blockedRelationship: boolean;
+}
+
+export interface PaymentRiskResult {
+  score: number;
+  decision: PaymentRiskDecision;
+  reasons: string[];
+  modelVersion: string;
+}
+
+export interface SecurityDecision {
+  risk: PaymentRiskResult;
+  requireStepUp: boolean;
+  requireScamWarning: boolean;
+  warnings: Array<{
+    code: string;
+    severity: "INFO" | "WARN" | "HIGH" | "CRITICAL";
+    messageKey: string;
+  }>;
+  securityCooldownUntil?: string;
+  blocked: boolean;
+  blockReason?: string;
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/device-binding.service.ts
+================================================================================
+
+import { ForbiddenException, Injectable } from "@nestjs/common";
+
+@Injectable()
+export class DeviceBindingService {
+  constructor(private readonly devices: TrustedPaymentDeviceRepository) {}
+
+  async assertUsable(args: {
+    userId: string;
+    installationId: string;
+    deviceId: string;
+  }) {
+    const device = await this.devices.find(args);
+
+    if (!device) {
+      return {
+        trustState: "UNKNOWN" as const,
+        requiresStepUp: true,
+      };
+    }
+
+    if (device.trustState === "REVOKED") {
+      throw new ForbiddenException("PAYMENT_DEVICE_REVOKED");
+    }
+
+    return {
+      trustState: device.trustState,
+      requiresStepUp: device.trustState !== "TRUSTED",
+      deviceBindingKeyId: device.deviceBindingKeyId,
+      firstSeenAt: device.firstSeenAt,
+    };
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/security-change-cooldown.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class SecurityChangeCooldownService {
+  constructor(private readonly events: SecurityChangeEventRepository) {}
+
+  async evaluate(userId: string) {
+    const recent = await this.events.listRecent(
+      userId,
+      new Date(Date.now() - 72 * 60 * 60 * 1000),
+    );
+
+    let until: Date | undefined;
+    const reasons: string[] = [];
+
+    for (const event of recent) {
+      let hours = 0;
+
+      switch (event.eventType) {
+        case "ACCOUNT_RECOVERY_COMPLETED":
+        case "PRIMARY_PHONE_CHANGED":
+        case "RECOVERY_PHONE_CHANGED":
+          hours = 24;
+          break;
+
+        case "PASSWORD_RESET":
+        case "RECOVERY_EMAIL_CHANGED":
+        case "DEVICE_ENROLLED":
+          hours = 6;
+          break;
+      }
+
+      if (hours > 0) {
+        reasons.push(event.eventType);
+        const candidate = new Date(
+          event.eventAt.getTime() + hours * 60 * 60 * 1000,
+        );
+        if (!until || candidate > until) until = candidate;
+      }
+    }
+
+    return {
+      active: !!until && until > new Date(),
+      cooldownUntil: until,
+      reasons,
+    };
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/transaction-signature.service.ts
+================================================================================
+
+import { createHash } from "crypto";
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class TransactionSignatureService {
+  buildTransactionHash(args: {
+    transferId: string;
+    senderUserId: string;
+    recipientId: string;
+    quoteId: string;
+    sourceAmountMinor: bigint;
+    sourceCurrency: string;
+    destinationAmountMinor: bigint;
+    destinationCurrency: string;
+    fundingSourceId: string;
+    transferClass: string;
+  }) {
+    const canonical = [
+      "LINQASEND_TX_V4",
+      args.transferId,
+      args.senderUserId,
+      args.recipientId,
+      args.quoteId,
+      args.sourceAmountMinor.toString(),
+      args.sourceCurrency.toUpperCase(),
+      args.destinationAmountMinor.toString(),
+      args.destinationCurrency.toUpperCase(),
+      args.fundingSourceId,
+      args.transferClass,
+    ].join("|");
+
+    return createHash("sha256").update(canonical).digest("hex");
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/transaction-challenge.service.ts
+================================================================================
+
+import { createHash, randomBytes } from "crypto";
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class TransactionChallengeService {
+  constructor(
+    private readonly repo: TransactionChallengeRepository,
+    private readonly signatures: TransactionSignatureService,
+  ) {}
+
+  async create(args: {
+    transfer: SecureTransferView;
+    userId: string;
+    installationId: string;
+    deviceId: string;
+  }) {
+    const transactionHash = this.signatures.buildTransactionHash({
+      transferId: args.transfer.id,
+      senderUserId: args.transfer.senderUserId,
+      recipientId: args.transfer.recipientId,
+      quoteId: args.transfer.quoteId,
+      sourceAmountMinor: args.transfer.sourceAmountMinor,
+      sourceCurrency: args.transfer.sourceCurrency,
+      destinationAmountMinor: args.transfer.destinationAmountMinor,
+      destinationCurrency: args.transfer.destinationCurrency,
+      fundingSourceId: args.transfer.fundingSourceId,
+      transferClass: args.transfer.transferClass,
+    });
+
+    const nonce = randomBytes(32).toString("base64url");
+    const challengeHash = createHash("sha256")
+      .update(`${nonce}|${transactionHash}`)
+      .digest("hex");
+
+    return this.repo.create({
+      transferId: args.transfer.id,
+      userId: args.userId,
+      challengeNonce: nonce,
+      challengeHash,
+      expectedTransactionHash: transactionHash,
+      installationId: args.installationId,
+      deviceId: args.deviceId,
+      expiresAt: new Date(Date.now() + 120_000),
+    });
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/transaction-authorization.service.ts
+================================================================================
+
+import { ForbiddenException, Injectable } from "@nestjs/common";
+import { randomUUID } from "crypto";
+
+@Injectable()
+export class TransactionAuthorizationService {
+  constructor(
+    private readonly challenges: TransactionChallengeRepository,
+    private readonly authorizations: TransactionAuthorizationRepository,
+    private readonly assertions: DeviceAssertionVerifier,
+    private readonly signer: TransactionTokenSigner,
+    private readonly redis: RedisService,
+  ) {}
+
+  async authorize(args: {
+    challengeId: string;
+    userId: string;
+    installationId: string;
+    deviceId: string;
+    assertion: DevicePaymentAssertion;
+    authMethod:
+      | "PASSKEY"
+      | "BIOMETRIC_DEVICE_ASSERTION"
+      | "DEVICE_CREDENTIAL";
+  }) {
+    const challenge = await this.challenges.findActive(args.challengeId);
+
+    if (!challenge) {
+      throw new ForbiddenException("PAYMENT_CHALLENGE_EXPIRED");
+    }
+
+    if (
+      challenge.userId !== args.userId ||
+      challenge.installationId !== args.installationId ||
+      challenge.deviceId !== args.deviceId
+    ) {
+      throw new ForbiddenException("PAYMENT_CHALLENGE_BINDING_MISMATCH");
+    }
+
+    const verified = await this.assertions.verify({
+      challenge: challenge.challengeNonce,
+      expectedTransactionHash: challenge.expectedTransactionHash,
+      assertion: args.assertion,
+      userId: args.userId,
+      deviceId: args.deviceId,
+    });
+
+    if (!verified.ok) {
+      throw new ForbiddenException("PAYMENT_ASSERTION_INVALID");
+    }
+
+    await this.challenges.consume(challenge.id);
+
+    const jti = randomUUID();
+    const expiresAt = new Date(Date.now() + 120_000);
+
+    await this.authorizations.create({
+      transferId: challenge.transferId,
+      userId: args.userId,
+      jti,
+      transactionHash: challenge.expectedTransactionHash,
+      deviceBindingKeyId: verified.deviceBindingKeyId,
+      authMethod: args.authMethod,
+      expiresAt,
+    });
+
+    await this.redis.set(`linqasend:v4:auth:${jti}`, "ACTIVE", 120);
+
+    return this.signer.sign({
+      sub: args.userId,
+      transferId: challenge.transferId,
+      transactionHash: challenge.expectedTransactionHash,
+      purpose: "LINQASEND_TRANSFER_CONFIRM",
+      aud: "linqasend-money-movement",
+      jti,
+      exp: Math.floor(expiresAt.getTime() / 1000),
+    });
+  }
+
+  async consume(
+    token: string,
+    expected: {
+      userId: string;
+      transferId: string;
+      transactionHash: string;
+    },
+  ) {
+    const claims = await this.signer.verify(token);
+
+    if (
+      claims.sub !== expected.userId ||
+      claims.transferId !== expected.transferId ||
+      claims.transactionHash !== expected.transactionHash ||
+      claims.purpose !== "LINQASEND_TRANSFER_CONFIRM" ||
+      claims.aud !== "linqasend-money-movement"
+    ) {
+      throw new ForbiddenException("PAYMENT_AUTH_TOKEN_MISMATCH");
+    }
+
+    const state = await this.redis.getDel(`linqasend:v4:auth:${claims.jti}`);
+
+    if (state !== "ACTIVE") {
+      throw new ForbiddenException("PAYMENT_AUTH_TOKEN_USED_OR_EXPIRED");
+    }
+
+    await this.authorizations.markConsumed(claims.jti);
+    return claims;
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/velocity-limit.service.ts
+================================================================================
+
+import { Injectable, TooManyRequestsException } from "@nestjs/common";
+
+@Injectable()
+export class VelocityLimitService {
+  constructor(private readonly redis: RedisService) {}
+
+  async enforce(args: {
+    userId: string;
+    amountMinor: bigint;
+    currency: string;
+    isNewRecipient: boolean;
+    policy: {
+      maxTransfers1h: number;
+      maxTransfers24h: number;
+      newRecipientMaxTransfers24h?: number;
+      maxAmount24hMinor?: bigint;
+    };
+  }) {
+    const oneHour = await this.redis.incrWithTtl(
+      `linqasend:v4:velocity:${args.userId}:1h`,
+      3600,
+    );
+
+    if (oneHour > args.policy.maxTransfers1h) {
+      throw new TooManyRequestsException("TRANSFER_VELOCITY_1H_EXCEEDED");
+    }
+
+    const oneDay = await this.redis.incrWithTtl(
+      `linqasend:v4:velocity:${args.userId}:24h`,
+      86400,
+    );
+
+    if (oneDay > args.policy.maxTransfers24h) {
+      throw new TooManyRequestsException("TRANSFER_VELOCITY_24H_EXCEEDED");
+    }
+
+    if (
+      args.isNewRecipient &&
+      args.policy.newRecipientMaxTransfers24h !== undefined
+    ) {
+      const count = await this.redis.incrWithTtl(
+        `linqasend:v4:velocity:${args.userId}:new-recipient:24h`,
+        86400,
+      );
+
+      if (count > args.policy.newRecipientMaxTransfers24h) {
+        throw new TooManyRequestsException(
+          "NEW_RECIPIENT_VELOCITY_EXCEEDED",
+        );
+      }
+    }
+
+    if (args.policy.maxAmount24hMinor !== undefined) {
+      const total = await this.redis.addBigIntWithTtl(
+        `linqasend:v4:velocity:${args.userId}:amount:${args.currency}:24h`,
+        args.amountMinor,
+        86400,
+      );
+
+      if (total > args.policy.maxAmount24hMinor) {
+        throw new TooManyRequestsException("TRANSFER_AMOUNT_24H_EXCEEDED");
+      }
+    }
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/recipient-trust.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class RecipientTrustService {
+  constructor(private readonly repo: RecipientTrustRepository) {}
+
+  async evaluate(senderUserId: string, recipientId: string) {
+    const row = await this.repo.find(senderUserId, recipientId);
+
+    if (!row) {
+      return {
+        isNew: true,
+        trustState: "NEW" as const,
+        successfulTransfers: 0,
+        relationshipAgeDays: 0,
+      };
+    }
+
+    return {
+      isNew: row.successfulTransferCount === 0,
+      trustState: row.trustState,
+      successfulTransfers: row.successfulTransferCount,
+      relationshipAgeDays: row.firstTransferAt
+        ? Math.max(
+            0,
+            Math.floor(
+              (Date.now() - row.firstTransferAt.getTime()) / 86_400_000,
+            ),
+          )
+        : 0,
+    };
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/funding-fraud.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class FundingFraudService {
+  constructor(
+    private readonly fingerprints: FundingFingerprintRepository,
+    private readonly failures: FundingFailureRepository,
+  ) {}
+
+  async collect(userId: string, fundingSourceId: string) {
+    const source = await this.fingerprints.findByFundingSource(
+      fundingSourceId,
+    );
+
+    const failedAttempts = await this.failures.countRecent(
+      userId,
+      24 * 60 * 60,
+    );
+
+    if (!source) {
+      return {
+        fundingSourceAgeDays: 0,
+        fundingSourceReuseAcrossAccounts: 0,
+        priorFailedFundingAttempts: failedAttempts,
+      };
+    }
+
+    const reuse = await this.fingerprints.countOwnersForFingerprint(
+      source.provider,
+      source.providerFingerprint,
+    );
+
+    return {
+      fundingSourceAgeDays: Math.max(
+        0,
+        Math.floor(
+          (Date.now() - source.firstSeenAt.getTime()) / 86_400_000,
+        ),
+      ),
+      fundingSourceReuseAcrossAccounts: reuse,
+      priorFailedFundingAttempts: failedAttempts,
+    };
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/payment-risk-engine.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class PaymentRiskEngineService {
+  readonly modelVersion = "linqasend-risk-v4.1";
+
+  assess(s: PaymentRiskSignals): PaymentRiskResult {
+    let score = 0;
+    const reasons: string[] = [];
+
+    const add = (condition: boolean, points: number, reason: string) => {
+      if (condition) {
+        score += points;
+        reasons.push(reason);
+      }
+    };
+
+    add(s.blockedRelationship, 100, "BLOCKED_RELATIONSHIP");
+    add(s.deviceTrust === "REVOKED", 100, "REVOKED_DEVICE");
+    add(s.deviceTrust === "RISKY", 35, "RISKY_DEVICE");
+    add(s.deviceTrust === "UNKNOWN", 15, "UNKNOWN_DEVICE");
+
+    add(s.accountAgeDays < 7, 12, "YOUNG_ACCOUNT");
+    add(s.deviceAgeDays < 1, 15, "NEW_DEVICE");
+
+    add(s.recentPasswordReset, 20, "RECENT_PASSWORD_RESET");
+    add(s.recentRecoveryChange, 25, "RECENT_RECOVERY_CHANGE");
+    add(s.recentPhoneChange, 30, "RECENT_PHONE_CHANGE");
+    add(s.recentDeviceEnrollment, 15, "RECENT_DEVICE_ENROLLMENT");
+
+    add(s.recipientIsNew, 12, "NEW_RECIPIENT");
+    add(
+      s.priorSuccessfulTransfers === 0 && s.relationshipAgeDays < 1,
+      12,
+      "NO_ESTABLISHED_RELATIONSHIP",
+    );
+
+    add(s.transferCount1h >= 4, 20, "HIGH_VELOCITY_1H");
+    add(s.transferCount24h >= 10, 15, "HIGH_VELOCITY_24H");
+    add(s.amountDeviationRatio >= 3, 20, "UNUSUAL_AMOUNT");
+
+    add(s.fundingSourceAgeDays < 1, 18, "NEW_FUNDING_SOURCE");
+    add(
+      s.fundingSourceReuseAcrossAccounts >= 3,
+      25,
+      "FUNDING_SOURCE_MULTI_ACCOUNT_REUSE",
+    );
+
+    add(s.countryMismatch, 15, "COUNTRY_MISMATCH");
+    add(s.impossibleTravelSignal, 35, "IMPOSSIBLE_TRAVEL");
+
+    add(s.priorChargebacks >= 1, 20, "PRIOR_CHARGEBACK");
+    add(
+      s.priorFailedFundingAttempts >= 3,
+      20,
+      "REPEATED_FUNDING_FAILURES",
+    );
+
+    add(s.quoteAgeSeconds > 60, 20, "STALE_QUOTE");
+
+    score = Math.min(100, score);
+
+    let decision: PaymentRiskDecision = "ALLOW";
+
+    if (score >= 90) decision = "FREEZE";
+    else if (score >= 80) decision = "DECLINE";
+    else if (score >= 65) decision = "HOLD";
+    else if (score >= 50) decision = "REVIEW";
+    else if (score >= 30) decision = "WARN";
+    else if (score >= 15) decision = "STEP_UP";
+
+    return {
+      score,
+      decision,
+      reasons,
+      modelVersion: this.modelVersion,
+    };
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/scam-defense.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class ScamDefenseService {
+  buildWarnings(risk: PaymentRiskResult) {
+    const warnings: SecurityDecision["warnings"] = [];
+    const has = (r: string) => risk.reasons.includes(r);
+
+    if (has("NEW_RECIPIENT")) {
+      warnings.push({
+        code: "NEW_RECIPIENT_WARNING",
+        severity: "WARN",
+        messageKey: "linqasend.scam.new_recipient",
+      });
+    }
+
+    if (
+      has("RECENT_PASSWORD_RESET") ||
+      has("RECENT_RECOVERY_CHANGE") ||
+      has("RECENT_PHONE_CHANGE")
+    ) {
+      warnings.push({
+        code: "RECENT_ACCOUNT_SECURITY_CHANGE",
+        severity: "HIGH",
+        messageKey: "linqasend.scam.security_change",
+      });
+    }
+
+    if (has("FUNDING_SOURCE_MULTI_ACCOUNT_REUSE")) {
+      warnings.push({
+        code: "FUNDING_SOURCE_REUSE",
+        severity: "HIGH",
+        messageKey: "linqasend.scam.funding_source_reuse",
+      });
+    }
+
+    if (has("IMPOSSIBLE_TRAVEL")) {
+      warnings.push({
+        code: "LOCATION_ANOMALY",
+        severity: "CRITICAL",
+        messageKey: "linqasend.scam.location_anomaly",
+      });
+    }
+
+    return warnings;
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/transfer-security-orchestrator.service.ts
+================================================================================
+
+import { ForbiddenException, Injectable } from "@nestjs/common";
+
+@Injectable()
+export class TransferSecurityOrchestratorService {
+  constructor(
+    private readonly devices: DeviceBindingService,
+    private readonly cooldowns: SecurityChangeCooldownService,
+    private readonly recipients: RecipientTrustService,
+    private readonly velocity: VelocityLimitService,
+    private readonly signalCollector: PaymentRiskSignalCollector,
+    private readonly risk: PaymentRiskEngineService,
+    private readonly scam: ScamDefenseService,
+    private readonly riskRepo: PaymentRiskAssessmentRepository,
+    private readonly warningsRepo: ScamWarningRepository,
+    private readonly audit: SecurityAuditEvidenceService,
+  ) {}
+
+  async evaluate(args: {
+    transfer: SecureTransferView;
+    senderUserId: string;
+    installationId: string;
+    deviceId: string;
+    velocityPolicy: {
+      maxTransfers1h: number;
+      maxTransfers24h: number;
+      newRecipientMaxTransfers24h?: number;
+      maxAmount24hMinor?: bigint;
+    };
+  }): Promise<SecurityDecision> {
+    const device = await this.devices.assertUsable({
+      userId: args.senderUserId,
+      installationId: args.installationId,
+      deviceId: args.deviceId,
+    });
+
+    const cooldown = await this.cooldowns.evaluate(args.senderUserId);
+
+    const recipientTrust = await this.recipients.evaluate(
+      args.senderUserId,
+      args.transfer.recipientId,
+    );
+
+    if (recipientTrust.trustState === "BLOCKED") {
+      throw new ForbiddenException("RECIPIENT_BLOCKED");
+    }
+
+    await this.velocity.enforce({
+      userId: args.senderUserId,
+      amountMinor: args.transfer.sourceAmountMinor,
+      currency: args.transfer.sourceCurrency,
+      isNewRecipient: recipientTrust.isNew,
+      policy: args.velocityPolicy,
+    });
+
+    const signals = await this.signalCollector.collect({
+      transfer: args.transfer,
+      senderUserId: args.senderUserId,
+      installationId: args.installationId,
+      deviceId: args.deviceId,
+      deviceTrust: device.trustState,
+      recipientTrust,
+    });
+
+    const result = this.risk.assess(signals);
+
+    await this.riskRepo.insert({
+      transferId: args.transfer.id,
+      userId: args.senderUserId,
+      score: result.score,
+      decision: result.decision,
+      modelVersion: result.modelVersion,
+      reasons: result.reasons,
+      signals: {
+        ...signals,
+        amountSent24hMinor: signals.amountSent24hMinor.toString(),
+      },
+    });
+
+    if (result.decision === "FREEZE") {
+      await this.audit.append({
+        actorType: "SYSTEM",
+        actorId: "linqasend-risk-v4",
+        transferId: args.transfer.id,
+        eventType: "TRANSFER_SECURITY_FREEZE",
+        evidence: {
+          score: result.score,
+          reasons: result.reasons,
+        },
+      });
+
+      return {
+        risk: result,
+        requireStepUp: true,
+        requireScamWarning: false,
+        warnings: [],
+        blocked: true,
+        blockReason: "SECURITY_FREEZE",
+      };
+    }
+
+    if (["DECLINE", "HOLD", "REVIEW"].includes(result.decision)) {
+      return {
+        risk: result,
+        requireStepUp: true,
+        requireScamWarning: false,
+        warnings: [],
+        blocked: true,
+        blockReason:
+          result.decision === "DECLINE"
+            ? "SECURITY_DECLINE"
+            : result.decision === "HOLD"
+              ? "SECURITY_HOLD"
+              : "SECURITY_REVIEW",
+      };
+    }
+
+    const warnings = this.scam.buildWarnings(result);
+
+    for (const warning of warnings) {
+      await this.warningsRepo.insert({
+        transferId: args.transfer.id,
+        userId: args.senderUserId,
+        warningCode: warning.code,
+        severity: warning.severity,
+        metadata: {},
+      });
+    }
+
+    if (cooldown.active) {
+      return {
+        risk: result,
+        requireStepUp: true,
+        requireScamWarning: warnings.length > 0,
+        warnings,
+        securityCooldownUntil: cooldown.cooldownUntil?.toISOString(),
+        blocked: true,
+        blockReason: "SECURITY_CHANGE_COOLDOWN",
+      };
+    }
+
+    return {
+      risk: result,
+      requireStepUp: true,
+      requireScamWarning: warnings.length > 0,
+      warnings,
+      blocked: false,
+    };
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/webhook-security.service.ts
+================================================================================
+
+import { createHash } from "crypto";
+import { ForbiddenException, Injectable } from "@nestjs/common";
+
+@Injectable()
+export class WebhookSecurityService {
+  constructor(
+    private readonly providers: WebhookProviderRegistry,
+    private readonly events: ProviderWebhookEventRepository,
+  ) {}
+
+  async verifyAndRegister(args: {
+    provider: string;
+    rawBody: Buffer;
+    headers: Record<string, string | string[] | undefined>;
+  }) {
+    const adapter = this.providers.get(args.provider);
+
+    const parsed = await adapter.parseAndVerify({
+      rawBody: args.rawBody,
+      headers: args.headers,
+    });
+
+    if (!parsed.signatureValid) {
+      throw new ForbiddenException("WEBHOOK_SIGNATURE_INVALID");
+    }
+
+    if (
+      Math.abs(Date.now() - parsed.signedTimestamp.getTime()) >
+      adapter.timestampToleranceMs
+    ) {
+      throw new ForbiddenException("WEBHOOK_TIMESTAMP_OUT_OF_RANGE");
+    }
+
+    const payloadHash = createHash("sha256")
+      .update(args.rawBody)
+      .digest("hex");
+
+    const existing = await this.events.findByProviderEventId(
+      args.provider,
+      parsed.eventId,
+    );
+
+    if (existing) {
+      if (existing.payloadHash !== payloadHash) {
+        throw new ForbiddenException("WEBHOOK_EVENT_ID_PAYLOAD_MISMATCH");
+      }
+
+      return {
+        duplicate: true,
+        event: existing,
+      };
+    }
+
+    const event = await this.events.insert({
+      provider: args.provider,
+      providerEventId: parsed.eventId,
+      eventType: parsed.eventType,
+      signatureVerified: true,
+      timestampVerified: true,
+      payloadHash,
+      replayDetected: false,
+    });
+
+    return {
+      duplicate: false,
+      event,
+      parsed,
+    };
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/provider-state-guard.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+const ALLOWED: Record<string, string[]> = {
+  CREATED: ["FUNDING_AUTHORIZATION", "DECLINED", "FAILED"],
+  FUNDING_AUTHORIZATION: [
+    "FUNDS_AUTHORIZED",
+    "REQUIRES_ACTION",
+    "DECLINED",
+    "FAILED",
+  ],
+  FUNDS_AUTHORIZED: ["LEDGER_POSTING", "PAYOUT_SUBMITTED", "FAILED"],
+  LEDGER_POSTING: ["LEDGER_POSTED", "FAILED"],
+  LEDGER_POSTED: ["PAYOUT_SUBMITTED", "RECIPIENT_CREDITED", "FAILED"],
+  PAYOUT_SUBMITTED: ["PAYOUT_PROCESSING", "RECIPIENT_CREDITED", "FAILED"],
+  PAYOUT_PROCESSING: ["RECIPIENT_CREDITED", "FAILED"],
+  RECIPIENT_CREDITED: ["COMPLETED"],
+  COMPLETED: ["REFUNDED", "REVERSED"],
+};
+
+@Injectable()
+export class ProviderStateGuardService {
+  assertAllowed(current: string, next: string) {
+    const allowed = ALLOWED[current] ?? [];
+
+    if (!allowed.includes(next)) {
+      throw new Error(
+        `INVALID_PROVIDER_STATE_TRANSITION:${current}->${next}`,
+      );
+    }
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/ledger-integrity.service.ts
+================================================================================
+
+import { createHash } from "crypto";
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class LedgerIntegrityService {
+  constructor(
+    private readonly ledger: LedgerReadRepository,
+    private readonly integrity: LedgerIntegrityRepository,
+  ) {}
+
+  async sealJournal(journalId: string) {
+    const journal = await this.ledger.getJournalWithPostings(journalId);
+
+    if (!journal) {
+      throw new Error("LEDGER_JOURNAL_NOT_FOUND");
+    }
+
+    const previous = await this.integrity.getLatestBefore(
+      journal.createdAt,
+    );
+
+    const postingText = [...journal.postings]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((p) =>
+        [
+          p.id,
+          p.accountId,
+          p.direction,
+          p.amountMinor.toString(),
+          p.currency,
+        ].join("|"),
+      )
+      .join("\n");
+
+    const canonical = [
+      "LINQASEND_LEDGER_V4",
+      journal.id,
+      journal.referenceType,
+      journal.referenceId,
+      journal.description,
+      previous?.journalHash ?? "",
+      postingText,
+    ].join("\n");
+
+    const journalHash = createHash("sha256")
+      .update(canonical)
+      .digest("hex");
+
+    await this.integrity.insert({
+      journalId: journal.id,
+      previousHash: previous?.journalHash,
+      journalHash,
+      postingCount: journal.postings.length,
+    });
+
+    return journalHash;
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/audit-evidence.service.ts
+================================================================================
+
+import { createHash } from "crypto";
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class SecurityAuditEvidenceService {
+  constructor(private readonly repo: SecurityAuditRepository) {}
+
+  async append(args: {
+    actorType: string;
+    actorId: string;
+    transferId?: string;
+    eventType: string;
+    evidence: Record<string, unknown>;
+  }) {
+    const previous = await this.repo.getLatest();
+
+    const canonical = JSON.stringify({
+      actorType: args.actorType,
+      actorId: args.actorId,
+      transferId: args.transferId ?? null,
+      eventType: args.eventType,
+      evidence: args.evidence,
+      previousHash: previous?.eventHash ?? null,
+    });
+
+    const eventHash = createHash("sha256")
+      .update(canonical)
+      .digest("hex");
+
+    return this.repo.insert({
+      ...args,
+      prevEventHash: previous?.eventHash,
+      eventHash,
+    });
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/admin-money-security.service.ts
+================================================================================
+
+import { ForbiddenException, Injectable } from "@nestjs/common";
+
+@Injectable()
+export class AdminMoneySecurityService {
+  constructor(
+    private readonly actions: PrivilegedMoneyActionRepository,
+    private readonly scopes: StaffScopeService,
+    private readonly audit: SecurityAuditEvidenceService,
+  ) {}
+
+  async requestAction(args: {
+    staffUserId: string;
+    actionType:
+      | "RELEASE_HOLD"
+      | "REFUND"
+      | "REVERSAL"
+      | "LIMIT_OVERRIDE"
+      | "RISK_OVERRIDE"
+      | "COMPLIANCE_OVERRIDE"
+      | "PROVIDER_RETRY";
+    transferId?: string;
+    reasonCode: string;
+    notes?: string;
+  }) {
+    await this.scopes.require(
+      args.staffUserId,
+      "ops:money:privileged:request",
+    );
+
+    const action = await this.actions.create({
+      actionType: args.actionType,
+      transferId: args.transferId,
+      requestedBy: args.staffUserId,
+      status: "REQUESTED",
+      reasonCode: args.reasonCode,
+      notes: args.notes,
+    });
+
+    await this.audit.append({
+      actorType: "STAFF",
+      actorId: args.staffUserId,
+      transferId: args.transferId,
+      eventType: "PRIVILEGED_MONEY_ACTION_REQUESTED",
+      evidence: {
+        actionId: action.id,
+        actionType: args.actionType,
+        reasonCode: args.reasonCode,
+      },
+    });
+
+    return action;
+  }
+
+  async approveAction(approverUserId: string, actionId: string) {
+    await this.scopes.require(
+      approverUserId,
+      "ops:money:privileged:approve",
+    );
+
+    const action = await this.actions.findById(actionId);
+
+    if (!action) throw new Error("PRIVILEGED_ACTION_NOT_FOUND");
+
+    if (action.requestedBy === approverUserId) {
+      throw new ForbiddenException(
+        "MAKER_CHECKER_SELF_APPROVAL_DENIED",
+      );
+    }
+
+    return this.actions.approve({
+      actionId,
+      approvedBy: approverUserId,
+    });
+  }
+}
+
+
+================================================================================
+FILE: apps/server/src/services/linqasend/security-v4/security-v4.module.ts
+================================================================================
+
+import { Module } from "@nestjs/common";
+
+@Module({
+  providers: [
+    DeviceBindingService,
+    SecurityChangeCooldownService,
+
+    TransactionSignatureService,
+    TransactionChallengeService,
+    TransactionAuthorizationService,
+
+    VelocityLimitService,
+    RecipientTrustService,
+    FundingFraudService,
+
+    PaymentRiskEngineService,
+    ScamDefenseService,
+
+    TransferSecurityOrchestratorService,
+
+    WebhookSecurityService,
+    ProviderStateGuardService,
+    LedgerIntegrityService,
+
+    AdminMoneySecurityService,
+    SecurityAuditEvidenceService,
+  ],
+  exports: [
+    TransferSecurityOrchestratorService,
+    TransactionChallengeService,
+    TransactionAuthorizationService,
+    WebhookSecurityService,
+    ProviderStateGuardService,
+    LedgerIntegrityService,
+    AdminMoneySecurityService,
+  ],
+})
+export class LinqaSendSecurityV4Module {}
+
+
+================================================================================
+FILE: apps/mobile/src/types/linqasend-security-v4.ts
+================================================================================
+
+export type LinqaSendSecurityUiState =
+  | { type: "READY" }
+  | {
+      type: "SECURITY_WARNING";
+      warnings: Array<{
+        code: string;
+        severity: string;
+        messageKey: string;
+      }>;
+    }
+  | {
+      type: "SECURITY_COOLDOWN";
+      until: string;
+      reason: string;
+    }
+  | {
+      type: "STEP_UP_REQUIRED";
+      transferId: string;
+    }
+  | {
+      type: "MANUAL_REVIEW";
+      transferId: string;
+    }
+  | {
+      type: "ON_HOLD";
+      transferId: string;
+    }
+  | {
+      type: "BLOCKED";
+      reason: string;
+    };
+
+
+================================================================================
+FILE: apps/mobile/src/store/useLinqaSendSecurity.ts
+================================================================================
+
+import { create } from "zustand";
+
+type State = {
+  securityState: LinqaSendSecurityUiState;
+  setSecurityState: (state: LinqaSendSecurityUiState) => void;
+  reset: () => void;
+};
+
+export const useLinqaSendSecurity = create<State>((set) => ({
+  securityState: { type: "READY" },
+
+  setSecurityState: (securityState) =>
+    set({ securityState }),
+
+  reset: () =>
+    set({
+      securityState: { type: "READY" },
+    }),
+}));
+
+
+================================================================================
+FILE: apps/mobile/src/api/linqasend-security-v4.ts
+================================================================================
+
+const API = process.env.EXPO_PUBLIC_API_BASE_URL!;
+
+async function request<T>(
+  path: string,
+  token: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const response = await fetch(
+    `${API}/v1/linqasend/security${path}`,
+    {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(init.headers || {}),
+      },
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      body.message || body.error || `HTTP_${response.status}`,
+    );
+  }
+
+  return response.json();
+}
+
+export const linqaSendSecurityApiV4 = {
+  evaluate(
+    token: string,
+    transferId: string,
+    installationId: string,
+    deviceId: string,
+  ) {
+    return request(
+      `/transfers/${transferId}/evaluate`,
+      token,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          installationId,
+          deviceId,
+        }),
+      },
+    );
+  },
+
+  createChallenge(
+    token: string,
+    transferId: string,
+    installationId: string,
+    deviceId: string,
+  ) {
+    return request(
+      `/transfers/${transferId}/challenge`,
+      token,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          installationId,
+          deviceId,
+        }),
+      },
+    );
+  },
+
+  authorize(
+    token: string,
+    challengeId: string,
+    body: {
+      installationId: string;
+      deviceId: string;
+      assertion: unknown;
+      authMethod:
+        | "PASSKEY"
+        | "BIOMETRIC_DEVICE_ASSERTION"
+        | "DEVICE_CREDENTIAL";
+    },
+  ) {
+    return request(
+      `/challenges/${challengeId}/authorize`,
+      token,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+  },
+};
+
+
+================================================================================
+FILE: apps/mobile/app/(linqasend)/security/verify-device.tsx
+================================================================================
+
+import { View } from "react-native";
+import { router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import * as LocalAuthentication from "expo-local-authentication";
+
+import { Screen } from "../../../src/components/Screen";
+import { Text } from "../../../src/components/Text";
+import { Button } from "../../../src/components/Button";
+
+export default function VerifyPaymentDeviceScreen() {
+  async function verify() {
+    const result = await LocalAuthentication.authenticateAsync({
+      promptMessage: "Authorize LinqaSend transfer",
+      fallbackLabel: "Use device passcode",
+    });
+
+    if (!result.success) return;
+
+    // Production:
+    // 1. Request server challenge.
+    // 2. Bind challenge to transfer hash.
+    // 3. Produce passkey/device-bound assertion.
+    // 4. Server validates assertion.
+    // 5. Server issues one-time authorization token.
+    // 6. Confirm endpoint consumes token once.
+    // Biometrics alone must never mark transfer complete.
+
+    router.back();
+  }
+
+  return (
+    <Screen dark scroll={false} className="items-center justify-center">
+      <View className="h-24 w-24 items-center justify-center rounded-3xl bg-slate-900">
+        <Ionicons
+          name="shield-checkmark-outline"
+          size={52}
+          color="#8B7CFD"
+        />
+      </View>
+
+      <Text className="mt-6 text-xl font-semibold text-white">
+        Verify this transfer
+      </Text>
+
+      <Text className="mt-3 text-center text-sm text-slate-300">
+        LinqaSend binds the recipient, amount, quote, funding source,
+        transfer class and device before money can move.
+      </Text>
+
+      <Button className="mt-8 w-full" onPress={verify}>
+        Verify & Continue
+      </Button>
+    </Screen>
+  );
+}
+
+
+================================================================================
+FILE: apps/mobile/app/(linqasend)/security/scam-warning.tsx
+================================================================================
+
+import { View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+
+import { Screen } from "../../../src/components/Screen";
+import { Text } from "../../../src/components/Text";
+import { Button } from "../../../src/components/Button";
+
+export default function LinqaSendScamWarningV4() {
+  return (
+    <Screen>
+      <View className="mt-8 items-center">
+        <View className="h-16 w-16 items-center justify-center rounded-full bg-amber-100">
+          <Ionicons
+            name="warning-outline"
+            size={34}
+            color="#B54708"
+          />
+        </View>
+
+        <Text className="mt-4 text-xl font-semibold">
+          Check before you send
+        </Text>
+      </View>
+
+      <View className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-5">
+        <Text className="font-semibold">
+          This transfer has unusual security signals.
+        </Text>
+
+        <Text className="mt-3 text-sm text-muted">
+          Only send to someone you know and trust. Linqa will never ask
+          you to send money to verify your account, reverse a security
+          issue, claim a prize, or unlock your profile.
+        </Text>
+      </View>
+
+      <Button className="mt-6">
+        I Know This Recipient
+      </Button>
+
+      <Button className="mt-3">
+        Cancel Transfer
+      </Button>
+    </Screen>
+  );
+}
+
+
+================================================================================
+FILE: apps/mobile/app/(linqasend)/security/security-cooldown.tsx
+================================================================================
+
+import { View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+
+import { Screen } from "../../../src/components/Screen";
+import { Text } from "../../../src/components/Text";
+
+export default function LinqaSendSecurityCooldownScreen() {
+  return (
+    <Screen>
+      <View className="mt-8 items-center">
+        <Ionicons
+          name="time-outline"
+          size={52}
+          color="#5B4BEB"
+        />
+
+        <Text className="mt-4 text-xl font-semibold">
+          Transfer temporarily protected
+        </Text>
+      </View>
+
+      <View className="mt-6 rounded-2xl bg-purple-50 p-5">
+        <Text className="font-medium">
+          A recent security change was made to this account.
+        </Text>
+
+        <Text className="mt-3 text-sm text-muted">
+          LinqaSend can temporarily delay higher-risk money movement after
+          password, recovery, phone, or new-device changes.
+        </Text>
+      </View>
+    </Screen>
+  );
+}
+
+
+================================================================================
+FILE: apps/mobile/app/(linqasend)/security/review-required.tsx
+================================================================================
+
+import { Screen } from "../../../src/components/Screen";
+import { Text } from "../../../src/components/Text";
+
+export default function LinqaSendReviewRequiredScreen() {
+  return (
+    <Screen>
+      <Text className="mt-8 text-xl font-semibold">
+        Transfer under review
+      </Text>
+
+      <Text className="mt-4 text-muted">
+        LinqaSend detected security signals that require additional review.
+        The recipient has not been credited.
+      </Text>
+
+      <Text className="mt-3 text-sm text-muted">
+        You will receive an authenticated in-app update when the transfer
+        status changes.
+      </Text>
+    </Screen>
+  );
+}
+
+
+================================================================================
+FILE: apps/mobile/app/(linqasend)/security/transfer-blocked.tsx
+================================================================================
+
+import { Screen } from "../../../src/components/Screen";
+import { Text } from "../../../src/components/Text";
+
+export default function LinqaSendTransferBlockedScreen() {
+  return (
+    <Screen>
+      <Text className="mt-8 text-xl font-semibold">
+        Transfer could not continue
+      </Text>
+
+      <Text className="mt-4 text-muted">
+        LinqaSend blocked this transfer because one or more security checks
+        did not pass.
+      </Text>
+    </Screen>
+  );
+}
+
+
+================================================================================
+REDIS KEYS
+================================================================================
+
+linqasend:v4:auth:{jti}
+  TTL: 120 sec
+  Value: ACTIVE
+  Must use atomic GETDEL / Lua to consume.
+
+linqasend:v4:velocity:{userId}:1h
+  TTL: 3600 sec
+
+linqasend:v4:velocity:{userId}:24h
+  TTL: 86400 sec
+
+linqasend:v4:velocity:{userId}:new-recipient:24h
+  TTL: 86400 sec
+
+linqasend:v4:velocity:{userId}:amount:{currency}:24h
+  TTL: 86400 sec
+
+linqasend:v4:webhook-replay:{provider}:{eventId}
+  TTL: provider replay window
+
+Never treat a generic "biometric passed" cache entry as transfer authorization.
+
+
+================================================================================
+ENVIRONMENT VARIABLES
+================================================================================
+
+LINQA_SEND_SECURITY_V4_ENABLED=true
+
+LINQA_SEND_SECURITY_V4_AUTH_TTL_SECONDS=120
+LINQA_SEND_SECURITY_V4_CHALLENGE_TTL_SECONDS=120
+
+LINQA_SEND_SECURITY_V4_SECURITY_CHANGE_COOLDOWN_ENABLED=true
+
+LINQA_SEND_SECURITY_V4_PASSWORD_RESET_COOLDOWN_HOURS=6
+LINQA_SEND_SECURITY_V4_RECOVERY_CHANGE_COOLDOWN_HOURS=24
+LINQA_SEND_SECURITY_V4_PHONE_CHANGE_COOLDOWN_HOURS=24
+LINQA_SEND_SECURITY_V4_NEW_DEVICE_COOLDOWN_HOURS=6
+
+LINQA_SEND_SECURITY_V4_MAX_TRANSFERS_1H=4
+LINQA_SEND_SECURITY_V4_MAX_TRANSFERS_24H=10
+LINQA_SEND_SECURITY_V4_NEW_RECIPIENT_MAX_24H=3
+
+LINQA_SEND_SECURITY_V4_RISK_MODEL_VERSION=linqasend-risk-v4.1
+
+LINQA_SEND_SECURITY_V4_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS=300
+
+LINQA_SEND_SECURITY_V4_LEDGER_INTEGRITY_ENABLED=true
+LINQA_SEND_SECURITY_V4_MAKER_CHECKER_ENABLED=true
+
+DATABASE_URL=postgresql://...
+REDIS_URL=redis://...
+
+LINQASEND_TRANSACTION_SIGNING_KEY_ID=...
+LINQASEND_TRANSACTION_SIGNING_PRIVATE_KEY=...
+
+LINQASEND_WEBHOOK_SECRET_PROVIDER_A=...
+LINQASEND_WEBHOOK_SECRET_PROVIDER_B=...
+
+
+================================================================================
+REQUIRED AUDIT EVENTS
+================================================================================
+
+TRANSFER_SECURITY_EVALUATED
+TRANSFER_SECURITY_STEP_UP_REQUIRED
+TRANSFER_SECURITY_WARNING_DISPLAYED
+TRANSFER_SECURITY_WARNING_ACKNOWLEDGED
+TRANSFER_SECURITY_HOLD
+TRANSFER_SECURITY_DECLINE
+TRANSFER_SECURITY_FREEZE
+
+PAYMENT_CHALLENGE_CREATED
+PAYMENT_CHALLENGE_CONSUMED
+PAYMENT_ASSERTION_VERIFIED
+PAYMENT_ASSERTION_FAILED
+
+PAYMENT_AUTHORIZATION_CREATED
+PAYMENT_AUTHORIZATION_CONSUMED
+PAYMENT_AUTHORIZATION_REPLAY_BLOCKED
+
+FUNDING_FINGERPRINT_REGISTERED
+FUNDING_SOURCE_MULTI_ACCOUNT_REUSE_DETECTED
+
+WEBHOOK_SIGNATURE_VERIFIED
+WEBHOOK_REPLAY_BLOCKED
+WEBHOOK_STATE_TRANSITION_REJECTED
+
+LEDGER_JOURNAL_SEALED
+LEDGER_INTEGRITY_VERIFIED
+LEDGER_INTEGRITY_FAILURE
+
+PRIVILEGED_MONEY_ACTION_REQUESTED
+PRIVILEGED_MONEY_ACTION_APPROVED
+PRIVILEGED_MONEY_ACTION_EXECUTED
+PRIVILEGED_MONEY_ACTION_REJECTED
+
+
+================================================================================
+REQUIRED TEST MATRIX
+================================================================================
+
+DEVICE / ATO
+- trusted device passes
+- unknown device requires step-up
+- risky device increases risk
+- revoked device blocked
+- new device activates cooldown
+- password reset activates cooldown
+- recovery change activates cooldown
+- phone change activates cooldown
+
+TRANSACTION BINDING
+- recipient change invalidates hash
+- amount change invalidates hash
+- quote change invalidates hash
+- funding source change invalidates hash
+- source currency change invalidates hash
+- destination amount/currency change invalidates hash
+- transfer class change invalidates hash
+
+AUTHORIZATION
+- challenge expires
+- challenge wrong user blocked
+- challenge wrong device blocked
+- challenge wrong installation blocked
+- invalid assertion blocked
+- token single use
+- replay blocked
+- wrong audience blocked
+- wrong purpose blocked
+- transaction hash mismatch blocked
+
+VELOCITY
+- 1h count limit
+- 24h count limit
+- new-recipient limit
+- 24h amount limit
+- concurrency-safe increment
+- TTL expiry
+
+RECIPIENT TRUST
+- new recipient classified NEW
+- successful transfer establishes relationship
+- blocked recipient prevents payment
+
+FUNDING FRAUD
+- new source raises risk
+- multi-account fingerprint reuse detected
+- repeated funding failures raise risk
+- chargeback signal raises risk
+
+RISK ENGINE
+- ALLOW threshold
+- STEP_UP threshold
+- WARN threshold
+- REVIEW threshold
+- HOLD threshold
+- DECLINE threshold
+- FREEZE threshold
+- score capped at 100
+
+WEBHOOK
+- valid signature accepted
+- invalid signature rejected
+- stale timestamp rejected
+- duplicate event id deduped
+- same id/different payload blocked
+- illegal state transition rejected
+
+LEDGER
+- journal hash deterministic
+- altered posting changes hash
+- previous hash chained
+- missing seal detected
+
+ADMIN
+- maker can request
+- maker cannot self-approve
+- approver scope required
+- privileged action audited
+
+MOBILE
+- cooldown screen routing
+- scam warning routing
+- review routing
+- blocked routing
+- biometric success alone never marks COMPLETED
+
+
+================================================================================
+NON-NEGOTIABLE SECURITY INVARIANTS
+================================================================================
+
+1. No money movement before v3 capability approval.
+2. No money movement before v4 security approval.
+3. Login session alone cannot authorize a transfer.
+4. Transfer authorization binds:
+   sender,
+   transfer,
+   recipient,
+   quote,
+   source amount,
+   source currency,
+   destination amount,
+   destination currency,
+   funding source,
+   transfer class,
+   device assertion,
+   one-time JTI.
+5. Any bound-field mutation invalidates authorization.
+6. Cooldown status is server-controlled.
+7. Risk score is server-only.
+8. Fraud rules are server-only.
+9. Webhook is untrusted until signature, timestamp and replay checks pass.
+10. Webhook cannot skip allowed transfer states.
+11. Ledger postings are immutable.
+12. Ledger corrections use reversing journals.
+13. High-risk privileged actions use maker-checker.
+14. Staff cannot approve their own privileged action.
+15. Client cannot mark FUNDS_AUTHORIZED, LEDGER_POSTED,
+    RECIPIENT_CREDITED or COMPLETED.
+16. PAN/CVV/bank credentials do not enter this module.
+17. Chat/social cannot access payment tokens, payout tokens, KYC,
+    AML findings, risk scores or ledger account IDs.
+18. Security failures fail closed.
+19. Every critical decision creates auditable evidence.
+20. A transfer is complete only after server-authoritative
+    settlement/ledger/recipient-credit evidence exists.
+
+
+================================================================================
+FINAL v4 EXECUTION FLOW
+================================================================================
+
+V3 CAPABILITY APPROVED
+        |
+        v
+PERSISTED QUOTE
+        |
+        v
+TRANSFER CREATED
+        |
+        v
+DEVICE BINDING
+        |
+        v
+SECURITY-CHANGE COOLDOWN
+        |
+        v
+RECIPIENT TRUST
+        |
+        v
+VELOCITY LIMITS
+        |
+        v
+FUNDING FRAUD SIGNALS
+        |
+        v
+PAYMENT RISK ENGINE
+        |
+        +-----------------------+
+        |                       |
+     PASS/WARN               REVIEW/HOLD/
+        |                    DECLINE/FREEZE
+        |                       |
+        v                       v
+SCAM WARNING IF NEEDED      STOP MONEY MOVEMENT
+        |
+        v
+TRANSACTION HASH
+        |
+        v
+SERVER CHALLENGE
+        |
+        v
+PASSKEY / DEVICE ASSERTION
+        |
+        v
+SINGLE-USE AUTH TOKEN
+        |
+        v
+ATOMIC TOKEN CONSUMPTION
+        |
+        v
+FUNDING AUTHORIZATION
+        |
+        v
+TRANSFER-CLASS ROUTER
+        |
+        v
+IMMUTABLE LEDGER
+        |
+        v
+RECIPIENT CREDIT
+        |
+        v
+SIGNED PROVIDER WEBHOOK
+        |
+        v
+STATE TRANSITION GUARD
+        |
+        v
+LEDGER INTEGRITY SEAL
+        |
+        v
+RECONCILIATION
+        |
+        v
+SERVER-AUTHORITATIVE COMPLETION
+
+================================================================================
+END — LINQASEND TRANSACTION SECURITY & FRAUD DEFENSE PACK v4
+================================================================================

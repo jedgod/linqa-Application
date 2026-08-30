@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { SafeAreaView, StyleSheet, Text, Pressable, View } from "react-native";
+import { StyleSheet, Text, Pressable, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, router } from "expo-router";
 import { MultiAccountApiService } from "../../services/multi-account.service";
 import { accessTokenProvider } from "../../services/session";

@@ -5,7 +5,11 @@ export async function discoverBusinesses(db: Database, userId: string, limit = 3
 
   const result = await db.query(
     `WITH viewer AS (
-       SELECT verified_country_code AS country_code FROM users WHERE id = $1
+       SELECT u.verified_country_code AS country_code,
+              COALESCE(p.enabled, TRUE) AS discovery_enabled,
+              COALESCE(p.allow_businesses, TRUE) AS allow_businesses
+       FROM users u LEFT JOIN country_discovery_preferences p ON p.user_id=u.id
+       WHERE u.id = $1
      )
      SELECT
        b.id, b.name, b.category, b.logo_url AS "logoUrl",
@@ -22,7 +26,7 @@ export async function discoverBusinesses(db: Database, userId: string, limit = 3
      CROSS JOIN viewer v
      LEFT JOIN countries c ON c.code = v.country_code
      LEFT JOIN business_scores s ON s.business_id = b.id
-     WHERE b.status = 'ACTIVE'
+     WHERE b.status = 'ACTIVE' AND v.discovery_enabled=TRUE AND v.allow_businesses=TRUE
        AND (
          (t.target_type = 'COUNTRY' AND t.country_code = v.country_code)
          OR (t.target_type = 'REGION' AND t.region_code = c.region_code)

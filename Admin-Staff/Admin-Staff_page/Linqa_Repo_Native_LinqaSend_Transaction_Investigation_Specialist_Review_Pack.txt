@@ -1,0 +1,432 @@
+LINQA REPO-NATIVE LINQASEND TRANSACTION INVESTIGATION + SPECIALIST REVIEW PACK
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Repo-Native LinqaSend Transaction Investigation + Specialist Review Pack
+
+Narrow scope:
+- read real linqasend_payment_methods / linqasend_transfers
+- resolve support_cases_v2.user_id
+- record APPROVED / REJECTED / ESCALATED
+- audit + support event
+- current case workspace integration
+
+No hold release, transfer reversal, refund, payment-method mutation, SLA, or new realtime.
+
+
+====================================================================================================
+FILE: server/src/db/migrations/033_ops_linqasend_review.sql
+====================================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE ops_linqasend_review_decision AS ENUM (
+    'PENDING','APPROVED','REJECTED','ESCALATED'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS ops_linqasend_reviews_v1 (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL UNIQUE REFERENCES support_cases_v2(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reviewer_user_id uuid REFERENCES users(id),
+  decision ops_linqasend_review_decision NOT NULL DEFAULT 'PENDING',
+  evidence_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+  specialist_note text,
+  reason_code text,
+  reviewed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+
+====================================================================================================
+FILE: server/src/services/operations/linqasend-policy.ts
+====================================================================================================
+export function requiredScopeForLinqaSendDecision(
+  decision:"APPROVED"|"REJECTED"|"ESCALATED"
+){
+  return decision==="APPROVED" ? "ops:linqasend:approve" : "ops:linqasend:review";
+}
+
+export function deriveTransferAttention(input:{
+  status?:string|null;
+  amount:number;
+  paymentMethodVerified?:boolean|null;
+}):"NORMAL"|"REVIEW"|"HIGH"{
+  const status=String(input.status??"").toUpperCase();
+  if(["FAILED","REVERSED","CANCELLED"].includes(status)) return "HIGH";
+  if(input.paymentMethodVerified===false) return "REVIEW";
+  if(input.amount>=1000) return "REVIEW";
+  return "NORMAL";
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/linqasend-evidence.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+import { deriveTransferAttention } from "./linqasend-policy";
+
+export class LinqaSendEvidenceService {
+  constructor(private pool:Pool){}
+
+  async getForCase(caseId:string){
+    const caseR=await this.pool.query(
+      `SELECT id::text,case_number AS "caseNumber",user_id::text AS "userId",
+              state::text,priority::text
+       FROM support_cases_v2 WHERE id=$1::uuid LIMIT 1`,
+      [caseId]
+    );
+    if(!caseR.rowCount) return null;
+
+    const c=caseR.rows[0];
+    const userId=c.userId as string;
+
+    const [pmR,trR,reviewR]=await Promise.all([
+      this.pool.query(
+        `SELECT to_jsonb(p) AS row
+         FROM linqasend_payment_methods p
+         WHERE p.user_id=$1::uuid`,
+        [userId]
+      ),
+      this.pool.query(
+        `SELECT to_jsonb(t) AS row
+         FROM linqasend_transfers t
+         WHERE t.sender_user_id=$1::uuid OR t.recipient_user_id=$1::uuid
+         LIMIT 100`,
+        [userId]
+      ),
+      this.pool.query(
+        `SELECT id::text,decision::text,
+                reviewer_user_id::text AS "reviewerUserId",
+                specialist_note AS "specialistNote",
+                reason_code AS "reasonCode",
+                reviewed_at AS "reviewedAt"
+         FROM ops_linqasend_reviews_v1
+         WHERE case_id=$1::uuid LIMIT 1`,
+        [caseId]
+      )
+    ]);
+
+    const paymentMethods=pmR.rows.map(({row}:any)=>{
+      const state=row.verification_status??row.status??row.state??null;
+      return {
+        id:row.id??null,
+        type:row.method_type??row.type??null,
+        verificationStatus:state,
+        verified:["VERIFIED","ACTIVE"].includes(String(state??"").toUpperCase()),
+        maskedReference:row.masked_pan??row.masked_account??row.last4??null
+      };
+    });
+
+    const byId=new Map(
+      paymentMethods.filter((x:any)=>x.id).map((x:any)=>[String(x.id),x])
+    );
+
+    const transfers=trR.rows.map(({row}:any)=>{
+      const amount=Number(row.amount??row.send_amount??row.source_amount??0)||0;
+      const paymentMethodId=row.payment_method_id??row.source_payment_method_id??null;
+      const pm=paymentMethodId ? byId.get(String(paymentMethodId)) : null;
+
+      return {
+        id:row.id??null,
+        status:row.status??row.state??null,
+        amount,
+        currency:row.currency??row.send_currency??row.source_currency??null,
+        destinationCurrency:row.receive_currency??row.destination_currency??null,
+        fxRate:row.exchange_rate??row.fx_rate??null,
+        paymentMethodId,
+        paymentMethodVerified:(pm as any)?.verified??null,
+        attention:deriveTransferAttention({
+          status:row.status??row.state??null,
+          amount,
+          paymentMethodVerified:(pm as any)?.verified??null
+        }),
+        createdAt:row.created_at??null
+      };
+    });
+
+    return {
+      caseId:c.id,
+      caseNumber:c.caseNumber,
+      userId,
+      caseState:c.state,
+      priority:c.priority,
+      evidence:{
+        paymentMethods,
+        transfers,
+        summary:{
+          paymentMethodCount:paymentMethods.length,
+          verifiedPaymentMethodCount:paymentMethods.filter((x:any)=>x.verified).length,
+          transferCount:transfers.length,
+          attentionTransferCount:transfers.filter((x:any)=>x.attention!=="NORMAL").length,
+          failedTransferCount:transfers.filter((x:any)=>
+            ["FAILED","REVERSED","CANCELLED"].includes(String(x.status??"").toUpperCase())
+          ).length
+        }
+      },
+      review:reviewR.rows[0]??null
+    };
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/linqasend-review.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+import { LinqaSendEvidenceService } from "./linqasend-evidence.service";
+
+export class LinqaSendReviewService {
+  private evidence:LinqaSendEvidenceService;
+
+  constructor(private pool:Pool){
+    this.evidence=new LinqaSendEvidenceService(pool);
+  }
+
+  async save(input:{
+    caseId:string;
+    reviewerUserId:string;
+    reviewerScopes:string[];
+    decision:"APPROVED"|"REJECTED"|"ESCALATED";
+    specialistNote:string;
+    reasonCode:string;
+    requestId?:string|null;
+  }){
+    const evidence=await this.evidence.getForCase(input.caseId);
+    if(!evidence) throw Object.assign(new Error("CASE_NOT_FOUND"),{statusCode:404});
+    if(evidence.caseState==="CLOSED") throw Object.assign(new Error("CASE_CLOSED"),{statusCode:409});
+
+    const client=await this.pool.connect();
+    try{
+      await client.query("BEGIN");
+
+      const review=await client.query(
+        `INSERT INTO ops_linqasend_reviews_v1(
+           case_id,user_id,reviewer_user_id,decision,evidence_snapshot,
+           specialist_note,reason_code,reviewed_at
+         )
+         VALUES($1::uuid,$2::uuid,$3::uuid,$4::ops_linqasend_review_decision,
+                $5::jsonb,$6,$7,now())
+         ON CONFLICT(case_id) DO UPDATE SET
+           reviewer_user_id=EXCLUDED.reviewer_user_id,
+           decision=EXCLUDED.decision,
+           evidence_snapshot=EXCLUDED.evidence_snapshot,
+           specialist_note=EXCLUDED.specialist_note,
+           reason_code=EXCLUDED.reason_code,
+           reviewed_at=now(),updated_at=now()
+         RETURNING *`,
+        [
+          input.caseId,evidence.userId,input.reviewerUserId,input.decision,
+          JSON.stringify(evidence.evidence),input.specialistNote,input.reasonCode
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO ops_audit_events(
+           actor_user_id,actor_scope_snapshot,action,resource_type,
+           resource_id,reason_code,request_id,after_json
+         )
+         VALUES($1::uuid,$2::jsonb,'ops.linqasend.review.decision',
+                'support_case_v2',$3,$4,$5,$6::jsonb)`,
+        [
+          input.reviewerUserId,JSON.stringify(input.reviewerScopes),input.caseId,
+          input.reasonCode,input.requestId??null,JSON.stringify(review.rows[0])
+        ]
+      );
+
+      await client.query("COMMIT");
+      return review.rows[0];
+    }catch(e){
+      await client.query("ROLLBACK");
+      throw e;
+    }finally{
+      client.release();
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/routes/operations/linqasend-specialist-routes.ts
+====================================================================================================
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { requireScope } from "../../auth/jwt";
+import { LinqaSendEvidenceService } from "../../services/operations/linqasend-evidence.service";
+import { LinqaSendReviewService } from "../../services/operations/linqasend-review.service";
+import { requiredScopeForLinqaSendDecision } from "../../services/operations/linqasend-policy";
+
+const Params=z.object({caseId:z.string().uuid()});
+const Body=z.object({
+  decision:z.enum(["APPROVED","REJECTED","ESCALATED"]),
+  specialistNote:z.string().trim().min(3).max(4000),
+  reasonCode:z.string().trim().min(3).max(100)
+});
+
+const scopes=(p:any):string[]=>p?.scopes instanceof Set?[...p.scopes]:[];
+
+export function registerLinqaSendSpecialistRoutes(
+  app:FastifyInstance,
+  pool:any,
+  authenticate:any,
+  withErrors:any
+){
+  const evidence=new LinqaSendEvidenceService(pool);
+  const reviews=new LinqaSendReviewService(pool);
+
+  app.get("/cases/:caseId/linqasend",withErrors(async(request:any,reply:any)=>{
+    const p=await authenticate(request,reply);
+    requireScope(p,"ops:linqasend:read");
+    const {caseId}=Params.parse(request.params);
+    const result=await evidence.getForCase(caseId);
+    if(!result) return reply.code(404).send({error:"CASE_NOT_FOUND"});
+    return result;
+  }));
+
+  app.post("/cases/:caseId/linqasend/decision",withErrors(async(request:any,reply:any)=>{
+    const p=await authenticate(request,reply);
+    const {caseId}=Params.parse(request.params);
+    const body=Body.parse(request.body);
+    requireScope(p,requiredScopeForLinqaSendDecision(body.decision));
+
+    return reply.send(await reviews.save({
+      caseId,
+      reviewerUserId:p.sub,
+      reviewerScopes:scopes(p),
+      decision:body.decision,
+      specialistNote:body.specialistNote,
+      reasonCode:body.reasonCode,
+      requestId:request.id
+    }));
+  }));
+}
+
+
+====================================================================================================
+FILE: server/src/auth/ops-linqasend-scopes.example.ts
+====================================================================================================
+export const LINQASEND_OPS_SCOPES = [
+  "ops:linqasend:read",
+  "ops:linqasend:review",
+  "ops:linqasend:approve"
+] as const;
+
+/*
+Suggested FINANCE_OPS:
+- ops:case:read
+- ops:case:assign
+- ops:case:release
+- ops:case:note
+- ops:linqasend:read
+- ops:linqasend:review
+- ops:linqasend:approve
+*/
+
+
+====================================================================================================
+FILE: server/tests/linqasend-specialist.test.ts
+====================================================================================================
+import { describe,it,expect } from "vitest";
+import {
+  deriveTransferAttention,
+  requiredScopeForLinqaSendDecision
+} from "../src/services/operations/linqasend-policy";
+
+describe("LinqaSend policy",()=>{
+  it("failed transfer is HIGH",()=>{
+    expect(deriveTransferAttention({status:"FAILED",amount:10,paymentMethodVerified:true}))
+      .toBe("HIGH");
+  });
+
+  it("unverified payment method is REVIEW",()=>{
+    expect(deriveTransferAttention({status:"PENDING",amount:100,paymentMethodVerified:false}))
+      .toBe("REVIEW");
+  });
+
+  it("approve requires approve scope",()=>{
+    expect(requiredScopeForLinqaSendDecision("APPROVED"))
+      .toBe("ops:linqasend:approve");
+  });
+});
+
+describe("repo-native LinqaSend specialist",()=>{
+  it.todo("requires read/review/approve scopes");
+  it.todo("reads real payment methods and transfers only");
+  it.todo("records evidence snapshot + review atomically");
+  it.todo("writes audit + support timeline event");
+  it.todo("rejects CLOSED cases");
+  it.todo("performs no financial mutation");
+});
+
+
+====================================================================================================
+FILE: clients/web/src/admin/api/linqasend-specialist-api.ts
+====================================================================================================
+export type LinqaSendEvidence={
+  caseId:string;
+  caseNumber:string|number;
+  userId:string;
+  caseState:string;
+  priority:string;
+  evidence:{
+    paymentMethods:any[];
+    transfers:any[];
+    summary:{
+      paymentMethodCount:number;
+      verifiedPaymentMethodCount:number;
+      transferCount:number;
+      attentionTransferCount:number;
+      failedTransferCount:number;
+    };
+  };
+  review:any|null;
+};
+
+async function api<T>(token:string,path:string,init?:RequestInit):Promise<T>{
+  const r=await fetch(path,{
+    ...init,
+    headers:{
+      authorization:`Bearer ${token}`,
+      "content-type":"application/json",
+      ...(init?.headers??{})
+    }
+  });
+  const body=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(body.error??`HTTP_${r.status}`);
+  return body as T;
+}
+
+export const linqaSendSpecialistApi={
+  get:(token:string,caseId:string)=>
+    api<LinqaSendEvidence>(token,`/v1/admin/operations/cases/${caseId}/linqasend`),
+
+  decide:(token:string,caseId:string,input:{
+    decision:"APPROVED"|"REJECTED"|"ESCALATED";
+    specialistNote:string;
+    reasonCode:string;
+  })=>
+    api<any>(token,`/v1/admin/operations/cases/${caseId}/linqasend/decision`,{
+      method:"POST",
+      body:JSON.stringify(input)
+    })
+};
+
+
+====================================================================================================
+FILE: INTEGRATION_NOTES.md
+====================================================================================================
+# Integration Notes
+
+- Add scopes: ops:linqasend:read / review / approve.
+- Add FINANCE_OPS if absent.
+- Register GET /cases/:caseId/linqasend and POST /cases/:caseId/linqasend/decision.
+- Adapt to repo-standard Database / OpsHttpError / SupportOperationsService.addEvent().
+- Fold into current case workspace with existing polling.
+- Keep evidence read-only.
+- Do not release holds, reverse/cancel transfers, issue refunds, or mutate payment methods.
+- The example 1000 attention threshold is display-only; replace with a real existing compliance threshold if one exists.

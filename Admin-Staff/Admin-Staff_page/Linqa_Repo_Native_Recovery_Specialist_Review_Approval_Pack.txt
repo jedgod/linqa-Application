@@ -1,0 +1,1671 @@
+LINQA REPO-NATIVE RECOVERY SPECIALIST REVIEW + APPROVAL PACK
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Repo-Native Recovery Specialist Review + Approval Pack
+
+Narrow scope only.
+
+Built against the actual repo concepts already confirmed:
+
+- Fastify operations routes
+- `principal.scopes: Set<string>`
+- raw `pg.Pool`
+- `support_cases_v2`
+- `recovery_email_identities_v3`
+- `trusted_installation_devices_v3`
+- `webauthn_credentials`
+- `ops_audit_events`
+- current case workspace
+- existing accessToken + polling client pattern
+
+## Adds
+
+- `ops:recovery:read`
+- `ops:recovery:review`
+- `ops:recovery:approve`
+- small operations-only review table
+- read-only recovery evidence projection
+- specialist review notes
+- APPROVE / REJECT / ESCALATE decision
+- immutable audit trail
+- support-case event
+- Recovery Specialist panel in the case workspace
+
+## Explicitly does NOT add
+
+- reset 2FA
+- delete passkeys
+- modify passkeys
+- change recovery email
+- mutate trusted devices
+- account takeover bypass
+- automatic identity override
+- fraud workflow
+- LinqaSend actions
+- Vault actions
+- Trust & Safety actions
+- SLA
+- new realtime stack
+
+Approval in this pack is an OPERATIONS DECISION RECORD.
+Any future downstream recovery mutation must still be performed by the owning
+recovery service through a separate, explicitly implemented command.
+
+
+====================================================================================================
+FILE: server/src/db/migrations/031_ops_recovery_specialist_review.sql
+====================================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE ops_recovery_review_decision AS ENUM (
+    'PENDING',
+    'APPROVED',
+    'REJECTED',
+    'ESCALATED'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS ops_recovery_reviews_v1 (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL UNIQUE REFERENCES support_cases_v2(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+  reviewer_user_id uuid REFERENCES users(id),
+  decision ops_recovery_review_decision NOT NULL DEFAULT 'PENDING',
+
+  evidence_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+
+  specialist_note text,
+  reason_code text,
+
+  reviewed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_recovery_reviews_v1_user
+ON ops_recovery_reviews_v1(user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_ops_recovery_reviews_v1_decision
+ON ops_recovery_reviews_v1(decision, updated_at DESC);
+
+
+====================================================================================================
+FILE: server/src/services/operations/recovery-evidence.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+
+function truthy(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value > 0;
+  if (typeof value === "string") {
+    return ["true", "1", "yes", "verified", "active", "trusted"].includes(
+      value.toLowerCase()
+    );
+  }
+  return false;
+}
+
+function maskEmail(value: string | null): string | null {
+  if (!value || !value.includes("@")) return value;
+  const [local, domain] = value.split("@");
+  if (!local || !domain) return value;
+  const shown = local.slice(0, 2);
+  return `${shown}${"*".repeat(Math.max(2, local.length - 2))}@${domain}`;
+}
+
+/**
+ * Evidence service deliberately queries the real domain tables.
+ *
+ * It does not mutate them.
+ *
+ * `to_jsonb(row)` is used so this adapter can tolerate minor column-name
+ * differences across existing migrations without inventing new schema.
+ */
+export class RecoveryEvidenceService {
+  constructor(private pool: Pool) {}
+
+  async getForCase(caseId: string) {
+    const caseR = await this.pool.query(
+      `
+        SELECT
+          id::text,
+          case_number AS "caseNumber",
+          user_id::text AS "userId",
+          state::text,
+          priority::text
+        FROM support_cases_v2
+        WHERE id=$1::uuid
+        LIMIT 1
+      `,
+      [caseId]
+    );
+
+    if (!caseR.rowCount) return null;
+
+    const supportCase = caseR.rows[0];
+    const userId = supportCase.userId as string;
+
+    const [emailR, deviceR, passkeyR, reviewR] = await Promise.all([
+      this.pool.query(
+        `
+          SELECT to_jsonb(r) AS row
+          FROM recovery_email_identities_v3 r
+          WHERE r.user_id=$1::uuid
+          ORDER BY
+            COALESCE(
+              (to_jsonb(r)->>'updated_at')::timestamptz,
+              (to_jsonb(r)->>'created_at')::timestamptz
+            ) DESC NULLS LAST
+        `,
+        [userId]
+      ),
+
+      this.pool.query(
+        `
+          SELECT to_jsonb(d) AS row
+          FROM trusted_installation_devices_v3 d
+          WHERE d.user_id=$1::uuid
+          ORDER BY
+            COALESCE(
+              (to_jsonb(d)->>'last_seen_at')::timestamptz,
+              (to_jsonb(d)->>'updated_at')::timestamptz,
+              (to_jsonb(d)->>'created_at')::timestamptz
+            ) DESC NULLS LAST
+        `,
+        [userId]
+      ),
+
+      this.pool.query(
+        `
+          SELECT to_jsonb(w) AS row
+          FROM webauthn_credentials w
+          WHERE w.user_id=$1::uuid
+          ORDER BY
+            COALESCE(
+              (to_jsonb(w)->>'last_used_at')::timestamptz,
+              (to_jsonb(w)->>'created_at')::timestamptz
+            ) DESC NULLS LAST
+        `,
+        [userId]
+      ),
+
+      this.pool.query(
+        `
+          SELECT
+            id::text,
+            decision::text,
+            reviewer_user_id::text AS "reviewerUserId",
+            specialist_note AS "specialistNote",
+            reason_code AS "reasonCode",
+            evidence_snapshot AS "evidenceSnapshot",
+            reviewed_at AS "reviewedAt",
+            created_at AS "createdAt",
+            updated_at AS "updatedAt"
+          FROM ops_recovery_reviews_v1
+          WHERE case_id=$1::uuid
+          LIMIT 1
+        `,
+        [caseId]
+      )
+    ]);
+
+    const recoveryEmails = emailR.rows.map(({ row }: any) => {
+      const email =
+        row.email ??
+        row.recovery_email ??
+        row.email_address ??
+        null;
+
+      const state =
+        row.state ??
+        row.status ??
+        row.verification_status ??
+        null;
+
+      const verified =
+        truthy(row.verified) ||
+        truthy(row.is_verified) ||
+        String(state ?? "").toUpperCase() === "VERIFIED";
+
+      return {
+        id: row.id ?? null,
+        maskedEmail: maskEmail(email),
+        state,
+        verified,
+        createdAt: row.created_at ?? null,
+        updatedAt: row.updated_at ?? null
+      };
+    });
+
+    const trustedDevices = deviceR.rows.map(({ row }: any) => {
+      const state =
+        row.state ??
+        row.status ??
+        row.trust_status ??
+        null;
+
+      const trusted =
+        truthy(row.trusted) ||
+        truthy(row.is_trusted) ||
+        ["ACTIVE", "TRUSTED"].includes(
+          String(state ?? "").toUpperCase()
+        );
+
+      return {
+        id: row.id ?? null,
+        label:
+          row.label ??
+          row.device_name ??
+          row.device_label ??
+          "Trusted device",
+        platform:
+          row.platform ??
+          row.os ??
+          row.device_platform ??
+          null,
+        state,
+        trusted,
+        lastSeenAt:
+          row.last_seen_at ??
+          row.updated_at ??
+          null
+      };
+    });
+
+    const passkeys = passkeyR.rows.map(({ row }: any) => ({
+      id: row.id ?? null,
+      label:
+        row.label ??
+        row.name ??
+        row.device_name ??
+        "Passkey",
+      createdAt: row.created_at ?? null,
+      lastUsedAt:
+        row.last_used_at ??
+        row.updated_at ??
+        null,
+      active:
+        !["REVOKED", "DISABLED"].includes(
+          String(
+            row.status ??
+            row.state ??
+            "ACTIVE"
+          ).toUpperCase()
+        )
+    }));
+
+    const evidence = {
+      recoveryEmails,
+      trustedDevices,
+      passkeys,
+
+      summary: {
+        verifiedRecoveryEmailCount:
+          recoveryEmails.filter((x: any) => x.verified).length,
+
+        trustedDeviceCount:
+          trustedDevices.filter((x: any) => x.trusted).length,
+
+        activePasskeyCount:
+          passkeys.filter((x: any) => x.active).length
+      }
+    };
+
+    return {
+      caseId: supportCase.id,
+      caseNumber: supportCase.caseNumber,
+      userId,
+      caseState: supportCase.state,
+      priority: supportCase.priority,
+      evidence,
+      review: reviewR.rows[0] ?? null
+    };
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/recovery-review.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+import { RecoveryEvidenceService } from "./recovery-evidence.service";
+
+/**
+ * Operations review only.
+ *
+ * It records a specialist decision and evidence snapshot.
+ * It does NOT modify recovery-email, device, passkey, or auth state.
+ */
+export class RecoveryReviewService {
+  private evidence: RecoveryEvidenceService;
+
+  constructor(private pool: Pool) {
+    this.evidence = new RecoveryEvidenceService(pool);
+  }
+
+  async saveReview(input: {
+    caseId: string;
+    reviewerUserId: string;
+    reviewerScopes: string[];
+    decision: "APPROVED" | "REJECTED" | "ESCALATED";
+    specialistNote: string;
+    reasonCode: string;
+    requestId?: string | null;
+  }) {
+    const evidencePayload =
+      await this.evidence.getForCase(input.caseId);
+
+    if (!evidencePayload) {
+      throw Object.assign(
+        new Error("CASE_NOT_FOUND"),
+        { statusCode: 404 }
+      );
+    }
+
+    if (evidencePayload.caseState === "CLOSED") {
+      throw Object.assign(
+        new Error("CASE_CLOSED"),
+        { statusCode: 409 }
+      );
+    }
+
+    const client = await this.pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const beforeR = await client.query(
+        `
+          SELECT
+            id::text,
+            decision::text,
+            reviewer_user_id::text AS "reviewerUserId",
+            specialist_note AS "specialistNote",
+            reason_code AS "reasonCode",
+            reviewed_at AS "reviewedAt"
+          FROM ops_recovery_reviews_v1
+          WHERE case_id=$1::uuid
+          FOR UPDATE
+        `,
+        [input.caseId]
+      );
+
+      const reviewR = await client.query(
+        `
+          INSERT INTO ops_recovery_reviews_v1(
+            case_id,
+            user_id,
+            reviewer_user_id,
+            decision,
+            evidence_snapshot,
+            specialist_note,
+            reason_code,
+            reviewed_at
+          )
+          VALUES(
+            $1::uuid,
+            $2::uuid,
+            $3::uuid,
+            $4::ops_recovery_review_decision,
+            $5::jsonb,
+            $6,
+            $7,
+            now()
+          )
+          ON CONFLICT(case_id)
+          DO UPDATE SET
+            reviewer_user_id=EXCLUDED.reviewer_user_id,
+            decision=EXCLUDED.decision,
+            evidence_snapshot=EXCLUDED.evidence_snapshot,
+            specialist_note=EXCLUDED.specialist_note,
+            reason_code=EXCLUDED.reason_code,
+            reviewed_at=now(),
+            updated_at=now()
+          RETURNING
+            id::text,
+            case_id::text AS "caseId",
+            user_id::text AS "userId",
+            reviewer_user_id::text AS "reviewerUserId",
+            decision::text,
+            evidence_snapshot AS "evidenceSnapshot",
+            specialist_note AS "specialistNote",
+            reason_code AS "reasonCode",
+            reviewed_at AS "reviewedAt",
+            created_at AS "createdAt",
+            updated_at AS "updatedAt"
+        `,
+        [
+          input.caseId,
+          evidencePayload.userId,
+          input.reviewerUserId,
+          input.decision,
+          JSON.stringify(evidencePayload.evidence),
+          input.specialistNote,
+          input.reasonCode
+        ]
+      );
+
+      /**
+       * Follow the established repo pattern:
+       * If SupportOperationsService.addEvent() is already the authoritative
+       * helper for support_case_events_v2, swap this raw insert for that helper.
+       *
+       * This insert intentionally uses only body text; no metadata jsonb is
+       * assumed.
+       */
+      await client.query(
+        `
+          INSERT INTO support_case_events_v2(
+            case_id,
+            event_type,
+            actor_id,
+            body,
+            created_at
+          )
+          VALUES(
+            $1::uuid,
+            'RECOVERY_SPECIALIST_DECISION',
+            $2::uuid,
+            $3,
+            now()
+          )
+        `,
+        [
+          input.caseId,
+          input.reviewerUserId,
+          `Recovery specialist decision: ${input.decision}. Reason: ${input.reasonCode}`
+        ]
+      );
+
+      await client.query(
+        `
+          INSERT INTO ops_audit_events(
+            actor_user_id,
+            actor_scope_snapshot,
+            action,
+            resource_type,
+            resource_id,
+            reason_code,
+            request_id,
+            before_json,
+            after_json
+          )
+          VALUES(
+            $1::uuid,
+            $2::jsonb,
+            'ops.recovery.review.decision',
+            'support_case_v2',
+            $3,
+            $4,
+            $5,
+            $6::jsonb,
+            $7::jsonb
+          )
+        `,
+        [
+          input.reviewerUserId,
+          JSON.stringify(input.reviewerScopes),
+          input.caseId,
+          input.reasonCode,
+          input.requestId ?? null,
+          JSON.stringify(beforeR.rows[0] ?? null),
+          JSON.stringify(reviewR.rows[0])
+        ]
+      );
+
+      await client.query("COMMIT");
+
+      return reviewR.rows[0];
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/routes/operations/recovery-specialist-routes.ts
+====================================================================================================
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { requireScope } from "../../auth/jwt";
+import { RecoveryEvidenceService } from "../../services/operations/recovery-evidence.service";
+import { RecoveryReviewService } from "../../services/operations/recovery-review.service";
+
+const Params = z.object({
+  caseId: z.string().uuid()
+});
+
+const DecisionBody = z.object({
+  decision: z.enum([
+    "APPROVED",
+    "REJECTED",
+    "ESCALATED"
+  ]),
+  specialistNote:
+    z.string()
+      .trim()
+      .min(3)
+      .max(4000),
+  reasonCode:
+    z.string()
+      .trim()
+      .min(3)
+      .max(100)
+});
+
+function scopeSnapshot(principal: any): string[] {
+  return principal?.scopes instanceof Set
+    ? [...principal.scopes]
+    : [];
+}
+
+/**
+ * Call this from the existing operations/index.ts registration.
+ *
+ * Replace authenticator/wrapper details with the repo's existing
+ * createAuthenticator / withErrors pattern if needed.
+ */
+export function registerRecoverySpecialistRoutes(
+  app: FastifyInstance,
+  pool: any,
+  authenticate: any,
+  withErrors: any
+) {
+  const evidence =
+    new RecoveryEvidenceService(pool);
+
+  const reviews =
+    new RecoveryReviewService(pool);
+
+  app.get(
+    "/cases/:caseId/recovery",
+    withErrors(async (request: any, reply: any) => {
+      const principal =
+        await authenticate(
+          request,
+          reply
+        );
+
+      requireScope(
+        principal,
+        "ops:recovery:read"
+      );
+
+      const { caseId } =
+        Params.parse(
+          request.params
+        );
+
+      const result =
+        await evidence.getForCase(
+          caseId
+        );
+
+      if (!result) {
+        return reply
+          .code(404)
+          .send({
+            error:
+              "CASE_NOT_FOUND"
+          });
+      }
+
+      return result;
+    })
+  );
+
+  app.post(
+    "/cases/:caseId/recovery/decision",
+    withErrors(async (request: any, reply: any) => {
+      const principal =
+        await authenticate(
+          request,
+          reply
+        );
+
+      requireScope(
+        principal,
+        "ops:recovery:review"
+      );
+
+      const { caseId } =
+        Params.parse(
+          request.params
+        );
+
+      const body =
+        DecisionBody.parse(
+          request.body
+        );
+
+      /**
+       * APPROVED is the highest-impact decision in this narrow workflow.
+       * Require the stronger approval scope for that branch.
+       */
+      if (
+        body.decision ===
+        "APPROVED"
+      ) {
+        requireScope(
+          principal,
+          "ops:recovery:approve"
+        );
+      }
+
+      return reply
+        .code(200)
+        .send(
+          await reviews.saveReview({
+            caseId,
+            reviewerUserId:
+              principal.sub,
+            reviewerScopes:
+              scopeSnapshot(
+                principal
+              ),
+            decision:
+              body.decision,
+            specialistNote:
+              body.specialistNote,
+            reasonCode:
+              body.reasonCode,
+            requestId:
+              request.id
+          })
+        );
+    })
+  );
+}
+
+
+====================================================================================================
+FILE: server/src/auth/ops-recovery-scopes.example.ts
+====================================================================================================
+/**
+ * Merge into the existing ops-scopes.ts.
+ */
+
+export const RECOVERY_OPS_SCOPES = [
+  "ops:recovery:read",
+  "ops:recovery:review",
+  "ops:recovery:approve"
+] as const;
+
+/**
+ * Suggested grants:
+ *
+ * SUPPORT_AGENT:
+ *   - ops:recovery:read
+ *
+ * RECOVERY_SPECIALIST:
+ *   - ops:recovery:read
+ *   - ops:recovery:review
+ *   - ops:recovery:approve
+ *
+ * SUPERVISOR / OPS_ADMIN:
+ *   - ops:recovery:read
+ *   - ops:recovery:review
+ *
+ * Only add `ops:recovery:approve` to those roles if that is explicitly
+ * consistent with your production control policy.
+ */
+
+
+====================================================================================================
+FILE: server/tests/recovery-specialist.test.ts
+====================================================================================================
+import {
+  describe,
+  it,
+  expect
+} from "vitest";
+
+/**
+ * Pure helpers can be extracted from RecoveryEvidenceService and tested
+ * directly if your test style prefers.
+ */
+describe(
+  "repo-native recovery specialist review",
+  () => {
+    it.todo(
+      "requires ops:recovery:read to view evidence"
+    );
+
+    it.todo(
+      "requires ops:recovery:review to reject or escalate"
+    );
+
+    it.todo(
+      "requires ops:recovery:approve for APPROVED"
+    );
+
+    it.todo(
+      "resolves user_id from support_cases_v2"
+    );
+
+    it.todo(
+      "reads recovery_email_identities_v3 without mutating it"
+    );
+
+    it.todo(
+      "reads trusted_installation_devices_v3 without mutating it"
+    );
+
+    it.todo(
+      "reads webauthn_credentials without mutating it"
+    );
+
+    it.todo(
+      "persists evidence snapshot with specialist decision"
+    );
+
+    it.todo(
+      "writes ops_audit_events in same transaction as review"
+    );
+
+    it.todo(
+      "writes support case event for specialist decision"
+    );
+
+    it.todo(
+      "rejects review changes on CLOSED cases"
+    );
+
+    it.todo(
+      "does not reset 2FA, delete passkeys, change recovery email, or mutate trusted devices"
+    );
+  }
+);
+
+
+====================================================================================================
+FILE: clients/web/src/admin/api/recovery-specialist-api.ts
+====================================================================================================
+export type RecoveryEvidence = {
+  caseId: string;
+  caseNumber: string | number;
+  userId: string;
+  caseState: string;
+  priority: string;
+
+  evidence: {
+    recoveryEmails: Array<{
+      id?: string | null;
+      maskedEmail?: string | null;
+      state?: string | null;
+      verified: boolean;
+      createdAt?: string | null;
+      updatedAt?: string | null;
+    }>;
+
+    trustedDevices: Array<{
+      id?: string | null;
+      label: string;
+      platform?: string | null;
+      state?: string | null;
+      trusted: boolean;
+      lastSeenAt?: string | null;
+    }>;
+
+    passkeys: Array<{
+      id?: string | null;
+      label: string;
+      createdAt?: string | null;
+      lastUsedAt?: string | null;
+      active: boolean;
+    }>;
+
+    summary: {
+      verifiedRecoveryEmailCount: number;
+      trustedDeviceCount: number;
+      activePasskeyCount: number;
+    };
+  };
+
+  review: null | {
+    id: string;
+    decision:
+      | "PENDING"
+      | "APPROVED"
+      | "REJECTED"
+      | "ESCALATED";
+    reviewerUserId?: string | null;
+    specialistNote?: string | null;
+    reasonCode?: string | null;
+    reviewedAt?: string | null;
+  };
+};
+
+async function api<T>(
+  accessToken: string,
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  const response =
+    await fetch(
+      path,
+      {
+        ...init,
+        headers: {
+          authorization:
+            `Bearer ${accessToken}`,
+          "content-type":
+            "application/json",
+          ...(init?.headers ?? {})
+        }
+      }
+    );
+
+  const body =
+    await response
+      .json()
+      .catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      body.error ??
+      `HTTP_${response.status}`
+    );
+  }
+
+  return body as T;
+}
+
+export const recoverySpecialistApi = {
+  get(
+    accessToken: string,
+    caseId: string
+  ) {
+    return api<RecoveryEvidence>(
+      accessToken,
+      `/v1/admin/operations/cases/${caseId}/recovery`
+    );
+  },
+
+  decide(
+    accessToken: string,
+    caseId: string,
+    input: {
+      decision:
+        | "APPROVED"
+        | "REJECTED"
+        | "ESCALATED";
+      specialistNote: string;
+      reasonCode: string;
+    }
+  ) {
+    return api<any>(
+      accessToken,
+      `/v1/admin/operations/cases/${caseId}/recovery/decision`,
+      {
+        method: "POST",
+        body:
+          JSON.stringify(input)
+      }
+    );
+  }
+};
+
+
+====================================================================================================
+FILE: clients/web/src/admin/hooks/useRecoverySpecialistPolling.ts
+====================================================================================================
+import {
+  recoverySpecialistApi
+} from "../api/recovery-specialist-api";
+
+/**
+ * Use this loader with the repo's EXISTING usePolling helper.
+ * Do not add SWR.
+ */
+export function createRecoverySpecialistLoader(
+  accessToken: string,
+  caseId: string
+) {
+  return () =>
+    recoverySpecialistApi.get(
+      accessToken,
+      caseId
+    );
+}
+
+/**
+ * Example:
+ *
+ * const recoveryPoll = usePolling(
+ *   createRecoverySpecialistLoader(accessToken, caseId),
+ *   15_000,
+ *   [accessToken, caseId]
+ * );
+ */
+
+
+====================================================================================================
+FILE: clients/web/src/admin/components/RecoverySpecialistPanel.tsx
+====================================================================================================
+import {
+  useMemo,
+  useState
+} from "react";
+
+import type {
+  RecoveryEvidence
+} from "../api/recovery-specialist-api";
+
+const card = {
+  border: "1px solid #1e293b",
+  borderRadius: 12,
+  background:
+    "rgba(15,23,42,.72)",
+  padding: 14
+};
+
+const label = {
+  color: "#64748b",
+  fontSize: 12
+};
+
+function EvidenceCount({
+  labelText,
+  value
+}: {
+  labelText: string;
+  value: number;
+}) {
+  return (
+    <div style={card}>
+      <div style={label}>
+        {labelText}
+      </div>
+
+      <div
+        style={{
+          fontSize: 24,
+          fontWeight: 700,
+          marginTop: 6
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+export function RecoverySpecialistPanel({
+  data,
+  canReview,
+  canApprove,
+  onDecision
+}: {
+  data: RecoveryEvidence;
+  canReview: boolean;
+  canApprove: boolean;
+  onDecision: (
+    input: {
+      decision:
+        | "APPROVED"
+        | "REJECTED"
+        | "ESCALATED";
+      specialistNote: string;
+      reasonCode: string;
+    }
+  ) => Promise<void>;
+}) {
+  const [note, setNote] =
+    useState(
+      data.review
+        ?.specialistNote ??
+      ""
+    );
+
+  const [reason, setReason] =
+    useState(
+      data.review
+        ?.reasonCode ??
+      "RECOVERY_REVIEW"
+    );
+
+  const [busy, setBusy] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
+  const summary =
+    data.evidence.summary;
+
+  const hasStrongEvidence =
+    useMemo(
+      () =>
+        summary
+          .verifiedRecoveryEmailCount >
+          0 ||
+        summary
+          .trustedDeviceCount >
+          0 ||
+        summary
+          .activePasskeyCount >
+          0,
+      [summary]
+    );
+
+  async function decide(
+    decision:
+      | "APPROVED"
+      | "REJECTED"
+      | "ESCALATED"
+  ) {
+    if (!canReview) return;
+
+    if (
+      decision ===
+        "APPROVED" &&
+      !canApprove
+    ) {
+      setError(
+        "Approval scope required."
+      );
+      return;
+    }
+
+    if (!note.trim()) {
+      setError(
+        "Specialist note is required."
+      );
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+
+    try {
+      await onDecision({
+        decision,
+        specialistNote:
+          note.trim(),
+        reasonCode:
+          reason.trim()
+      });
+    } catch (e: any) {
+      setError(
+        e?.message ??
+        "Recovery decision failed."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 12
+      }}
+    >
+      <div style={card}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent:
+              "space-between",
+            alignItems: "center",
+            gap: 12
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontWeight: 700
+              }}
+            >
+              Recovery Specialist
+            </div>
+
+            <div
+              style={{
+                color: "#94a3b8",
+                fontSize: 12,
+                marginTop: 4
+              }}
+            >
+              Evidence review only.
+              No credential mutation.
+            </div>
+          </div>
+
+          <div
+            style={{
+              fontSize: 12,
+              color:
+                data.review
+                  ?.decision ===
+                "APPROVED"
+                  ? "#34d399"
+                  : data.review
+                      ?.decision ===
+                    "REJECTED"
+                    ? "#fb7185"
+                    : "#fbbf24"
+            }}
+          >
+            {data.review
+              ?.decision ??
+              "PENDING"}
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns:
+            "repeat(auto-fit,minmax(180px,1fr))",
+          gap: 12
+        }}
+      >
+        <EvidenceCount
+          labelText=
+            "Verified recovery emails"
+          value={
+            summary
+              .verifiedRecoveryEmailCount
+          }
+        />
+
+        <EvidenceCount
+          labelText=
+            "Trusted devices"
+          value={
+            summary
+              .trustedDeviceCount
+          }
+        />
+
+        <EvidenceCount
+          labelText=
+            "Active passkeys"
+          value={
+            summary
+              .activePasskeyCount
+          }
+        />
+      </div>
+
+      <div style={card}>
+        <div
+          style={{
+            fontWeight: 700,
+            marginBottom: 10
+          }}
+        >
+          Recovery Email Evidence
+        </div>
+
+        {data.evidence
+          .recoveryEmails.length ===
+        0 ? (
+          <div
+            style={{
+              color: "#94a3b8",
+              fontSize: 13
+            }}
+          >
+            No recovery email
+            evidence found.
+          </div>
+        ) : (
+          data.evidence
+            .recoveryEmails
+            .map(
+              (
+                item,
+                index
+              ) => (
+                <div
+                  key={
+                    item.id ??
+                    index
+                  }
+                  style={{
+                    display:
+                      "flex",
+                    justifyContent:
+                      "space-between",
+                    padding:
+                      "8px 0",
+                    borderBottom:
+                      "1px solid #1e293b"
+                  }}
+                >
+                  <span>
+                    {item.maskedEmail ??
+                      "Masked email unavailable"}
+                  </span>
+
+                  <span
+                    style={{
+                      color:
+                        item.verified
+                          ? "#34d399"
+                          : "#fbbf24",
+                      fontSize: 12
+                    }}
+                  >
+                    {item.verified
+                      ? "VERIFIED"
+                      : item.state ??
+                        "UNVERIFIED"}
+                  </span>
+                </div>
+              )
+            )
+        )}
+      </div>
+
+      <div style={card}>
+        <div
+          style={{
+            fontWeight: 700,
+            marginBottom: 10
+          }}
+        >
+          Trusted Devices
+        </div>
+
+        {data.evidence
+          .trustedDevices.length ===
+        0 ? (
+          <div
+            style={{
+              color: "#94a3b8",
+              fontSize: 13
+            }}
+          >
+            No trusted-device
+            evidence found.
+          </div>
+        ) : (
+          data.evidence
+            .trustedDevices
+            .map(
+              (
+                item,
+                index
+              ) => (
+                <div
+                  key={
+                    item.id ??
+                    index
+                  }
+                  style={{
+                    padding:
+                      "8px 0",
+                    borderBottom:
+                      "1px solid #1e293b"
+                  }}
+                >
+                  <div>
+                    {item.label}
+                  </div>
+                  <div
+                    style={{
+                      color:
+                        "#94a3b8",
+                      fontSize: 12,
+                      marginTop: 3
+                    }}
+                  >
+                    {item.platform ??
+                      "Platform unavailable"}
+                    {" • "}
+                    {item.trusted
+                      ? "Trusted"
+                      : item.state ??
+                        "Not trusted"}
+                  </div>
+                </div>
+              )
+            )
+        )}
+      </div>
+
+      <div style={card}>
+        <div
+          style={{
+            fontWeight: 700,
+            marginBottom: 10
+          }}
+        >
+          Passkeys
+        </div>
+
+        {data.evidence
+          .passkeys.length ===
+        0 ? (
+          <div
+            style={{
+              color: "#94a3b8",
+              fontSize: 13
+            }}
+          >
+            No passkey evidence
+            found.
+          </div>
+        ) : (
+          data.evidence
+            .passkeys
+            .map(
+              (
+                item,
+                index
+              ) => (
+                <div
+                  key={
+                    item.id ??
+                    index
+                  }
+                  style={{
+                    display:
+                      "flex",
+                    justifyContent:
+                      "space-between",
+                    padding:
+                      "8px 0",
+                    borderBottom:
+                      "1px solid #1e293b"
+                  }}
+                >
+                  <span>
+                    {item.label}
+                  </span>
+
+                  <span
+                    style={{
+                      color:
+                        item.active
+                          ? "#34d399"
+                          : "#94a3b8",
+                      fontSize: 12
+                    }}
+                  >
+                    {item.active
+                      ? "ACTIVE"
+                      : "INACTIVE"}
+                  </span>
+                </div>
+              )
+            )
+        )}
+      </div>
+
+      <div style={card}>
+        <div
+          style={{
+            fontWeight: 700,
+            marginBottom: 10
+          }}
+        >
+          Specialist Decision
+        </div>
+
+        {!hasStrongEvidence && (
+          <div
+            style={{
+              color: "#fbbf24",
+              fontSize: 12,
+              marginBottom: 10
+            }}
+          >
+            No strong recovery
+            evidence is currently
+            visible. Escalation or
+            rejection may be more
+            appropriate than
+            approval.
+          </div>
+        )}
+
+        <textarea
+          value={note}
+          onChange={e =>
+            setNote(
+              e.target.value
+            )
+          }
+          disabled={
+            !canReview ||
+            busy
+          }
+          placeholder=
+            "Document the evidence reviewed and rationale."
+          style={{
+            width: "100%",
+            minHeight: 100,
+            resize:
+              "vertical",
+            border:
+              "1px solid #334155",
+            borderRadius: 8,
+            background:
+              "#020617",
+            color: "#e2e8f0",
+            padding: 10
+          }}
+        />
+
+        <input
+          value={reason}
+          onChange={e =>
+            setReason(
+              e.target.value
+            )
+          }
+          disabled={
+            !canReview ||
+            busy
+          }
+          style={{
+            width: "100%",
+            marginTop: 8,
+            border:
+              "1px solid #334155",
+            borderRadius: 8,
+            background:
+              "#020617",
+            color: "#e2e8f0",
+            padding: 10
+          }}
+        />
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            marginTop: 10,
+            flexWrap: "wrap"
+          }}
+        >
+          <button
+            disabled={
+              !canApprove ||
+              busy
+            }
+            onClick={() =>
+              decide(
+                "APPROVED"
+              )
+            }
+            style={{
+              border: 0,
+              borderRadius: 8,
+              background:
+                "#059669",
+              color: "white",
+              padding:
+                "9px 14px",
+              opacity:
+                !canApprove ||
+                busy
+                  ? 0.5
+                  : 1
+            }}
+          >
+            Approve
+          </button>
+
+          <button
+            disabled={
+              !canReview ||
+              busy
+            }
+            onClick={() =>
+              decide(
+                "REJECTED"
+              )
+            }
+            style={{
+              border:
+                "1px solid #7f1d1d",
+              borderRadius: 8,
+              background:
+                "#450a0a",
+              color: "#fda4af",
+              padding:
+                "9px 14px",
+              opacity:
+                !canReview ||
+                busy
+                  ? 0.5
+                  : 1
+            }}
+          >
+            Reject
+          </button>
+
+          <button
+            disabled={
+              !canReview ||
+              busy
+            }
+            onClick={() =>
+              decide(
+                "ESCALATED"
+              )
+            }
+            style={{
+              border:
+                "1px solid #92400e",
+              borderRadius: 8,
+              background:
+                "#451a03",
+              color: "#fbbf24",
+              padding:
+                "9px 14px",
+              opacity:
+                !canReview ||
+                busy
+                  ? 0.5
+                  : 1
+            }}
+          >
+            Escalate
+          </button>
+        </div>
+
+        {error && (
+          <div
+            style={{
+              color: "#fb7185",
+              fontSize: 12,
+              marginTop: 8
+            }}
+          >
+            {error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+====================================================================================================
+FILE: INTEGRATION_NOTES.md
+====================================================================================================
+# Integration Notes
+
+## Server
+
+1. Add migration `031_ops_recovery_specialist_review.sql`.
+2. Add scopes:
+   - `ops:recovery:read`
+   - `ops:recovery:review`
+   - `ops:recovery:approve`
+3. Register:
+   - GET `/v1/admin/operations/cases/:caseId/recovery`
+   - POST `/v1/admin/operations/cases/:caseId/recovery/decision`
+4. Prefer the repo's existing:
+   - `createAuthenticator`
+   - `requireScope`
+   - `withErrors`
+5. If `SupportOperationsService.addEvent()` is already authoritative for
+   `support_case_events_v2`, use it instead of the example raw event insert.
+
+## Why one new table is appropriate
+
+`ops_recovery_reviews_v1` stores OPERATIONS WORKFLOW STATE only:
+- who reviewed
+- what evidence was visible
+- decision
+- rationale
+
+It does not duplicate recovery identity data and does not become an auth source
+of truth.
+
+## Evidence
+
+The service reads:
+- `recovery_email_identities_v3`
+- `trusted_installation_devices_v3`
+- `webauthn_credentials`
+
+It never modifies those tables.
+
+## Approval semantics
+
+`APPROVED` means:
+
+"An authorized recovery specialist reviewed the available evidence and approved
+the recovery support request."
+
+It does NOT mean:
+- reset 2FA
+- change email
+- delete passkey
+- trust a device
+- bypass authentication
+
+Any such action must be implemented later as a separate owning-domain command.
+
+## Client
+
+Fold `RecoverySpecialistPanel` into the current CaseWorkspacePanel.
+
+Use the existing polling helper at ~15 seconds.
+
+Derive:
+- `canReview` from `principal.scopes.has("ops:recovery:review")`
+- `canApprove` from `principal.scopes.has("ops:recovery:approve")`
+
+Do not rely on the button being hidden; the server remains authoritative.

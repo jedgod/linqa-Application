@@ -1,0 +1,450 @@
+LINQA WORLD WELCOME — TAILWIND + SHADCN-STYLE COMPLETE CODE
+====================================================================================================
+
+
+====================================================================================================
+FILE: IMPLEMENTATION_NOTES.md
+====================================================================================================
+
+# Implementation Notes
+
+To wire this into Linqa production:
+
+- Replace Get Started console action with:
+  router.push({ pathname: "/account/phone", params: { purpose: "REGISTRATION" } })
+
+- Replace Log In action with:
+  router.push({ pathname: "/account/phone", params: { purpose: "LOGIN" } })
+
+- Keep authentication authority in the server.
+- Do not treat the welcome screen as CountryLinqa authentication.
+- CountryLinqa onboarding should follow authenticated account creation.
+- For native Expo, replace HTML Tailwind classes with NativeWind equivalents or use this component in the web client.
+
+Visual tuning targets from the provided image:
+- 390x844 portrait reference
+- near-full-height purple gradient
+- white status icons
+- centered pin logo
+- large Linqa World title
+- translucent tagline
+- dotted white globe
+- large white CTA
+- white Log In action
+- iOS home indicator
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+
+# Linqa World Welcome Screen
+
+A Tailwind + shadcn-style React recreation of the supplied Linqa World welcome screen.
+
+Includes:
+- iPhone-style portrait shell
+- purple/violet gradient
+- status bar
+- location-pin logo mark
+- Linqa World title
+- tagline
+- dotted globe treatment
+- Get Started CTA
+- Log In link
+- gesture/home indicator
+
+Run:
+npm install
+npm run dev
+
+
+====================================================================================================
+FILE: index.html
+====================================================================================================
+
+<div id="root"></div>
+<script type="module" src="/src/main.tsx"></script>
+
+
+====================================================================================================
+FILE: package.json
+====================================================================================================
+
+{
+  "name": "linqa-world-welcome-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.1"
+  }
+}
+
+
+====================================================================================================
+FILE: postcss.config.js
+====================================================================================================
+
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {}
+  }
+};
+
+
+====================================================================================================
+FILE: src/App.tsx
+====================================================================================================
+
+import LinqaWorldWelcome from "./pages/LinqaWorldWelcome";
+
+export default function App() {
+  return <LinqaWorldWelcome />;
+}
+
+
+====================================================================================================
+FILE: src/components/DottedGlobe.tsx
+====================================================================================================
+
+export function DottedGlobe() {
+  return (
+    <div
+      aria-hidden="true"
+      className="relative mx-auto h-[360px] w-[360px] max-w-[88vw] overflow-hidden rounded-full opacity-80"
+    >
+      <div className="absolute inset-0 rounded-full border border-white/5" />
+
+      <div
+        className="absolute inset-0 rounded-full"
+        style={{
+          backgroundImage:
+            "radial-gradient(circle, rgba(255,255,255,0.70) 1.8px, transparent 2px)",
+          backgroundSize: "9px 9px",
+          WebkitMaskImage:
+            "radial-gradient(circle at center, black 0 68%, transparent 70%)",
+          maskImage:
+            "radial-gradient(circle at center, black 0 68%, transparent 70%)",
+        }}
+      />
+
+      <svg
+        viewBox="0 0 360 360"
+        className="absolute inset-0 h-full w-full"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <defs>
+          <pattern
+            id="dotPattern"
+            width="9"
+            height="9"
+            patternUnits="userSpaceOnUse"
+          >
+            <circle cx="2" cy="2" r="1.8" fill="rgba(255,255,255,0.82)" />
+          </pattern>
+
+          <clipPath id="globeClip">
+            <circle cx="180" cy="180" r="170" />
+          </clipPath>
+        </defs>
+
+        <g clipPath="url(#globeClip)" fill="url(#dotPattern)">
+          <path d="M164 47c21 3 41 10 58 22l21 22 18 8 14 19-9 13-23-5-10 16-25 2-12 15-16-5-18 12-21-7-8-19 10-22-6-17 8-14 19-4z" />
+          <path d="M145 165l20-7 23 7 17 19-5 25-19 22-7 36-18 27-20-3-15-31 5-24-17-16 5-24 16-14z" />
+          <path d="M61 86l27-27 39-9 15 14-12 15-24 4-8 20-17 8-10 22-20 1-11-17z" />
+          <path d="M42 156l24-8 18 13 5 21-14 18-4 27-17-1-10-26-12-18z" />
+          <path d="M80 233l20 11 15 25 1 38-17 8-14-23-15-11-6-27z" />
+          <path d="M245 165l20-4 22 12 17 25-9 21-17-6-11-24-20-8z" />
+          <path d="M269 223l28 8 20 20-8 20-25-4-14-21z" />
+          <path d="M306 275l18 9 10 14-13 10-19-8z" />
+        </g>
+
+        <circle
+          cx="180"
+          cy="180"
+          r="169"
+          stroke="rgba(255,255,255,0.10)"
+          strokeWidth="1"
+        />
+      </svg>
+    </div>
+  );
+}
+
+
+====================================================================================================
+FILE: src/components/StatusBar.tsx
+====================================================================================================
+
+import { Battery, Signal, Wifi } from "lucide-react";
+
+export function StatusBar() {
+  return (
+    <div className="flex items-center justify-between px-7 pt-5 text-white">
+      <span className="text-[15px] font-bold tracking-tight">9:41</span>
+
+      <div className="flex items-center gap-2">
+        <Signal className="h-[17px] w-[17px]" strokeWidth={2.5} />
+        <Wifi className="h-[18px] w-[18px]" strokeWidth={2.5} />
+        <Battery className="h-[22px] w-[22px]" strokeWidth={2.1} />
+      </div>
+    </div>
+  );
+}
+
+
+====================================================================================================
+FILE: src/components/ui/button.tsx
+====================================================================================================
+
+import * as React from "react";
+import { cn } from "../../lib/utils";
+
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: "primary" | "ghost";
+}
+
+export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant = "primary", ...props }, ref) => {
+    return (
+      <button
+        ref={ref}
+        className={cn(
+          "inline-flex items-center justify-center whitespace-nowrap rounded-2xl text-base font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 disabled:pointer-events-none disabled:opacity-50",
+          variant === "primary" &&
+            "bg-white text-violet-700 shadow-[0_10px_35px_rgba(10,10,40,0.18)] hover:bg-white/95",
+          variant === "ghost" &&
+            "bg-transparent text-white hover:bg-white/10",
+          className
+        )}
+        {...props}
+      />
+    );
+  }
+);
+
+Button.displayName = "Button";
+
+
+====================================================================================================
+FILE: src/index.css
+====================================================================================================
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Display",
+    "Segoe UI",
+    sans-serif;
+  background: #09090b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+button {
+  font: inherit;
+}
+
+
+====================================================================================================
+FILE: src/lib/utils.ts
+====================================================================================================
+
+export type ClassValue =
+  | string
+  | false
+  | null
+  | undefined
+  | Record<string, boolean>;
+
+export function cn(...values: ClassValue[]) {
+  const classes: string[] = [];
+
+  for (const value of values) {
+    if (!value) continue;
+
+    if (typeof value === "string") {
+      classes.push(value);
+      continue;
+    }
+
+    for (const [className, enabled] of Object.entries(value)) {
+      if (enabled) classes.push(className);
+    }
+  }
+
+  return classes.join(" ");
+}
+
+
+====================================================================================================
+FILE: src/main.tsx
+====================================================================================================
+
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+import "./index.css";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
+
+====================================================================================================
+FILE: src/pages/LinqaWorldWelcome.tsx
+====================================================================================================
+
+import { MapPin } from "lucide-react";
+import { Button } from "../components/ui/button";
+import { StatusBar } from "../components/StatusBar";
+import { DottedGlobe } from "../components/DottedGlobe";
+
+export default function LinqaWorldWelcome() {
+  return (
+    <div className="min-h-screen bg-zinc-950 p-0 sm:grid sm:place-items-center sm:p-6">
+      <div className="relative flex min-h-[100svh] w-full flex-col overflow-hidden bg-[radial-gradient(circle_at_50%_15%,#7148ff_0%,#5531dc_34%,#33229e_66%,#251b74_100%)] text-white sm:min-h-[844px] sm:max-w-[390px] sm:rounded-[44px] sm:border-[8px] sm:border-black sm:shadow-2xl">
+
+        <StatusBar />
+
+        <main className="flex flex-1 flex-col px-7 pb-[calc(18px+env(safe-area-inset-bottom))]">
+          <section className="flex flex-1 flex-col items-center pt-14 text-center">
+            <MapPin
+              className="h-[58px] w-[58px] text-white"
+              strokeWidth={1.9}
+            />
+
+            <h1 className="mt-6 text-[39px] font-semibold tracking-[-0.04em]">
+              Linqa World
+            </h1>
+
+            <p className="mt-5 text-[18px] font-medium tracking-[-0.02em] text-white/70">
+              Connect Locally. Connect Globally.
+            </p>
+
+            <div className="mt-8 w-full">
+              <DottedGlobe />
+            </div>
+          </section>
+
+          <section className="mt-5 space-y-4">
+            <Button
+              className="h-[64px] rounded-[20px] text-[21px] font-bold"
+              onClick={() => console.log("Get Started")}
+            >
+              Get Started
+            </Button>
+
+            <Button
+              variant="ghost"
+              className="h-[52px] text-[19px] font-medium"
+              onClick={() => console.log("Log In")}
+            >
+              Log In
+            </Button>
+          </section>
+        </main>
+
+        <div className="pointer-events-none absolute bottom-2 left-1/2 h-[5px] w-[132px] -translate-x-1/2 rounded-full bg-white/95" />
+      </div>
+    </div>
+  );
+}
+
+
+====================================================================================================
+FILE: tailwind.config.ts
+====================================================================================================
+
+import type { Config } from "tailwindcss";
+
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{ts,tsx}"
+  ],
+  theme: {
+    extend: {
+      colors: {
+        linqa: {
+          500: "#6848F5",
+          600: "#5531DC",
+          700: "#3925A7",
+          800: "#251B74"
+        }
+      }
+    }
+  },
+  plugins: []
+} satisfies Config;
+
+
+====================================================================================================
+FILE: tsconfig.json
+====================================================================================================
+
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
+
+
+====================================================================================================
+FILE: vite.config.ts
+====================================================================================================
+
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()]
+});

@@ -51,9 +51,12 @@ export async function discoverUsers(db: Database, requesterId: string, input: Di
 
   const result = await db.query(
     `WITH ${viewerScopeCte(1)}
-     SELECT author.id, profile.display_name, profile.avatar_object_key, author.verified_country_code, author.country_verification_state
+     SELECT author.id, profile.display_name, profile.avatar_object_key,
+       CASE WHEN COALESCE(author_preferences.show_country, TRUE) THEN author.verified_country_code ELSE NULL END AS verified_country_code,
+       author.country_verification_state
      FROM users author
      JOIN user_profiles profile ON profile.user_id = author.id
+     LEFT JOIN country_discovery_preferences author_preferences ON author_preferences.user_id=author.id
      CROSS JOIN viewer_scope vs
      WHERE author.status = 'ACTIVE' AND author.id <> $1 AND ${conditions.join(" AND ")}
      ORDER BY author.id

@@ -1,0 +1,1945 @@
+// LINQA — ACCOUNT JURISDICTION + TRAVEL / INTERNATIONAL RELOCATION PACK v2.0
+// TypeScript + PostgreSQL production-oriented reference implementation
+//
+// v2 integrates and supersedes v1.0.
+//
+// MAJOR v2 SECURITY RULE:
+// Every sensitive LinqaSend action requires BOTH:
+//   1. authenticated authorization, and
+//   2. current device/location/risk assessment.
+//
+// Risk determines whether the action proceeds normally, requires stronger
+// step-up authentication, enters temporary hold, or is blocked.
+//
+// CRITICAL JURISDICTION RULE:
+// Money follows the jurisdiction and regulatory entity of the wallet/ledger
+// actually being debited. GPS/IP/SIM/current residence MUST NOT silently
+// relabel an existing wallet or grant another country's LinqaSend permissions.
+
+export enum LocationRelationship {
+  HOME='HOME',
+  TRAVELING='TRAVELING',
+  TEMPORARY_RESIDENT='TEMPORARY_RESIDENT',
+  RELOCATION_PENDING='RELOCATION_PENDING',
+  RELOCATION_VERIFICATION='RELOCATION_VERIFICATION',
+  RELOCATED_VERIFIED='RELOCATED_VERIFIED',
+  LOCATION_MISMATCH='LOCATION_MISMATCH',
+  LOCATION_HIGH_RISK='LOCATION_HIGH_RISK'
+}
+
+export enum JurisdictionMigrationStatus {
+  NONE='NONE',
+  REQUESTED='REQUESTED',
+  DOCUMENTS_REQUIRED='DOCUMENTS_REQUIRED',
+  UNDER_REVIEW='UNDER_REVIEW',
+  APPROVED_FOR_MIGRATION='APPROVED_FOR_MIGRATION',
+  APPROVED='APPROVED',
+  REJECTED='REJECTED',
+  SUSPENDED='SUSPENDED',
+  CANCELLED='CANCELLED'
+}
+
+export enum LocationSignalType {
+  IP='IP',
+  GPS='GPS',
+  SIM='SIM',
+  PHONE_PREFIX='PHONE_PREFIX',
+  DEVICE_LOCALE='DEVICE_LOCALE',
+  TIMEZONE='TIMEZONE',
+  BANK_COUNTRY='BANK_COUNTRY',
+  CARD_COUNTRY='CARD_COUNTRY',
+  VERIFIED_ADDRESS='VERIFIED_ADDRESS'
+}
+
+export enum LocationRiskSignal {
+  IMPOSSIBLE_TRAVEL='IMPOSSIBLE_TRAVEL',
+  VPN_OR_PROXY='VPN_OR_PROXY',
+  TOR_EXIT_NODE='TOR_EXIT_NODE',
+  SIM_COUNTRY_CHANGE='SIM_COUNTRY_CHANGE',
+  NEW_DEVICE='NEW_DEVICE',
+  COUNTRY_MISMATCH='COUNTRY_MISMATCH',
+  RAPID_COUNTRY_HOPPING='RAPID_COUNTRY_HOPPING',
+  SESSION_TAKEOVER_RISK='SESSION_TAKEOVER_RISK',
+  SPOOFED_LOCATION_SUSPECTED='SPOOFED_LOCATION_SUSPECTED'
+}
+
+export enum ResidencyEvidenceType {
+  GOVERNMENT_ID='GOVERNMENT_ID',
+  RESIDENCE_PERMIT='RESIDENCE_PERMIT',
+  VISA='VISA',
+  UTILITY_BILL='UTILITY_BILL',
+  BANK_STATEMENT='BANK_STATEMENT',
+  TAX_DOCUMENT='TAX_DOCUMENT',
+  TENANCY_AGREEMENT='TENANCY_AGREEMENT',
+  EMPLOYMENT_DOCUMENT='EMPLOYMENT_DOCUMENT',
+  SCHOOL_ENROLLMENT='SCHOOL_ENROLLMENT',
+  GOVERNMENT_LETTER='GOVERNMENT_LETTER'
+}
+
+export enum ResidencyEvidenceClass {
+  IDENTITY='IDENTITY',
+  RESIDENCY_RIGHT='RESIDENCY_RIGHT',
+  ADDRESS='ADDRESS',
+  FINANCIAL='FINANCIAL',
+  EMPLOYMENT_OR_EDUCATION='EMPLOYMENT_OR_EDUCATION',
+  GOVERNMENT='GOVERNMENT'
+}
+
+export enum VerificationStatus {
+  PENDING='PENDING',
+  VERIFIED='VERIFIED',
+  REJECTED='REJECTED',
+  EXPIRED='EXPIRED',
+  MANUAL_REVIEW='MANUAL_REVIEW'
+}
+
+export enum WalletMigrationStatus {
+  NOT_REQUIRED='NOT_REQUIRED',
+  PENDING_REVIEW='PENDING_REVIEW',
+  ELIGIBLE='ELIGIBLE',
+  RESTRICTED='RESTRICTED',
+  BLOCKED='BLOCKED',
+  COMPLETED='COMPLETED'
+}
+
+export enum WalletStatus {
+  ACTIVE='ACTIVE',
+  RESTRICTED='RESTRICTED',
+  FROZEN='FROZEN',
+  CLOSING='CLOSING',
+  CLOSED='CLOSED'
+}
+
+export enum SensitiveAction {
+  P2P_SEND='P2P_SEND',
+  STANDARD_CASHOUT='STANDARD_CASHOUT',
+  INSTANT_CASHOUT='INSTANT_CASHOUT',
+  BANK_ACCOUNT_ADD='BANK_ACCOUNT_ADD',
+  BANK_ACCOUNT_CHANGE='BANK_ACCOUNT_CHANGE',
+  DEBIT_CARD_ADD='DEBIT_CARD_ADD',
+  DEBIT_CARD_CHANGE='DEBIT_CARD_CHANGE',
+  RELOCATION_REQUEST='RELOCATION_REQUEST',
+  RELOCATION_EVIDENCE_UPLOAD='RELOCATION_EVIDENCE_UPLOAD',
+  RELOCATION_APPROVAL='RELOCATION_APPROVAL',
+  WALLET_MIGRATION='WALLET_MIGRATION',
+  FX_TRANSFER='FX_TRANSFER',
+  PHONE_CHANGE='PHONE_CHANGE',
+  RECOVERY_EMAIL_CHANGE='RECOVERY_EMAIL_CHANGE'
+}
+
+export enum AuthorizationOutcome {
+  ALLOW='ALLOW',
+  STEP_UP='STEP_UP',
+  TEMPORARY_HOLD='TEMPORARY_HOLD',
+  BLOCK='BLOCK'
+}
+
+export interface UserJurisdictionProfile {
+  userId:string;
+  nationalityCountry:string|null;
+  originalRegistrationCountry:string;
+  verifiedResidenceCountry:string;
+  accountCountry:string;
+  currentPhysicalCountry:string|null;
+  taxResidenceCountries:string[];
+  phoneCountry:string|null;
+  regulatoryEntityId:string;
+  regulatoryJurisdiction:string;
+  locationRelationship:LocationRelationship;
+  migrationStatus:JurisdictionMigrationStatus;
+  residenceVerifiedAt:Date|null;
+  jurisdictionEffectiveFrom:Date;
+  jurisdictionVersion:number;
+}
+
+export interface LocationSignal {
+  type:LocationSignalType;
+  country:string|null;
+  confidence:number;
+  observedAt:Date;
+  metadata?:Record<string,unknown>;
+}
+
+export interface LocationAssessment {
+  currentPhysicalCountry:string|null;
+  locationRelationship:LocationRelationship;
+  riskSignals:LocationRiskSignal[];
+  requiresStepUpAuth:boolean;
+  jurisdictionChanged:false;
+}
+
+export interface RelocationRequest {
+  id:string;
+  userId:string;
+  fromCountry:string;
+  requestedCountry:string;
+  requestedAt:Date;
+  status:JurisdictionMigrationStatus;
+  reason?:string;
+  decisionVersion?:number;
+}
+
+export interface ResidencyEvidence {
+  id:string;
+  relocationRequestId:string;
+  type:ResidencyEvidenceType;
+  evidenceClass?:ResidencyEvidenceClass;
+  country:string;
+  status:VerificationStatus;
+  issuedAt?:Date;
+  expiresAt?:Date;
+  verifiedAt?:Date;
+  metadata?:Record<string,unknown>;
+}
+
+export interface WalletAccount {
+  id:string;
+  userId:string;
+  jurisdiction:string;
+  regulatoryEntityId:string;
+  currency:string;
+  ledgerBalanceMinor:bigint;
+  pendingBalanceMinor:bigint;
+  availableBalanceMinor:bigint;
+  withdrawableBalanceMinor:bigint;
+  heldBalanceMinor:bigint;
+  status:WalletStatus;
+  jurisdictionVersion:number;
+}
+
+export interface JurisdictionRepository {
+  getProfile(userId:string):Promise<UserJurisdictionProfile|null>;
+  updatePhysicalLocation(userId:string,country:string|null,relationship:LocationRelationship):Promise<void>;
+  setLocationRelationship(userId:string,relationship:LocationRelationship):Promise<void>;
+
+  createRelocationRequest(args:{
+    userId:string;
+    fromCountry:string;
+    requestedCountry:string;
+    reason?:string;
+  }):Promise<RelocationRequest>;
+
+  getRelocationRequest(id:string):Promise<RelocationRequest|null>;
+  listResidencyEvidence(requestId:string):Promise<ResidencyEvidence[]>;
+
+  updateMigrationStatus(
+    userId:string,
+    requestId:string,
+    status:JurisdictionMigrationStatus
+  ):Promise<void>;
+
+  markApprovedForMigration(args:{
+    userId:string;
+    requestId:string;
+    targetCountry:string;
+    targetRegulatoryEntityId:string;
+    decisionVersion:number;
+  }):Promise<void>;
+
+  approveJurisdictionMigrationAtomic(args:{
+    userId:string;
+    requestId:string;
+    expectedJurisdictionVersion:number;
+    expectedDecisionVersion:number;
+    newCountry:string;
+    newRegulatoryEntityId:string;
+    effectiveFrom:Date;
+  }):Promise<void>;
+
+  appendAuditEvent(args:{
+    userId:string;
+    type:string;
+    metadata:Record<string,unknown>;
+  }):Promise<void>;
+}
+
+export interface WalletRepository {
+  listUserWallets(userId:string):Promise<WalletAccount[]>;
+  getWalletForUser(walletId:string,userId:string):Promise<WalletAccount|null>;
+
+  createWallet(args:{
+    userId:string;
+    jurisdiction:string;
+    currency:string;
+    regulatoryEntityId:string;
+  }):Promise<WalletAccount>;
+}
+
+export class LocationIntelligenceEngine {
+  assess(args:{
+    profile:UserJurisdictionProfile;
+    signals:LocationSignal[];
+    priorCountries:{country:string;observedAt:Date}[];
+    proxyDetected?:boolean;
+    torDetected?:boolean;
+    newDevice?:boolean;
+    sessionTakeoverRisk?:boolean;
+    priorSimCountry?:string|null;
+    currentSimCountry?:string|null;
+  }):LocationAssessment {
+    const riskSignals:LocationRiskSignal[]=[];
+
+    const trusted=args.signals
+      .filter(x =>
+        [LocationSignalType.GPS,LocationSignalType.IP,LocationSignalType.SIM].includes(x.type)
+      )
+      .filter(x => x.country && x.confidence >= 0.6);
+
+    const distinct=[
+      ...new Set(trusted.map(x => x.country!.toUpperCase()))
+    ];
+
+    let physicalCountry:string|null=null;
+
+    if(distinct.length===1) {
+      physicalCountry=distinct[0];
+    } else if(distinct.length>1) {
+      riskSignals.push(LocationRiskSignal.COUNTRY_MISMATCH);
+
+      const gps=trusted.find(
+        x => x.type===LocationSignalType.GPS && x.confidence>=0.8
+      );
+
+      physicalCountry=gps?.country?.toUpperCase() ?? null;
+    }
+
+    if(args.proxyDetected)
+      riskSignals.push(LocationRiskSignal.VPN_OR_PROXY);
+
+    if(args.torDetected)
+      riskSignals.push(LocationRiskSignal.TOR_EXIT_NODE);
+
+    if(args.newDevice)
+      riskSignals.push(LocationRiskSignal.NEW_DEVICE);
+
+    if(args.sessionTakeoverRisk)
+      riskSignals.push(LocationRiskSignal.SESSION_TAKEOVER_RISK);
+
+    if(
+      args.priorSimCountry &&
+      args.currentSimCountry &&
+      args.priorSimCountry.toUpperCase() !== args.currentSimCountry.toUpperCase()
+    ) {
+      riskSignals.push(LocationRiskSignal.SIM_COUNTRY_CHANGE);
+    }
+
+    const recent=[...args.priorCountries]
+      .sort((a,b)=>b.observedAt.getTime()-a.observedAt.getTime())
+      .slice(0,5);
+
+    if(new Set(recent.map(x=>x.country.toUpperCase())).size>=4) {
+      riskSignals.push(LocationRiskSignal.RAPID_COUNTRY_HOPPING);
+    }
+
+    // Lightweight impossible-travel heuristic.
+    // Production should use geodesic distance + elapsed time + confidence-weighted signals.
+    if(recent.length > 0 && physicalCountry) {
+      const latest = recent[0];
+      const elapsedMs = Date.now() - latest.observedAt.getTime();
+      const differentCountry = latest.country.toUpperCase() !== physicalCountry;
+      if(differentCountry && elapsedMs < 30 * 60 * 1000) {
+        riskSignals.push(LocationRiskSignal.IMPOSSIBLE_TRAVEL);
+      }
+    }
+
+    const requiresStepUpAuth=riskSignals.some(x =>
+      [
+        LocationRiskSignal.TOR_EXIT_NODE,
+        LocationRiskSignal.RAPID_COUNTRY_HOPPING,
+        LocationRiskSignal.COUNTRY_MISMATCH,
+        LocationRiskSignal.NEW_DEVICE,
+        LocationRiskSignal.IMPOSSIBLE_TRAVEL,
+        LocationRiskSignal.SESSION_TAKEOVER_RISK,
+        LocationRiskSignal.SIM_COUNTRY_CHANGE
+      ].includes(x)
+    );
+
+    const home=args.profile.regulatoryJurisdiction.toUpperCase();
+    let relationship=args.profile.locationRelationship;
+
+    if(
+      physicalCountry &&
+      physicalCountry!==home &&
+      relationship===LocationRelationship.HOME
+    ) {
+      relationship=LocationRelationship.TRAVELING;
+    }
+
+    if(
+      physicalCountry &&
+      physicalCountry===home &&
+      [
+        LocationRelationship.TRAVELING,
+        LocationRelationship.LOCATION_MISMATCH
+      ].includes(relationship)
+    ) {
+      relationship=LocationRelationship.HOME;
+    }
+
+    if(riskSignals.length>=3) {
+      relationship=LocationRelationship.LOCATION_HIGH_RISK;
+    } else if(riskSignals.includes(LocationRiskSignal.COUNTRY_MISMATCH)) {
+      relationship=LocationRelationship.LOCATION_MISMATCH;
+    }
+
+    return {
+      currentPhysicalCountry:physicalCountry,
+      locationRelationship:relationship,
+      riskSignals,
+      requiresStepUpAuth,
+      jurisdictionChanged:false
+    };
+  }
+}
+
+export class AccountJurisdictionResolver {
+  resolve(profile:UserJurisdictionProfile){
+    if(!profile.regulatoryJurisdiction || !profile.regulatoryEntityId) {
+      throw new Error('REGULATORY_JURISDICTION_NOT_CONFIGURED');
+    }
+
+    return {
+      regulatoryJurisdiction:profile.regulatoryJurisdiction.toUpperCase(),
+      regulatoryEntityId:profile.regulatoryEntityId,
+      source:'VERIFIED_PROFILE' as const
+    };
+  }
+}
+
+export interface SessionAuthenticationService {
+  requireFreshAuthenticatedSession(args:{
+    userId:string;
+    sessionId:string;
+    maxAgeSeconds?:number;
+  }):Promise<{
+    authenticated:boolean;
+    authenticatedAt:Date;
+    methods:string[];
+  }>;
+}
+
+export interface DeviceTrustService {
+  assess(args:{
+    userId:string;
+    deviceId:string;
+  }):Promise<{
+    trusted:boolean;
+    bound:boolean;
+    deviceRiskScore:number;
+    reasonCodes:string[];
+  }>;
+}
+
+export interface StepUpAuthenticationService {
+  requireStepUp(args:{
+    userId:string;
+    reasonCodes:string[];
+    requiredMethods?:('BIOMETRIC'|'PASSKEY'|'PIN'|'OTP')[];
+  }):Promise<void>;
+}
+
+export class TravelContextService {
+  constructor(
+    private repo:JurisdictionRepository,
+    private intelligence:LocationIntelligenceEngine,
+    private stepUp:StepUpAuthenticationService
+  ){}
+
+  async processLocationUpdate(args:{
+    userId:string;
+    signals:LocationSignal[];
+    priorCountries:{country:string;observedAt:Date}[];
+    proxyDetected?:boolean;
+    torDetected?:boolean;
+    newDevice?:boolean;
+    sessionTakeoverRisk?:boolean;
+    priorSimCountry?:string|null;
+    currentSimCountry?:string|null;
+  }){
+    const profile=await this.repo.getProfile(args.userId);
+
+    if(!profile)
+      throw new Error('JURISDICTION_PROFILE_NOT_FOUND');
+
+    const assessment=this.intelligence.assess({
+      ...args,
+      profile
+    });
+
+    await this.repo.updatePhysicalLocation(
+      args.userId,
+      assessment.currentPhysicalCountry,
+      assessment.locationRelationship
+    );
+
+    await this.repo.appendAuditEvent({
+      userId:args.userId,
+      type:'LOCATION_ASSESSED',
+      metadata:{...assessment}
+    });
+
+    // This remains useful for standalone location-processing calls.
+    // Sensitive-action flows use the mandatory authorization gate below.
+    if(assessment.requiresStepUpAuth) {
+      await this.stepUp.requireStepUp({
+        userId:args.userId,
+        reasonCodes:assessment.riskSignals
+      });
+    }
+
+    return assessment;
+  }
+}
+
+export interface ResidencyVerificationPolicy {
+  minimumEvidenceCount(country:string):number;
+  acceptableEvidence(country:string):ResidencyEvidenceType[];
+  minimumDistinctEvidenceClasses(country:string):number;
+  evidenceClass(type:ResidencyEvidenceType):ResidencyEvidenceClass;
+  requiredEvidenceClasses?(country:string):ResidencyEvidenceClass[];
+}
+
+export class ResidencyVerificationService {
+  constructor(
+    private repo:JurisdictionRepository,
+    private policy:ResidencyVerificationPolicy
+  ){}
+
+  async verifyEvidenceSufficiency(request:RelocationRequest){
+    const evidence=await this.repo.listResidencyEvidence(request.id);
+    const accepted=this.policy.acceptableEvidence(request.requestedCountry);
+
+    const valid=evidence.filter(x =>
+      x.country.toUpperCase()===request.requestedCountry.toUpperCase() &&
+      x.status===VerificationStatus.VERIFIED &&
+      accepted.includes(x.type) &&
+      (!x.expiresAt || x.expiresAt.getTime()>Date.now())
+    );
+
+    const uniqueTypes=new Set(valid.map(x=>x.type));
+
+    const classes=new Set(
+      valid.map(x =>
+        x.evidenceClass ?? this.policy.evidenceClass(x.type)
+      )
+    );
+
+    const minCount=this.policy.minimumEvidenceCount(request.requestedCountry);
+    const minClasses=this.policy.minimumDistinctEvidenceClasses(request.requestedCountry);
+    const requiredClasses=this.policy.requiredEvidenceClasses?.(
+      request.requestedCountry
+    ) ?? [];
+
+    const missingRequiredClasses=requiredClasses.filter(
+      c => !classes.has(c)
+    );
+
+    const reasonCodes:string[]=[];
+
+    if(uniqueTypes.size < minCount)
+      reasonCodes.push('INSUFFICIENT_VERIFIED_RESIDENCY_EVIDENCE');
+
+    if(classes.size < minClasses)
+      reasonCodes.push('INSUFFICIENT_EVIDENCE_DIVERSITY');
+
+    if(missingRequiredClasses.length > 0)
+      reasonCodes.push(
+        ...missingRequiredClasses.map(c => `MISSING_EVIDENCE_CLASS_${c}`)
+      );
+
+    return {
+      sufficient:reasonCodes.length===0,
+      reasonCodes,
+      verifiedEvidenceIds:valid.map(x=>x.id)
+    };
+  }
+}
+
+export interface RelocationComplianceService {
+  screen(args:{
+    userId:string;
+    targetCountry:string;
+  }):Promise<{
+    passed:boolean;
+    manualReview:boolean;
+    reasonCodes:string[];
+  }>;
+}
+
+export interface RegulatoryEntityEligibilityService {
+  check(args:{
+    userId:string;
+    targetCountry:string;
+  }):Promise<{
+    eligible:boolean;
+    entityId?:string;
+    jurisdiction?:string;
+    reasonCodes:string[];
+  }>;
+}
+
+export class JurisdictionMigrationService {
+  constructor(
+    private repo:JurisdictionRepository,
+    private residency:ResidencyVerificationService,
+    private compliance:RelocationComplianceService,
+    private eligibility:RegulatoryEntityEligibilityService
+  ){}
+
+  async requestRelocation(args:{
+    userId:string;
+    targetCountry:string;
+    reason?:string;
+  }){
+    const profile=await this.repo.getProfile(args.userId);
+
+    if(!profile)
+      throw new Error('JURISDICTION_PROFILE_NOT_FOUND');
+
+    const target=args.targetCountry.toUpperCase();
+
+    if(target===profile.regulatoryJurisdiction.toUpperCase()) {
+      throw new Error('TARGET_COUNTRY_ALREADY_CURRENT_JURISDICTION');
+    }
+
+    const req=await this.repo.createRelocationRequest({
+      userId:args.userId,
+      fromCountry:profile.regulatoryJurisdiction,
+      requestedCountry:target,
+      reason:args.reason
+    });
+
+    await this.repo.setLocationRelationship(
+      args.userId,
+      LocationRelationship.RELOCATION_PENDING
+    );
+
+    await this.repo.updateMigrationStatus(
+      args.userId,
+      req.id,
+      JurisdictionMigrationStatus.DOCUMENTS_REQUIRED
+    );
+
+    await this.repo.appendAuditEvent({
+      userId:args.userId,
+      type:'JURISDICTION_RELOCATION_REQUESTED',
+      metadata:{
+        requestId:req.id,
+        fromCountry:profile.regulatoryJurisdiction,
+        targetCountry:target
+      }
+    });
+
+    return req;
+  }
+
+  async evaluateRelocation(requestId:string){
+    const req=await this.repo.getRelocationRequest(requestId);
+
+    if(!req)
+      throw new Error('RELOCATION_REQUEST_NOT_FOUND');
+
+    if([
+      JurisdictionMigrationStatus.APPROVED,
+      JurisdictionMigrationStatus.REJECTED,
+      JurisdictionMigrationStatus.CANCELLED,
+      JurisdictionMigrationStatus.SUSPENDED
+    ].includes(req.status)) {
+      throw new Error('RELOCATION_REQUEST_TERMINAL_STATE');
+    }
+
+    const ev=await this.residency.verifyEvidenceSufficiency(req);
+
+    if(!ev.sufficient) {
+      await this.repo.updateMigrationStatus(
+        req.userId,
+        req.id,
+        JurisdictionMigrationStatus.DOCUMENTS_REQUIRED
+      );
+
+      return {
+        approved:false,
+        status:JurisdictionMigrationStatus.DOCUMENTS_REQUIRED,
+        targetCountry:req.requestedCountry,
+        reasonCodes:ev.reasonCodes
+      };
+    }
+
+    await this.repo.updateMigrationStatus(
+      req.userId,
+      req.id,
+      JurisdictionMigrationStatus.UNDER_REVIEW
+    );
+
+    const comp=await this.compliance.screen({
+      userId:req.userId,
+      targetCountry:req.requestedCountry
+    });
+
+    if(!comp.passed) {
+      await this.repo.updateMigrationStatus(
+        req.userId,
+        req.id,
+        JurisdictionMigrationStatus.REJECTED
+      );
+
+      await this.repo.appendAuditEvent({
+        userId:req.userId,
+        type:'JURISDICTION_MIGRATION_REJECTED',
+        metadata:{
+          requestId:req.id,
+          targetCountry:req.requestedCountry,
+          stage:'COMPLIANCE',
+          reasonCodes:comp.reasonCodes
+        }
+      });
+
+      return {
+        approved:false,
+        status:JurisdictionMigrationStatus.REJECTED,
+        targetCountry:req.requestedCountry,
+        reasonCodes:comp.reasonCodes.length
+          ? comp.reasonCodes
+          : ['RELOCATION_COMPLIANCE_FAILED']
+      };
+    }
+
+    if(comp.manualReview) {
+      return {
+        approved:false,
+        status:JurisdictionMigrationStatus.UNDER_REVIEW,
+        targetCountry:req.requestedCountry,
+        reasonCodes:comp.reasonCodes.length
+          ? comp.reasonCodes
+          : ['MANUAL_REVIEW_REQUIRED']
+      };
+    }
+
+    const elig=await this.eligibility.check({
+      userId:req.userId,
+      targetCountry:req.requestedCountry
+    });
+
+    if(!elig.eligible) {
+      await this.repo.updateMigrationStatus(
+        req.userId,
+        req.id,
+        JurisdictionMigrationStatus.REJECTED
+      );
+
+      await this.repo.appendAuditEvent({
+        userId:req.userId,
+        type:'JURISDICTION_MIGRATION_REJECTED',
+        metadata:{
+          requestId:req.id,
+          targetCountry:req.requestedCountry,
+          stage:'REGULATORY_ENTITY_ELIGIBILITY',
+          reasonCodes:elig.reasonCodes
+        }
+      });
+
+      return {
+        approved:false,
+        status:JurisdictionMigrationStatus.REJECTED,
+        targetCountry:req.requestedCountry,
+        reasonCodes:elig.reasonCodes
+      };
+    }
+
+    if(!elig.entityId || !elig.jurisdiction) {
+      throw new Error('TARGET_REGULATORY_ENTITY_NOT_RESOLVED');
+    }
+
+    const decisionVersion=(req.decisionVersion ?? 0)+1;
+
+    await this.repo.markApprovedForMigration({
+      userId:req.userId,
+      requestId:req.id,
+      targetCountry:req.requestedCountry,
+      targetRegulatoryEntityId:elig.entityId,
+      decisionVersion
+    });
+
+    await this.repo.appendAuditEvent({
+      userId:req.userId,
+      type:'JURISDICTION_MIGRATION_APPROVED_FOR_COMMIT',
+      metadata:{
+        requestId:req.id,
+        targetCountry:req.requestedCountry,
+        regulatoryEntityId:elig.entityId,
+        decisionVersion
+      }
+    });
+
+    return {
+      approved:true,
+      status:JurisdictionMigrationStatus.APPROVED_FOR_MIGRATION,
+      targetCountry:req.requestedCountry,
+      newRegulatoryEntityId:elig.entityId,
+      decisionVersion,
+      reasonCodes:[]
+    };
+  }
+
+  async commitApprovedRelocation(args:{
+    requestId:string;
+    expectedDecisionVersion:number;
+  }){
+    const req=await this.repo.getRelocationRequest(args.requestId);
+
+    if(!req)
+      throw new Error('RELOCATION_REQUEST_NOT_FOUND');
+
+    if(req.status!==JurisdictionMigrationStatus.APPROVED_FOR_MIGRATION) {
+      throw new Error('RELOCATION_NOT_APPROVED_FOR_MIGRATION');
+    }
+
+    const profile=await this.repo.getProfile(req.userId);
+
+    if(!profile)
+      throw new Error('JURISDICTION_PROFILE_NOT_FOUND');
+
+    const elig=await this.eligibility.check({
+      userId:req.userId,
+      targetCountry:req.requestedCountry
+    });
+
+    if(!elig.eligible || !elig.entityId) {
+      throw new Error('TARGET_REGULATORY_ENTITY_NOT_CURRENTLY_ELIGIBLE');
+    }
+
+    await this.repo.approveJurisdictionMigrationAtomic({
+      userId:req.userId,
+      requestId:req.id,
+      expectedJurisdictionVersion:profile.jurisdictionVersion,
+      expectedDecisionVersion:args.expectedDecisionVersion,
+      newCountry:req.requestedCountry,
+      newRegulatoryEntityId:elig.entityId,
+      effectiveFrom:new Date()
+    });
+
+    await this.repo.appendAuditEvent({
+      userId:req.userId,
+      type:'JURISDICTION_MIGRATION_APPROVED',
+      metadata:{
+        requestId:req.id,
+        fromCountry:req.fromCountry,
+        toCountry:req.requestedCountry,
+        regulatoryEntityId:elig.entityId,
+        priorJurisdictionVersion:profile.jurisdictionVersion
+      }
+    });
+  }
+}
+
+export interface BalanceMigrationEligibilityService {
+  evaluate(args:{
+    userId:string;
+    sourceWallet:WalletAccount;
+    targetJurisdiction:string;
+    targetCurrency:string;
+  }):Promise<{
+    status:WalletMigrationStatus;
+    reasonCodes:string[];
+  }>;
+}
+
+export class RelocatedWalletService {
+  constructor(
+    private wallets:WalletRepository,
+    private balanceMigration:BalanceMigrationEligibilityService
+  ){}
+
+  async provisionTargetWallet(args:{
+    profile:UserJurisdictionProfile;
+    targetCurrency:string;
+  }){
+    return this.wallets.createWallet({
+      userId:args.profile.userId,
+      jurisdiction:args.profile.regulatoryJurisdiction,
+      currency:args.targetCurrency,
+      regulatoryEntityId:args.profile.regulatoryEntityId
+    });
+  }
+
+  async evaluateExistingBalances(args:{
+    userId:string;
+    newJurisdiction:string;
+    targetCurrency:string;
+  }){
+    const wallets=await this.wallets.listUserWallets(args.userId);
+    const out=[];
+
+    for(const wallet of wallets){
+      if(
+        wallet.jurisdiction.toUpperCase()===
+        args.newJurisdiction.toUpperCase()
+      ) continue;
+
+      const d=await this.balanceMigration.evaluate({
+        userId:args.userId,
+        sourceWallet:wallet,
+        targetJurisdiction:args.newJurisdiction,
+        targetCurrency:args.targetCurrency
+      });
+
+      out.push({
+        walletId:wallet.id,
+        sourceJurisdiction:wallet.jurisdiction,
+        sourceRegulatoryEntityId:wallet.regulatoryEntityId,
+        sourceCurrency:wallet.currency,
+        ledgerBalanceMinor:wallet.ledgerBalanceMinor,
+        availableBalanceMinor:wallet.availableBalanceMinor,
+        withdrawableBalanceMinor:wallet.withdrawableBalanceMinor,
+        migrationStatus:d.status,
+        reasonCodes:d.reasonCodes
+      });
+    }
+
+    return out;
+  }
+}
+
+export interface WalletJurisdictionContext {
+  walletId:string;
+  userId:string;
+
+  walletJurisdiction:string;
+  walletRegulatoryEntityId:string;
+
+  accountJurisdiction:string;
+  accountRegulatoryEntityId:string;
+
+  currentPhysicalCountry:string|null;
+  locationRelationship:LocationRelationship;
+}
+
+export class LinqaSendJurisdictionContextBuilder {
+  constructor(
+    private jurisdictionRepo:JurisdictionRepository,
+    private walletRepo:WalletRepository
+  ){}
+
+  async buildForWallet(
+    userId:string,
+    walletId:string
+  ):Promise<WalletJurisdictionContext>{
+    const profile=await this.jurisdictionRepo.getProfile(userId);
+
+    if(!profile)
+      throw new Error('JURISDICTION_PROFILE_NOT_FOUND');
+
+    const wallet=await this.walletRepo.getWalletForUser(
+      walletId,
+      userId
+    );
+
+    if(!wallet)
+      throw new Error('SOURCE_WALLET_NOT_FOUND');
+
+    if(
+      wallet.status===WalletStatus.FROZEN ||
+      wallet.status===WalletStatus.CLOSED
+    ) {
+      throw new Error('SOURCE_WALLET_NOT_ACTIVE');
+    }
+
+    return {
+      walletId:wallet.id,
+      userId,
+
+      // CRITICAL:
+      // money-movement source jurisdiction comes from
+      // the wallet/ledger actually being debited.
+      walletJurisdiction:wallet.jurisdiction.toUpperCase(),
+      walletRegulatoryEntityId:wallet.regulatoryEntityId,
+
+      accountJurisdiction:
+        profile.regulatoryJurisdiction.toUpperCase(),
+      accountRegulatoryEntityId:
+        profile.regulatoryEntityId,
+
+      currentPhysicalCountry:
+        profile.currentPhysicalCountry,
+      locationRelationship:
+        profile.locationRelationship
+    };
+  }
+}
+
+export enum TravelTransactionPolicy {
+  NORMAL='NORMAL',
+  STEP_UP_REQUIRED='STEP_UP_REQUIRED',
+  RESTRICT_HIGH_RISK_ACTIONS='RESTRICT_HIGH_RISK_ACTIONS',
+  TEMPORARY_HOLD='TEMPORARY_HOLD'
+}
+
+export class TravelTransactionPolicyEngine {
+  decide(args:{
+    relationship:LocationRelationship;
+    riskSignals:LocationRiskSignal[];
+    transferAmountMinor:bigint;
+    highValueThresholdMinor:bigint;
+  }){
+    if(
+      args.relationship===LocationRelationship.LOCATION_HIGH_RISK
+    ) {
+      return TravelTransactionPolicy.TEMPORARY_HOLD;
+    }
+
+    if(
+      args.riskSignals.includes(LocationRiskSignal.TOR_EXIT_NODE) ||
+      args.riskSignals.includes(LocationRiskSignal.SESSION_TAKEOVER_RISK) ||
+      args.riskSignals.includes(LocationRiskSignal.IMPOSSIBLE_TRAVEL)
+    ) {
+      return TravelTransactionPolicy.TEMPORARY_HOLD;
+    }
+
+    if(
+      args.riskSignals.includes(LocationRiskSignal.SPOOFED_LOCATION_SUSPECTED)
+    ) {
+      return TravelTransactionPolicy.RESTRICT_HIGH_RISK_ACTIONS;
+    }
+
+    if(
+      args.riskSignals.includes(LocationRiskSignal.NEW_DEVICE) ||
+      args.riskSignals.includes(LocationRiskSignal.COUNTRY_MISMATCH) ||
+      args.riskSignals.includes(LocationRiskSignal.SIM_COUNTRY_CHANGE) ||
+      args.transferAmountMinor>=args.highValueThresholdMinor
+    ) {
+      return TravelTransactionPolicy.STEP_UP_REQUIRED;
+    }
+
+    return TravelTransactionPolicy.NORMAL;
+  }
+}
+
+export interface TransactionRiskService {
+  evaluate(args:{
+    userId:string;
+    action:SensitiveAction;
+    amountMinor?:bigint;
+    currency?:string;
+    deviceId:string;
+    physicalCountry:string|null;
+    walletJurisdiction?:string;
+    riskSignals:LocationRiskSignal[];
+  }):Promise<{
+    blocked:boolean;
+    temporaryHold:boolean;
+    stepUpRequired:boolean;
+    reasonCodes:string[];
+  }>;
+}
+
+export interface SensitiveActionAuthorizationRequest {
+  userId:string;
+  action:SensitiveAction;
+  walletId?:string;
+  amountMinor?:bigint;
+  currency?:string;
+
+  sessionId:string;
+  deviceId:string;
+
+  locationSignals:LocationSignal[];
+  priorCountries:{country:string;observedAt:Date}[];
+
+  proxyDetected?:boolean;
+  torDetected?:boolean;
+  sessionTakeoverRisk?:boolean;
+  priorSimCountry?:string|null;
+  currentSimCountry?:string|null;
+}
+
+export interface AuthorizationDecision {
+  allowed:boolean;
+  outcome:AuthorizationOutcome;
+
+  authenticationSatisfied:boolean;
+  deviceTrusted:boolean;
+  locationAssessed:boolean;
+
+  stepUpRequired:boolean;
+  temporaryHold:boolean;
+
+  walletContext?:WalletJurisdictionContext;
+  locationAssessment:LocationAssessment;
+  reasonCodes:string[];
+}
+
+export class LinqaSendActionAuthorizationService {
+  constructor(
+    private sessions:SessionAuthenticationService,
+    private devices:DeviceTrustService,
+    private travelContext:TravelContextService,
+    private stepUp:StepUpAuthenticationService,
+    private jurisdiction:LinqaSendJurisdictionContextBuilder,
+    private fraud:TransactionRiskService,
+    private travelPolicy:TravelTransactionPolicyEngine
+  ){}
+
+  async authorize(
+    input:SensitiveActionAuthorizationRequest
+  ):Promise<AuthorizationDecision>{
+
+    // RULE 1: every sensitive action requires a fresh authenticated session.
+    const session=await this.sessions.requireFreshAuthenticatedSession({
+      userId:input.userId,
+      sessionId:input.sessionId,
+      maxAgeSeconds:300
+    });
+
+    if(!session.authenticated) {
+      throw new Error('AUTHENTICATION_REQUIRED');
+    }
+
+    // RULE 2: every action gets device trust assessment.
+    const device=await this.devices.assess({
+      userId:input.userId,
+      deviceId:input.deviceId
+    });
+
+    // RULE 3: every action gets current location/risk assessment.
+    const locationAssessment=
+      await this.travelContext.processLocationUpdate({
+        userId:input.userId,
+        signals:input.locationSignals,
+        priorCountries:input.priorCountries,
+        proxyDetected:input.proxyDetected,
+        torDetected:input.torDetected,
+        newDevice:!device.trusted,
+        sessionTakeoverRisk:input.sessionTakeoverRisk,
+        priorSimCountry:input.priorSimCountry,
+        currentSimCountry:input.currentSimCountry
+      });
+
+    // RULE 4: wallet-scoped money movement uses wallet jurisdiction.
+    const walletContext=input.walletId
+      ? await this.jurisdiction.buildForWallet(
+          input.userId,
+          input.walletId
+        )
+      : undefined;
+
+    const fraudDecision=await this.fraud.evaluate({
+      userId:input.userId,
+      action:input.action,
+      amountMinor:input.amountMinor,
+      currency:input.currency,
+      deviceId:input.deviceId,
+      physicalCountry:
+        locationAssessment.currentPhysicalCountry,
+      walletJurisdiction:
+        walletContext?.walletJurisdiction,
+      riskSignals:
+        locationAssessment.riskSignals
+    });
+
+    const transferAmount=input.amountMinor ?? 0n;
+
+    const travelDecision=this.travelPolicy.decide({
+      relationship:
+        locationAssessment.locationRelationship,
+      riskSignals:
+        locationAssessment.riskSignals,
+      transferAmountMinor:
+        transferAmount,
+      highValueThresholdMinor:
+        500000n
+    });
+
+    const mandatoryStrongStepUpActions = new Set<SensitiveAction>([
+      SensitiveAction.P2P_SEND,
+      SensitiveAction.STANDARD_CASHOUT,
+      SensitiveAction.INSTANT_CASHOUT,
+      SensitiveAction.BANK_ACCOUNT_ADD,
+      SensitiveAction.BANK_ACCOUNT_CHANGE,
+      SensitiveAction.DEBIT_CARD_ADD,
+      SensitiveAction.DEBIT_CARD_CHANGE,
+      SensitiveAction.RELOCATION_REQUEST,
+      SensitiveAction.RELOCATION_APPROVAL,
+      SensitiveAction.WALLET_MIGRATION,
+      SensitiveAction.FX_TRANSFER,
+      SensitiveAction.PHONE_CHANGE,
+      SensitiveAction.RECOVERY_EMAIL_CHANGE
+    ]);
+
+    if(fraudDecision.blocked) {
+      return {
+        allowed:false,
+        outcome:AuthorizationOutcome.BLOCK,
+        authenticationSatisfied:true,
+        deviceTrusted:device.trusted,
+        locationAssessed:true,
+        stepUpRequired:true,
+        temporaryHold:false,
+        walletContext,
+        locationAssessment,
+        reasonCodes:[
+          ...device.reasonCodes,
+          ...fraudDecision.reasonCodes
+        ]
+      };
+    }
+
+    if(
+      fraudDecision.temporaryHold ||
+      travelDecision===TravelTransactionPolicy.TEMPORARY_HOLD
+    ) {
+      return {
+        allowed:false,
+        outcome:AuthorizationOutcome.TEMPORARY_HOLD,
+        authenticationSatisfied:true,
+        deviceTrusted:device.trusted,
+        locationAssessed:true,
+        stepUpRequired:true,
+        temporaryHold:true,
+        walletContext,
+        locationAssessment,
+        reasonCodes:[
+          ...device.reasonCodes,
+          ...locationAssessment.riskSignals,
+          ...fraudDecision.reasonCodes
+        ]
+      };
+    }
+
+    const stepUpRequired=
+      mandatoryStrongStepUpActions.has(input.action) ||
+      locationAssessment.requiresStepUpAuth ||
+      !device.trusted ||
+      fraudDecision.stepUpRequired ||
+      travelDecision===TravelTransactionPolicy.STEP_UP_REQUIRED ||
+      travelDecision===TravelTransactionPolicy.RESTRICT_HIGH_RISK_ACTIONS;
+
+    if(stepUpRequired) {
+      await this.stepUp.requireStepUp({
+        userId:input.userId,
+        reasonCodes:[
+          `ACTION_${input.action}`,
+          ...device.reasonCodes,
+          ...locationAssessment.riskSignals,
+          ...fraudDecision.reasonCodes
+        ],
+        requiredMethods:['BIOMETRIC','PASSKEY']
+      });
+    }
+
+    return {
+      allowed:true,
+      outcome:stepUpRequired
+        ? AuthorizationOutcome.STEP_UP
+        : AuthorizationOutcome.ALLOW,
+      authenticationSatisfied:true,
+      deviceTrusted:device.trusted,
+      locationAssessed:true,
+      stepUpRequired,
+      temporaryHold:false,
+      walletContext,
+      locationAssessment,
+      reasonCodes:[]
+    };
+  }
+}
+
+// -----------------------------------------------------------------------------
+// LINQASEND CAPABILITY + MONEY-MOVEMENT INTEGRATION
+// -----------------------------------------------------------------------------
+
+export interface LinqaSendCapabilityDecision {
+  allowed:boolean;
+  domestic:boolean;
+  crossBorder:boolean;
+  sourceJurisdiction:string;
+  destinationJurisdiction:string;
+  reasonCodes:string[];
+}
+
+export interface LinqaSendCapabilityEngine {
+  evaluate(args:{
+    userId:string;
+    sourceWalletId:string;
+    sourceJurisdiction:string;
+    sourceRegulatoryEntityId:string;
+    destinationJurisdiction:string;
+    action:SensitiveAction;
+    currency:string;
+    amountMinor:bigint;
+  }):Promise<LinqaSendCapabilityDecision>;
+}
+
+export interface RecipientWalletResolver {
+  resolveRecipientWallet(args:{
+    recipientUserId:string;
+    preferredCurrency?:string;
+  }):Promise<WalletAccount>;
+}
+
+export interface P2PExecutionService {
+  executeAuthorizedP2P(args:{
+    senderUserId:string;
+    recipientUserId:string;
+    sourceWalletId:string;
+    destinationWalletId:string;
+    amountMinor:bigint;
+    currency:string;
+    idempotencyKey:string;
+    authorization:AuthorizationDecision;
+    capability:LinqaSendCapabilityDecision;
+  }):Promise<unknown>;
+}
+
+export class JurisdictionAwareP2PService {
+  constructor(
+    private authorization:LinqaSendActionAuthorizationService,
+    private capability:LinqaSendCapabilityEngine,
+    private recipientWallets:RecipientWalletResolver,
+    private execution:P2PExecutionService
+  ){}
+
+  async send(args:{
+    senderUserId:string;
+    recipientUserId:string;
+    sourceWalletId:string;
+    amountMinor:bigint;
+    currency:string;
+    idempotencyKey:string;
+
+    sessionId:string;
+    deviceId:string;
+    locationSignals:LocationSignal[];
+    priorCountries:{country:string;observedAt:Date}[];
+    proxyDetected?:boolean;
+    torDetected?:boolean;
+  }){
+    const auth=await this.authorization.authorize({
+      userId:args.senderUserId,
+      action:SensitiveAction.P2P_SEND,
+      walletId:args.sourceWalletId,
+      amountMinor:args.amountMinor,
+      currency:args.currency,
+      sessionId:args.sessionId,
+      deviceId:args.deviceId,
+      locationSignals:args.locationSignals,
+      priorCountries:args.priorCountries,
+      proxyDetected:args.proxyDetected,
+      torDetected:args.torDetected
+    });
+
+    if(!auth.allowed || !auth.walletContext)
+      throw new Error('P2P_NOT_AUTHORIZED');
+
+    const recipientWallet=
+      await this.recipientWallets.resolveRecipientWallet({
+        recipientUserId:args.recipientUserId,
+        preferredCurrency:args.currency
+      });
+
+    const capability=await this.capability.evaluate({
+      userId:args.senderUserId,
+      sourceWalletId:args.sourceWalletId,
+      sourceJurisdiction:
+        auth.walletContext.walletJurisdiction,
+      sourceRegulatoryEntityId:
+        auth.walletContext.walletRegulatoryEntityId,
+      destinationJurisdiction:
+        recipientWallet.jurisdiction,
+      action:SensitiveAction.P2P_SEND,
+      currency:args.currency,
+      amountMinor:args.amountMinor
+    });
+
+    if(!capability.allowed)
+      throw new Error(
+        `P2P_CAPABILITY_DENIED:${capability.reasonCodes.join(',')}`
+      );
+
+    return this.execution.executeAuthorizedP2P({
+      senderUserId:args.senderUserId,
+      recipientUserId:args.recipientUserId,
+      sourceWalletId:args.sourceWalletId,
+      destinationWalletId:recipientWallet.id,
+      amountMinor:args.amountMinor,
+      currency:args.currency,
+      idempotencyKey:args.idempotencyKey,
+      authorization:auth,
+      capability
+    });
+  }
+}
+
+export interface BankDestination {
+  id:string;
+  userId:string;
+  country:string;
+  currency:string;
+  verified:boolean;
+  ownershipVerified:boolean;
+}
+
+export interface BankDestinationRepository {
+  getForUser(
+    destinationId:string,
+    userId:string
+  ):Promise<BankDestination|null>;
+}
+
+export interface CashoutExecutionService {
+  executeAuthorizedCashout(args:{
+    userId:string;
+    sourceWalletId:string;
+    bankDestinationId:string;
+    amountMinor:bigint;
+    currency:string;
+    mode:'STANDARD'|'INSTANT';
+    idempotencyKey:string;
+    authorization:AuthorizationDecision;
+    capability:LinqaSendCapabilityDecision;
+  }):Promise<unknown>;
+}
+
+export class JurisdictionAwareCashoutService {
+  constructor(
+    private authorization:LinqaSendActionAuthorizationService,
+    private capability:LinqaSendCapabilityEngine,
+    private destinations:BankDestinationRepository,
+    private execution:CashoutExecutionService
+  ){}
+
+  async cashout(args:{
+    userId:string;
+    sourceWalletId:string;
+    bankDestinationId:string;
+    amountMinor:bigint;
+    currency:string;
+    mode:'STANDARD'|'INSTANT';
+    idempotencyKey:string;
+
+    sessionId:string;
+    deviceId:string;
+    locationSignals:LocationSignal[];
+    priorCountries:{country:string;observedAt:Date}[];
+    proxyDetected?:boolean;
+    torDetected?:boolean;
+  }){
+    const action=args.mode==='INSTANT'
+      ? SensitiveAction.INSTANT_CASHOUT
+      : SensitiveAction.STANDARD_CASHOUT;
+
+    const auth=await this.authorization.authorize({
+      userId:args.userId,
+      action,
+      walletId:args.sourceWalletId,
+      amountMinor:args.amountMinor,
+      currency:args.currency,
+      sessionId:args.sessionId,
+      deviceId:args.deviceId,
+      locationSignals:args.locationSignals,
+      priorCountries:args.priorCountries,
+      proxyDetected:args.proxyDetected,
+      torDetected:args.torDetected
+    });
+
+    if(!auth.allowed || !auth.walletContext)
+      throw new Error('CASHOUT_NOT_AUTHORIZED');
+
+    const destination=
+      await this.destinations.getForUser(
+        args.bankDestinationId,
+        args.userId
+      );
+
+    if(
+      !destination ||
+      !destination.verified ||
+      !destination.ownershipVerified
+    ) {
+      throw new Error('BANK_DESTINATION_NOT_VERIFIED');
+    }
+
+    const capability=await this.capability.evaluate({
+      userId:args.userId,
+      sourceWalletId:args.sourceWalletId,
+
+      // CRITICAL:
+      // travel or relocation does not relabel the source wallet.
+      sourceJurisdiction:
+        auth.walletContext.walletJurisdiction,
+
+      sourceRegulatoryEntityId:
+        auth.walletContext.walletRegulatoryEntityId,
+
+      destinationJurisdiction:
+        destination.country.toUpperCase(),
+
+      action,
+      currency:args.currency,
+      amountMinor:args.amountMinor
+    });
+
+    if(!capability.allowed)
+      throw new Error(
+        `CASHOUT_CAPABILITY_DENIED:${capability.reasonCodes.join(',')}`
+      );
+
+    return this.execution.executeAuthorizedCashout({
+      userId:args.userId,
+      sourceWalletId:args.sourceWalletId,
+      bankDestinationId:args.bankDestinationId,
+      amountMinor:args.amountMinor,
+      currency:args.currency,
+      mode:args.mode,
+      idempotencyKey:args.idempotencyKey,
+      authorization:auth,
+      capability
+    });
+  }
+}
+
+export const JurisdictionMessages={
+  TRAVEL:
+    'You appear to be traveling. Your Linqa account country and LinqaSend permissions have not changed.',
+
+  RELOCATION_PENDING:
+    'We need to verify your new country of residence before changing your LinqaSend jurisdiction.',
+
+  VPN_WARNING:
+    'Your network location does not determine your LinqaSend account country.',
+
+  BALANCE_PROTECTION:
+    'Balances from your previous jurisdiction remain subject to the rules that apply to those funds.',
+
+  AUTH_REQUIRED:
+    'For your protection, this action requires fresh authentication and security verification.',
+
+  APPROVED:
+    'Your new country of residence has been verified. Eligible services for your new jurisdiction can now be activated.'
+};
+
+/* =============================================================================
+   PostgreSQL migration — v2
+   =============================================================================
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE location_relationship AS ENUM (
+    'HOME','TRAVELING','TEMPORARY_RESIDENT','RELOCATION_PENDING',
+    'RELOCATION_VERIFICATION','RELOCATED_VERIFIED','LOCATION_MISMATCH',
+    'LOCATION_HIGH_RISK'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  CREATE TYPE jurisdiction_migration_status AS ENUM (
+    'NONE','REQUESTED','DOCUMENTS_REQUIRED','UNDER_REVIEW',
+    'APPROVED_FOR_MIGRATION','APPROVED','REJECTED',
+    'SUSPENDED','CANCELLED'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS user_jurisdiction_profiles_v2 (
+  user_id UUID PRIMARY KEY,
+
+  nationality_country CHAR(2),
+  original_registration_country CHAR(2) NOT NULL,
+  verified_residence_country CHAR(2) NOT NULL,
+  account_country CHAR(2) NOT NULL,
+  current_physical_country CHAR(2),
+
+  tax_residence_countries JSONB NOT NULL DEFAULT '[]',
+  phone_country CHAR(2),
+
+  regulatory_entity_id TEXT NOT NULL,
+  regulatory_jurisdiction CHAR(2) NOT NULL,
+
+  location_relationship location_relationship NOT NULL DEFAULT 'HOME',
+  migration_status jurisdiction_migration_status NOT NULL DEFAULT 'NONE',
+
+  residence_verified_at TIMESTAMPTZ,
+  jurisdiction_effective_from TIMESTAMPTZ NOT NULL,
+
+  jurisdiction_version INTEGER NOT NULL DEFAULT 1,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT ck_jurisdiction_version_positive
+    CHECK (jurisdiction_version >= 1),
+
+  CONSTRAINT ck_original_registration_country
+    CHECK (original_registration_country ~ '^[A-Z]{2}$'),
+
+  CONSTRAINT ck_verified_residence_country
+    CHECK (verified_residence_country ~ '^[A-Z]{2}$'),
+
+  CONSTRAINT ck_account_country
+    CHECK (account_country ~ '^[A-Z]{2}$'),
+
+  CONSTRAINT ck_regulatory_jurisdiction
+    CHECK (regulatory_jurisdiction ~ '^[A-Z]{2}$'),
+
+  CONSTRAINT ck_current_physical_country
+    CHECK (
+      current_physical_country IS NULL OR
+      current_physical_country ~ '^[A-Z]{2}$'
+    )
+);
+
+CREATE TABLE IF NOT EXISTS user_location_observations_v2 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+
+  signal_type TEXT NOT NULL CHECK (
+    signal_type IN (
+      'IP','GPS','SIM','PHONE_PREFIX','DEVICE_LOCALE',
+      'TIMEZONE','BANK_COUNTRY','CARD_COUNTRY','VERIFIED_ADDRESS'
+    )
+  ),
+
+  country_code CHAR(2),
+
+  confidence NUMERIC(5,4) NOT NULL
+    CHECK (confidence >= 0 AND confidence <= 1),
+
+  risk_signals JSONB NOT NULL DEFAULT '[]',
+  metadata JSONB NOT NULL DEFAULT '{}',
+
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT ck_location_country_code
+    CHECK (
+      country_code IS NULL OR
+      country_code ~ '^[A-Z]{2}$'
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_location_observations_user_time_v2
+  ON user_location_observations_v2(
+    user_id,
+    observed_at DESC
+  );
+
+CREATE TABLE IF NOT EXISTS jurisdiction_relocation_requests_v2 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+
+  from_country CHAR(2) NOT NULL,
+  requested_country CHAR(2) NOT NULL,
+
+  status jurisdiction_migration_status
+    NOT NULL DEFAULT 'REQUESTED',
+
+  reason TEXT,
+
+  decision_version INTEGER NOT NULL DEFAULT 0,
+  target_regulatory_entity_id TEXT,
+
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reviewed_at TIMESTAMPTZ,
+  reviewed_by TEXT,
+
+  committed_at TIMESTAMPTZ,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT ck_relocation_from_country
+    CHECK (from_country ~ '^[A-Z]{2}$'),
+
+  CONSTRAINT ck_relocation_requested_country
+    CHECK (requested_country ~ '^[A-Z]{2}$'),
+
+  CONSTRAINT ck_relocation_country_change
+    CHECK (from_country <> requested_country),
+
+  CONSTRAINT ck_decision_version_nonnegative
+    CHECK (decision_version >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_jurisdiction_relocation_v2
+  ON jurisdiction_relocation_requests_v2(user_id)
+  WHERE status IN (
+    'REQUESTED',
+    'DOCUMENTS_REQUIRED',
+    'UNDER_REVIEW',
+    'APPROVED_FOR_MIGRATION'
+  );
+
+CREATE TABLE IF NOT EXISTS residency_evidence_v2 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  relocation_request_id UUID NOT NULL
+    REFERENCES jurisdiction_relocation_requests_v2(id)
+    ON DELETE CASCADE,
+
+  evidence_type TEXT NOT NULL CHECK (
+    evidence_type IN (
+      'GOVERNMENT_ID','RESIDENCE_PERMIT','VISA',
+      'UTILITY_BILL','BANK_STATEMENT','TAX_DOCUMENT',
+      'TENANCY_AGREEMENT','EMPLOYMENT_DOCUMENT',
+      'SCHOOL_ENROLLMENT','GOVERNMENT_LETTER'
+    )
+  ),
+
+  evidence_class TEXT NOT NULL CHECK (
+    evidence_class IN (
+      'IDENTITY','RESIDENCY_RIGHT','ADDRESS','FINANCIAL',
+      'EMPLOYMENT_OR_EDUCATION','GOVERNMENT'
+    )
+  ),
+
+  country_code CHAR(2) NOT NULL
+    CHECK (country_code ~ '^[A-Z]{2}$'),
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'PENDING','VERIFIED','REJECTED','EXPIRED','MANUAL_REVIEW'
+    )
+  ),
+
+  storage_reference TEXT NOT NULL,
+  document_hash TEXT NOT NULL,
+
+  issued_at DATE,
+  expires_at DATE,
+  verified_at TIMESTAMPTZ,
+
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT uq_relocation_document_hash
+    UNIQUE (relocation_request_id, document_hash)
+);
+
+CREATE TABLE IF NOT EXISTS jurisdiction_audit_events_v2 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+
+  event_type TEXT NOT NULL,
+
+  old_jurisdiction CHAR(2),
+  new_jurisdiction CHAR(2),
+
+  metadata JSONB NOT NULL DEFAULT '{}',
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_jurisdiction_audit_user_time_v2
+  ON jurisdiction_audit_events_v2(
+    user_id,
+    created_at DESC
+  );
+
+-- Mandatory sensitive-action authorization record.
+CREATE TABLE IF NOT EXISTS linqasend_action_authorizations_v2 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  user_id UUID NOT NULL,
+  action TEXT NOT NULL,
+
+  wallet_id UUID,
+  session_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+
+  amount_minor BIGINT,
+  currency CHAR(3),
+
+  wallet_jurisdiction CHAR(2),
+  account_jurisdiction CHAR(2),
+  physical_country CHAR(2),
+
+  authentication_satisfied BOOLEAN NOT NULL,
+  device_trusted BOOLEAN NOT NULL,
+  location_assessed BOOLEAN NOT NULL,
+  step_up_required BOOLEAN NOT NULL,
+  temporary_hold BOOLEAN NOT NULL,
+
+  outcome TEXT NOT NULL CHECK (
+    outcome IN ('ALLOW','STEP_UP','TEMPORARY_HOLD','BLOCK')
+  ),
+
+  reason_codes JSONB NOT NULL DEFAULT '[]',
+  risk_signals JSONB NOT NULL DEFAULT '[]',
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT ck_auth_currency
+    CHECK (
+      currency IS NULL OR
+      currency ~ '^[A-Z]{3}$'
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_action_auth_user_time_v2
+  ON linqasend_action_authorizations_v2(
+    user_id,
+    created_at DESC
+  );
+
+-- Atomic relocation commit example.
+-- Repository implementation should execute this entire workflow in ONE tx:
+--
+-- BEGIN;
+--
+-- SELECT *
+-- FROM jurisdiction_relocation_requests_v2
+-- WHERE id = $1
+-- FOR UPDATE;
+--
+-- SELECT *
+-- FROM user_jurisdiction_profiles_v2
+-- WHERE user_id = $2
+-- FOR UPDATE;
+--
+-- Verify:
+--   request.status = 'APPROVED_FOR_MIGRATION'
+--   request.decision_version = expectedDecisionVersion
+--   profile.jurisdiction_version = expectedJurisdictionVersion
+--
+-- UPDATE user_jurisdiction_profiles_v2
+-- SET
+--   verified_residence_country = $3,
+--   account_country = $3,
+--   regulatory_jurisdiction = $3,
+--   regulatory_entity_id = $4,
+--   residence_verified_at = NOW(),
+--   jurisdiction_effective_from = NOW(),
+--   jurisdiction_version = jurisdiction_version + 1,
+--   location_relationship = 'RELOCATED_VERIFIED',
+--   migration_status = 'APPROVED',
+--   updated_at = NOW()
+-- WHERE user_id = $2
+--   AND jurisdiction_version = $5;
+--
+-- Require exactly one updated row.
+--
+-- UPDATE jurisdiction_relocation_requests_v2
+-- SET
+--   status = 'APPROVED',
+--   committed_at = NOW(),
+--   updated_at = NOW()
+-- WHERE id = $1
+--   AND status = 'APPROVED_FOR_MIGRATION'
+--   AND decision_version = $6;
+--
+-- Require exactly one updated row.
+--
+-- INSERT INTO jurisdiction_audit_events_v2 (...);
+-- INSERT INTO ops_outbox (...);
+--
+-- COMMIT;
+*/
+
+/* =============================================================================
+   v2 SECURITY / INTEGRATION RULES
+   =============================================================================
+
+1. GH user traveling in UK:
+   physical=GB, account/regulatory jurisdiction remains GH.
+
+2. GH user on US VPN:
+   regulatory remains GH; record VPN risk; never grant US permissions.
+
+3. UK/US SIM change alone:
+   cannot migrate account or wallet jurisdiction.
+
+4. Permanent GH -> US/GB/DE/FR relocation:
+   explicit relocation request + strong authentication + evidence +
+   re-KYC + compliance + target entity eligibility + approval.
+
+5. Every sensitive action:
+   requires fresh session authentication + device assessment +
+   location/risk assessment before capability evaluation.
+
+6. High-risk or sensitive action:
+   requires biometric/passkey/PIN/OTP step-up according to policy.
+
+7. Existing GHS wallet:
+   stays GH-jurisdictional after user relocates.
+   Never relabel existing funds to US/GB/EU merely because account residence changes.
+
+8. Old balance movement:
+   must pass normal authorized cross-border/FX/corridor policy.
+
+9. LinqaSend source jurisdiction:
+   MUST come from the source wallet/ledger being debited.
+
+10. Current physical location:
+    is a fraud/travel signal, not the legal source-of-funds jurisdiction.
+
+11. P2P:
+    classify domestic vs cross-border using sender wallet jurisdiction
+    and recipient wallet jurisdiction, not the users' current GPS countries.
+
+12. Same-user wallet transfer:
+    GH wallet -> US wallet is still cross-border/FX if jurisdictions differ.
+
+13. Cash-out:
+    source jurisdiction comes from source wallet.
+    Destination jurisdiction comes from verified bank/card destination.
+
+14. Adding a US bank account while traveling:
+    does not change a GH wallet into a US wallet and does not grant US cash-out.
+
+15. Rejected compliance/entity decision:
+    MUST be persisted as REJECTED and audit logged.
+
+16. Relocation approval:
+    MUST be atomic, row-locked, version checked, idempotent, and auditable.
+
+17. Only one active relocation request per user:
+    enforce in PostgreSQL.
+
+18. Evidence:
+    count unique verified evidence and require distinct evidence classes;
+    duplicate hashes cannot satisfy minimum evidence requirements.
+
+19. Real country codes:
+    FR/DE/ES/GB/US/GH/etc.; never "EUROPE" as a country.
+
+20. Missing jurisdiction/entity/evidence/corridor config:
+    fail closed.
+
+21. No direct API -> P2P or API -> Cashout path.
+    Required path:
+
+       API
+        ↓
+       Mandatory Action Authorization Gate
+        ↓
+       Wallet Jurisdiction Resolver
+        ↓
+       LinqaSend Capability Engine
+        ↓
+       Fraud / Transaction Security
+        ↓
+       Ledger / Hold
+        ↓
+       Provider Router
+        ↓
+       Licensed Financial Partner
+        ↓
+       Settlement + Reconciliation
+
+22. A sensitive-action authorization decision should be persisted with:
+    user, action, wallet, session, device, physical country,
+    wallet jurisdiction, account jurisdiction, auth result,
+    risk signals, outcome, timestamp.
+
+23. Provider callbacks do not override jurisdiction policy.
+    Provider settlement state and Linqa authorization state are separate controls.
+
+24. A relocated user may receive a new eligible wallet under the new
+    regulatory entity, while the old wallet remains independently governed.
+
+25. Do not allow client-supplied country fields to be authoritative for
+    regulatory jurisdiction. Server-resolved records are authoritative.
+
+*/
+
+// END LINQA ACCOUNT JURISDICTION + TRAVEL / INTERNATIONAL RELOCATION PACK v2.0

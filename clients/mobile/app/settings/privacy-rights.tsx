@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { SafeAreaView, ScrollView, Pressable, StyleSheet, Text, View, ActivityIndicator } from "react-native";
+import { ScrollView, Pressable, StyleSheet, Text, View, ActivityIndicator } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { GaHardeningService } from "../../services/ga-hardening.service";
 import { accessTokenProvider } from "../../services/session";
 

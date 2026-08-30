@@ -12,6 +12,8 @@ import { MediaGalleryPage } from "./pages/MediaGalleryPage";
 import { PrivacyCenterPage } from "./pages/PrivacyCenterPage";
 import { FileVaultPage } from "./pages/FileVaultPage";
 import { getApiBaseUrl, getAccessToken } from "./app/apiSession";
+import { hasAnyOpsScope } from "./app/opsAccess";
+import { OperationsConsolePage } from "./admin/pages/OperationsConsolePage";
 
 export function App() {
   const { state: securityState, adapter: secureAdapter } = useSecurityRuntime();
@@ -22,7 +24,9 @@ export function App() {
   const [mediaOpen, setMediaOpen] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [vaultOpen, setVaultOpen] = useState(false);
+  const [operationsOpen, setOperationsOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState<"list" | "chat">("list");
+  const showOperationsEntry = hasAnyOpsScope(getAccessToken());
 
   useEffect(() => {
     CoreBridge.listConversations().then((list) => {
@@ -55,6 +59,7 @@ export function App() {
             onOpenMedia={() => setMediaOpen(true)}
             onOpenPrivacy={() => setPrivacyOpen(true)}
             onOpenVault={() => setVaultOpen(true)}
+            onOpenOperations={showOperationsEntry ? () => setOperationsOpen(true) : undefined}
           />
         </div>
         <div className="app-main">
@@ -114,6 +119,16 @@ export function App() {
             <LiveCapabilityGuard capability="fileVault">
               <FileVaultPage apiBaseUrl={getApiBaseUrl()} accessToken={getAccessToken()} />
             </LiveCapabilityGuard>
+          </div>
+        </div>
+      )}
+      {operationsOpen && (
+        <div className="modal-backdrop" onClick={() => setOperationsOpen(false)}>
+          <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
+            <button className="icon-btn" onClick={() => setOperationsOpen(false)} aria-label="Close">
+              ✕
+            </button>
+            <OperationsConsolePage apiBaseUrl={getApiBaseUrl()} accessToken={getAccessToken()} />
           </div>
         </div>
       )}

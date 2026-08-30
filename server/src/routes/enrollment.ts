@@ -6,8 +6,9 @@ import type { Database } from "../db/pool.js";
 import { createAuthenticator } from "../auth/jwt.js";
 import { verifyEnrollmentProof } from "../auth/enrollment-proof.js";
 import type { SessionService } from "../services/session.service.js";
+import { scopesForStaffRole, type StaffRole } from "../auth/ops-scopes.js";
 
-const ENROLLED_DEVICE_SCOPES = [
+export const ENROLLED_DEVICE_SCOPES = [
   "account:write",
   "ai:use",
   "attachments:write",
@@ -171,8 +172,21 @@ export async function registerEnrollmentRoutes(
         await client.query("COMMIT");
 
         const deviceId = device.rows[0].id as string;
+
+        // ops-scopes.ts defines STAFF_ROLE_SCOPES but nothing ever merged
+        // them into a real session before -- this is the only place a full
+        // (non-pre-enrollment) session gets minted, so it's the right spot
+        // to fold in ops:* scopes for accounts that are also staff.
+        const staffProfile = await db.query(
+          `SELECT staff_role FROM ops_staff_profiles WHERE user_id = $1 AND suspended = false`,
+          [principal.userId]
+        );
+        const opsScopes = staffProfile.rows[0]
+          ? scopesForStaffRole(staffProfile.rows[0].staff_role as StaffRole)
+          : [];
+
         const scopes = Array.from(
-          new Set([...principal.scopes, ...ENROLLED_DEVICE_SCOPES])
+          new Set([...principal.scopes, ...ENROLLED_DEVICE_SCOPES, ...opsScopes])
         );
         const session = await sessions.create({
           userId: principal.userId,

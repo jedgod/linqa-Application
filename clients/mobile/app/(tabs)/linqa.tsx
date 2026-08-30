@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { HUB_GROUPS, LINQA_HUB_SERVICES } from "../../navigation/information-architecture";
 
 export default function LinqaHubScreen() {
@@ -13,7 +14,7 @@ export default function LinqaHubScreen() {
   ), [normalized]);
 
   return (
-    <SafeAreaView style={s.screen}>
+    <SafeAreaView edges={["left", "right"]} style={s.screen}>
       <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
         <View style={s.intro}>
           <Text style={s.eyebrow}>EVERYTHING IN ONE PLACE</Text>

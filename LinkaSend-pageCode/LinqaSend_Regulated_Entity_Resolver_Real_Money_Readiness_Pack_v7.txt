@@ -1,0 +1,3009 @@
+
+================================================================================
+LINQASEND™ — REGULATED ENTITY RESOLVER + REAL-MONEY READINESS PACK v7
+Missing Real-User / Real-Money Control Layer
+Format: Notepad-friendly TXT
+
+PURPOSE
+--------------------------------------------------------------------------------
+This module sits between LinqaSend Capability Engine v3 and Security/Fraud v4.
+
+It answers one critical question before any real user money can move:
+
+"Which regulated / approved entity is responsible for each financial leg
+of this transfer?"
+
+Linqa remains the technology, user-experience, orchestration, messaging,
+risk-display, status and reconciliation platform.
+
+Real-money movement is allowed only when an approved financial-partner
+responsibility map exists for the exact:
+- source country
+- destination country
+- transfer class
+- source currency
+- destination currency
+- funding method
+- payout method
+- customer/account model
+- provider arrangement
+- effective policy/version
+
+POSITION
+--------------------------------------------------------------------------------
+
+Authenticated User
+        |
+        v
+Recipient Resolver
+        |
+        v
+Transfer Classifier
+        |
+        v
+Country / Corridor Capability Engine v3
+        |
+        v
+[ REGULATED ENTITY RESOLVER v7 ]
+        |
+        +-- Who accepts customer funds?
+        +-- Who legally holds / safeguards customer funds?
+        +-- Who provides customer account / stored value?
+        +-- Who transmits value?
+        +-- Who performs FX?
+        +-- Who performs domestic payout?
+        +-- Who performs cross-border payout?
+        +-- Who performs KYC/CIP?
+        +-- Who performs AML transaction monitoring?
+        +-- Who performs sanctions screening?
+        +-- Who manages disputes / chargebacks?
+        +-- Who settles and reconciles?
+        |
+        v
+Security / Fraud Defense v4
+        |
+        v
+Money Movement
+        |
+        v
+Settlement / Treasury / Safeguarding v5
+        |
+        v
+Implementation Closure / Certification v6
+
+FAIL-CLOSED RULE
+--------------------------------------------------------------------------------
+If the exact transfer does not resolve to a complete, active, approved,
+effective responsibility map:
+
+DO NOT QUOTE AS EXECUTABLE.
+DO NOT AUTHORIZE FUNDING.
+DO NOT POST CUSTOMER MONEY MOVEMENT.
+DO NOT PAY OUT.
+================================================================================
+
+
+================================================================================
+01. REPOSITORY LAYOUT
+================================================================================
+
+linqa/
+├── apps/server/src/services/linqasend/regulatory-network-v7/
+│   ├── regulatory-network-v7.module.ts
+│   ├── regulatory-network-v7.controller.ts
+│   ├── types.ts
+│   ├── entity-registry.repository.ts
+│   ├── partner-contract.repository.ts
+│   ├── financial-responsibility.repository.ts
+│   ├── regulated-entity-resolver.service.ts
+│   ├── responsibility-validator.service.ts
+│   ├── custody-model.service.ts
+│   ├── partner-account-model.service.ts
+│   ├── compliance-responsibility.service.ts
+│   ├── execution-authority.service.ts
+│   ├── partner-health.service.ts
+│   ├── partner-routing.service.ts
+│   ├── responsibility-snapshot.service.ts
+│   ├── real-money-readiness.service.ts
+│   └── workers/
+│       ├── contract-expiry.worker.ts
+│       ├── license-expiry.worker.ts
+│       ├── partner-health.worker.ts
+│       └── responsibility-revalidation.worker.ts
+│
+├── apps/web/src/features/linqasend-ops/
+│   ├── FinancialPartnerRegistryPage.tsx
+│   ├── CorridorResponsibilityPage.tsx
+│   ├── RealMoneyReadinessPage.tsx
+│   └── PartnerContractStatusPage.tsx
+│
+└── server/migrations/
+    └── 20260820_linqasend_regulated_entity_resolver_v7.sql
+
+
+================================================================================
+02. CORE DOMAIN TYPES
+FILE: types.ts
+================================================================================
+
+export type FinancialEntityType =
+  | "BANK"
+  | "MONEY_TRANSMITTER"
+  | "EMI"
+  | "PAYMENT_INSTITUTION"
+  | "PSP"
+  | "IMTO"
+  | "CARD_PROCESSOR"
+  | "MOBILE_MONEY_OPERATOR"
+  | "FX_PROVIDER"
+  | "SETTLEMENT_BANK"
+  | "KYC_PROVIDER"
+  | "AML_PROVIDER"
+  | "SANCTIONS_PROVIDER"
+  | "PROGRAM_MANAGER"
+  | "OTHER";
+
+export type FinancialResponsibility =
+  | "CUSTOMER_ONBOARDING"
+  | "KYC_CIP"
+  | "AML_MONITORING"
+  | "SANCTIONS_SCREENING"
+  | "ACCEPT_CUSTOMER_FUNDS"
+  | "CUSTOMER_FUNDS_CUSTODY"
+  | "SAFEGUARDING"
+  | "CUSTOMER_ACCOUNT_ISSUER"
+  | "STORED_VALUE_ISSUER"
+  | "DOMESTIC_TRANSMISSION"
+  | "CROSS_BORDER_TRANSMISSION"
+  | "FX_EXECUTION"
+  | "CARD_ACQUIRING"
+  | "BANK_DEBIT"
+  | "BANK_CREDIT"
+  | "MOBILE_MONEY_PAYOUT"
+  | "CARD_PUSH_PAYOUT"
+  | "LOCAL_BANK_PAYOUT"
+  | "DISPUTES"
+  | "CHARGEBACKS"
+  | "REFUNDS"
+  | "SETTLEMENT"
+  | "RECONCILIATION";
+
+export type ResponsibilityRequirement =
+  | "REQUIRED"
+  | "OPTIONAL"
+  | "NOT_APPLICABLE";
+
+export type PartnerStatus =
+  | "DRAFT"
+  | "PENDING_DUE_DILIGENCE"
+  | "ACTIVE"
+  | "RESTRICTED"
+  | "SUSPENDED"
+  | "TERMINATED"
+  | "EXPIRED";
+
+export type ContractStatus =
+  | "DRAFT"
+  | "ACTIVE"
+  | "SUSPENDED"
+  | "EXPIRED"
+  | "TERMINATED";
+
+export type CustodyModel =
+  | "NO_CUSTOMER_FUNDS"
+  | "PARTNER_CUSTODY"
+  | "FBO_OR_EQUIVALENT_PARTNER_ACCOUNT"
+  | "PARTNER_ISSUED_STORED_VALUE"
+  | "PASS_THROUGH_ONLY";
+
+export interface RegulatedEntity {
+  id: string;
+
+  legalName: string;
+  displayName: string;
+
+  entityType:
+    FinancialEntityType;
+
+  countryCode: string;
+
+  status:
+    PartnerStatus;
+
+  website?: string;
+
+  legalEntityIdentifier?: string;
+
+  regulatoryReference?: string;
+
+  dueDiligenceStatus:
+    | "NOT_STARTED"
+    | "IN_PROGRESS"
+    | "APPROVED"
+    | "REJECTED"
+    | "EXPIRED";
+
+  operationalStatus:
+    | "HEALTHY"
+    | "DEGRADED"
+    | "DOWN"
+    | "UNKNOWN";
+}
+
+
+================================================================================
+03. FINANCIAL RESPONSIBILITY MAP
+================================================================================
+
+export interface CorridorFinancialResponsibility {
+  id: string;
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  transferClass:
+    | "INTERNAL_DOMESTIC"
+    | "INTERNAL_CROSS_BORDER"
+    | "EXTERNAL_DOMESTIC"
+    | "EXTERNAL_CROSS_BORDER";
+
+  sourceCurrency: string;
+  destinationCurrency: string;
+
+  fundingMode:
+    | "LINQA_BALANCE"
+    | "BANK"
+    | "DEBIT_CARD"
+    | "CREDIT_CARD"
+    | "MOBILE_MONEY";
+
+  receiveMode:
+    | "LINQA_BALANCE"
+    | "BANK"
+    | "CARD"
+    | "MOBILE_MONEY";
+
+  custodyModel:
+    CustodyModel;
+
+  customerOnboardingEntityId?: string;
+  kycCipEntityId?: string;
+  amlMonitoringEntityId?: string;
+  sanctionsScreeningEntityId?: string;
+
+  acceptCustomerFundsEntityId?: string;
+  customerFundsCustodyEntityId?: string;
+  safeguardingEntityId?: string;
+
+  customerAccountIssuerEntityId?: string;
+  storedValueIssuerEntityId?: string;
+
+  cardAcquiringEntityId?: string;
+  bankDebitEntityId?: string;
+
+  domesticTransmissionEntityId?: string;
+  crossBorderTransmissionEntityId?: string;
+
+  fxExecutionEntityId?: string;
+
+  bankPayoutEntityId?: string;
+  mobileMoneyPayoutEntityId?: string;
+  cardPushPayoutEntityId?: string;
+
+  disputeEntityId?: string;
+  chargebackEntityId?: string;
+  refundEntityId?: string;
+
+  settlementEntityId?: string;
+  reconciliationEntityId?: string;
+
+  legalApprovalReference: string;
+  partnerApprovalReference: string;
+
+  contractSetId: string;
+
+  policyVersion: number;
+
+  effectiveFrom: Date;
+  effectiveTo?: Date;
+
+  status:
+    | "DRAFT"
+    | "ACTIVE"
+    | "RESTRICTED"
+    | "SUSPENDED"
+    | "EXPIRED";
+}
+
+
+================================================================================
+04. RESPONSIBILITY REQUIREMENT MODEL
+================================================================================
+
+export interface RequiredResponsibilities {
+  CUSTOMER_ONBOARDING:
+    ResponsibilityRequirement;
+
+  KYC_CIP:
+    ResponsibilityRequirement;
+
+  AML_MONITORING:
+    ResponsibilityRequirement;
+
+  SANCTIONS_SCREENING:
+    ResponsibilityRequirement;
+
+  ACCEPT_CUSTOMER_FUNDS:
+    ResponsibilityRequirement;
+
+  CUSTOMER_FUNDS_CUSTODY:
+    ResponsibilityRequirement;
+
+  SAFEGUARDING:
+    ResponsibilityRequirement;
+
+  CUSTOMER_ACCOUNT_ISSUER:
+    ResponsibilityRequirement;
+
+  STORED_VALUE_ISSUER:
+    ResponsibilityRequirement;
+
+  DOMESTIC_TRANSMISSION:
+    ResponsibilityRequirement;
+
+  CROSS_BORDER_TRANSMISSION:
+    ResponsibilityRequirement;
+
+  FX_EXECUTION:
+    ResponsibilityRequirement;
+
+  CARD_ACQUIRING:
+    ResponsibilityRequirement;
+
+  BANK_DEBIT:
+    ResponsibilityRequirement;
+
+  MOBILE_MONEY_PAYOUT:
+    ResponsibilityRequirement;
+
+  CARD_PUSH_PAYOUT:
+    ResponsibilityRequirement;
+
+  LOCAL_BANK_PAYOUT:
+    ResponsibilityRequirement;
+
+  DISPUTES:
+    ResponsibilityRequirement;
+
+  CHARGEBACKS:
+    ResponsibilityRequirement;
+
+  REFUNDS:
+    ResponsibilityRequirement;
+
+  SETTLEMENT:
+    ResponsibilityRequirement;
+
+  RECONCILIATION:
+    ResponsibilityRequirement;
+}
+
+
+================================================================================
+05. REQUIREMENT DERIVATION
+================================================================================
+
+export class ResponsibilityRequirementService {
+  derive(args: {
+    transferClass: string;
+    fundingMode: string;
+    receiveMode: string;
+
+    sourceCurrency: string;
+    destinationCurrency: string;
+
+    custodyModel:
+      CustodyModel;
+  }): RequiredResponsibilities {
+    const crossBorder =
+      args.transferClass ===
+        "INTERNAL_CROSS_BORDER" ||
+      args.transferClass ===
+        "EXTERNAL_CROSS_BORDER";
+
+    const requiresFx =
+      args.sourceCurrency !==
+      args.destinationCurrency;
+
+    const result:
+      RequiredResponsibilities = {
+        CUSTOMER_ONBOARDING:
+          "REQUIRED",
+
+        KYC_CIP:
+          "REQUIRED",
+
+        AML_MONITORING:
+          "REQUIRED",
+
+        SANCTIONS_SCREENING:
+          "REQUIRED",
+
+        ACCEPT_CUSTOMER_FUNDS:
+          args.fundingMode ===
+            "LINQA_BALANCE"
+            ? "OPTIONAL"
+            : "REQUIRED",
+
+        CUSTOMER_FUNDS_CUSTODY:
+          args.custodyModel ===
+            "NO_CUSTOMER_FUNDS"
+            ? "NOT_APPLICABLE"
+            : "REQUIRED",
+
+        SAFEGUARDING:
+          [
+            "PARTNER_CUSTODY",
+            "FBO_OR_EQUIVALENT_PARTNER_ACCOUNT",
+            "PARTNER_ISSUED_STORED_VALUE",
+          ].includes(
+            args.custodyModel,
+          )
+            ? "REQUIRED"
+            : "NOT_APPLICABLE",
+
+        CUSTOMER_ACCOUNT_ISSUER:
+          args.receiveMode ===
+            "LINQA_BALANCE"
+            ? "REQUIRED"
+            : "OPTIONAL",
+
+        STORED_VALUE_ISSUER:
+          args.receiveMode ===
+            "LINQA_BALANCE"
+            ? "REQUIRED"
+            : "NOT_APPLICABLE",
+
+        DOMESTIC_TRANSMISSION:
+          crossBorder
+            ? "NOT_APPLICABLE"
+            : "REQUIRED",
+
+        CROSS_BORDER_TRANSMISSION:
+          crossBorder
+            ? "REQUIRED"
+            : "NOT_APPLICABLE",
+
+        FX_EXECUTION:
+          requiresFx
+            ? "REQUIRED"
+            : "NOT_APPLICABLE",
+
+        CARD_ACQUIRING:
+          [
+            "DEBIT_CARD",
+            "CREDIT_CARD",
+          ].includes(
+            args.fundingMode,
+          )
+            ? "REQUIRED"
+            : "NOT_APPLICABLE",
+
+        BANK_DEBIT:
+          args.fundingMode ===
+            "BANK"
+            ? "REQUIRED"
+            : "NOT_APPLICABLE",
+
+        MOBILE_MONEY_PAYOUT:
+          args.receiveMode ===
+            "MOBILE_MONEY"
+            ? "REQUIRED"
+            : "NOT_APPLICABLE",
+
+        CARD_PUSH_PAYOUT:
+          args.receiveMode ===
+            "CARD"
+            ? "REQUIRED"
+            : "NOT_APPLICABLE",
+
+        LOCAL_BANK_PAYOUT:
+          args.receiveMode ===
+            "BANK"
+            ? "REQUIRED"
+            : "NOT_APPLICABLE",
+
+        DISPUTES:
+          "REQUIRED",
+
+        CHARGEBACKS:
+          [
+            "DEBIT_CARD",
+            "CREDIT_CARD",
+          ].includes(
+            args.fundingMode,
+          )
+            ? "REQUIRED"
+            : "OPTIONAL",
+
+        REFUNDS:
+          "REQUIRED",
+
+        SETTLEMENT:
+          "REQUIRED",
+
+        RECONCILIATION:
+          "REQUIRED",
+      };
+
+    return result;
+  }
+}
+
+
+================================================================================
+06. RESOLUTION RESULT
+================================================================================
+
+export interface FinancialExecutionAuthority {
+  responsibility:
+    FinancialResponsibility;
+
+  entityId: string;
+
+  legalName: string;
+
+  entityType:
+    FinancialEntityType;
+
+  countryCode: string;
+
+  contractId: string;
+
+  contractStatus:
+    ContractStatus;
+
+  regulatoryReference?: string;
+
+  operationalStatus:
+    "HEALTHY"
+    | "DEGRADED"
+    | "DOWN"
+    | "UNKNOWN";
+}
+
+export interface RegulatedEntityResolution {
+  responsibilityMapId: string;
+
+  policyVersion: number;
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  transferClass: string;
+
+  custodyModel:
+    CustodyModel;
+
+  authorities:
+    FinancialExecutionAuthority[];
+
+  legalApprovalReference: string;
+  partnerApprovalReference: string;
+
+  effectiveAt: string;
+
+  complete: boolean;
+
+  missingResponsibilities:
+    FinancialResponsibility[];
+
+  blockedReasons:
+    string[];
+}
+
+
+================================================================================
+07. ENTITY REGISTRY REPOSITORY CONTRACT
+================================================================================
+
+export interface EntityRegistryRepository {
+  findById(
+    id: string,
+  ): Promise<
+    RegulatedEntity | null
+  >;
+
+  listActiveByCountry(
+    countryCode: string,
+  ): Promise<
+    RegulatedEntity[]
+  >;
+}
+
+
+================================================================================
+08. PARTNER CONTRACT MODEL
+================================================================================
+
+export interface PartnerContract {
+  id: string;
+
+  regulatedEntityId: string;
+
+  contractType:
+    | "PROGRAM"
+    | "PAYMENTS"
+    | "CUSTODY"
+    | "SAFEGUARDING"
+    | "REMITTANCE"
+    | "FX"
+    | "PAYOUT"
+    | "KYC_AML"
+    | "SETTLEMENT"
+    | "OTHER";
+
+  status:
+    ContractStatus;
+
+  sourceCountries:
+    string[];
+
+  destinationCountries:
+    string[];
+
+  sourceCurrencies:
+    string[];
+
+  destinationCurrencies:
+    string[];
+
+  allowedResponsibilities:
+    FinancialResponsibility[];
+
+  effectiveFrom:
+    Date;
+
+  effectiveTo?:
+    Date;
+
+  providerAccountReference?:
+    string;
+
+  approvalReference:
+    string;
+
+  createdAt:
+    Date;
+}
+
+
+================================================================================
+09. PARTNER CONTRACT REPOSITORY
+================================================================================
+
+export interface PartnerContractRepository {
+  findEffectiveContract(args: {
+    entityId: string;
+
+    responsibility:
+      FinancialResponsibility;
+
+    sourceCountry: string;
+    destinationCountry: string;
+
+    sourceCurrency: string;
+    destinationCurrency: string;
+
+    at: Date;
+  }): Promise<
+    PartnerContract | null
+  >;
+}
+
+
+================================================================================
+10. REGULATED ENTITY RESOLVER
+FILE: regulated-entity-resolver.service.ts
+================================================================================
+
+import {
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class RegulatedEntityResolverService {
+  constructor(
+    private readonly responsibilityRepo:
+      FinancialResponsibilityRepository,
+
+    private readonly entityRepo:
+      EntityRegistryRepository,
+
+    private readonly contracts:
+      PartnerContractRepository,
+
+    private readonly requirements:
+      ResponsibilityRequirementService,
+  ) {}
+
+  async resolve(args: {
+    sourceCountry: string;
+    destinationCountry: string;
+
+    transferClass: string;
+
+    sourceCurrency: string;
+    destinationCurrency: string;
+
+    fundingMode: string;
+    receiveMode: string;
+
+    at?: Date;
+  }): Promise<
+    RegulatedEntityResolution
+  > {
+    const at =
+      args.at ??
+      new Date();
+
+    const map =
+      await this.responsibilityRepo.findActive({
+        sourceCountry:
+          args.sourceCountry,
+
+        destinationCountry:
+          args.destinationCountry,
+
+        transferClass:
+          args.transferClass,
+
+        sourceCurrency:
+          args.sourceCurrency,
+
+        destinationCurrency:
+          args.destinationCurrency,
+
+        fundingMode:
+          args.fundingMode,
+
+        receiveMode:
+          args.receiveMode,
+
+        at,
+      });
+
+    if (!map) {
+      return {
+        responsibilityMapId:
+          "NONE",
+
+        policyVersion:
+          0,
+
+        sourceCountry:
+          args.sourceCountry,
+
+        destinationCountry:
+          args.destinationCountry,
+
+        transferClass:
+          args.transferClass,
+
+        custodyModel:
+          "NO_CUSTOMER_FUNDS",
+
+        authorities: [],
+
+        legalApprovalReference:
+          "",
+
+        partnerApprovalReference:
+          "",
+
+        effectiveAt:
+          at.toISOString(),
+
+        complete:
+          false,
+
+        missingResponsibilities: [],
+
+        blockedReasons: [
+          "FINANCIAL_RESPONSIBILITY_MAP_NOT_CONFIGURED",
+        ],
+      };
+    }
+
+    const required =
+      this.requirements.derive({
+        transferClass:
+          args.transferClass,
+
+        fundingMode:
+          args.fundingMode,
+
+        receiveMode:
+          args.receiveMode,
+
+        sourceCurrency:
+          args.sourceCurrency,
+
+        destinationCurrency:
+          args.destinationCurrency,
+
+        custodyModel:
+          map.custodyModel,
+      });
+
+    const authorities:
+      FinancialExecutionAuthority[] =
+        [];
+
+    const missing:
+      FinancialResponsibility[] =
+        [];
+
+    const blockedReasons:
+      string[] =
+        [];
+
+    for (
+      const [
+        responsibility,
+        requirement,
+      ]
+      of Object.entries(
+        required,
+      ) as Array<
+        [
+          FinancialResponsibility,
+          ResponsibilityRequirement,
+        ]
+      >
+    ) {
+      if (
+        requirement ===
+        "NOT_APPLICABLE"
+      ) {
+        continue;
+      }
+
+      const entityId =
+        getEntityForResponsibility(
+          map,
+          responsibility,
+        );
+
+      if (!entityId) {
+        if (
+          requirement ===
+          "REQUIRED"
+        ) {
+          missing.push(
+            responsibility,
+          );
+        }
+
+        continue;
+      }
+
+      const entity =
+        await this.entityRepo.findById(
+          entityId,
+        );
+
+      if (!entity) {
+        missing.push(
+          responsibility,
+        );
+
+        blockedReasons.push(
+          `ENTITY_NOT_FOUND:${responsibility}:${entityId}`,
+        );
+
+        continue;
+      }
+
+      if (
+        entity.status !==
+        "ACTIVE"
+      ) {
+        blockedReasons.push(
+          `ENTITY_NOT_ACTIVE:${responsibility}:${entity.id}`,
+        );
+
+        continue;
+      }
+
+      if (
+        entity.dueDiligenceStatus !==
+        "APPROVED"
+      ) {
+        blockedReasons.push(
+          `ENTITY_DUE_DILIGENCE_NOT_APPROVED:${entity.id}`,
+        );
+
+        continue;
+      }
+
+      const contract =
+        await this.contracts.findEffectiveContract({
+          entityId:
+            entity.id,
+
+          responsibility,
+
+          sourceCountry:
+            args.sourceCountry,
+
+          destinationCountry:
+            args.destinationCountry,
+
+          sourceCurrency:
+            args.sourceCurrency,
+
+          destinationCurrency:
+            args.destinationCurrency,
+
+          at,
+        });
+
+      if (!contract) {
+        missing.push(
+          responsibility,
+        );
+
+        blockedReasons.push(
+          `CONTRACT_NOT_FOUND:${responsibility}:${entity.id}`,
+        );
+
+        continue;
+      }
+
+      if (
+        contract.status !==
+        "ACTIVE"
+      ) {
+        blockedReasons.push(
+          `CONTRACT_NOT_ACTIVE:${contract.id}`,
+        );
+
+        continue;
+      }
+
+      authorities.push({
+        responsibility,
+
+        entityId:
+          entity.id,
+
+        legalName:
+          entity.legalName,
+
+        entityType:
+          entity.entityType,
+
+        countryCode:
+          entity.countryCode,
+
+        contractId:
+          contract.id,
+
+        contractStatus:
+          contract.status,
+
+        regulatoryReference:
+          entity.regulatoryReference,
+
+        operationalStatus:
+          entity.operationalStatus,
+      });
+    }
+
+    const down =
+      authorities.filter(
+        (a) =>
+          a.operationalStatus ===
+            "DOWN" ||
+          a.operationalStatus ===
+            "UNKNOWN",
+      );
+
+    for (
+      const entity of down
+    ) {
+      blockedReasons.push(
+        `PARTNER_OPERATIONALLY_UNAVAILABLE:${entity.responsibility}:${entity.entityId}`,
+      );
+    }
+
+    const complete =
+      missing.length === 0 &&
+      blockedReasons.length === 0;
+
+    return {
+      responsibilityMapId:
+        map.id,
+
+      policyVersion:
+        map.policyVersion,
+
+      sourceCountry:
+        args.sourceCountry,
+
+      destinationCountry:
+        args.destinationCountry,
+
+      transferClass:
+        args.transferClass,
+
+      custodyModel:
+        map.custodyModel,
+
+      authorities,
+
+      legalApprovalReference:
+        map.legalApprovalReference,
+
+      partnerApprovalReference:
+        map.partnerApprovalReference,
+
+      effectiveAt:
+        at.toISOString(),
+
+      complete,
+
+      missingResponsibilities:
+        missing,
+
+      blockedReasons,
+    };
+  }
+}
+
+
+================================================================================
+11. ENTITY MAPPING HELPER
+================================================================================
+
+function getEntityForResponsibility(
+  map:
+    CorridorFinancialResponsibility,
+  responsibility:
+    FinancialResponsibility,
+): string | undefined {
+  const lookup:
+    Record<
+      FinancialResponsibility,
+      string | undefined
+    > = {
+    CUSTOMER_ONBOARDING:
+      map.customerOnboardingEntityId,
+
+    KYC_CIP:
+      map.kycCipEntityId,
+
+    AML_MONITORING:
+      map.amlMonitoringEntityId,
+
+    SANCTIONS_SCREENING:
+      map.sanctionsScreeningEntityId,
+
+    ACCEPT_CUSTOMER_FUNDS:
+      map.acceptCustomerFundsEntityId,
+
+    CUSTOMER_FUNDS_CUSTODY:
+      map.customerFundsCustodyEntityId,
+
+    SAFEGUARDING:
+      map.safeguardingEntityId,
+
+    CUSTOMER_ACCOUNT_ISSUER:
+      map.customerAccountIssuerEntityId,
+
+    STORED_VALUE_ISSUER:
+      map.storedValueIssuerEntityId,
+
+    DOMESTIC_TRANSMISSION:
+      map.domesticTransmissionEntityId,
+
+    CROSS_BORDER_TRANSMISSION:
+      map.crossBorderTransmissionEntityId,
+
+    FX_EXECUTION:
+      map.fxExecutionEntityId,
+
+    CARD_ACQUIRING:
+      map.cardAcquiringEntityId,
+
+    BANK_DEBIT:
+      map.bankDebitEntityId,
+
+    MOBILE_MONEY_PAYOUT:
+      map.mobileMoneyPayoutEntityId,
+
+    CARD_PUSH_PAYOUT:
+      map.cardPushPayoutEntityId,
+
+    LOCAL_BANK_PAYOUT:
+      map.bankPayoutEntityId,
+
+    DISPUTES:
+      map.disputeEntityId,
+
+    CHARGEBACKS:
+      map.chargebackEntityId,
+
+    REFUNDS:
+      map.refundEntityId,
+
+    SETTLEMENT:
+      map.settlementEntityId,
+
+    RECONCILIATION:
+      map.reconciliationEntityId,
+  };
+
+  return lookup[
+    responsibility
+  ];
+}
+
+
+================================================================================
+12. RESPONSIBILITY VALIDATOR
+FILE: responsibility-validator.service.ts
+================================================================================
+
+import {
+  ForbiddenException,
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class ResponsibilityValidatorService {
+  assertExecutable(
+    resolution:
+      RegulatedEntityResolution,
+  ) {
+    if (
+      !resolution.complete
+    ) {
+      throw new ForbiddenException({
+        code:
+          "REAL_MONEY_RESPONSIBILITY_NOT_COMPLETE",
+
+        responsibilityMapId:
+          resolution.responsibilityMapId,
+
+        missingResponsibilities:
+          resolution.missingResponsibilities,
+
+        blockedReasons:
+          resolution.blockedReasons,
+      });
+    }
+
+    if (
+      !resolution.legalApprovalReference
+    ) {
+      throw new ForbiddenException(
+        "LEGAL_APPROVAL_REFERENCE_MISSING",
+      );
+    }
+
+    if (
+      !resolution.partnerApprovalReference
+    ) {
+      throw new ForbiddenException(
+        "PARTNER_APPROVAL_REFERENCE_MISSING",
+      );
+    }
+  }
+}
+
+
+================================================================================
+13. CUSTODY MODEL SERVICE
+FILE: custody-model.service.ts
+================================================================================
+
+import {
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class CustodyModelService {
+  validate(args: {
+    custodyModel:
+      CustodyModel;
+
+    transferClass: string;
+
+    fundingMode: string;
+    receiveMode: string;
+
+    resolution:
+      RegulatedEntityResolution;
+  }) {
+    if (
+      args.receiveMode ===
+        "LINQA_BALANCE" &&
+      args.custodyModel ===
+        "NO_CUSTOMER_FUNDS"
+    ) {
+      throw new Error(
+        "LINQA_BALANCE_REQUIRES_PARTNER_ACCOUNT_OR_STORED_VALUE_MODEL",
+      );
+    }
+
+    if (
+      args.custodyModel ===
+        "PARTNER_ISSUED_STORED_VALUE"
+    ) {
+      const issuer =
+        args.resolution.authorities.find(
+          (x) =>
+            x.responsibility ===
+            "STORED_VALUE_ISSUER",
+        );
+
+      if (!issuer) {
+        throw new Error(
+          "STORED_VALUE_ISSUER_MISSING",
+        );
+      }
+    }
+
+    if (
+      [
+        "PARTNER_CUSTODY",
+        "FBO_OR_EQUIVALENT_PARTNER_ACCOUNT",
+      ].includes(
+        args.custodyModel,
+      )
+    ) {
+      const custody =
+        args.resolution.authorities.find(
+          (x) =>
+            x.responsibility ===
+            "CUSTOMER_FUNDS_CUSTODY",
+        );
+
+      const safeguard =
+        args.resolution.authorities.find(
+          (x) =>
+            x.responsibility ===
+            "SAFEGUARDING",
+        );
+
+      if (
+        !custody ||
+        !safeguard
+      ) {
+        throw new Error(
+          "CUSTOMER_FUNDS_CUSTODY_OR_SAFEGUARDING_MISSING",
+        );
+      }
+    }
+  }
+}
+
+
+================================================================================
+14. COMPLIANCE RESPONSIBILITY SERVICE
+FILE: compliance-responsibility.service.ts
+================================================================================
+
+import {
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class ComplianceResponsibilityService {
+  assertCoverage(
+    resolution:
+      RegulatedEntityResolution,
+  ) {
+    const required:
+      FinancialResponsibility[] =
+        [
+          "KYC_CIP",
+          "AML_MONITORING",
+          "SANCTIONS_SCREENING",
+        ];
+
+    for (
+      const responsibility
+      of required
+    ) {
+      const authority =
+        resolution.authorities.find(
+          (a) =>
+            a.responsibility ===
+            responsibility,
+        );
+
+      if (!authority) {
+        throw new Error(
+          `COMPLIANCE_RESPONSIBILITY_MISSING:${responsibility}`,
+        );
+      }
+    }
+  }
+}
+
+
+================================================================================
+15. RESPONSIBILITY SNAPSHOT
+FILE: responsibility-snapshot.service.ts
+================================================================================
+
+export interface FinancialResponsibilitySnapshot {
+  mapId: string;
+
+  policyVersion: number;
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  transferClass: string;
+
+  custodyModel:
+    CustodyModel;
+
+  legalApprovalReference:
+    string;
+
+  partnerApprovalReference:
+    string;
+
+  authorities: Array<{
+    responsibility:
+      FinancialResponsibility;
+
+    entityId:
+      string;
+
+    legalName:
+      string;
+
+    entityType:
+      FinancialEntityType;
+
+    contractId:
+      string;
+
+    regulatoryReference?:
+      string;
+  }>;
+
+  resolvedAt:
+    string;
+}
+
+export class ResponsibilitySnapshotService {
+  create(
+    resolution:
+      RegulatedEntityResolution,
+  ): FinancialResponsibilitySnapshot {
+    return {
+      mapId:
+        resolution.responsibilityMapId,
+
+      policyVersion:
+        resolution.policyVersion,
+
+      sourceCountry:
+        resolution.sourceCountry,
+
+      destinationCountry:
+        resolution.destinationCountry,
+
+      transferClass:
+        resolution.transferClass,
+
+      custodyModel:
+        resolution.custodyModel,
+
+      legalApprovalReference:
+        resolution.legalApprovalReference,
+
+      partnerApprovalReference:
+        resolution.partnerApprovalReference,
+
+      authorities:
+        resolution.authorities.map(
+          (a) => ({
+            responsibility:
+              a.responsibility,
+
+            entityId:
+              a.entityId,
+
+            legalName:
+              a.legalName,
+
+            entityType:
+              a.entityType,
+
+            contractId:
+              a.contractId,
+
+            regulatoryReference:
+              a.regulatoryReference,
+          }),
+        ),
+
+      resolvedAt:
+        new Date()
+          .toISOString(),
+    };
+  }
+}
+
+
+================================================================================
+16. EXECUTION AUTHORITY SERVICE
+FILE: execution-authority.service.ts
+================================================================================
+
+import {
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class ExecutionAuthorityService {
+  getAuthority(
+    snapshot:
+      FinancialResponsibilitySnapshot,
+
+    responsibility:
+      FinancialResponsibility,
+  ) {
+    const authority =
+      snapshot.authorities.find(
+        (x) =>
+          x.responsibility ===
+          responsibility,
+      );
+
+    if (!authority) {
+      throw new Error(
+        `EXECUTION_AUTHORITY_MISSING:${responsibility}`,
+      );
+    }
+
+    return authority;
+  }
+
+  getFundingAuthority(
+    snapshot:
+      FinancialResponsibilitySnapshot,
+
+    fundingMode:
+      string,
+  ) {
+    switch (
+      fundingMode
+    ) {
+      case "DEBIT_CARD":
+      case "CREDIT_CARD":
+        return this.getAuthority(
+          snapshot,
+          "CARD_ACQUIRING",
+        );
+
+      case "BANK":
+        return this.getAuthority(
+          snapshot,
+          "BANK_DEBIT",
+        );
+
+      case "LINQA_BALANCE":
+        return this.getAuthority(
+          snapshot,
+          "CUSTOMER_FUNDS_CUSTODY",
+        );
+
+      default:
+        return this.getAuthority(
+          snapshot,
+          "ACCEPT_CUSTOMER_FUNDS",
+        );
+    }
+  }
+
+  getTransmissionAuthority(
+    snapshot:
+      FinancialResponsibilitySnapshot,
+  ) {
+    const crossBorder =
+      snapshot.transferClass ===
+        "INTERNAL_CROSS_BORDER" ||
+      snapshot.transferClass ===
+        "EXTERNAL_CROSS_BORDER";
+
+    return this.getAuthority(
+      snapshot,
+      crossBorder
+        ? "CROSS_BORDER_TRANSMISSION"
+        : "DOMESTIC_TRANSMISSION",
+    );
+  }
+
+  getPayoutAuthority(
+    snapshot:
+      FinancialResponsibilitySnapshot,
+    receiveMode:
+      string,
+  ) {
+    switch (
+      receiveMode
+    ) {
+      case "BANK":
+        return this.getAuthority(
+          snapshot,
+          "LOCAL_BANK_PAYOUT",
+        );
+
+      case "MOBILE_MONEY":
+        return this.getAuthority(
+          snapshot,
+          "MOBILE_MONEY_PAYOUT",
+        );
+
+      case "CARD":
+        return this.getAuthority(
+          snapshot,
+          "CARD_PUSH_PAYOUT",
+        );
+
+      case "LINQA_BALANCE":
+        return this.getAuthority(
+          snapshot,
+          "CUSTOMER_ACCOUNT_ISSUER",
+        );
+
+      default:
+        throw new Error(
+          "UNSUPPORTED_RECEIVE_MODE",
+        );
+    }
+  }
+}
+
+
+================================================================================
+17. REAL-MONEY READINESS SERVICE
+FILE: real-money-readiness.service.ts
+================================================================================
+
+import {
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class RealMoneyReadinessService {
+  constructor(
+    private readonly resolver:
+      RegulatedEntityResolverService,
+
+    private readonly validator:
+      ResponsibilityValidatorService,
+
+    private readonly custody:
+      CustodyModelService,
+
+    private readonly compliance:
+      ComplianceResponsibilityService,
+
+    private readonly snapshots:
+      ResponsibilitySnapshotService,
+  ) {}
+
+  async evaluate(args: {
+    sourceCountry: string;
+    destinationCountry: string;
+
+    transferClass: string;
+
+    sourceCurrency: string;
+    destinationCurrency: string;
+
+    fundingMode: string;
+    receiveMode: string;
+  }) {
+    const resolution =
+      await this.resolver.resolve(
+        args,
+      );
+
+    this.validator.assertExecutable(
+      resolution,
+    );
+
+    this.compliance.assertCoverage(
+      resolution,
+    );
+
+    this.custody.validate({
+      custodyModel:
+        resolution.custodyModel,
+
+      transferClass:
+        args.transferClass,
+
+      fundingMode:
+        args.fundingMode,
+
+      receiveMode:
+        args.receiveMode,
+
+      resolution,
+    });
+
+    return {
+      ready:
+        true,
+
+      resolution,
+
+      snapshot:
+        this.snapshots.create(
+          resolution,
+        ),
+    };
+  }
+}
+
+
+================================================================================
+18. INTEGRATION WITH v3 PREPARE FLOW
+================================================================================
+
+export class LinqaSendPrepareWithRealMoneyV7 {
+  constructor(
+    private readonly v3:
+      LinqaSendPrepareServiceV3,
+
+    private readonly readiness:
+      RealMoneyReadinessService,
+  ) {}
+
+  async prepare(args: {
+    authenticatedUserId:
+      string;
+
+    request:
+      CreateTransferIntentRequest;
+  }) {
+    const prepared =
+      await this.v3.prepare(
+        args,
+      );
+
+    const financial =
+      await this.readiness.evaluate({
+        sourceCountry:
+          prepared.sender.verifiedCountry,
+
+        destinationCountry:
+          prepared.recipient.verifiedCountry,
+
+        transferClass:
+          prepared.classification.transferClass,
+
+        sourceCurrency:
+          prepared.quote.sourceCurrency,
+
+        destinationCurrency:
+          prepared.quote.destinationCurrency,
+
+        fundingMode:
+          prepared.fundingMode,
+
+        receiveMode:
+          prepared.recipient.receiveMode,
+      });
+
+    return {
+      ...prepared,
+
+      financialResponsibilitySnapshot:
+        financial.snapshot,
+    };
+  }
+}
+
+
+================================================================================
+19. TRANSFER RECORD EXTENSION
+================================================================================
+
+ALTER TABLE linqasend_transfers_v3
+ADD COLUMN IF NOT EXISTS
+  financial_responsibility_snapshot JSONB;
+
+ALTER TABLE linqasend_transfers_v3
+ADD COLUMN IF NOT EXISTS
+  financial_responsibility_map_id UUID;
+
+ALTER TABLE linqasend_transfers_v3
+ADD COLUMN IF NOT EXISTS
+  financial_responsibility_version INTEGER;
+
+ALTER TABLE linqasend_transfers_v3
+ADD COLUMN IF NOT EXISTS
+  custody_model TEXT;
+
+ALTER TABLE linqasend_transfers_v3
+ADD COLUMN IF NOT EXISTS
+  funding_execution_entity_id UUID;
+
+ALTER TABLE linqasend_transfers_v3
+ADD COLUMN IF NOT EXISTS
+  transmission_entity_id UUID;
+
+ALTER TABLE linqasend_transfers_v3
+ADD COLUMN IF NOT EXISTS
+  fx_execution_entity_id UUID;
+
+ALTER TABLE linqasend_transfers_v3
+ADD COLUMN IF NOT EXISTS
+  payout_execution_entity_id UUID;
+
+ALTER TABLE linqasend_transfers_v3
+ADD COLUMN IF NOT EXISTS
+  settlement_entity_id UUID;
+
+
+================================================================================
+20. POSTGRESQL SCHEMA
+FILE: 20260820_linqasend_regulated_entity_resolver_v7.sql
+================================================================================
+
+BEGIN;
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS linqasend_financial_entities_v7 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  legal_name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+
+  entity_type TEXT NOT NULL,
+
+  country_code CHAR(2) NOT NULL,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'DRAFT',
+      'PENDING_DUE_DILIGENCE',
+      'ACTIVE',
+      'RESTRICTED',
+      'SUSPENDED',
+      'TERMINATED',
+      'EXPIRED'
+    )
+  ),
+
+  website TEXT,
+
+  legal_entity_identifier TEXT,
+
+  regulatory_reference TEXT,
+
+  due_diligence_status TEXT NOT NULL CHECK (
+    due_diligence_status IN (
+      'NOT_STARTED',
+      'IN_PROGRESS',
+      'APPROVED',
+      'REJECTED',
+      'EXPIRED'
+    )
+  ),
+
+  operational_status TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (
+    operational_status IN (
+      'HEALTHY',
+      'DEGRADED',
+      'DOWN',
+      'UNKNOWN'
+    )
+  ),
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_partner_contracts_v7 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  regulated_entity_id UUID NOT NULL
+    REFERENCES linqasend_financial_entities_v7(id),
+
+  contract_type TEXT NOT NULL,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'DRAFT',
+      'ACTIVE',
+      'SUSPENDED',
+      'EXPIRED',
+      'TERMINATED'
+    )
+  ),
+
+  source_countries CHAR(2)[] NOT NULL DEFAULT '{}',
+  destination_countries CHAR(2)[] NOT NULL DEFAULT '{}',
+
+  source_currencies CHAR(3)[] NOT NULL DEFAULT '{}',
+  destination_currencies CHAR(3)[] NOT NULL DEFAULT '{}',
+
+  allowed_responsibilities TEXT[] NOT NULL DEFAULT '{}',
+
+  provider_account_reference TEXT,
+
+  approval_reference TEXT NOT NULL,
+
+  effective_from TIMESTAMPTZ NOT NULL,
+  effective_to TIMESTAMPTZ,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  CHECK (
+    effective_to IS NULL OR
+    effective_to > effective_from
+  )
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_financial_responsibility_maps_v7 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  source_country CHAR(2) NOT NULL,
+  destination_country CHAR(2) NOT NULL,
+
+  transfer_class TEXT NOT NULL,
+
+  source_currency CHAR(3) NOT NULL,
+  destination_currency CHAR(3) NOT NULL,
+
+  funding_mode TEXT NOT NULL,
+  receive_mode TEXT NOT NULL,
+
+  custody_model TEXT NOT NULL CHECK (
+    custody_model IN (
+      'NO_CUSTOMER_FUNDS',
+      'PARTNER_CUSTODY',
+      'FBO_OR_EQUIVALENT_PARTNER_ACCOUNT',
+      'PARTNER_ISSUED_STORED_VALUE',
+      'PASS_THROUGH_ONLY'
+    )
+  ),
+
+  customer_onboarding_entity_id UUID,
+  kyc_cip_entity_id UUID,
+  aml_monitoring_entity_id UUID,
+  sanctions_screening_entity_id UUID,
+
+  accept_customer_funds_entity_id UUID,
+  customer_funds_custody_entity_id UUID,
+  safeguarding_entity_id UUID,
+
+  customer_account_issuer_entity_id UUID,
+  stored_value_issuer_entity_id UUID,
+
+  card_acquiring_entity_id UUID,
+  bank_debit_entity_id UUID,
+
+  domestic_transmission_entity_id UUID,
+  cross_border_transmission_entity_id UUID,
+
+  fx_execution_entity_id UUID,
+
+  bank_payout_entity_id UUID,
+  mobile_money_payout_entity_id UUID,
+  card_push_payout_entity_id UUID,
+
+  dispute_entity_id UUID,
+  chargeback_entity_id UUID,
+  refund_entity_id UUID,
+
+  settlement_entity_id UUID,
+  reconciliation_entity_id UUID,
+
+  legal_approval_reference TEXT NOT NULL,
+  partner_approval_reference TEXT NOT NULL,
+
+  contract_set_id TEXT NOT NULL,
+
+  policy_version INTEGER NOT NULL,
+
+  effective_from TIMESTAMPTZ NOT NULL,
+  effective_to TIMESTAMPTZ,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'DRAFT',
+      'ACTIVE',
+      'RESTRICTED',
+      'SUSPENDED',
+      'EXPIRED'
+    )
+  ),
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  UNIQUE(
+    source_country,
+    destination_country,
+    transfer_class,
+    source_currency,
+    destination_currency,
+    funding_mode,
+    receive_mode,
+    policy_version
+  )
+);
+
+
+CREATE INDEX IF NOT EXISTS
+  idx_responsibility_map_lookup_v7
+ON linqasend_financial_responsibility_maps_v7 (
+  source_country,
+  destination_country,
+  transfer_class,
+  source_currency,
+  destination_currency,
+  funding_mode,
+  receive_mode,
+  status
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_partner_health_v7 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  entity_id UUID NOT NULL
+    REFERENCES linqasend_financial_entities_v7(id),
+
+  capability TEXT NOT NULL,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'HEALTHY',
+      'DEGRADED',
+      'DOWN',
+      'UNKNOWN'
+    )
+  ),
+
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_real_money_readiness_v7 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  responsibility_map_id UUID NOT NULL
+    REFERENCES linqasend_financial_responsibility_maps_v7(id),
+
+  result TEXT NOT NULL CHECK (
+    result IN (
+      'READY',
+      'BLOCKED',
+      'REVIEW'
+    )
+  ),
+
+  missing_responsibilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+
+  blocked_reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+
+  evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMIT;
+
+
+================================================================================
+21. REAL MONEY GATE
+================================================================================
+
+export class RealMoneyExecutionGateV7 {
+  constructor(
+    private readonly readiness:
+      RealMoneyReadinessService,
+
+    private readonly authority:
+      ExecutionAuthorityService,
+
+    private readonly v4:
+      SecureMoneyMovementGateV4,
+  ) {}
+
+  async execute(args: {
+    transfer:
+      SecureTransferView;
+
+    sender:
+      SenderContext;
+
+    recipient:
+      ResolvedRecipient;
+
+    fundingSource:
+      FundingSource;
+
+    quote:
+      PersistedQuote;
+
+    installationId:
+      string;
+
+    deviceId:
+      string;
+
+    authorizationToken:
+      string;
+  }) {
+    const financial =
+      await this.readiness.evaluate({
+        sourceCountry:
+          args.transfer.sourceCountry,
+
+        destinationCountry:
+          args.transfer.destinationCountry,
+
+        transferClass:
+          args.transfer.transferClass,
+
+        sourceCurrency:
+          args.quote.sourceCurrency,
+
+        destinationCurrency:
+          args.quote.destinationCurrency,
+
+        fundingMode:
+          args.fundingSource.mode,
+
+        receiveMode:
+          args.recipient.receiveMode,
+      });
+
+    const fundingAuthority =
+      this.authority.getFundingAuthority(
+        financial.snapshot,
+        args.fundingSource.mode,
+      );
+
+    const transmissionAuthority =
+      this.authority.getTransmissionAuthority(
+        financial.snapshot,
+      );
+
+    const payoutAuthority =
+      this.authority.getPayoutAuthority(
+        financial.snapshot,
+        args.recipient.receiveMode,
+      );
+
+    const fxAuthority =
+      args.quote.sourceCurrency !==
+      args.quote.destinationCurrency
+        ? this.authority.getAuthority(
+            financial.snapshot,
+            "FX_EXECUTION",
+          )
+        : null;
+
+    return this.v4.execute({
+      ...args,
+
+      regulatedExecution: {
+        financialResponsibilitySnapshot:
+          financial.snapshot,
+
+        fundingAuthority,
+
+        transmissionAuthority,
+
+        payoutAuthority,
+
+        fxAuthority,
+      },
+    } as any);
+  }
+}
+
+
+================================================================================
+22. PARTNER ROUTING SERVICE
+================================================================================
+
+export class PartnerRoutingService {
+  constructor(
+    private readonly providerRegistry:
+      ProviderRegistryService,
+
+    private readonly executionAuthority:
+      ExecutionAuthorityService,
+  ) {}
+
+  resolveFundingProvider(args: {
+    snapshot:
+      FinancialResponsibilitySnapshot;
+
+    fundingMode:
+      string;
+  }) {
+    const authority =
+      this.executionAuthority.getFundingAuthority(
+        args.snapshot,
+        args.fundingMode,
+      );
+
+    return this.providerRegistry.getFunding(
+      authority.entityId,
+    );
+  }
+
+  resolvePayoutProvider(args: {
+    snapshot:
+      FinancialResponsibilitySnapshot;
+
+    receiveMode:
+      string;
+  }) {
+    const authority =
+      this.executionAuthority.getPayoutAuthority(
+        args.snapshot,
+        args.receiveMode,
+      );
+
+    return this.providerRegistry.getPayout(
+      authority.entityId,
+    );
+  }
+
+  resolveFxProvider(
+    snapshot:
+      FinancialResponsibilitySnapshot,
+  ) {
+    const authority =
+      this.executionAuthority.getAuthority(
+        snapshot,
+        "FX_EXECUTION",
+      );
+
+    return this.providerRegistry.getFx(
+      authority.entityId,
+    );
+  }
+}
+
+
+================================================================================
+23. ADMIN API
+================================================================================
+
+import {
+  Controller,
+  Get,
+  Param,
+  Post,
+  Req,
+} from "@nestjs/common";
+
+@Controller(
+  "v1/admin/linqasend/financial-network",
+)
+export class RegulatoryNetworkV7Controller {
+  constructor(
+    private readonly readiness:
+      RealMoneyReadinessService,
+
+    private readonly entities:
+      EntityRegistryRepository,
+
+    private readonly responsibilities:
+      FinancialResponsibilityRepository,
+  ) {}
+
+  @Get("entities")
+  listEntities() {
+    return this.entities.listAll();
+  }
+
+  @Get("responsibility-maps")
+  listResponsibilityMaps() {
+    return this.responsibilities.listAll();
+  }
+
+  @Post("readiness/evaluate")
+  evaluate(
+    @Req()
+    req: any,
+  ) {
+    return this.readiness.evaluate(
+      req.body,
+    );
+  }
+}
+
+
+================================================================================
+24. MODULE
+================================================================================
+
+import {
+  Module,
+} from "@nestjs/common";
+
+@Module({
+  controllers: [
+    RegulatoryNetworkV7Controller,
+  ],
+
+  providers: [
+    ResponsibilityRequirementService,
+    RegulatedEntityResolverService,
+    ResponsibilityValidatorService,
+    CustodyModelService,
+    ComplianceResponsibilityService,
+    ResponsibilitySnapshotService,
+    ExecutionAuthorityService,
+    RealMoneyReadinessService,
+    PartnerRoutingService,
+  ],
+
+  exports: [
+    RealMoneyReadinessService,
+    ExecutionAuthorityService,
+    PartnerRoutingService,
+    ResponsibilitySnapshotService,
+  ],
+})
+export class
+  LinqaSendRegulatoryNetworkV7Module {}
+
+
+================================================================================
+25. INTERNAL DOMESTIC EXAMPLE
+================================================================================
+
+SOURCE COUNTRY: NG
+DESTINATION COUNTRY: NG
+
+TRANSFER CLASS:
+INTERNAL_DOMESTIC
+
+FUNDING:
+LINQA_BALANCE
+
+RECEIVE:
+LINQA_BALANCE
+
+CUSTODY:
+PARTNER_ISSUED_STORED_VALUE
+
+REQUIRED RESPONSIBILITY MAP:
+
+KYC/CIP
+  -> approved onboarding/KYC entity
+
+AML MONITORING
+  -> approved transaction-monitoring entity
+
+SANCTIONS
+  -> approved sanctions-screening entity
+
+CUSTOMER ACCOUNT ISSUER
+  -> approved financial institution / stored-value issuer
+
+STORED VALUE ISSUER
+  -> same or approved issuer
+
+CUSTOMER FUNDS CUSTODY
+  -> partner custody
+
+SAFEGUARDING
+  -> approved safeguarding structure
+
+DOMESTIC TRANSMISSION
+  -> authorized domestic payment entity
+
+SETTLEMENT
+  -> approved settlement entity
+
+RECONCILIATION
+  -> Linqa + partner operational responsibility
+
+If any REQUIRED item missing:
+BLOCK.
+
+
+================================================================================
+26. CROSS-BORDER EXAMPLE
+================================================================================
+
+SOURCE: US
+DESTINATION: GH
+
+TRANSFER CLASS:
+INTERNAL_CROSS_BORDER
+
+FUNDING:
+DEBIT_CARD
+
+RECEIVE:
+LINQA_BALANCE
+
+USD -> GHS
+
+REQUIRED RESPONSIBILITY MAP:
+
+CARD_ACQUIRING
+  -> approved card processor / acquiring entity
+
+ACCEPT_CUSTOMER_FUNDS
+  -> approved regulated financial entity
+
+KYC_CIP
+  -> approved KYC/CIP responsibility
+
+AML_MONITORING
+  -> approved responsible entity
+
+SANCTIONS_SCREENING
+  -> approved responsible entity
+
+CROSS_BORDER_TRANSMISSION
+  -> approved remittance / money-transmission entity
+
+FX_EXECUTION
+  -> approved FX provider
+
+CUSTOMER_ACCOUNT_ISSUER
+  -> Ghana-side partner account issuer
+
+STORED_VALUE_ISSUER
+  -> if balance model used
+
+SAFEGUARDING
+  -> where required by deployed account model
+
+SETTLEMENT
+  -> settlement bank / provider
+
+RECONCILIATION
+  -> partner + Linqa reconciliation responsibility
+
+
+================================================================================
+27. CARD-ON-FILE REAL USER MODEL
+================================================================================
+
+USER
+ |
+ v
+ADD CARD
+ |
+ v
+PROVIDER-HOSTED OR TOKENIZED COLLECTION
+ |
+ v
+REGULATED CARD / PAYMENT PROVIDER
+ |
+ v
+payment_method_token
+ |
+ v
+LINQA STORES ONLY:
+
+provider_id
+provider_token
+brand
+last4
+expiration metadata
+verification state
+fingerprint token if permitted
+status
+
+NEVER:
+
+raw PAN
+CVV
+full magnetic stripe
+sensitive authentication data
+
+
+================================================================================
+28. PARTNER-BACKED BALANCE MODEL
+================================================================================
+
+DO NOT PRESENT:
+
+"Linqa directly holds your money"
+
+unless Linqa has the appropriate structure.
+
+PREFERRED MODEL:
+
+User sees:
+"LinqaSend Balance"
+
+Underlying model:
+Partner-issued / partner-custodied financial account or stored-value product
+
+Linqa:
+- provides UI
+- provides ledger projection/subledger
+- provides contact/payment UX
+- provides transaction history
+- provides risk/scam UX
+- receives provider status
+- reconciles
+
+Financial partner:
+- legal customer-funds role
+- custody / safeguarding
+- money transmission where applicable
+- settlement
+- relevant account issuance
+- regulated responsibilities per contract
+
+
+================================================================================
+29. USER DISCLOSURE CONFIGURATION
+================================================================================
+
+export interface FinancialProductDisclosure {
+  countryCode: string;
+
+  productName:
+    string;
+
+  partnerLegalName:
+    string;
+
+  partnerRole:
+    string;
+
+  fundsHeldByText:
+    string;
+
+  transmissionProvidedByText:
+    string;
+
+  fxProvidedByText?:
+    string;
+
+  payoutProvidedByText?:
+    string;
+
+  regulatoryDisclosureText?:
+    string;
+
+  supportEscalationText?:
+    string;
+
+  effectiveFrom:
+    string;
+
+  version:
+    number;
+}
+
+IMPORTANT:
+Disclosure content must be legal/compliance-approved.
+Do not invent regulatory claims in UI.
+
+
+================================================================================
+30. REAL-MONEY READINESS DASHBOARD
+================================================================================
+
+export interface RealMoneyReadinessDashboard {
+  totalResponsibilityMaps:
+    number;
+
+  ready:
+    number;
+
+  blocked:
+    number;
+
+  review:
+    number;
+
+  expiringContracts:
+    number;
+
+  entitiesDown:
+    number;
+
+  corridors: Array<{
+    corridor:
+      string;
+
+    transferClass:
+      string;
+
+    fundingMode:
+      string;
+
+    receiveMode:
+      string;
+
+    custodyModel:
+      string;
+
+    ready:
+      boolean;
+
+    missing:
+      string[];
+
+    blockedReasons:
+      string[];
+  }>;
+}
+
+
+================================================================================
+31. CONTRACT EXPIRY WORKER
+================================================================================
+
+import {
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class ContractExpiryWorker {
+  constructor(
+    private readonly contracts:
+      PartnerContractRepository,
+
+    private readonly maps:
+      FinancialResponsibilityRepository,
+
+    private readonly alerts:
+      OperationsAlertService,
+  ) {}
+
+  async run() {
+    const expiring =
+      await this.contracts.listExpiringWithinDays(
+        30,
+      );
+
+    for (
+      const contract
+      of expiring
+    ) {
+      await this.alerts.raise({
+        type:
+          "LINQASEND_PARTNER_CONTRACT_EXPIRING",
+
+        contractId:
+          contract.id,
+
+        entityId:
+          contract.regulatedEntityId,
+
+        effectiveTo:
+          contract.effectiveTo,
+      });
+    }
+
+    const expired =
+      await this.contracts.listExpired();
+
+    for (
+      const contract
+      of expired
+    ) {
+      await this.maps.suspendMapsUsingContract(
+        contract.id,
+      );
+    }
+  }
+}
+
+
+================================================================================
+32. PARTNER HEALTH WORKER
+================================================================================
+
+import {
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class PartnerHealthWorker {
+  constructor(
+    private readonly entities:
+      EntityRegistryRepository,
+
+    private readonly checks:
+      PartnerHealthCheckRegistry,
+
+    private readonly health:
+      PartnerHealthRepository,
+  ) {}
+
+  async run() {
+    const entities =
+      await this.entities.listActive();
+
+    for (
+      const entity
+      of entities
+    ) {
+      const checker =
+        this.checks.get(
+          entity.id,
+        );
+
+      if (!checker) {
+        await this.health.record({
+          entityId:
+            entity.id,
+
+          capability:
+            "UNKNOWN",
+
+          status:
+            "UNKNOWN",
+
+          evidence: {
+            reason:
+              "HEALTH_CHECK_NOT_CONFIGURED",
+          },
+        });
+
+        continue;
+      }
+
+      const result =
+        await checker.check();
+
+      await this.health.record({
+        entityId:
+          entity.id,
+
+        capability:
+          result.capability,
+
+        status:
+          result.status,
+
+        evidence:
+          result.evidence,
+      });
+    }
+  }
+}
+
+
+================================================================================
+33. REAL-MONEY RELEASE GATE
+================================================================================
+
+export class RealMoneyReleaseGateV7 {
+  constructor(
+    private readonly maps:
+      FinancialResponsibilityRepository,
+
+    private readonly readiness:
+      RealMoneyReadinessService,
+
+    private readonly certifications:
+      CorridorCertificationRepository,
+  ) {}
+
+  async assertCorridorReady(
+    corridorId: string,
+  ) {
+    const cert =
+      await this.certifications.findById(
+        corridorId,
+      );
+
+    if (
+      !cert ||
+      cert.status !==
+        "CERTIFIED"
+    ) {
+      throw new Error(
+        "CORRIDOR_NOT_CERTIFIED",
+      );
+    }
+
+    const map =
+      await this.maps.findByCorridorId(
+        corridorId,
+      );
+
+    if (!map) {
+      throw new Error(
+        "FINANCIAL_RESPONSIBILITY_MAP_MISSING",
+      );
+    }
+
+    const result =
+      await this.readiness.evaluate({
+        sourceCountry:
+          map.sourceCountry,
+
+        destinationCountry:
+          map.destinationCountry,
+
+        transferClass:
+          map.transferClass,
+
+        sourceCurrency:
+          map.sourceCurrency,
+
+        destinationCurrency:
+          map.destinationCurrency,
+
+        fundingMode:
+          map.fundingMode,
+
+        receiveMode:
+          map.receiveMode,
+      });
+
+    if (!result.ready) {
+      throw new Error(
+        "REAL_MONEY_READINESS_NOT_GREEN",
+      );
+    }
+
+    return true;
+  }
+}
+
+
+================================================================================
+34. SECURITY INVARIANTS
+================================================================================
+
+1. Linqa UI does not determine who legally handles money.
+
+2. Financial responsibility map is server-authoritative.
+
+3. Every real-money transfer has a stored responsibility snapshot.
+
+4. Missing responsibility fails closed.
+
+5. Missing contract fails closed.
+
+6. Expired contract fails closed.
+
+7. Suspended entity fails closed.
+
+8. Failed partner due diligence fails closed.
+
+9. Down/unknown required financial entity fails closed.
+
+10. Linqa balance cannot exist as a real-money product without an approved
+    underlying account/custody/stored-value model.
+
+11. Card funding requires an approved acquiring/payment entity.
+
+12. Bank funding requires an approved bank-debit/payment entity.
+
+13. Cross-border transfers require an approved cross-border transmission entity.
+
+14. FX requires an approved FX execution entity when currencies differ.
+
+15. External payout requires an approved payout entity.
+
+16. Customer funds custody and Linqa operating funds are not conflated.
+
+17. Partner status and contract status must be effective at transfer time.
+
+18. Historical responsibility snapshots are immutable.
+
+19. Later contract changes cannot rewrite the responsibility map used for a
+    prior transfer.
+
+20. Provider routing uses the stored/approved responsibility snapshot,
+    not arbitrary client parameters.
+
+21. Chat/social never receives partner credentials.
+
+22. Provider credentials remain server-side.
+
+23. UI financial disclosures come from approved versioned configuration.
+
+24. No unsupported regulatory claims are hard-coded.
+
+25. Corridor certification and real-money responsibility readiness are both
+    required before production enablement.
+
+
+================================================================================
+35. TEST MATRIX
+================================================================================
+
+ENTITY RESOLUTION
+- missing map blocked
+- inactive map blocked
+- expired map blocked
+- active map resolves
+- policy version stored
+
+CONTRACTS
+- active effective contract passes
+- future contract blocked
+- expired contract blocked
+- suspended contract blocked
+- missing responsibility permission blocked
+
+DUE DILIGENCE
+- approved entity passes
+- pending entity blocked
+- rejected entity blocked
+- expired due diligence blocked
+
+PARTNER HEALTH
+- HEALTHY passes
+- DOWN blocked
+- UNKNOWN blocked for required role
+- DEGRADED handled by policy
+
+CUSTODY
+- Linqa balance + NO_CUSTOMER_FUNDS blocked
+- stored-value model requires issuer
+- partner custody requires custody authority
+- safeguarding model requires safeguarding authority
+
+COMPLIANCE
+- missing KYC responsibility blocked
+- missing AML responsibility blocked
+- missing sanctions responsibility blocked
+
+DOMESTIC
+- internal domestic resolves domestic transmission
+- external domestic resolves local payout
+- balance-to-balance resolves account issuer/custody
+
+CROSS BORDER
+- requires cross-border transmitter
+- requires FX entity when currencies differ
+- requires payout authority
+- receive-only outbound map blocked upstream
+
+CARD
+- card funding resolves card acquiring authority
+- raw card data never stored
+- token-only path
+
+BANK
+- bank funding resolves bank-debit authority
+- bank payout resolves local-bank payout authority
+
+SNAPSHOT
+- stored snapshot immutable
+- prior transfer retains old map after new version
+- contract ids stored
+- legal/partner approval refs stored
+
+RELEASE GATE
+- corridor certified but responsibility map missing => blocked
+- map ready but corridor uncertified => blocked
+- both ready => enabled
+- expired partner contract => automatically no longer ready
+
+
+================================================================================
+36. FINAL REAL-USER / REAL-MONEY FLOW
+================================================================================
+
+USER SELECTS SEND
+        |
+        v
+AUTHENTICATED LINQA USER
+        |
+        v
+RECIPIENT RESOLVER
+        |
+        v
+TRANSFER CLASSIFIER
+        |
+        v
+COUNTRY / CORRIDOR CAPABILITY v3
+        |
+        v
+REGULATED ENTITY RESOLVER v7
+        |
+        +-- onboarding authority
+        +-- KYC authority
+        +-- AML authority
+        +-- sanctions authority
+        +-- customer funds authority
+        +-- custody/safeguarding authority
+        +-- domestic/cross-border transmitter
+        +-- FX authority
+        +-- payout authority
+        +-- settlement authority
+        +-- reconciliation authority
+        |
+        v
+RESPONSIBILITY SNAPSHOT
+        |
+        v
+REAL MONEY READINESS = GREEN?
+        |
+   +----+----+
+   |         |
+  NO        YES
+   |         |
+ BLOCK       v
+        SECURITY / FRAUD v4
+             |
+             v
+        TRANSACTION SIGNING
+             |
+             v
+        APPROVED PROVIDER ROUTING
+             |
+             v
+        MONEY MOVEMENT
+             |
+             v
+        SETTLEMENT / TREASURY v5
+             |
+             v
+        RECONCILIATION
+             |
+             v
+        EXACT-SHA CERTIFICATION v6
+             |
+             v
+        PRODUCTION CORRIDOR
+
+
+================================================================================
+37. FINAL GUIDANCE
+================================================================================
+
+Before enabling real user money:
+
+A. Select one launch corridor only.
+
+B. Identify real partners for every required responsibility.
+
+C. Enter each partner into linqasend_financial_entities_v7.
+
+D. Enter executed/approved partner contracts.
+
+E. Create exact financial responsibility map.
+
+F. Keep map DRAFT until legal/compliance/partner approvals exist.
+
+G. Implement real provider adapters.
+
+H. Run v6 physical certification.
+
+I. Confirm v7 readiness = GREEN.
+
+J. Enable only that corridor.
+
+Do not enable "LinqaSend globally" before this process is completed corridor
+by corridor.
+
+================================================================================
+END — LINQASEND REGULATED ENTITY RESOLVER + REAL-MONEY READINESS PACK v7
+================================================================================

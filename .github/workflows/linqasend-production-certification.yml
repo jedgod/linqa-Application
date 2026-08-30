@@ -1,0 +1,65 @@
+name: LinqaSend Production Certification
+
+on:
+  pull_request:
+    paths:
+      - "server/src/**linqasend**"
+      - "clients/mobile/**linqasend**"
+      - "clients/web/src/admin/**"
+      - "scripts/linqasend-certification-gate.mjs"
+      - ".github/workflows/linqasend-production-certification.yml"
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Exact-SHA physical certification manifest
+        required: true
+        default: certification/linqasend-production-manifest.json
+
+permissions:
+  contents: read
+
+jobs:
+  implementation-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            clients/mobile/package-lock.json
+            clients/web/package-lock.json
+      - run: npm ci
+        working-directory: server
+      - run: npm run build
+        working-directory: server
+      - run: npx vitest run src/tests/linqasend-control-stack.test.ts src/tests/linqasend-providers.test.ts
+        working-directory: server
+      - run: npm ci
+        working-directory: clients/mobile
+      - run: npm run typecheck
+        working-directory: clients/mobile
+      - run: npm ci
+        working-directory: clients/web
+      - run: npm run build
+        working-directory: clients/web
+      - name: Reject focused or skipped LinqaSend tests
+        shell: bash
+        run: |
+          if rg -n '(describe|it|test)\.(skip|only)\s*\(|\b(xit|fit)\s*\(' server/src/tests/*linqasend*; then
+            echo "Focused or skipped LinqaSend tests are forbidden"
+            exit 1
+          fi
+
+  exact-sha-production-gate:
+    if: github.event_name == 'workflow_dispatch'
+    needs: implementation-verification
+    runs-on: ubuntu-latest
+    environment: linqasend-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - run: node scripts/linqasend-certification-gate.mjs "${{ inputs.manifest_path }}"

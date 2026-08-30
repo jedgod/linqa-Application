@@ -3,7 +3,7 @@ import { z } from "zod";
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().default("127.0.0.1"),
-  PORT: z.coerce.number().int().min(1).max(65535).default(8080),
+  PORT: z.coerce.number().int().min(1).max(65535).default(8088),
   DATABASE_URL: z.string().min(1),
   JWT_ISSUER: z.string().url(),
   JWT_AUDIENCE: z.string().min(1),
@@ -19,7 +19,16 @@ const EnvSchema = z.object({
     .default("turn:127.0.0.1:3478?transport=udp,turn:127.0.0.1:3478?transport=tcp")
     .transform((value) => value.split(",").map((item) => item.trim()).filter(Boolean)),
   CORS_ORIGINS: z.string()
-    .default("http://127.0.0.1:5173")
+    // 5182/5183/5184 are the local admin/staff preview apps (gateway,
+    // admin console, staff console) -- see scratchpad/{gateway,
+    // admin-staff-preview,staff-portal-preview}. Not present in any
+    // deployed environment, only meaningful for local dev.
+    .default(
+      "http://127.0.0.1:5173,http://localhost:5173," +
+        "http://127.0.0.1:5182,http://localhost:5182," +
+        "http://127.0.0.1:5183,http://localhost:5183," +
+        "http://127.0.0.1:5184,http://localhost:5184"
+    )
     .transform((value) => value.split(",").map((item) => item.trim()).filter(Boolean)),
   DEVICE_CHALLENGE_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(300),
   ENVELOPE_TTL_SECONDS: z.coerce.number().int().min(3600).max(7_776_000).default(2_592_000),
@@ -65,6 +74,18 @@ const EnvSchema = z.object({
   LINQASEND_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().min(60).max(86_400).default(300),
   LINQASEND_PROVIDER_URL: z.string().url().optional(),
   LINQASEND_PROVIDER_TOKEN: z.string().min(16).optional(),
+  LINQASEND_RELEASE_GIT_SHA: z.string().regex(/^[a-fA-F0-9]{40}$/).optional(),
+  LINQASEND_ARTIFACT_SHA256: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
+  // The absence of these flags is intentionally equivalent to the safest
+  // setting so older deployments cannot become money-moving by upgrading.
+  LINQASEND_MODE: z.enum(["SANDBOX_CERTIFICATION", "LIMITED_LAUNCH", "GENERAL_AVAILABILITY"]).optional(),
+  LINQASEND_REAL_MONEY_ENABLED: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
+  LINQASEND_PUBLIC_ENROLLMENT: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
+  LINQASEND_TOKEN_KMS_KEY_ID: z.string().min(1).optional(),
+  LINQASEND_TOKEN_KMS_REGION: z.string().min(1).optional(),
+  LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID: z.string().uuid().optional(),
+  LINQASEND_EXECUTION_LEASE_SECONDS: z.coerce.number().int().min(10).max(600).optional(),
+  LINQASEND_WEBHOOK_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(86_400).optional(),
 
   ESCALATION_STAFF_WEBHOOK_URL: z.string().url().optional(),
   ESCALATION_STAFF_WEBHOOK_SECRET: z.string().min(16).optional(),
@@ -119,6 +140,23 @@ const EnvSchema = z.object({
     ["JWT_VERIFYING_PUBLIC_KEY_PEM", value.JWT_VERIFYING_PUBLIC_KEY_PEM]
   ]);
 
+  requireAllOrNone([
+    ["LINQASEND_TOKEN_KMS_KEY_ID", value.LINQASEND_TOKEN_KMS_KEY_ID],
+    ["LINQASEND_TOKEN_KMS_REGION", value.LINQASEND_TOKEN_KMS_REGION]
+  ]);
+
+  const realMoney = value.LINQASEND_REAL_MONEY_ENABLED === true;
+  const mode = value.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION";
+  if (realMoney && mode === "SANDBOX_CERTIFICATION") {
+    context.addIssue({ code: "custom", message: "LinqaSend real money cannot be enabled in SANDBOX_CERTIFICATION mode" });
+  }
+  if (value.LINQASEND_PUBLIC_ENROLLMENT === true && mode !== "GENERAL_AVAILABILITY") {
+    context.addIssue({ code: "custom", message: "LinqaSend public enrollment is forbidden before GENERAL_AVAILABILITY" });
+  }
+  if (realMoney && (!value.LINQASEND_TOKEN_KMS_KEY_ID || !value.LINQASEND_PROVIDER_URL || !value.LINQASEND_RELEASE_GIT_SHA || !value.LINQASEND_ARTIFACT_SHA256)) {
+    context.addIssue({ code: "custom", message: "LinqaSend real money requires provider, KMS, and exact release-artifact configuration" });
+  }
+
   if (value.NODE_ENV === "production" &&
       (!value.JWT_SIGNING_PRIVATE_KEY_PEM || !value.JWT_VERIFYING_PUBLIC_KEY_PEM)) {
     context.addIssue({
@@ -157,7 +195,9 @@ const EnvSchema = z.object({
 
   requireAllOrNone([
     ["LINQASEND_PROVIDER_URL", value.LINQASEND_PROVIDER_URL],
-    ["LINQASEND_PROVIDER_TOKEN", value.LINQASEND_PROVIDER_TOKEN]
+    ["LINQASEND_PROVIDER_TOKEN", value.LINQASEND_PROVIDER_TOKEN],
+    ["LINQASEND_RELEASE_GIT_SHA", value.LINQASEND_RELEASE_GIT_SHA],
+    ["LINQASEND_ARTIFACT_SHA256", value.LINQASEND_ARTIFACT_SHA256]
   ]);
 
   requireAllOrNone([

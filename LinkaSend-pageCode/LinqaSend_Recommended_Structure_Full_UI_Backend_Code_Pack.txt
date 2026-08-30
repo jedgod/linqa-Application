@@ -1,0 +1,952 @@
+LINQASEND™ — FULL UI + DATABASE + BACKEND CODE PACK
+
+See full implementation structure below.
+
+[NOTE]
+This pack contains production-oriented reference code and architecture for:
+- Send Money → To Linqa User / Outside Linqa
+- Receive Money
+- Request Money
+- Global Contacts
+- External Recipients
+- Payment Methods
+- Transaction History
+- Transfer Limits
+- Settings
+- Recipient Resolver
+- Quote / FX Engine
+- Transfer Orchestrator
+- Rail Router
+- Risk Engine
+- Compliance Engine
+- Payment Providers
+- Payout Providers
+- Double-entry Ledger
+- Reconciliation
+- Notifications
+
+================================================================================
+MONOREPO LAYOUT
+================================================================================
+
+linqa/
+├── apps/
+│   ├── mobile/
+│   │   ├── app/(linqasend)/...
+│   │   └── src/...
+│   └── api/
+│       └── src/modules/linqasend/...
+├── packages/
+│   ├── contracts/
+│   ├── config/
+│   └── observability/
+└── db/migrations/20260815_linqasend_core.sql
+
+================================================================================
+DATABASE — db/migrations/20260815_linqasend_core.sql
+================================================================================
+
+BEGIN;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TYPE linqasend_recipient_type AS ENUM ('LINQA_USER','EXTERNAL_PERSON','EXTERNAL_BUSINESS');
+CREATE TYPE linqasend_delivery_method AS ENUM ('LINQA_PROFILE','BANK','CARD','MOBILE_MONEY','PHONE_CLAIM','EMAIL_CLAIM');
+CREATE TYPE linqasend_transfer_status AS ENUM (
+  'CREATED','QUOTE_CREATED','AWAITING_CONFIRMATION','AUTHENTICATING',
+  'COMPLIANCE_SCREENING','RISK_REVIEW','FUNDING_AUTHORIZATION','FUNDS_AUTHORIZED',
+  'TRANSFER_SUBMITTED','PROCESSING','PAYOUT_SUBMITTED','PAYOUT_PROCESSING','COMPLETED',
+  'REQUIRES_ACTION','MANUAL_REVIEW','ON_HOLD','DECLINED','CANCELED','EXPIRED',
+  'FAILED','REVERSED','REFUNDED','DISPUTED','CHARGEBACK'
+);
+CREATE TYPE linqasend_risk_decision AS ENUM ('ALLOW','ALLOW_STEP_UP','REVIEW','TEMPORARY_HOLD','DECLINE','FREEZE_ACCOUNT');
+CREATE TYPE linqasend_compliance_status AS ENUM ('NOT_STARTED','PENDING','PASSED','REVIEW','FAILED');
+
+CREATE TABLE linqasend_external_recipients (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_user_id UUID NOT NULL,
+  recipient_kind linqasend_recipient_type NOT NULL,
+  display_name TEXT NOT NULL,
+  country_code CHAR(2) NOT NULL,
+  currency CHAR(3) NOT NULL,
+  phone_hash TEXT,
+  email_hash TEXT,
+  verification_status TEXT NOT NULL DEFAULT 'PENDING',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE linqasend_recipients (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_user_id UUID NOT NULL,
+  recipient_type linqasend_recipient_type NOT NULL,
+  linqa_user_id UUID,
+  external_recipient_id UUID REFERENCES linqasend_external_recipients(id),
+  display_name TEXT NOT NULL,
+  country_code CHAR(2) NOT NULL,
+  preferred_currency CHAR(3) NOT NULL,
+  verification_status TEXT NOT NULL DEFAULT 'PENDING',
+  risk_status TEXT NOT NULL DEFAULT 'NORMAL',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE linqasend_payout_endpoints (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  external_recipient_id UUID NOT NULL REFERENCES linqasend_external_recipients(id),
+  delivery_method linqasend_delivery_method NOT NULL,
+  provider TEXT NOT NULL,
+  provider_token TEXT NOT NULL,
+  masked_display TEXT NOT NULL,
+  country_code CHAR(2) NOT NULL,
+  currency CHAR(3) NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  verified_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(provider, provider_token)
+);
+
+CREATE TABLE linqasend_payment_methods (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  provider TEXT NOT NULL,
+  provider_token TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  brand TEXT,
+  last4 CHAR(4),
+  expiry_month SMALLINT,
+  expiry_year SMALLINT,
+  billing_country CHAR(2),
+  verification_status TEXT NOT NULL DEFAULT 'PENDING',
+  is_default BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(provider, provider_token)
+);
+
+CREATE TABLE linqasend_fx_pricing_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_country CHAR(2) NOT NULL,
+  destination_country CHAR(2) NOT NULL,
+  source_currency CHAR(3) NOT NULL,
+  destination_currency CHAR(3) NOT NULL,
+  base_margin_bps INTEGER NOT NULL,
+  min_margin_bps INTEGER NOT NULL,
+  max_margin_bps INTEGER NOT NULL,
+  volatility_buffer_bps INTEGER NOT NULL DEFAULT 0,
+  liquidity_buffer_bps INTEGER NOT NULL DEFAULT 0,
+  settlement_buffer_bps INTEGER NOT NULL DEFAULT 0,
+  promotion_adjustment_bps INTEGER NOT NULL DEFAULT 0,
+  active BOOLEAN NOT NULL DEFAULT true,
+  effective_from TIMESTAMPTZ NOT NULL DEFAULT now(),
+  effective_to TIMESTAMPTZ
+);
+
+CREATE TABLE linqasend_quotes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  recipient_id UUID NOT NULL REFERENCES linqasend_recipients(id),
+  send_amount NUMERIC(20,2) NOT NULL,
+  send_currency CHAR(3) NOT NULL,
+  receive_amount NUMERIC(20,2) NOT NULL,
+  receive_currency CHAR(3) NOT NULL,
+  market_reference_rate NUMERIC(20,8),
+  provider_execution_rate NUMERIC(20,8),
+  customer_rate NUMERIC(20,8) NOT NULL,
+  margin_bps INTEGER NOT NULL DEFAULT 0,
+  sender_fee NUMERIC(20,2) NOT NULL DEFAULT 0,
+  recipient_fee NUMERIC(20,2) NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE linqasend_transfers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  recipient_id UUID NOT NULL REFERENCES linqasend_recipients(id),
+  payment_method_id UUID REFERENCES linqasend_payment_methods(id),
+  quote_id UUID NOT NULL REFERENCES linqasend_quotes(id),
+  delivery_method linqasend_delivery_method NOT NULL,
+  rail_provider TEXT,
+  status linqasend_transfer_status NOT NULL DEFAULT 'CREATED',
+  send_amount NUMERIC(20,2) NOT NULL,
+  send_currency CHAR(3) NOT NULL,
+  receive_amount NUMERIC(20,2) NOT NULL,
+  receive_currency CHAR(3) NOT NULL,
+  customer_rate NUMERIC(20,8),
+  idempotency_key TEXT NOT NULL,
+  provider_transfer_id TEXT,
+  provider_payout_id TEXT,
+  failure_code TEXT,
+  failure_message TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  UNIQUE(user_id, idempotency_key)
+);
+
+CREATE TABLE ledger_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code TEXT NOT NULL,
+  currency CHAR(3) NOT NULL,
+  account_type TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(code, currency)
+);
+
+CREATE TABLE ledger_transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reference_type TEXT NOT NULL,
+  reference_id UUID NOT NULL,
+  description TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE ledger_entries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transaction_id UUID NOT NULL REFERENCES ledger_transactions(id),
+  account_id UUID NOT NULL REFERENCES ledger_accounts(id),
+  direction TEXT NOT NULL CHECK (direction IN ('DEBIT','CREDIT')),
+  amount NUMERIC(20,2) NOT NULL CHECK (amount >= 0),
+  currency CHAR(3) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE linqasend_provider_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider TEXT NOT NULL,
+  provider_event_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ,
+  UNIQUE(provider, provider_event_id)
+);
+
+CREATE TABLE linqasend_reconciliation_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider TEXT NOT NULL,
+  reconciliation_date DATE NOT NULL,
+  expected_amount NUMERIC(20,2) NOT NULL,
+  provider_amount NUMERIC(20,2) NOT NULL,
+  delta_amount NUMERIC(20,2) NOT NULL,
+  status TEXT NOT NULL,
+  details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMIT;
+
+================================================================================
+BACKEND TYPES — apps/api/src/modules/linqasend/types.ts
+================================================================================
+
+export type RecipientType = 'LINQA_USER' | 'EXTERNAL_PERSON' | 'EXTERNAL_BUSINESS';
+export type DeliveryMethod = 'LINQA_PROFILE' | 'BANK' | 'CARD' | 'MOBILE_MONEY' | 'PHONE_CLAIM' | 'EMAIL_CLAIM';
+export type RiskDecision = 'ALLOW' | 'ALLOW_STEP_UP' | 'REVIEW' | 'TEMPORARY_HOLD' | 'DECLINE' | 'FREEZE_ACCOUNT';
+
+export interface ResolvedRecipient {
+  recipientId: string;
+  type: RecipientType;
+  displayName: string;
+  countryCode: string;
+  currency: string;
+  deliveryMethods: DeliveryMethod[];
+  preferredDeliveryMethod?: DeliveryMethod;
+}
+
+================================================================================
+RECIPIENT RESOLVER
+================================================================================
+
+@Injectable()
+export class RecipientResolverService {
+  constructor(
+    private readonly usersRepo: UsersRepository,
+    private readonly externalRepo: ExternalRecipientsRepository,
+  ) {}
+
+  async resolveLinqaUser(senderUserId: string, query: string): Promise<ResolvedRecipient | null> {
+    const user = await this.usersRepo.findVerifiedByHandlePhoneOrEmail(query);
+    if (!user || user.id === senderUserId) return null;
+    return {
+      recipientId: user.id,
+      type: 'LINQA_USER',
+      displayName: user.displayName,
+      countryCode: user.countryCode,
+      currency: user.preferredCurrency,
+      deliveryMethods: ['LINQA_PROFILE'],
+      preferredDeliveryMethod: 'LINQA_PROFILE',
+    };
+  }
+
+  async resolveExternal(senderUserId: string, externalRecipientId: string) {
+    const recipient = await this.externalRepo.findOwnedBy(senderUserId, externalRecipientId);
+    if (!recipient) return null;
+    const endpoints = await this.externalRepo.listActiveEndpoints(recipient.id);
+    return {
+      recipientId: recipient.id,
+      type: recipient.recipientKind,
+      displayName: recipient.displayName,
+      countryCode: recipient.countryCode,
+      currency: recipient.currency,
+      deliveryMethods: endpoints.map((e) => e.deliveryMethod),
+      preferredDeliveryMethod: endpoints[0]?.deliveryMethod,
+    };
+  }
+}
+
+================================================================================
+QUOTE / FX ENGINE
+================================================================================
+
+@Injectable()
+export class FxEngineService {
+  constructor(
+    private readonly rateProvider: MarketRateProvider,
+    private readonly pricingRepo: FxPricingRepository,
+  ) {}
+
+  async quote(input: {
+    sourceCountry: string;
+    destinationCountry: string;
+    sendCurrency: string;
+    receiveCurrency: string;
+    sendAmount: number;
+  }) {
+    if (input.sendAmount <= 0) throw new BadRequestException('INVALID_AMOUNT');
+
+    if (input.sendCurrency === input.receiveCurrency) {
+      return {
+        marketReferenceRate: 1,
+        providerExecutionRate: 1,
+        customerRate: 1,
+        marginBps: 0,
+        receiveAmount: input.sendAmount,
+        senderFee: 0,
+        recipientFee: 0,
+        expiresAt: new Date(Date.now() + 30000).toISOString(),
+      };
+    }
+
+    const market = await this.rateProvider.getRate(input.sendCurrency, input.receiveCurrency);
+    const rule = await this.pricingRepo.getActiveRule(input);
+    if (!rule) throw new BadRequestException('UNSUPPORTED_CORRIDOR');
+
+    const rawMargin =
+      rule.baseMarginBps +
+      rule.volatilityBufferBps +
+      rule.liquidityBufferBps +
+      rule.settlementBufferBps -
+      rule.promotionAdjustmentBps;
+
+    const marginBps = Math.min(rule.maxMarginBps, Math.max(rule.minMarginBps, rawMargin));
+    const customerRate = Number((market.providerRate * (1 - marginBps / 10000)).toFixed(8));
+
+    return {
+      marketReferenceRate: market.marketRate,
+      providerExecutionRate: market.providerRate,
+      customerRate,
+      marginBps,
+      receiveAmount: Number((input.sendAmount * customerRate).toFixed(2)),
+      senderFee: 0,
+      recipientFee: 0,
+      expiresAt: new Date(Date.now() + 30000).toISOString(),
+    };
+  }
+}
+
+================================================================================
+RISK ENGINE
+================================================================================
+
+@Injectable()
+export class RiskEngineService {
+  async assess(input: {
+    recipientIsNew: boolean;
+    paymentMethodAgeDays: number;
+    accountAgeDays: number;
+    recentPasswordReset: boolean;
+    recentDeviceChange: boolean;
+    velocity24h: number;
+  }) {
+    let score = 0;
+    const reasons: string[] = [];
+
+    if (input.recipientIsNew) { score += 15; reasons.push('NEW_RECIPIENT'); }
+    if (input.paymentMethodAgeDays < 1) { score += 20; reasons.push('NEW_PAYMENT_METHOD'); }
+    if (input.accountAgeDays < 7) { score += 15; reasons.push('YOUNG_ACCOUNT'); }
+    if (input.recentPasswordReset) { score += 20; reasons.push('RECENT_PASSWORD_RESET'); }
+    if (input.recentDeviceChange) { score += 20; reasons.push('RECENT_DEVICE_CHANGE'); }
+    if (input.velocity24h >= 5) { score += 20; reasons.push('HIGH_TRANSFER_VELOCITY'); }
+
+    let decision: RiskDecision = 'ALLOW';
+    if (score >= 80) decision = 'DECLINE';
+    else if (score >= 60) decision = 'TEMPORARY_HOLD';
+    else if (score >= 40) decision = 'REVIEW';
+    else if (score >= 20) decision = 'ALLOW_STEP_UP';
+
+    return { score, decision, reasons };
+  }
+}
+
+================================================================================
+COMPLIANCE ENGINE
+================================================================================
+
+@Injectable()
+export class ComplianceEngineService {
+  constructor(
+    private readonly kycProvider: KycProvider,
+    private readonly sanctionsProvider: SanctionsProvider,
+    private readonly amlProvider: AmlProvider,
+  ) {}
+
+  async screenTransfer(input: any) {
+    const [senderKyc, sanctions, aml] = await Promise.all([
+      this.kycProvider.checkUser(input.senderUserId),
+      this.sanctionsProvider.screenRecipient(input.recipientId),
+      this.amlProvider.evaluateTransfer(input),
+    ]);
+
+    if (!senderKyc.passed) return { status: 'FAILED', reason: 'KYC_REQUIRED' };
+    if (sanctions.match) return { status: 'REVIEW', reason: 'SANCTIONS_REVIEW' };
+    if (aml.reviewRequired) return { status: 'REVIEW', reason: 'AML_REVIEW' };
+    return { status: 'PASSED', reason: null };
+  }
+}
+
+================================================================================
+PAYMENT PROVIDER INTERFACE
+================================================================================
+
+export interface PaymentProvider {
+  readonly name: string;
+  authorizeFunding(input: {
+    transferId: string;
+    amount: number;
+    currency: string;
+    providerPaymentToken: string;
+    customerId: string;
+    idempotencyKey: string;
+  }): Promise<{
+    providerAuthorizationId: string;
+    status: 'AUTHORIZED' | 'REQUIRES_ACTION' | 'DECLINED';
+    clientActionToken?: string;
+    declineCode?: string;
+  }>;
+  captureFunding(providerAuthorizationId: string): Promise<void>;
+  refundFunding(providerAuthorizationId: string, amount: number, currency: string): Promise<{ providerRefundId: string }>;
+}
+
+================================================================================
+PAYOUT PROVIDER INTERFACE
+================================================================================
+
+export interface PayoutProvider {
+  readonly name: string;
+  supports(input: { countryCode: string; currency: string; deliveryMethod: DeliveryMethod }): boolean;
+  payout(input: {
+    transferId: string;
+    amount: number;
+    currency: string;
+    countryCode: string;
+    deliveryMethod: DeliveryMethod;
+    providerRecipientToken: string;
+    idempotencyKey: string;
+  }): Promise<{
+    providerPayoutId: string;
+    status: 'SUBMITTED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+    failureCode?: string;
+  }>;
+}
+
+================================================================================
+RAIL ROUTER
+================================================================================
+
+@Injectable()
+export class RailRouterService {
+  constructor(private readonly payoutProviders: PayoutProvider[]) {}
+
+  choose(input: { countryCode: string; currency: string; deliveryMethod: DeliveryMethod }): PayoutProvider {
+    const provider = this.payoutProviders.find((p) => p.supports(input));
+    if (!provider) throw new BadRequestException('NO_AVAILABLE_PAYOUT_RAIL');
+    return provider;
+  }
+}
+
+================================================================================
+DOUBLE-ENTRY LEDGER
+================================================================================
+
+@Injectable()
+export class LedgerService {
+  constructor(private readonly db: DatabaseService) {}
+
+  async postTransfer(input: {
+    transferId: string;
+    currency: string;
+    amount: number;
+    fundingClearingAccountId: string;
+    transferPayableAccountId: string;
+  }) {
+    const postings = [
+      { accountId: input.fundingClearingAccountId, direction: 'DEBIT', amount: input.amount, currency: input.currency },
+      { accountId: input.transferPayableAccountId, direction: 'CREDIT', amount: input.amount, currency: input.currency },
+    ] as const;
+
+    const debit = postings.filter(x => x.direction === 'DEBIT').reduce((a, x) => a + x.amount, 0);
+    const credit = postings.filter(x => x.direction === 'CREDIT').reduce((a, x) => a + x.amount, 0);
+    if (Math.abs(debit - credit) > 0.000001) throw new Error('UNBALANCED_LEDGER');
+
+    await this.db.transaction(async (tx: any) => {
+      const ledgerTx = await tx.ledgerTransactions.create({
+        referenceType: 'LINQASEND_TRANSFER',
+        referenceId: input.transferId,
+        description: 'LinqaSend funding authorization',
+      });
+      for (const posting of postings) {
+        await tx.ledgerEntries.create({ transactionId: ledgerTx.id, ...posting });
+      }
+    });
+  }
+}
+
+================================================================================
+TRANSFER ORCHESTRATOR
+================================================================================
+
+@Injectable()
+export class TransferOrchestratorService {
+  constructor(
+    private readonly transfersRepo: TransfersRepository,
+    private readonly quotesRepo: QuotesRepository,
+    private readonly risk: RiskEngineService,
+    private readonly compliance: ComplianceEngineService,
+    private readonly payments: PaymentProviderRegistry,
+    private readonly rails: RailRouterService,
+    private readonly ledger: LedgerService,
+    private readonly notifications: NotificationService,
+  ) {}
+
+  async create(input: any) {
+    const existing = await this.transfersRepo.findByIdempotency(input.userId, input.idempotencyKey);
+    if (existing) return existing;
+
+    const quote = await this.quotesRepo.findValidOwned(input.userId, input.quoteId);
+    if (!quote) throw new BadRequestException('QUOTE_EXPIRED_OR_INVALID');
+
+    return this.transfersRepo.create({
+      ...input,
+      sendAmount: quote.sendAmount,
+      sendCurrency: quote.sendCurrency,
+      receiveAmount: quote.receiveAmount,
+      receiveCurrency: quote.receiveCurrency,
+      customerRate: quote.customerRate,
+      status: 'AWAITING_CONFIRMATION',
+    });
+  }
+
+  async confirm(input: any) {
+    const transfer = await this.transfersRepo.findOwned(input.userId, input.transferId);
+    if (!transfer) throw new ForbiddenException();
+
+    await verifySingleUseTransferAuthorizationToken({
+      token: input.authorizationToken,
+      userId: input.userId,
+      transferId: input.transferId,
+      amount: transfer.sendAmount,
+      currency: transfer.sendCurrency,
+      recipientId: transfer.recipientId,
+    });
+
+    await this.transfersRepo.updateStatus(transfer.id, 'COMPLIANCE_SCREENING');
+    const complianceResult = await this.compliance.screenTransfer({
+      senderUserId: input.userId,
+      recipientId: transfer.recipientId,
+      amount: transfer.sendAmount,
+      currency: transfer.sendCurrency,
+      destinationCountry: transfer.destinationCountry,
+    });
+
+    if (complianceResult.status === 'FAILED') {
+      await this.transfersRepo.updateStatus(transfer.id, 'DECLINED');
+      return this.transfersRepo.findById(transfer.id);
+    }
+    if (complianceResult.status === 'REVIEW') {
+      await this.transfersRepo.updateStatus(transfer.id, 'MANUAL_REVIEW');
+      return this.transfersRepo.findById(transfer.id);
+    }
+
+    await this.transfersRepo.updateStatus(transfer.id, 'RISK_REVIEW');
+    const riskResult = await this.risk.assess(transfer.riskInput);
+    if (riskResult.decision === 'DECLINE') {
+      await this.transfersRepo.updateStatus(transfer.id, 'DECLINED');
+      return this.transfersRepo.findById(transfer.id);
+    }
+    if (riskResult.decision === 'REVIEW' || riskResult.decision === 'TEMPORARY_HOLD') {
+      await this.transfersRepo.updateStatus(transfer.id, 'ON_HOLD');
+      return this.transfersRepo.findById(transfer.id);
+    }
+
+    await this.transfersRepo.updateStatus(transfer.id, 'FUNDING_AUTHORIZATION');
+    const paymentProvider = this.payments.forPaymentMethod(transfer.paymentMethod);
+    const funding = await paymentProvider.authorizeFunding({
+      transferId: transfer.id,
+      amount: transfer.sendAmount,
+      currency: transfer.sendCurrency,
+      providerPaymentToken: transfer.paymentMethod.providerToken,
+      customerId: input.userId,
+      idempotencyKey: `${transfer.id}:fund`,
+    });
+
+    if (funding.status === 'REQUIRES_ACTION') {
+      await this.transfersRepo.updateStatus(transfer.id, 'REQUIRES_ACTION');
+      return { ...(await this.transfersRepo.findById(transfer.id)), clientActionToken: funding.clientActionToken };
+    }
+    if (funding.status === 'DECLINED') {
+      await this.transfersRepo.updateStatus(transfer.id, 'DECLINED');
+      return this.transfersRepo.findById(transfer.id);
+    }
+
+    await this.transfersRepo.updateStatus(transfer.id, 'FUNDS_AUTHORIZED');
+    await this.ledger.postTransfer({
+      transferId: transfer.id,
+      currency: transfer.sendCurrency,
+      amount: transfer.sendAmount,
+      fundingClearingAccountId: transfer.fundingClearingAccountId,
+      transferPayableAccountId: transfer.transferPayableAccountId,
+    });
+
+    const rail = this.rails.choose({
+      countryCode: transfer.destinationCountry,
+      currency: transfer.receiveCurrency,
+      deliveryMethod: transfer.deliveryMethod,
+    });
+
+    await this.transfersRepo.updateStatus(transfer.id, 'PAYOUT_SUBMITTED');
+    const payout = await rail.payout({
+      transferId: transfer.id,
+      amount: transfer.receiveAmount,
+      currency: transfer.receiveCurrency,
+      countryCode: transfer.destinationCountry,
+      deliveryMethod: transfer.deliveryMethod,
+      providerRecipientToken: transfer.providerRecipientToken,
+      idempotencyKey: `${transfer.id}:payout`,
+    });
+
+    await this.transfersRepo.savePayoutReference(transfer.id, rail.name, payout.providerPayoutId);
+    await this.transfersRepo.updateStatus(transfer.id, payout.status === 'COMPLETED' ? 'COMPLETED' : 'PAYOUT_PROCESSING');
+    await this.notifications.transferStatusChanged(transfer.id);
+    return this.transfersRepo.findById(transfer.id);
+  }
+}
+
+================================================================================
+API CONTROLLER SURFACE
+================================================================================
+
+GET    /v1/linqasend/home
+POST   /v1/linqasend/recipients/resolve/linqa
+POST   /v1/linqasend/recipients/resolve/external
+GET    /v1/linqasend/recipients
+POST   /v1/linqasend/external-recipients
+PATCH  /v1/linqasend/external-recipients/:id
+POST   /v1/linqasend/quotes
+GET    /v1/linqasend/payment-methods
+POST   /v1/linqasend/payment-methods/setup
+POST   /v1/linqasend/payment-methods/confirm
+DELETE /v1/linqasend/payment-methods/:id
+POST   /v1/linqasend/transfers
+POST   /v1/linqasend/transfers/:id/authorization-challenge
+POST   /v1/linqasend/transfers/:id/confirm
+GET    /v1/linqasend/transfers/:id
+GET    /v1/linqasend/transfers
+POST   /v1/linqasend/transfers/:id/cancel
+POST   /v1/linqasend/transfers/:id/refund
+POST   /v1/linqasend/requests
+GET    /v1/linqasend/requests
+POST   /v1/linqasend/requests/:id/pay
+POST   /v1/linqasend/requests/:id/decline
+GET    /v1/linqasend/limits
+GET    /v1/linqasend/settings
+PATCH  /v1/linqasend/settings
+POST   /v1/linqasend/providers/:provider/webhook
+
+================================================================================
+RECONCILIATION
+================================================================================
+
+@Injectable()
+export class ReconciliationService {
+  constructor(
+    private readonly ledgerRepo: LedgerRepository,
+    private readonly providers: ReconciliationProviderRegistry,
+    private readonly reconciliationRepo: ReconciliationRepository,
+  ) {}
+
+  async reconcileProvider(providerName: string, date: string) {
+    const provider = this.providers.get(providerName);
+    const [expected, providerReport] = await Promise.all([
+      this.ledgerRepo.sumSettlementExpected(providerName, date),
+      provider.fetchSettlementReport(date),
+    ]);
+    const delta = Number((providerReport.totalAmount - expected.totalAmount).toFixed(2));
+    const status = Math.abs(delta) < 0.01 ? 'MATCHED' : 'MISMATCH';
+    return this.reconciliationRepo.create({
+      provider: providerName,
+      reconciliationDate: date,
+      expectedAmount: expected.totalAmount,
+      providerAmount: providerReport.totalAmount,
+      deltaAmount: delta,
+      status,
+      details: { expectedCount: expected.count, providerCount: providerReport.count },
+    });
+  }
+}
+
+================================================================================
+NOTIFICATIONS
+================================================================================
+
+@Injectable()
+export class NotificationService {
+  constructor(
+    private readonly transferRepo: TransfersRepository,
+    private readonly push: PushNotificationProvider,
+  ) {}
+
+  async transferStatusChanged(transferId: string) {
+    const transfer = await this.transferRepo.findById(transferId);
+    if (!transfer) return;
+    const template = {
+      COMPLETED: { title: 'Transfer completed', body: 'Your LinqaSend transfer was successfully delivered.' },
+      PAYOUT_PROCESSING: { title: 'Transfer is on the way', body: 'Your recipient payout is processing.' },
+      ON_HOLD: { title: 'Transfer under review', body: 'Your transfer needs additional review.' },
+      FAILED: { title: 'Transfer failed', body: 'Your transfer could not be completed.' },
+    }[transfer.status];
+    if (template) await this.push.sendToUser(transfer.userId, template);
+  }
+}
+
+================================================================================
+MOBILE UI — SEND MODE SELECTOR
+================================================================================
+
+export default function SendModeScreen() {
+  const setMode = useLinqaSend((s) => s.setMode);
+  return (
+    <Screen>
+      <Text className="mt-6 text-xl font-semibold">Send Money</Text>
+      <Text className="mt-2 text-sm text-muted">Choose how you want to send.</Text>
+
+      <Pressable
+        onPress={() => {
+          setMode('LINQA_USER');
+          router.push('/(linqasend)/send/linqa-user');
+        }}
+        className="mt-6 rounded-2xl border border-purple-200 bg-purple-50 p-5"
+      >
+        <Text className="font-semibold">To Linqa User</Text>
+        <Text className="mt-1 text-sm text-muted">Send to a verified Linqa contact or @Linqa ID.</Text>
+      </Pressable>
+
+      <Pressable
+        onPress={() => {
+          setMode('OUTSIDE_LINQA');
+          router.push('/(linqasend)/send/outside');
+        }}
+        className="mt-4 rounded-2xl border border-line bg-white p-5"
+      >
+        <Text className="font-semibold">Outside Linqa</Text>
+        <Text className="mt-1 text-sm text-muted">Bank, card, mobile money, phone or email claim.</Text>
+      </Pressable>
+    </Screen>
+  );
+}
+
+================================================================================
+MOBILE UI — OUTSIDE LINQA
+================================================================================
+
+const externalMethods = [
+  ['Bank account', 'BANK'],
+  ['Debit card', 'CARD'],
+  ['Mobile money', 'MOBILE_MONEY'],
+  ['Phone claim', 'PHONE_CLAIM'],
+  ['Email claim', 'EMAIL_CLAIM'],
+] as const;
+
+export default function OutsideLinqaScreen() {
+  return (
+    <Screen>
+      <Text className="mt-6 text-xl font-semibold">Outside Linqa</Text>
+      <Text className="mt-2 text-sm text-muted">Choose how the recipient should receive the money.</Text>
+      <View className="mt-6 gap-3">
+        {externalMethods.map(([label, method]) => (
+          <Pressable
+            key={method}
+            onPress={() => router.push({ pathname: '/(linqasend)/external-recipients', params: { method } } as never)}
+            className="rounded-2xl border border-line p-4"
+          >
+            <Text className="font-medium">{label}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </Screen>
+  );
+}
+
+================================================================================
+MOBILE UI — RECEIVE MONEY
+================================================================================
+
+export default function ReceiveMoneyScreen() {
+  return (
+    <Screen>
+      <Text className="mt-6 text-xl font-semibold">Receive Money</Text>
+      <View className="mt-6 rounded-2xl border border-line p-5">
+        <Text className="text-sm text-muted">Your Linqa ID</Text>
+        <Text className="mt-2 text-2xl font-bold">@DanielLinqa</Text>
+      </View>
+      <View className="mt-4 rounded-2xl border border-line p-5">
+        <Text className="font-medium">Preferred payout</Text>
+        <Text className="mt-2 text-sm text-muted">Bank •••• 3098</Text>
+      </View>
+    </Screen>
+  );
+}
+
+================================================================================
+MOBILE UI — REQUEST MONEY
+================================================================================
+
+export default function RequestMoneyScreen() {
+  const [recipient, setRecipient] = useState('');
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+
+  return (
+    <Screen>
+      <Text className="mt-6 text-xl font-semibold">Request Money</Text>
+      <TextInput value={recipient} onChangeText={setRecipient} placeholder="Linqa user, phone or email" className="mt-6 h-12 rounded-xl border border-line px-4" />
+      <TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="0.00" className="mt-4 h-12 rounded-xl border border-line px-4" />
+      <TextInput value={note} onChangeText={setNote} placeholder="What is this for?" multiline className="mt-4 min-h-[90px] rounded-xl border border-line px-4 py-3" />
+      <Button className="mt-6">Send Request</Button>
+    </Screen>
+  );
+}
+
+================================================================================
+MOBILE UI — PAYMENT METHODS
+================================================================================
+
+export default function PaymentMethodsScreen() {
+  return (
+    <Screen>
+      <Text className="mt-6 text-xl font-semibold">Payment Methods</Text>
+      <View className="mt-6 rounded-2xl border border-purple-500 bg-purple-50 p-4">
+        <Text className="font-medium">Visa •••• 4242</Text>
+        <Text className="mt-1 text-sm text-muted">Debit card • Default</Text>
+      </View>
+      <View className="mt-3 rounded-2xl border border-line p-4">
+        <Text className="font-medium">Mastercard •••• 1111</Text>
+        <Text className="mt-1 text-sm text-muted">Credit card</Text>
+      </View>
+      <View className="mt-3 rounded-2xl border border-line p-4">
+        <Text className="font-medium">Bank •••• 3098</Text>
+        <Text className="mt-1 text-sm text-muted">ACH / bank funding</Text>
+      </View>
+    </Screen>
+  );
+}
+
+================================================================================
+MOBILE UI — AMOUNT / FX
+================================================================================
+
+export default function AmountScreen() {
+  const [amount, setAmount] = useState('500');
+  const rate = 10.638;
+  const receive = Number(amount || 0) * rate;
+  return (
+    <Screen>
+      <Text className="mt-6 text-xl font-semibold">Amount & Exchange Rate</Text>
+      <TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" className="mt-6 h-14 rounded-2xl border border-line px-4 text-2xl" />
+      <View className="mt-4 rounded-2xl border border-line p-4">
+        <Text className="text-sm text-muted">They receive</Text>
+        <Text className="mt-2 text-2xl font-bold">GHS {receive.toFixed(2)}</Text>
+      </View>
+      <View className="mt-4 rounded-2xl bg-purple-50 p-4">
+        <Text className="font-medium">1 USD = 10.6380 GHS</Text>
+        <Text className="mt-1 text-sm text-muted">Sender fee $0.00 • Recipient fee $0.00</Text>
+      </View>
+      <Button className="mt-6" onPress={() => router.push('/(linqasend)/send/review')}>Continue</Button>
+    </Screen>
+  );
+}
+
+================================================================================
+MOBILE UI — REVIEW / AUTH / TRACKING
+================================================================================
+
+export function ReviewScreen() {
+  return (
+    <Screen>
+      <Text className="mt-6 text-xl font-semibold">Review & Confirm</Text>
+      <View className="mt-6 rounded-2xl border border-line p-5">
+        <Text className="text-sm text-muted">You send</Text>
+        <Text className="mt-2 text-2xl font-bold">$500.00 USD</Text>
+      </View>
+      <View className="mt-3 rounded-2xl border border-line p-5">
+        <Text className="text-sm text-muted">Recipient receives</Text>
+        <Text className="mt-2 text-2xl font-bold">GHS 5,319.00</Text>
+      </View>
+      <View className="mt-4 rounded-2xl bg-success-50 p-4">
+        <Text className="font-medium text-success-600">$0 sender fee • $0 recipient fee</Text>
+      </View>
+      <Button className="mt-6" onPress={() => router.push('/(linqasend)/send/authenticate')}>Confirm & Continue</Button>
+    </Screen>
+  );
+}
+
+export async function authenticateAndSend() {
+  const result = await LocalAuthentication.authenticateAsync({
+    promptMessage: 'Authorize LinqaSend transfer',
+    fallbackLabel: 'Use device passcode',
+  });
+  if (!result.success) return;
+  router.replace('/(linqasend)/send/tracking');
+}
+
+================================================================================
+SECURITY RULES
+================================================================================
+
+- Never store raw PAN/CVV in Linqa database or logs.
+- Use provider-hosted tokenization.
+- Require idempotency keys for create/confirm/refund/payout retry.
+- Server is authoritative for FX quote, fees, risk, compliance, payment state, payout state and receipt.
+- Require step-up authentication for transfers.
+- Bind authorization token to user, transfer, recipient, amount, currency, quote and expiration.
+- Verify all provider webhook signatures and prevent replay.
+- Ledger is immutable; corrections use reversals.
+- Social/chat domains may initiate payment intent but may not access financial credentials or compliance results.
+- External recipient payout details should be stored as provider tokens and masked metadata.
+
+================================================================================
+PRODUCTION NEXT STEPS
+================================================================================
+
+1. Replace demo repositories with Prisma/PostgreSQL repositories.
+2. Add Redis for distributed idempotency, quote locking, authorization-token JTI consumption, and velocity counters.
+3. Add a real funding-provider adapter.
+4. Add a real payout-provider adapter.
+5. Add a real FX-rate provider.
+6. Add KYC/AML/sanctions providers.
+7. Build Money Operations Admin UI and RBAC.
+8. Add real reconciliation importer.
+9. Add queue workers for webhooks, payouts, reconciliation and notifications.
+10. Add end-to-end tests for Linqa→Linqa, Linqa→bank, Linqa→card, Linqa→mobile money, phone/email claim, quote expiry, duplicate retry, risk hold, compliance review and refunds.
+
+END OF PACK

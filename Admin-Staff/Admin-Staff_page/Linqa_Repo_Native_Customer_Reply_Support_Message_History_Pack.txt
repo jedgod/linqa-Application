@@ -1,0 +1,422 @@
+LINQA REPO-NATIVE CUSTOMER REPLY + SUPPORT MESSAGE HISTORY PACK
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Repo-Native Customer Reply + Support Message History Pack
+
+Narrow scope:
+- Fastify + principal.scopes Set
+- raw pg.Pool
+- support_cases_v2 + support_case_events_v2
+- existing hub.sendToUser() transport
+- accessToken prop
+- polling only
+
+Adds durable customer-facing support messages, GET history, POST reply,
+delivery status, audit/event writes, API client, polling hook, and composer UI.
+No SLA, attachments, specialist actions, or new realtime stack.
+
+
+====================================================================================================
+FILE: server/src/db/migrations/030_ops_customer_reply.sql
+====================================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE ops_support_message_direction AS ENUM ('CLIENT_TO_STAFF','STAFF_TO_CLIENT');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE ops_support_delivery_status AS ENUM ('PENDING','SENT','DELIVERED','FAILED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS ops_case_customer_messages_v2 (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL,
+  client_user_id uuid NOT NULL,
+  direction ops_support_message_direction NOT NULL,
+  author_user_id uuid,
+  body text NOT NULL CHECK (length(body) BETWEEN 1 AND 8000),
+  delivery_status ops_support_delivery_status NOT NULL DEFAULT 'PENDING',
+  transport_message_id text,
+  delivery_error_code text,
+  delivery_error_message text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  sent_at timestamptz,
+  delivered_at timestamptz,
+  failed_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_case_customer_messages_v2_case_created
+ON ops_case_customer_messages_v2(case_id, created_at ASC);
+
+
+====================================================================================================
+FILE: server/src/services/operations/support-reply-delivery.adapter.ts
+====================================================================================================
+export interface SupportReplyDelivery {
+  sendToClient(input:{
+    clientUserId:string;
+    caseId:string;
+    messageId:string;
+    body:string;
+  }):Promise<{accepted:boolean;transportMessageId?:string|null}>;
+}
+
+export class ExistingHubSupportReplyDelivery implements SupportReplyDelivery {
+  constructor(private hub:{sendToUser:(userId:string,envelope:unknown)=>Promise<unknown>|unknown}) {}
+
+  async sendToClient(input:{
+    clientUserId:string;
+    caseId:string;
+    messageId:string;
+    body:string;
+  }) {
+    await this.hub.sendToUser(input.clientUserId,{
+      type:"SUPPORT_CASE_REPLY",
+      caseId:input.caseId,
+      messageId:input.messageId,
+      body:input.body
+    });
+    return {accepted:true,transportMessageId:input.messageId};
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/case-messages.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+import type { SupportReplyDelivery } from "./support-reply-delivery.adapter";
+
+export class CaseMessagesService {
+  constructor(private pool:Pool,private delivery:SupportReplyDelivery) {}
+
+  async list(caseId:string) {
+    const r=await this.pool.query(
+      `SELECT
+         m.id::text,m.case_id::text AS "caseId",m.client_user_id::text AS "clientUserId",
+         m.direction::text,m.author_user_id::text AS "authorUserId",
+         COALESCE(p.display_name,CASE WHEN m.direction='CLIENT_TO_STAFF' THEN 'Client' ELSE 'Staff' END) AS "authorName",
+         m.body,m.delivery_status::text AS "deliveryStatus",
+         m.transport_message_id AS "transportMessageId",
+         m.created_at AS "createdAt",m.sent_at AS "sentAt",
+         m.delivered_at AS "deliveredAt",m.failed_at AS "failedAt"
+       FROM ops_case_customer_messages_v2 m
+       LEFT JOIN ops_staff_profiles p ON p.user_id=m.author_user_id
+       WHERE m.case_id=$1::uuid
+       ORDER BY m.created_at ASC`,
+      [caseId]
+    );
+    return r.rows;
+  }
+
+  async reply(input:{
+    caseId:string;actorUserId:string;actorScopes:string[];
+    body:string;requestId?:string|null;
+  }) {
+    const client=await this.pool.connect();
+    let inserted:any;
+
+    try {
+      await client.query("BEGIN");
+
+      // ADAPT ONLY THIS COLUMN NAME if the real client FK differs.
+      const caseR=await client.query(
+        `SELECT id::text,case_number,state::text,
+                client_user_id::text AS "clientUserId"
+         FROM support_cases_v2
+         WHERE id=$1::uuid
+         FOR UPDATE`,
+        [input.caseId]
+      );
+      if(!caseR.rowCount) throw Object.assign(new Error("CASE_NOT_FOUND"),{statusCode:404});
+      if(caseR.rows[0].state==="CLOSED") throw Object.assign(new Error("CASE_CLOSED"),{statusCode:409});
+
+      const msgR=await client.query(
+        `INSERT INTO ops_case_customer_messages_v2(
+           case_id,client_user_id,direction,author_user_id,body,delivery_status
+         ) VALUES($1::uuid,$2::uuid,'STAFF_TO_CLIENT',$3::uuid,$4,'PENDING')
+         RETURNING id::text,case_id::text AS "caseId",
+                   client_user_id::text AS "clientUserId",
+                   direction::text,author_user_id::text AS "authorUserId",
+                   body,delivery_status::text AS "deliveryStatus",
+                   created_at AS "createdAt"`,
+        [input.caseId,caseR.rows[0].clientUserId,input.actorUserId,input.body]
+      );
+      inserted=msgR.rows[0];
+
+      await client.query(
+        `INSERT INTO support_case_events_v2(case_id,event_type,actor_id,metadata,created_at)
+         VALUES($1::uuid,'CUSTOMER_REPLY_QUEUED',$2::uuid,$3::jsonb,now())`,
+        [input.caseId,input.actorUserId,JSON.stringify({messageId:inserted.id})]
+      );
+
+      await client.query(
+        `INSERT INTO ops_audit_events(
+           actor_user_id,actor_scope_snapshot,action,resource_type,
+           resource_id,reason_code,request_id,after_json
+         ) VALUES($1::uuid,$2::jsonb,'ops.case.reply','support_case_v2',
+                  $3,'CUSTOMER_REPLY',$4,$5::jsonb)`,
+        [input.actorUserId,JSON.stringify(input.actorScopes),input.caseId,input.requestId??null,JSON.stringify({messageId:inserted.id})]
+      );
+
+      await client.query("COMMIT");
+    } catch(e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    try {
+      const result=await this.delivery.sendToClient({
+        clientUserId:inserted.clientUserId,
+        caseId:input.caseId,
+        messageId:inserted.id,
+        body:inserted.body
+      });
+
+      const u=await this.pool.query(
+        `UPDATE ops_case_customer_messages_v2
+         SET delivery_status='SENT',transport_message_id=$2,sent_at=now(),
+             delivery_error_code=NULL,delivery_error_message=NULL
+         WHERE id=$1::uuid
+         RETURNING delivery_status::text AS "deliveryStatus",
+                   transport_message_id AS "transportMessageId",
+                   sent_at AS "sentAt"`,
+        [inserted.id,result.transportMessageId??inserted.id]
+      );
+
+      await this.pool.query(
+        `INSERT INTO support_case_events_v2(case_id,event_type,actor_id,metadata,created_at)
+         VALUES($1::uuid,'CUSTOMER_REPLY_SENT',$2::uuid,$3::jsonb,now())`,
+        [input.caseId,input.actorUserId,JSON.stringify({messageId:inserted.id})]
+      );
+
+      return {...inserted,...u.rows[0]};
+    } catch(e:any) {
+      const code=typeof e?.code==="string"?e.code:"DELIVERY_FAILED";
+      const message=String(e?.message??e).slice(0,1000);
+
+      await this.pool.query(
+        `UPDATE ops_case_customer_messages_v2
+         SET delivery_status='FAILED',delivery_error_code=$2,
+             delivery_error_message=$3,failed_at=now()
+         WHERE id=$1::uuid`,
+        [inserted.id,code,message]
+      );
+
+      await this.pool.query(
+        `INSERT INTO support_case_events_v2(case_id,event_type,actor_id,metadata,created_at)
+         VALUES($1::uuid,'CUSTOMER_REPLY_FAILED',$2::uuid,$3::jsonb,now())`,
+        [input.caseId,input.actorUserId,JSON.stringify({messageId:inserted.id,errorCode:code})]
+      );
+
+      throw Object.assign(new Error("CUSTOMER_REPLY_DELIVERY_FAILED"),{
+        statusCode:502,details:{messageId:inserted.id,errorCode:code}
+      });
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/routes/operations/customer-reply-routes.ts
+====================================================================================================
+import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
+import { requireScope } from "../../auth/jwt";
+import { CaseMessagesService } from "../../services/operations/case-messages.service";
+import type { SupportReplyDelivery } from "../../services/operations/support-reply-delivery.adapter";
+
+const Params=z.object({caseId:z.string().uuid()});
+const ReplyBody=z.object({body:z.string().trim().min(1).max(8000)});
+const scopes=(p:any):string[]=>p?.scopes instanceof Set?[...p.scopes]:[];
+
+export function buildCustomerReplyRoutes(pool:any,delivery:SupportReplyDelivery):FastifyPluginAsync {
+  return async function customerReplyRoutes(app) {
+    const service=new CaseMessagesService(pool,delivery);
+
+    app.get("/cases/:caseId/messages",async(request,reply)=>{
+      const p=await (app as any).authenticate(request,reply);
+      requireScope(p,"ops:case:read");
+      const {caseId}=Params.parse(request.params);
+      return service.list(caseId);
+    });
+
+    app.post("/cases/:caseId/reply",async(request,reply)=>{
+      const p=await (app as any).authenticate(request,reply);
+      requireScope(p,"ops:case:reply");
+      const {caseId}=Params.parse(request.params);
+      const body=ReplyBody.parse(request.body);
+      return reply.code(201).send(await service.reply({
+        caseId,actorUserId:p.sub,actorScopes:scopes(p),
+        body:body.body,requestId:request.id
+      }));
+    });
+  };
+}
+
+
+====================================================================================================
+FILE: server/src/routes/operations/register-customer-reply.example.ts
+====================================================================================================
+import { buildCustomerReplyRoutes } from "./customer-reply-routes";
+import { ExistingHubSupportReplyDelivery } from "../../services/operations/support-reply-delivery.adapter";
+
+export async function registerCustomerReply(app:any,pool:any,hub:any) {
+  const delivery=new ExistingHubSupportReplyDelivery(hub);
+  await app.register(buildCustomerReplyRoutes(pool,delivery));
+}
+
+
+====================================================================================================
+FILE: server/tests/operations-customer-reply.test.ts
+====================================================================================================
+import { describe,it } from "vitest";
+
+describe("repo-native customer support reply",()=>{
+  it.todo("requires ops:case:reply");
+  it.todo("persists reply before delivery");
+  it.todo("writes event and audit");
+  it.todo("uses existing hub transport");
+  it.todo("marks SENT on accepted delivery");
+  it.todo("marks FAILED but preserves audit record on delivery failure");
+  it.todo("rejects CLOSED case");
+  it.todo("message history never includes internal notes");
+});
+
+
+====================================================================================================
+FILE: clients/web/src/admin/api/customer-reply-api.ts
+====================================================================================================
+export type SupportMessage={
+  id:string;caseId:string;clientUserId:string;
+  direction:"CLIENT_TO_STAFF"|"STAFF_TO_CLIENT";
+  authorUserId?:string|null;authorName:string;body:string;
+  deliveryStatus:"PENDING"|"SENT"|"DELIVERED"|"FAILED";
+  createdAt:string;sentAt?:string|null;deliveredAt?:string|null;failedAt?:string|null;
+};
+
+async function api<T>(token:string,path:string,init?:RequestInit):Promise<T>{
+  const r=await fetch(path,{
+    ...init,
+    headers:{authorization:`Bearer ${token}`,"content-type":"application/json",...(init?.headers??{})}
+  });
+  const body=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(body.error??`HTTP_${r.status}`);
+  return body as T;
+}
+
+export const customerReplyApi={
+  list:(token:string,caseId:string)=>api<SupportMessage[]>(token,`/v1/admin/operations/cases/${caseId}/messages`),
+  reply:(token:string,caseId:string,body:string)=>api<SupportMessage>(
+    token,`/v1/admin/operations/cases/${caseId}/reply`,
+    {method:"POST",body:JSON.stringify({body})}
+  )
+};
+
+
+====================================================================================================
+FILE: clients/web/src/admin/hooks/useCustomerMessagesPolling.ts
+====================================================================================================
+import useSWR from "swr";
+import { customerReplyApi } from "../api/customer-reply-api";
+
+export function useCustomerMessagesPolling(accessToken:string,caseId:string){
+  return useSWR(
+    accessToken&&caseId?["ops:customer-messages",caseId,accessToken]:null,
+    ()=>customerReplyApi.list(accessToken,caseId),
+    {refreshInterval:5000,revalidateOnFocus:true}
+  );
+}
+
+
+====================================================================================================
+FILE: clients/web/src/admin/components/CustomerReplyPanel.tsx
+====================================================================================================
+import { useState } from "react";
+
+export function CustomerReplyPanel({messages,onReply,disabled}:{
+  messages:any[];onReply:(body:string)=>Promise<void>;disabled?:boolean;
+}){
+  const [body,setBody]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+
+  async function submit(){
+    const value=body.trim();
+    if(!value) return;
+    setBusy(true);setError("");
+    try{await onReply(value);setBody("");}
+    catch(e:any){setError(e?.message??"Reply failed");}
+    finally{setBusy(false);}
+  }
+
+  return <div className="flex min-h-[560px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70">
+    <div className="border-b border-slate-800 px-4 py-3">
+      <h3 className="font-semibold">Customer Conversation</h3>
+      <p className="mt-1 text-xs text-slate-500">Internal notes are never shown here.</p>
+    </div>
+
+    <div className="flex-1 space-y-4 overflow-y-auto p-4">
+      {messages.map(m=>{
+        const staff=m.direction==="STAFF_TO_CLIENT";
+        return <div key={m.id} className={staff?"flex justify-end":"flex justify-start"}>
+          <div className={staff
+            ?"max-w-[75%] rounded-xl bg-emerald-800/80 px-4 py-3"
+            :"max-w-[75%] rounded-xl bg-slate-800 px-4 py-3"}>
+            <div className="text-xs font-medium text-slate-300">{m.authorName}</div>
+            <div className="mt-1 whitespace-pre-wrap text-sm text-slate-100">{m.body}</div>
+            <div className="mt-2 flex justify-end gap-2 text-[10px] text-slate-400">
+              <span>{new Date(m.createdAt).toLocaleTimeString()}</span>
+              {staff&&<span>{m.deliveryStatus}</span>}
+            </div>
+          </div>
+        </div>;
+      })}
+    </div>
+
+    <div className="border-t border-slate-800 p-3">
+      <textarea
+        value={body}
+        onChange={e=>setBody(e.target.value)}
+        disabled={disabled||busy}
+        maxLength={8000}
+        placeholder={disabled?"Reply unavailable for this case.":"Reply to customer…"}
+        className="min-h-24 w-full resize-none rounded-lg border border-slate-700 bg-slate-950 p-3 text-sm"
+      />
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-xs text-slate-500">{body.length}/8000</span>
+        <button
+          disabled={disabled||busy||!body.trim()}
+          onClick={submit}
+          className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+        >
+          {busy?"Sending…":"Send Reply"}
+        </button>
+      </div>
+      {error&&<div className="mt-2 text-xs text-rose-400">{error}</div>}
+    </div>
+  </div>;
+}
+
+
+====================================================================================================
+FILE: INTEGRATION_NOTES.md
+====================================================================================================
+# Integration notes
+
+1. Register `buildCustomerReplyRoutes()` under the same `/v1/admin/operations` prefix.
+2. Instantiate `ExistingHubSupportReplyDelivery` with the real hub already used by case assignment.
+3. Confirm the actual support_cases_v2 client FK. The service currently aliases `client_user_id`.
+4. Keep internal notes separate; the messages endpoint never queries notes.
+5. Delivery occurs after DB commit:
+   - accepted -> SENT
+   - failure -> FAILED, auditable message retained
+6. Add the panel to the existing CaseWorkspacePage and refresh messages via the 5-second polling hook.
+7. Customer-originated support messages should later insert `CLIENT_TO_STAFF` rows through the real client support ingress path, not the staff preview.

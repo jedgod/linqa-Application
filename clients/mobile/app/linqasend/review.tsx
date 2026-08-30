@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { LinqaSendService, type LinqaSendQuote } from "../../services/linqasend.service";
+import { LinqaSendApiError, LinqaSendService, type LinqaSendQuote, type LinqaSendSecurityWarning, type PreparedLinqaSendTransfer } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
 import { colors, radius, spacing } from "../../theme/tokens";
 
@@ -20,7 +20,7 @@ function secondsRemaining(expiresAt: string): number {
  * confirmation, never described as "free exchange." */
 export default function LinqaSendReview() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ quote: string; recipientName: string }>();
+  const params = useLocalSearchParams<{ quote: string; recipientName: string; purposeCode?: string }>();
   const quote: LinqaSendQuote = useMemo(() => JSON.parse(params.quote), [params.quote]);
   const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
 
@@ -30,6 +30,8 @@ export default function LinqaSendReview() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ transferId: string; status: string; reason?: string; action?: string } | null>(null);
+  const [pending, setPending] = useState<PreparedLinqaSendTransfer | null>(null);
+  const [warnings, setWarnings] = useState<LinqaSendSecurityWarning[]>([]);
 
   useEffect(() => {
     const timer = setInterval(() => setRemaining(secondsRemaining(quote.expiresAt)), 1000);
@@ -51,15 +53,17 @@ export default function LinqaSendReview() {
     setBusy(true);
     setError(null);
     try {
-      const outcome = await client.createTransfer({
-        quoteId: quote.id,
-        paymentMethodId,
-        senderLegalName: "Linqa User",
-        senderCountry: "US"
-      });
+      const prepared = pending ?? await client.prepareTransferConfirmation({ quoteId: quote.id, paymentMethodId, ...(params.purposeCode ? { purposeCode: params.purposeCode } : {}) });
+      setPending(prepared);
+      const outcome = await client.submitPreparedTransfer(prepared, warnings.map((warning) => warning.code));
       setResult(outcome);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to create this transfer.");
+      if (e instanceof LinqaSendApiError && e.payload.error === "scam_warning_acknowledgement_required" && Array.isArray(e.payload.warnings)) {
+        setWarnings(e.payload.warnings as LinqaSendSecurityWarning[]);
+        setError(null);
+      } else {
+        setError(e instanceof Error ? e.message.replace(/_/g, " ").toLowerCase() : "Unable to create this transfer.");
+      }
     } finally {
       setBusy(false);
     }
@@ -130,8 +134,18 @@ export default function LinqaSendReview() {
 
         {error && <Text style={s.error}>{error}</Text>}
 
+        {warnings.length > 0 && (
+          <View style={s.warningCard} accessibilityRole="alert">
+            <Text style={s.warningTitle}>Pause and verify before sending</Text>
+            {warnings.map((warning) => (
+              <Text key={warning.code} style={s.warningText}>• {warning.code.replace(/_/g, " ").toLowerCase()}</Text>
+            ))}
+            <Text style={s.warningText}>Only continue if you know the recipient and nobody is pressuring you to send money.</Text>
+          </View>
+        )}
+
         <Pressable style={[s.button, (!paymentMethodId || remaining === 0) && s.buttonDisabled]} onPress={confirm} disabled={busy || !paymentMethodId || remaining === 0}>
-          {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={s.buttonText}>{remaining === 0 ? "Quote expired" : "Confirm & Send"}</Text>}
+          {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={s.buttonText}>{remaining === 0 ? "Quote expired" : warnings.length ? "I understand — send money" : "Securely confirm & send"}</Text>}
         </Pressable>
       </ScrollView>
     </SafeAreaView>
@@ -159,6 +173,9 @@ const s = StyleSheet.create({
   pmText: { color: colors.text, fontWeight: "700" },
   pmCheck: { color: colors.accent, fontWeight: "900" },
   error: { color: colors.danger, fontSize: 12, marginBottom: spacing.md },
+  warningCard: { backgroundColor: "#3A2B12", borderColor: "#D69E2E", borderWidth: 1, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md },
+  warningTitle: { color: "#F6C453", fontWeight: "900", marginBottom: spacing.sm },
+  warningText: { color: colors.text, fontSize: 12, lineHeight: 18, marginBottom: 4 },
   button: { backgroundColor: colors.accent, borderRadius: radius.lg, height: 54, alignItems: "center", justifyContent: "center" },
   buttonDisabled: { opacity: 0.4 },
   buttonText: { color: colors.onAccent, fontWeight: "900", fontSize: 15 },

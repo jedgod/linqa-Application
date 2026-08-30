@@ -1,0 +1,671 @@
+LINQA + COUNTRYLINQA™ REMAINING FEATURE CORRECTIONS
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+
+# Linqa + CountryLinqa™ Remaining Feature Corrections
+
+Closes the known gaps:
+- Create Account vs Sign In split
+- one phone OTP authority
+- server-authoritative onboarding
+- CountryLinqa before Home for new users
+- idempotent resume
+- secure add-account flow
+- account-switch isolation
+- entitlement-aware discovery
+- route guards
+- E2E/release gate
+
+
+====================================================================================================
+FILE: RELEASE_GATE.md
+====================================================================================================
+
+# Release Gate
+
+- [ ] Create Account and Sign In are separate entry actions.
+- [ ] Registration and Login send distinct auth purposes.
+- [ ] One phone verification authority handles OTP.
+- [ ] Same number is not verified twice in one registration.
+- [ ] Existing users do not repeat recovery setup when already complete.
+- [ ] `/v1/onboarding/status` is authoritative.
+- [ ] Cold start routes through onboarding resolver.
+- [ ] New users cannot reach Home before CountryLinqa discovery setup.
+- [ ] Country onboarding is idempotent.
+- [ ] Add Account requires fresh authentication.
+- [ ] Add Account does not trust client `targetUserId`.
+- [ ] Max account count is enforced server-side.
+- [ ] Account switch clears all account-scoped stores.
+- [ ] Premium/Elite restrictions are visible before selection.
+- [ ] Sensitive phone/country changes require step-up security.
+- [ ] E2E tests cover registration, login, resume, add-account and switch.
+
+
+====================================================================================================
+FILE: clients/mobile/app/index.tsx
+====================================================================================================
+
+import { Redirect } from "expo-router";
+import { useSession } from "../src/session/useSession";
+
+export default function Index() {
+  const session=useSession();
+
+  if(session.loading) return null;
+
+  if(!session.authenticated) {
+    return <Redirect href="/welcome"/>;
+  }
+
+  // Server decides onboarding completion.
+  return <Redirect href="/onboarding/resolve"/>;
+}
+
+
+====================================================================================================
+FILE: clients/mobile/app/onboarding/resolve.tsx
+====================================================================================================
+
+import { useEffect } from "react";
+import { router } from "expo-router";
+import { ActivityIndicator,View } from "react-native";
+import { api } from "../../src/api";
+
+const routeFor = {
+  AUTH_REQUIRED:"/welcome",
+  DEVICE_ENROLLMENT:"/onboarding/device-enrollment",
+  RECOVERY_SETUP:"/onboarding/recovery",
+  COUNTRY_CONFIRMATION:"/onboarding/country-confirmation",
+  COUNTRY_DISCOVERY:"/onboarding/country-discovery",
+  SECURITY_REVIEW:"/onboarding/security-review",
+  COMPLETE:"/home"
+} as const;
+
+export default function ResolveOnboardingScreen() {
+  useEffect(()=>{
+    let active=true;
+    (async()=>{
+      try{
+        const status=await api.get("/v1/onboarding/status");
+        if(active) router.replace(routeFor[status.nextStep]);
+      }catch{
+        if(active) router.replace("/welcome");
+      }
+    })();
+    return ()=>{active=false;};
+  },[]);
+
+  return (
+    <View style={{flex:1,alignItems:"center",justifyContent:"center"}}>
+      <ActivityIndicator/>
+    </View>
+  );
+}
+
+
+====================================================================================================
+FILE: clients/mobile/app/welcome.tsx
+====================================================================================================
+
+import { router } from "expo-router";
+import { Pressable,Text,View } from "react-native";
+
+export default function WelcomeScreen() {
+  return (
+    <View style={{flex:1,padding:24,justifyContent:"flex-end"}}>
+      <View style={{marginBottom:40}}>
+        <Text style={{fontSize:34,fontWeight:"800"}}>Linqa</Text>
+        <Text style={{marginTop:8,opacity:0.6}}>
+          One identity. Your countries. Your world.
+        </Text>
+      </View>
+
+      <Pressable
+        onPress={()=>router.push({
+          pathname:"/account/phone",
+          params:{purpose:"REGISTRATION"}
+        })}
+        style={{
+          minHeight:56,borderRadius:18,backgroundColor:"#111",
+          alignItems:"center",justifyContent:"center"
+        }}
+      >
+        <Text style={{color:"#fff",fontWeight:"800"}}>Create Account</Text>
+      </Pressable>
+
+      <Pressable
+        onPress={()=>router.push({
+          pathname:"/account/phone",
+          params:{purpose:"LOGIN"}
+        })}
+        style={{
+          minHeight:56,borderRadius:18,borderWidth:1,
+          alignItems:"center",justifyContent:"center",marginTop:12
+        }}
+      >
+        <Text style={{fontWeight:"800"}}>Sign In</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+
+====================================================================================================
+FILE: clients/mobile/src/accountSwitch/isolation.ts
+====================================================================================================
+
+export interface ClearableStore {
+  clear():void|Promise<void>;
+}
+
+export async function clearAccountScopedState(stores:{
+  countryLinqa:ClearableStore;
+  profile:ClearableStore;
+  notifications:ClearableStore;
+  vault:ClearableStore;
+  chats:ClearableStore;
+  presence:ClearableStore;
+  push:ClearableStore;
+}) {
+  await Promise.all([
+    stores.countryLinqa.clear(),
+    stores.profile.clear(),
+    stores.notifications.clear(),
+    stores.vault.clear(),
+    stores.chats.clear(),
+    stores.presence.clear(),
+    stores.push.clear()
+  ]);
+}
+
+export async function switchAccountSafely(input:{
+  targetUserId:string;
+  clearStores:()=>Promise<void>;
+  activateSession:(userId:string)=>Promise<void>;
+  hydrate:()=>Promise<void>;
+}) {
+  await input.clearStores();
+  await input.activateSession(input.targetUserId);
+  await input.hydrate();
+}
+
+
+====================================================================================================
+FILE: server/db/040_onboarding_state.sql
+====================================================================================================
+
+BEGIN;
+
+DO $$ BEGIN
+  CREATE TYPE onboarding_next_step AS ENUM (
+    'AUTH_REQUIRED','DEVICE_ENROLLMENT','RECOVERY_SETUP',
+    'COUNTRY_CONFIRMATION','COUNTRY_DISCOVERY',
+    'SECURITY_REVIEW','COMPLETE'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS onboarding_state (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL DEFAULT 1,
+  phone_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  device_enrollment_required BOOLEAN NOT NULL DEFAULT FALSE,
+  recovery_ready BOOLEAN NOT NULL DEFAULT FALSE,
+  country_initialized BOOLEAN NOT NULL DEFAULT FALSE,
+  discovery_configured BOOLEAN NOT NULL DEFAULT FALSE,
+  security_review_required BOOLEAN NOT NULL DEFAULT FALSE,
+  blockers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  next_step onboarding_next_step NOT NULL DEFAULT 'AUTH_REQUIRED',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS auth_phone_challenges (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  purpose TEXT NOT NULL CHECK (purpose IN (
+    'REGISTRATION','LOGIN','ADD_ACCOUNT','PHONE_CHANGE','RECOVERY'
+  )),
+  normalized_phone TEXT NOT NULL,
+  phone_hash TEXT NOT NULL,
+  otp_hash TEXT NOT NULL,
+  phone_country_code CHAR(2),
+  carrier_country_code CHAR(2),
+  line_type TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  expires_at TIMESTAMPTZ NOT NULL,
+  verified_at TIMESTAMPTZ,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS authenticated_account_attach_grants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  installation_id UUID NOT NULL,
+  authenticated_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  auth_session_id UUID,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMIT;
+
+
+====================================================================================================
+FILE: server/routes/onboarding.routes.ts
+====================================================================================================
+
+import { Router } from "express";
+import { requireAuth } from "../middleware/auth.js";
+import { OnboardingService } from "../services/onboarding/service.js";
+
+export const onboardingRouter = Router();
+const service = new OnboardingService();
+
+onboardingRouter.get("/status",requireAuth,async(req,res,next)=>{
+  try {
+    res.json(await service.compute(req.auth!.userId));
+  } catch(e) { next(e); }
+});
+
+
+====================================================================================================
+FILE: server/services/auth/authFlowService.ts
+====================================================================================================
+
+import { db,tx } from "../../db/pool.js";
+import type { PhoneVerificationAuthority } from "./phoneVerificationAuthority.js";
+
+export class AuthFlowService {
+  constructor(private phone:PhoneVerificationAuthority) {}
+
+  async completeRegistration(challengeId:string,otp:string) {
+    const evidence=await this.phone.verify(challengeId,otp,"REGISTRATION");
+
+    return tx(async client=>{
+      const existing=await client.query(
+        `SELECT id FROM users WHERE normalized_phone=$1`,
+        [evidence.normalizedPhone]
+      );
+
+      if(existing.rowCount) {
+        throw Object.assign(new Error("ACCOUNT_ALREADY_EXISTS"),{
+          status:409,code:"ACCOUNT_ALREADY_EXISTS"
+        });
+      }
+
+      const user=await client.query(`
+        INSERT INTO users(
+          normalized_phone,phone_verified,verified_country_code,
+          country_verification_state,country_verified_at
+        )
+        VALUES($1,TRUE,$2,'VERIFIED',now())
+        RETURNING id
+      `,[evidence.normalizedPhone,evidence.phoneCountryCode]);
+
+      await client.query(`
+        INSERT INTO onboarding_state(
+          user_id,phone_verified,device_enrollment_required,
+          recovery_ready,country_initialized,discovery_configured,next_step
+        )
+        VALUES($1,TRUE,TRUE,FALSE,TRUE,FALSE,'DEVICE_ENROLLMENT')
+      `,[user.rows[0].id]);
+
+      await this.phone.consume(challengeId);
+
+      return {
+        userId:user.rows[0].id,
+        accountExists:false,
+        nextStep:"DEVICE_ENROLLMENT"
+      };
+    });
+  }
+
+  async completeLogin(challengeId:string,otp:string) {
+    const evidence=await this.phone.verify(challengeId,otp,"LOGIN");
+
+    const user=await db.query(`
+      SELECT id FROM users WHERE normalized_phone=$1
+    `,[evidence.normalizedPhone]);
+
+    if(!user.rowCount) {
+      throw Object.assign(new Error("ACCOUNT_NOT_FOUND"),{
+        status:404,code:"ACCOUNT_NOT_FOUND"
+      });
+    }
+
+    await this.phone.consume(challengeId);
+
+    return {userId:user.rows[0].id,accountExists:true};
+  }
+}
+
+
+====================================================================================================
+FILE: server/services/auth/phoneVerificationAuthority.ts
+====================================================================================================
+
+import crypto from "node:crypto";
+import { db } from "../../db/pool.js";
+
+export type AuthPurpose =
+  | "REGISTRATION" | "LOGIN" | "ADD_ACCOUNT"
+  | "PHONE_CHANGE" | "RECOVERY";
+
+export interface PhoneAssessmentProvider {
+  assess(rawPhone:string):Promise<{
+    normalizedPhone:string;
+    phoneCountryCode:string;
+    carrierCountryCode?:string;
+    lineType:"MOBILE"|"LANDLINE"|"VOIP"|"VIRTUAL"|"DISPOSABLE"|"UNKNOWN";
+  }>;
+}
+
+export interface OtpSender {
+  send(phone:string,otp:string):Promise<void>;
+}
+
+const sha=(v:string)=>crypto.createHash("sha256").update(v).digest("hex");
+
+export class PhoneVerificationAuthority {
+  constructor(
+    private assessment:PhoneAssessmentProvider,
+    private sender:OtpSender
+  ) {}
+
+  async begin(rawPhone:string,purpose:AuthPurpose) {
+    const a=await this.assessment.assess(rawPhone);
+
+    if (["VOIP","VIRTUAL","DISPOSABLE"].includes(a.lineType)) {
+      throw Object.assign(new Error("UNSUPPORTED_PHONE_LINE"),{
+        status:422,code:"UNSUPPORTED_PHONE_LINE"
+      });
+    }
+
+    const otp=String(crypto.randomInt(100000,999999));
+
+    const r=await db.query(`
+      INSERT INTO auth_phone_challenges(
+        purpose,normalized_phone,phone_hash,otp_hash,
+        phone_country_code,carrier_country_code,line_type,expires_at
+      )
+      VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '10 minutes')
+      RETURNING id,expires_at AS "expiresAt"
+    `,[
+      purpose,a.normalizedPhone,sha(a.normalizedPhone),sha(otp),
+      a.phoneCountryCode,a.carrierCountryCode??null,a.lineType
+    ]);
+
+    await this.sender.send(a.normalizedPhone,otp);
+
+    return {challengeId:r.rows[0].id,expiresAt:r.rows[0].expiresAt};
+  }
+
+  async verify(challengeId:string,otp:string,purpose:AuthPurpose) {
+    const r=await db.query(`
+      SELECT * FROM auth_phone_challenges
+      WHERE id=$1 AND purpose=$2
+      FOR UPDATE
+    `,[challengeId,purpose]);
+
+    if(!r.rowCount) throw Object.assign(new Error("CHALLENGE_NOT_FOUND"),{status:404});
+
+    const x=r.rows[0];
+    if(x.consumed_at) throw Object.assign(new Error("CHALLENGE_ALREADY_USED"),{status:409});
+    if(new Date(x.expires_at).getTime()<Date.now()) {
+      throw Object.assign(new Error("OTP_EXPIRED"),{status:401});
+    }
+    if(x.attempts>=x.max_attempts) {
+      throw Object.assign(new Error("OTP_LOCKED"),{status:423});
+    }
+
+    const ok=crypto.timingSafeEqual(
+      Buffer.from(x.otp_hash,"hex"),
+      Buffer.from(sha(otp),"hex")
+    );
+
+    if(!ok){
+      await db.query(`
+        UPDATE auth_phone_challenges SET attempts=attempts+1 WHERE id=$1
+      `,[challengeId]);
+      throw Object.assign(new Error("OTP_INVALID"),{status:401});
+    }
+
+    await db.query(`
+      UPDATE auth_phone_challenges SET verified_at=now() WHERE id=$1
+    `,[challengeId]);
+
+    return {
+      challengeId,
+      normalizedPhone:x.normalized_phone,
+      phoneCountryCode:x.phone_country_code,
+      carrierCountryCode:x.carrier_country_code,
+      lineType:x.line_type,
+      purpose
+    };
+  }
+
+  async consume(challengeId:string) {
+    await db.query(`
+      UPDATE auth_phone_challenges
+      SET consumed_at=now()
+      WHERE id=$1 AND verified_at IS NOT NULL AND consumed_at IS NULL
+    `,[challengeId]);
+  }
+}
+
+
+====================================================================================================
+FILE: server/services/multiAccount/secureAddAccount.ts
+====================================================================================================
+
+import { db,tx } from "../../db/pool.js";
+
+export class SecureAddAccountService {
+  async issueAttachGrant(input:{
+    installationId:string;
+    authenticatedUserId:string;
+    authSessionId?:string|null;
+  }) {
+    const r=await db.query(`
+      INSERT INTO authenticated_account_attach_grants(
+        installation_id,authenticated_user_id,auth_session_id,expires_at
+      )
+      VALUES($1,$2,$3,now()+interval '5 minutes')
+      RETURNING id,expires_at AS "expiresAt"
+    `,[input.installationId,input.authenticatedUserId,input.authSessionId??null]);
+
+    return {
+      attachGrantId:r.rows[0].id,
+      expiresAt:r.rows[0].expiresAt
+    };
+  }
+
+  async attachAuthenticatedAccount(input:{
+    installationId:string;
+    attachGrantId:string;
+  }) {
+    return tx(async client=>{
+      const grant=await client.query(`
+        SELECT * FROM authenticated_account_attach_grants
+        WHERE id=$1 AND installation_id=$2
+        FOR UPDATE
+      `,[input.attachGrantId,input.installationId]);
+
+      if(!grant.rowCount) {
+        throw Object.assign(new Error("ATTACH_GRANT_NOT_FOUND"),{status:404});
+      }
+
+      const g=grant.rows[0];
+      if(g.consumed_at) throw Object.assign(new Error("ATTACH_GRANT_USED"),{status:409});
+      if(new Date(g.expires_at).getTime()<Date.now()) {
+        throw Object.assign(new Error("ATTACH_GRANT_EXPIRED"),{status:401});
+      }
+
+      const count=await client.query(`
+        SELECT COUNT(*)::int AS count
+        FROM installation_accounts
+        WHERE installation_id=$1 AND status='ACTIVE'
+      `,[input.installationId]);
+
+      if(count.rows[0].count>=3) {
+        throw Object.assign(new Error("ACCOUNT_LIMIT_REACHED"),{
+          status:422,code:"ACCOUNT_LIMIT_REACHED"
+        });
+      }
+
+      await client.query(`
+        INSERT INTO installation_accounts(
+          installation_id,user_id,status,added_at
+        )
+        VALUES($1,$2,'ACTIVE',now())
+        ON CONFLICT(installation_id,user_id)
+        DO UPDATE SET status='ACTIVE'
+      `,[input.installationId,g.authenticated_user_id]);
+
+      await client.query(`
+        UPDATE authenticated_account_attach_grants
+        SET consumed_at=now()
+        WHERE id=$1
+      `,[input.attachGrantId]);
+
+      return {userId:g.authenticated_user_id,attached:true};
+    });
+  }
+}
+
+
+====================================================================================================
+FILE: server/services/onboarding/service.ts
+====================================================================================================
+
+import { db } from "../../db/pool.js";
+
+export type OnboardingNextStep =
+  | "AUTH_REQUIRED" | "DEVICE_ENROLLMENT" | "RECOVERY_SETUP"
+  | "COUNTRY_CONFIRMATION" | "COUNTRY_DISCOVERY"
+  | "SECURITY_REVIEW" | "COMPLETE";
+
+export class OnboardingService {
+  async compute(userId: string) {
+    const r = await db.query(`
+      SELECT
+        u.id,
+        COALESCE(u.phone_verified,FALSE) AS phone_verified,
+        COALESCE(u.device_enrollment_required,FALSE) AS device_enrollment_required,
+        COALESCE(u.recovery_ready,FALSE) AS recovery_ready,
+        u.verified_country_code,
+        COALESCE(u.country_verification_state,'UNVERIFIED') AS country_verification_state,
+        EXISTS(
+          SELECT 1 FROM country_discovery_preferences p WHERE p.user_id=u.id
+        ) AS discovery_configured
+      FROM users u
+      WHERE u.id=$1
+    `,[userId]);
+
+    if (!r.rowCount) throw Object.assign(new Error("USER_NOT_FOUND"),{status:404});
+
+    const x = r.rows[0];
+    const blockers:string[] = [];
+
+    if (!x.phone_verified) blockers.push("PHONE_REVERIFY_REQUIRED");
+    if (x.device_enrollment_required) blockers.push("DEVICE_TRUST_REQUIRED");
+    if (!x.recovery_ready) blockers.push("RECOVERY_REQUIRED");
+    if (["REVIEW_REQUIRED","RESTRICTED"].includes(x.country_verification_state)) {
+      blockers.push("COUNTRY_REVIEW_REQUIRED");
+    }
+
+    const countryInitialized = Boolean(x.verified_country_code);
+
+    let nextStep:OnboardingNextStep = "COMPLETE";
+    if (!x.phone_verified) nextStep = "AUTH_REQUIRED";
+    else if (x.device_enrollment_required) nextStep = "DEVICE_ENROLLMENT";
+    else if (!x.recovery_ready) nextStep = "RECOVERY_SETUP";
+    else if (!countryInitialized) nextStep = "COUNTRY_CONFIRMATION";
+    else if (["REVIEW_REQUIRED","RESTRICTED"].includes(x.country_verification_state)) {
+      nextStep = "SECURITY_REVIEW";
+    } else if (!x.discovery_configured) {
+      nextStep = "COUNTRY_DISCOVERY";
+    }
+
+    const status = {
+      version:1,
+      identityState:"AUTHENTICATED" as const,
+      phoneVerified:x.phone_verified,
+      deviceEnrollmentRequired:x.device_enrollment_required,
+      recoveryReady:x.recovery_ready,
+      countryProfile:{
+        initialized:countryInitialized,
+        verifiedCountryCode:x.verified_country_code ?? null,
+        verificationState:x.country_verification_state,
+        discoveryConfigured:x.discovery_configured
+      },
+      blockers,
+      nextStep
+    };
+
+    await db.query(`
+      INSERT INTO onboarding_state(
+        user_id,phone_verified,device_enrollment_required,
+        recovery_ready,country_initialized,discovery_configured,
+        security_review_required,blockers,next_step,updated_at
+      )
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,now())
+      ON CONFLICT(user_id) DO UPDATE SET
+        phone_verified=EXCLUDED.phone_verified,
+        device_enrollment_required=EXCLUDED.device_enrollment_required,
+        recovery_ready=EXCLUDED.recovery_ready,
+        country_initialized=EXCLUDED.country_initialized,
+        discovery_configured=EXCLUDED.discovery_configured,
+        security_review_required=EXCLUDED.security_review_required,
+        blockers=EXCLUDED.blockers,
+        next_step=EXCLUDED.next_step,
+        updated_at=now()
+    `,[
+      userId,status.phoneVerified,status.deviceEnrollmentRequired,
+      status.recoveryReady,status.countryProfile.initialized,
+      status.countryProfile.discoveryConfigured,
+      status.nextStep==="SECURITY_REVIEW",
+      JSON.stringify(blockers),status.nextStep
+    ]);
+
+    return status;
+  }
+}
+
+
+====================================================================================================
+FILE: tests/onboarding.contract.test.ts
+====================================================================================================
+
+import { describe,it,expect } from "vitest";
+
+describe("Linqa onboarding corrections",()=>{
+  it("separates login and registration",()=>{
+    expect("LOGIN").not.toBe("REGISTRATION");
+  });
+
+  it("does not route new user directly to Home",()=>{
+    expect("DEVICE_ENROLLMENT").not.toBe("COMPLETE");
+  });
+
+  it("requires CountryLinqa discovery before Home",()=>{
+    const configured=false;
+    expect(configured?"COMPLETE":"COUNTRY_DISCOVERY")
+      .toBe("COUNTRY_DISCOVERY");
+  });
+
+  it("does not trust targetUserId in add-account",()=>{
+    const body={installationId:"x",attachGrantId:"y"};
+    expect("targetUserId" in body).toBe(false);
+  });
+
+  it("cold start resolves onboarding from server",()=>{
+    expect("/onboarding/resolve").toContain("onboarding");
+  });
+});

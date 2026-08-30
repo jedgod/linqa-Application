@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { SafeAreaView, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { BootstrapAuthService } from "../../services/bootstrap-auth.service";
+import { MobileHubService } from "../../services/mobile-hub.service";
 import { generateDeviceKeyPair, restoreDeviceKeyPair, canonicalEnrollmentDigest, signEnrollmentProof, base64ToBytes, bytesToBase64 } from "../../crypto/device-enrollment-proof";
 import { AccountSecureStorage } from "../../account/AccountSecureStorage";
 import { AccountSessionStore } from "../../account/AccountSessionStore";
@@ -95,10 +97,16 @@ export default function SignUpVerifyScreen() {
       );
       await cacheInstallationServerId(installation.id);
       const attached = await installationApi.addAuthenticatedAccount(installation.id);
+      const fallbackName = params.phone ? `Linqa ${params.phone.slice(-4)}` : "Linqa account";
+      const displayName = await new MobileHubService(API, async () => token)
+        .loadHub()
+        .then((hub) => hub.profile.displayName || fallbackName)
+        .catch(() => fallbackName);
       addAndActivate({
         userId: challenge.userId,
         slot: attached.accountSlot as 1 | 2 | 3,
-        displayName: params.phone ? `Linqa ${params.phone.slice(-4)}` : "Linqa account"
+        displayName,
+        phoneSuffix: params.phone?.slice(-4)
       });
       router.replace("/onboarding/resolve");
     } catch (cause) {

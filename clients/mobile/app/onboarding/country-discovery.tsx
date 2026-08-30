@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons"; import { useRouter } from "expo-router";
 import { CountryLinqaService, type CountryLinqaPreferences, type DiscoveryMode } from "../../services/countrylinqa.service"; import { accessTokenProvider } from "../../services/session"; import { PrimaryButton } from "../../components/PrimaryButton"; import { ErrorBanner } from "../../components/ErrorBanner";
 const API=process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";

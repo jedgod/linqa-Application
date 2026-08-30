@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { SafeAreaView, StyleSheet, TextInput, View } from "react-native";
+import { StyleSheet, TextInput, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { accessTokenProvider } from "../../services/session";
 import { ScreenHeader } from "../../components/ScreenHeader";

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { CountryLinqaService, type CountryLinqaPreferences } from "../../services/countrylinqa.service";
 import { accessTokenProvider } from "../../services/session";
@@ -46,7 +47,7 @@ export default function CountryLinqaWorldScreen() {
             ["🏬", "Businesses"],
             ["🎉", "Events"],
             ["🏘", "Communities"],
-            ["🌍", "Countries"],
+            ["⚙", "Discovery Settings"],
           ].map(([icon, label]) => (
             <Pressable key={label as string} style={styles.gridItem} onPress={() => {
               const routes: Record<string, string> = {
@@ -55,7 +56,7 @@ export default function CountryLinqaWorldScreen() {
                 Businesses: "/countrylinqa/list?kind=businesses&title=Businesses",
                 Events: "/countrylinqa/list?kind=events&title=Events",
                 Communities: "/countrylinqa/list?kind=communities&title=Communities",
-                Countries: "/settings/countrylinqa"
+                "Discovery Settings": "/settings/countrylinqa"
               };
               router.push(routes[label as string] as never);
             }}>

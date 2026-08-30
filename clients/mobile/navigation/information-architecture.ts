@@ -104,8 +104,8 @@ export const LINQA_HUB_SERVICES: readonly HubService[] = [
   { key: "send", title: "LinqaSend", description: "Transfers, recipients and activity", icon: "paper-plane-outline", color: "#E86B22", route: "/linqasend", group: "Money & Business" },
   { key: "wallet", title: "Wallet", description: "Cards, passes and identity", icon: "wallet-outline", color: "#4F6EF7", route: "/modules/wallet", group: "Money & Business" },
   { key: "enterprise", title: "Business", description: "Teams, policies and administration", icon: "business-outline", color: "#344563", route: "/modules/enterprise", group: "Money & Business" },
-  { key: "privacy", title: "Privacy", description: "Audience and data controls", icon: "eye-off-outline", color: "#5966E9", route: "/settings/privacy", group: "Safety & Settings" },
-  { key: "security", title: "Security", description: "Devices, passkeys and encryption", icon: "shield-checkmark-outline", color: "#11A778", route: "/security", group: "Safety & Settings" },
+  { key: "privacy", title: "Privacy", description: "Audience and data controls", icon: "eye-off-outline", color: "#5966E9", route: "/privacy-center", group: "Safety & Settings" },
+  { key: "security", title: "Security", description: "Devices, passkeys and encryption", icon: "shield-checkmark-outline", color: "#11A778", route: "/modules/security", group: "Safety & Settings" },
   { key: "settings", title: "Settings", description: "Account, storage and accessibility", icon: "settings-outline", color: "#65758B", route: "/(tabs)/settings", group: "Safety & Settings" }
 ];
 

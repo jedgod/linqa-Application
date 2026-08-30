@@ -1,0 +1,3142 @@
+
+================================================================================
+LINQASEND™ — IMPLEMENTATION CLOSURE & PRODUCTION CERTIFICATION PACK v6
+Final Integration / Release Closure Layer
+Format: Notepad-friendly TXT
+================================================================================
+
+PURPOSE
+--------------------------------------------------------------------------------
+This pack turns LinqaSend v3/v4/v5 from architecture into implementation closure.
+
+It covers:
+1. Real provider-adapter architecture
+2. Production database repository implementations
+3. Bank-statement ingestion
+4. Provider settlement-report ingestion
+5. Physical / live transaction certification harness
+6. Reconciliation failure-injection tests
+7. Exact-SHA evidence binding
+8. Evidence freshness
+9. Mock/skipped-test detection
+10. Corridor-by-corridor production certification
+11. Provider/country release gates
+12. RC promotion / GA blocking
+13. Operations sign-off
+14. Deployment manifest
+15. Final readiness matrix
+
+STACK ASSUMPTIONS
+--------------------------------------------------------------------------------
+- Node.js / TypeScript
+- PostgreSQL
+- Redis
+- Existing Linqa auth
+- v3 Capability Engine
+- v4 Security/Fraud Defense
+- v5 Settlement/Treasury/Safeguarding/Reconciliation
+- CI/CD with GitHub Actions or equivalent
+- Docker/Kubernetes/VM compatible
+================================================================================
+
+
+================================================================================
+01. REPOSITORY LAYOUT
+================================================================================
+
+linqa/
+├── apps/server/src/services/linqasend/closure-v6/
+│   ├── closure-v6.module.ts
+│   ├── provider/
+│   │   ├── funding-provider.adapter.ts
+│   │   ├── payout-provider.adapter.ts
+│   │   ├── fx-provider.adapter.ts
+│   │   ├── settlement-provider.adapter.ts
+│   │   ├── webhook-provider.adapter.ts
+│   │   ├── provider-registry.service.ts
+│   │   └── examples/
+│   │       ├── stripe-funding.adapter.ts
+│   │       ├── adyen-funding.adapter.ts
+│   │       ├── bank-payout.adapter.ts
+│   │       └── mobile-money.adapter.ts
+│   │
+│   ├── repositories/
+│   │   ├── pg-base.repository.ts
+│   │   ├── transfer.repository.pg.ts
+│   │   ├── quote.repository.pg.ts
+│   │   ├── capability.repository.pg.ts
+│   │   ├── ledger.repository.pg.ts
+│   │   ├── settlement.repository.pg.ts
+│   │   ├── reconciliation.repository.pg.ts
+│   │   └── audit.repository.pg.ts
+│   │
+│   ├── ingestion/
+│   │   ├── bank-statement.types.ts
+│   │   ├── bank-statement.ingestor.ts
+│   │   ├── csv-bank-statement.parser.ts
+│   │   ├── mt940-bank-statement.parser.ts
+│   │   ├── camt053-bank-statement.parser.ts
+│   │   ├── provider-report.ingestor.ts
+│   │   └── ingestion-dedupe.service.ts
+│   │
+│   ├── certification/
+│   │   ├── physical-transaction.certifier.ts
+│   │   ├── corridor-certification.service.ts
+│   │   ├── provider-certification.service.ts
+│   │   ├── evidence-binder.service.ts
+│   │   ├── evidence-freshness.service.ts
+│   │   ├── release-manifest.service.ts
+│   │   └── ga-gate.service.ts
+│   │
+│   ├── chaos/
+│   │   ├── reconciliation-failure.injector.ts
+│   │   ├── provider-failure.injector.ts
+│   │   ├── webhook-replay.injector.ts
+│   │   └── ledger-corruption.detector.ts
+│   │
+│   ├── workers/
+│   │   ├── bank-ingestion.worker.ts
+│   │   ├── provider-report.worker.ts
+│   │   ├── evidence-freshness.worker.ts
+│   │   └── corridor-recertification.worker.ts
+│   │
+│   └── closure-v6.controller.ts
+│
+├── scripts/linqasend/
+│   ├── certify-corridor.ts
+│   ├── certify-provider.ts
+│   ├── bind-evidence.ts
+│   ├── verify-evidence.ts
+│   ├── verify-no-skips.ts
+│   ├── verify-no-mocks.ts
+│   ├── run-physical-certification.ts
+│   ├── run-reconciliation-chaos.ts
+│   └── promote-rc.ts
+│
+├── .github/workflows/
+│   └── linqasend-production-certification.yml
+│
+└── server/migrations/
+    └── 20260820_linqasend_closure_v6.sql
+
+
+================================================================================
+02. PROVIDER ADAPTER CONTRACTS
+================================================================================
+
+export interface FundingAuthorizationRequest {
+  transferId: string;
+  fundingSourceToken: string;
+  amountMinor: bigint;
+  currency: string;
+  idempotencyKey: string;
+  returnUrl?: string;
+}
+
+export interface FundingAuthorizationResult {
+  status:
+    | "AUTHORIZED"
+    | "REQUIRES_ACTION"
+    | "DECLINED"
+    | "FAILED";
+
+  reference?: string;
+  clientAction?: unknown;
+  failureCode?: string;
+}
+
+export interface FundingProviderAdapter {
+  readonly providerId: string;
+
+  authorize(
+    input: FundingAuthorizationRequest,
+  ): Promise<FundingAuthorizationResult>;
+
+  capture?(input: {
+    reference: string;
+    amountMinor: bigint;
+    currency: string;
+    idempotencyKey: string;
+  }): Promise<{
+    status: "CAPTURED" | "FAILED";
+    reference: string;
+  }>;
+
+  refund(input: {
+    reference: string;
+    amountMinor: bigint;
+    currency: string;
+    idempotencyKey: string;
+  }): Promise<{
+    status: "REFUNDED" | "FAILED";
+    reference: string;
+  }>;
+}
+
+
+export interface PayoutProviderAdapter {
+  readonly providerId: string;
+
+  payout(input: {
+    transferId: string;
+    recipientToken: string;
+    amountMinor: bigint;
+    currency: string;
+    idempotencyKey: string;
+  }): Promise<{
+    status:
+      | "SUBMITTED"
+      | "PROCESSING"
+      | "COMPLETED"
+      | "FAILED";
+
+    reference: string;
+    failureCode?: string;
+  }>;
+}
+
+
+export interface FxProviderAdapter {
+  readonly providerId: string;
+
+  getExecutableRate(input: {
+    sourceCurrency: string;
+    destinationCurrency: string;
+    amountMinor: bigint;
+  }): Promise<{
+    marketReferenceRate: string;
+    providerExecutionRate: string;
+    quoteReference: string;
+    expiresAt: Date;
+  }>;
+
+  hedge?(input: {
+    sourceCurrency: string;
+    destinationCurrency: string;
+    destinationAmountMinor: bigint;
+    reference: string;
+  }): Promise<{
+    reference: string;
+    status: "HEDGED" | "FAILED";
+  }>;
+}
+
+
+export interface SettlementProviderAdapter {
+  readonly providerId: string;
+
+  submitSettlementBatch(input: {
+    batchId: string;
+    currency: string;
+    totalAmountMinor: bigint;
+    checksum: string;
+    items: Array<{
+      instructionId: string;
+      amountMinor: bigint;
+    }>;
+  }): Promise<{
+    reference: string;
+    status:
+      | "SUBMITTED"
+      | "ACKNOWLEDGED"
+      | "FAILED";
+  }>;
+}
+
+
+export interface WebhookProviderAdapter {
+  readonly providerId: string;
+  readonly timestampToleranceMs: number;
+
+  parseAndVerify(input: {
+    rawBody: Buffer;
+    headers:
+      Record<
+        string,
+        string | string[] | undefined
+      >;
+  }): Promise<{
+    signatureValid: boolean;
+    signedTimestamp: Date;
+    eventId: string;
+    eventType: string;
+    nextState?: string;
+    reference?: string;
+    payload: unknown;
+  }>;
+}
+
+
+================================================================================
+03. PROVIDER REGISTRY
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class ProviderRegistryService {
+  private funding =
+    new Map<
+      string,
+      FundingProviderAdapter
+    >();
+
+  private payout =
+    new Map<
+      string,
+      PayoutProviderAdapter
+    >();
+
+  private fx =
+    new Map<
+      string,
+      FxProviderAdapter
+    >();
+
+  private settlement =
+    new Map<
+      string,
+      SettlementProviderAdapter
+    >();
+
+  registerFunding(
+    adapter:
+      FundingProviderAdapter,
+  ) {
+    this.funding.set(
+      adapter.providerId,
+      adapter,
+    );
+  }
+
+  registerPayout(
+    adapter:
+      PayoutProviderAdapter,
+  ) {
+    this.payout.set(
+      adapter.providerId,
+      adapter,
+    );
+  }
+
+  registerFx(
+    adapter:
+      FxProviderAdapter,
+  ) {
+    this.fx.set(
+      adapter.providerId,
+      adapter,
+    );
+  }
+
+  registerSettlement(
+    adapter:
+      SettlementProviderAdapter,
+  ) {
+    this.settlement.set(
+      adapter.providerId,
+      adapter,
+    );
+  }
+
+  getFunding(
+    providerId: string,
+  ) {
+    const item =
+      this.funding.get(
+        providerId,
+      );
+
+    if (!item) {
+      throw new Error(
+        `FUNDING_PROVIDER_NOT_REGISTERED:${providerId}`,
+      );
+    }
+
+    return item;
+  }
+
+  getPayout(
+    providerId: string,
+  ) {
+    const item =
+      this.payout.get(
+        providerId,
+      );
+
+    if (!item) {
+      throw new Error(
+        `PAYOUT_PROVIDER_NOT_REGISTERED:${providerId}`,
+      );
+    }
+
+    return item;
+  }
+
+  getFx(
+    providerId: string,
+  ) {
+    const item =
+      this.fx.get(
+        providerId,
+      );
+
+    if (!item) {
+      throw new Error(
+        `FX_PROVIDER_NOT_REGISTERED:${providerId}`,
+      );
+    }
+
+    return item;
+  }
+
+  getSettlement(
+    providerId: string,
+  ) {
+    const item =
+      this.settlement.get(
+        providerId,
+      );
+
+    if (!item) {
+      throw new Error(
+        `SETTLEMENT_PROVIDER_NOT_REGISTERED:${providerId}`,
+      );
+    }
+
+    return item;
+  }
+}
+
+
+================================================================================
+04. EXAMPLE TOKENIZED CARD FUNDING ADAPTER
+FILE: provider/examples/stripe-funding.adapter.ts
+================================================================================
+
+// This is an adapter pattern, not a hard-coded dependency.
+// Provider SDK/API versions must be pinned and verified at integration time.
+
+export class StripeFundingAdapter
+  implements FundingProviderAdapter
+{
+  readonly providerId =
+    "stripe";
+
+  constructor(
+    private readonly client:
+      StripeCompatibleClient,
+  ) {}
+
+  async authorize(
+    input:
+      FundingAuthorizationRequest,
+  ): Promise<FundingAuthorizationResult> {
+    const result =
+      await this.client.createPaymentIntent(
+        {
+          amount:
+            safeBigIntToProviderInteger(
+              input.amountMinor,
+            ),
+
+          currency:
+            input.currency.toLowerCase(),
+
+          payment_method:
+            input.fundingSourceToken,
+
+          confirmation_method:
+            "automatic",
+
+          confirm:
+            true,
+
+          metadata: {
+            linqa_transfer_id:
+              input.transferId,
+          },
+
+          return_url:
+            input.returnUrl,
+        },
+        {
+          idempotencyKey:
+            input.idempotencyKey,
+        },
+      );
+
+    if (
+      result.status ===
+      "succeeded"
+    ) {
+      return {
+        status:
+          "AUTHORIZED",
+        reference:
+          result.id,
+      };
+    }
+
+    if (
+      result.status ===
+        "requires_action" ||
+      result.status ===
+        "requires_source_action"
+    ) {
+      return {
+        status:
+          "REQUIRES_ACTION",
+        reference:
+          result.id,
+        clientAction:
+          result.next_action,
+      };
+    }
+
+    if (
+      result.status ===
+      "requires_payment_method"
+    ) {
+      return {
+        status:
+          "DECLINED",
+        reference:
+          result.id,
+        failureCode:
+          "PAYMENT_METHOD_DECLINED",
+      };
+    }
+
+    return {
+      status: "FAILED",
+      reference:
+        result.id,
+      failureCode:
+        `UNHANDLED_PROVIDER_STATUS:${result.status}`,
+    };
+  }
+
+  async refund(input: {
+    reference: string;
+    amountMinor: bigint;
+    currency: string;
+    idempotencyKey: string;
+  }) {
+    const refund =
+      await this.client.createRefund(
+        {
+          payment_intent:
+            input.reference,
+
+          amount:
+            safeBigIntToProviderInteger(
+              input.amountMinor,
+            ),
+        },
+        {
+          idempotencyKey:
+            input.idempotencyKey,
+        },
+      );
+
+    return {
+      status:
+        refund.status ===
+        "succeeded"
+          ? "REFUNDED"
+          : "FAILED",
+
+      reference:
+        refund.id,
+    } as const;
+  }
+}
+
+function safeBigIntToProviderInteger(
+  value: bigint,
+) {
+  if (
+    value >
+    BigInt(
+      Number.MAX_SAFE_INTEGER,
+    )
+  ) {
+    throw new Error(
+      "PROVIDER_AMOUNT_EXCEEDS_SAFE_INTEGER",
+    );
+  }
+
+  return Number(value);
+}
+
+
+================================================================================
+05. PRODUCTION POSTGRES BASE REPOSITORY
+================================================================================
+
+export class PgBaseRepository {
+  constructor(
+    protected readonly db:
+      PgPool,
+  ) {}
+
+  async tx<T>(
+    fn: (
+      client: PgClient,
+    ) => Promise<T>,
+  ) {
+    const client =
+      await this.db.connect();
+
+    try {
+      await client.query(
+        "BEGIN",
+      );
+
+      const result =
+        await fn(client);
+
+      await client.query(
+        "COMMIT",
+      );
+
+      return result;
+    } catch (error) {
+      await client.query(
+        "ROLLBACK",
+      );
+
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+
+================================================================================
+06. TRANSFER REPOSITORY — REAL POSTGRES IMPLEMENTATION
+================================================================================
+
+export class PgTransferRepository
+  extends PgBaseRepository
+{
+  async findByIdempotency(args: {
+    senderUserId: string;
+    idempotencyKey: string;
+  }) {
+    const result =
+      await this.db.query(
+        `
+        SELECT *
+        FROM linqasend_transfers_v3
+        WHERE sender_user_id=$1
+          AND idempotency_key=$2
+        LIMIT 1
+        `,
+        [
+          args.senderUserId,
+          args.idempotencyKey,
+        ],
+      );
+
+    return (
+      result.rows[0] ?? null
+    );
+  }
+
+  async create(input: {
+    senderUserId: string;
+    recipientId: string;
+    transferClass: string;
+    sourceCountry: string;
+    destinationCountry: string;
+    fundingSourceId: string;
+    fundingMode: string;
+    receiveMode: string;
+    quoteId: string;
+    state: string;
+    capabilitySnapshot: unknown;
+    regulatoryPolicyVersion: string;
+    idempotencyKey: string;
+  }) {
+    const result =
+      await this.db.query(
+        `
+        INSERT INTO linqasend_transfers_v3 (
+          sender_user_id,
+          recipient_id,
+          transfer_class,
+          source_country,
+          destination_country,
+          funding_source_id,
+          funding_mode,
+          receive_mode,
+          quote_id,
+          state,
+          capability_snapshot,
+          regulatory_policy_version,
+          idempotency_key
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+        )
+        RETURNING *
+        `,
+        [
+          input.senderUserId,
+          input.recipientId,
+          input.transferClass,
+          input.sourceCountry,
+          input.destinationCountry,
+          input.fundingSourceId,
+          input.fundingMode,
+          input.receiveMode,
+          input.quoteId,
+          input.state,
+          JSON.stringify(
+            input.capabilitySnapshot,
+          ),
+          input.regulatoryPolicyVersion,
+          input.idempotencyKey,
+        ],
+      );
+
+    return result.rows[0];
+  }
+
+  async updateState(
+    transferId: string,
+    state: string,
+    metadata:
+      Record<
+        string,
+        unknown
+      > = {},
+  ) {
+    await this.tx(
+      async (client) => {
+        await client.query(
+          `
+          UPDATE linqasend_transfers_v3
+          SET state=$2,
+              updated_at=now()
+          WHERE id=$1
+          `,
+          [
+            transferId,
+            state,
+          ],
+        );
+
+        await client.query(
+          `
+          INSERT INTO linqasend_transfer_events_v3 (
+            transfer_id,
+            state,
+            source,
+            metadata
+          )
+          VALUES ($1,$2,'SERVER',$3)
+          `,
+          [
+            transferId,
+            state,
+            JSON.stringify(
+              metadata,
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+
+================================================================================
+07. QUOTE REPOSITORY — REAL POSTGRES IMPLEMENTATION
+================================================================================
+
+export class PgQuoteRepository
+  extends PgBaseRepository
+{
+  async findValidOwned(args: {
+    quoteId: string;
+    senderUserId: string;
+    now: Date;
+  }) {
+    const result =
+      await this.db.query(
+        `
+        SELECT *
+        FROM linqasend_quotes_v3
+        WHERE id=$1
+          AND sender_user_id=$2
+          AND expires_at>$3
+        LIMIT 1
+        `,
+        [
+          args.quoteId,
+          args.senderUserId,
+          args.now,
+        ],
+      );
+
+    return (
+      result.rows[0] ?? null
+    );
+  }
+}
+
+
+================================================================================
+08. LEDGER REPOSITORY — REAL POSTGRES IMPLEMENTATION
+================================================================================
+
+export class PgLedgerRepository
+  extends PgBaseRepository
+{
+  async postBalancedJournal(args: {
+    referenceType: string;
+    referenceId: string;
+    description: string;
+
+    postings: Array<{
+      accountId: string;
+      direction:
+        | "DEBIT"
+        | "CREDIT";
+      amountMinor: bigint;
+      currency: string;
+    }>;
+  }) {
+    assertBalancedByCurrency(
+      args.postings,
+    );
+
+    return this.tx(
+      async (client) => {
+        const journal =
+          await client.query(
+            `
+            INSERT INTO linqasend_ledger_journals_v3 (
+              reference_type,
+              reference_id,
+              description
+            )
+            VALUES ($1,$2,$3)
+            RETURNING *
+            `,
+            [
+              args.referenceType,
+              args.referenceId,
+              args.description,
+            ],
+          );
+
+        const journalId =
+          journal.rows[0].id;
+
+        for (
+          const posting
+          of args.postings
+        ) {
+          await client.query(
+            `
+            INSERT INTO linqasend_ledger_postings_v3 (
+              journal_id,
+              account_id,
+              direction,
+              amount_minor,
+              currency
+            )
+            VALUES ($1,$2,$3,$4,$5)
+            `,
+            [
+              journalId,
+              posting.accountId,
+              posting.direction,
+              posting.amountMinor.toString(),
+              posting.currency,
+            ],
+          );
+        }
+
+        return (
+          journal.rows[0]
+        );
+      },
+    );
+  }
+}
+
+function assertBalancedByCurrency(
+  postings: Array<{
+    direction:
+      | "DEBIT"
+      | "CREDIT";
+    amountMinor: bigint;
+    currency: string;
+  }>,
+) {
+  const currencies =
+    new Set(
+      postings.map(
+        (x) =>
+          x.currency,
+      ),
+    );
+
+  for (
+    const currency
+    of currencies
+  ) {
+    let debits = 0n;
+    let credits = 0n;
+
+    for (
+      const posting
+      of postings
+    ) {
+      if (
+        posting.currency !==
+        currency
+      ) {
+        continue;
+      }
+
+      if (
+        posting.direction ===
+        "DEBIT"
+      ) {
+        debits +=
+          posting.amountMinor;
+      } else {
+        credits +=
+          posting.amountMinor;
+      }
+    }
+
+    if (
+      debits !==
+      credits
+    ) {
+      throw new Error(
+        `UNBALANCED_LEDGER:${currency}`,
+      );
+    }
+  }
+}
+
+
+================================================================================
+09. BANK STATEMENT TYPES
+================================================================================
+
+export interface NormalizedBankStatementRecord {
+  sourceId: string;
+
+  externalRecordId: string;
+
+  accountReference: string;
+
+  bookingDate: string;
+  valueDate?: string;
+
+  amountMinor: bigint;
+  currency: string;
+
+  direction:
+    | "DEBIT"
+    | "CREDIT";
+
+  bankReference?: string;
+  counterpartyReference?: string;
+
+  rawRecordHash: string;
+}
+
+export interface BankStatementParser {
+  parse(
+    input:
+      Buffer | string,
+  ): Promise<
+    NormalizedBankStatementRecord[]
+  >;
+}
+
+
+================================================================================
+10. CSV BANK STATEMENT PARSER
+================================================================================
+
+import {
+  createHash,
+} from "crypto";
+
+export class CsvBankStatementParser
+  implements
+    BankStatementParser
+{
+  async parse(
+    input:
+      Buffer | string,
+  ) {
+    const text =
+      Buffer.isBuffer(
+        input,
+      )
+        ? input.toString(
+            "utf8",
+          )
+        : input;
+
+    const lines =
+      text
+        .split(/\r?\n/)
+        .filter(Boolean);
+
+    const [
+      headerLine,
+      ...rows
+    ] = lines;
+
+    const headers =
+      headerLine.split(",");
+
+    return rows.map(
+      (line) => {
+        const cells =
+          splitCsvLine(
+            line,
+          );
+
+        const row =
+          Object.fromEntries(
+            headers.map(
+              (h, i) => [
+                h.trim(),
+                cells[i]?.trim(),
+              ],
+            ),
+          );
+
+        const rawRecordHash =
+          createHash("sha256")
+            .update(line)
+            .digest("hex");
+
+        return {
+          sourceId:
+            row.source_id,
+
+          externalRecordId:
+            row.transaction_id,
+
+          accountReference:
+            row.account_ref,
+
+          bookingDate:
+            row.booking_date,
+
+          valueDate:
+            row.value_date ||
+            undefined,
+
+          amountMinor:
+            parseDecimalToMinor(
+              row.amount,
+              row.currency,
+            ),
+
+          currency:
+            row.currency.toUpperCase(),
+
+          direction:
+            row.direction.toUpperCase() as
+              | "DEBIT"
+              | "CREDIT",
+
+          bankReference:
+            row.bank_reference ||
+            undefined,
+
+          counterpartyReference:
+            row.counterparty_reference ||
+            undefined,
+
+          rawRecordHash,
+        };
+      },
+    );
+  }
+}
+
+function splitCsvLine(
+  line: string,
+) {
+  // Replace with production CSV parser library for quoted/escaped CSV.
+  return line.split(",");
+}
+
+
+================================================================================
+11. BANK STATEMENT INGESTOR
+================================================================================
+
+export class BankStatementIngestor {
+  constructor(
+    private readonly records:
+      ExternalSettlementRecordRepository,
+
+    private readonly dedupe:
+      IngestionDedupeService,
+  ) {}
+
+  async ingest(args: {
+    sourceType:
+      "BANK_STATEMENT";
+    sourceId: string;
+
+    records:
+      NormalizedBankStatementRecord[];
+  }) {
+    let inserted = 0;
+    let duplicates = 0;
+
+    for (
+      const record
+      of args.records
+    ) {
+      const duplicate =
+        await this.dedupe.exists({
+          sourceType:
+            args.sourceType,
+          sourceId:
+            args.sourceId,
+          externalRecordId:
+            record.externalRecordId,
+        });
+
+      if (duplicate) {
+        duplicates++;
+        continue;
+      }
+
+      await this.records.insert({
+        sourceType:
+          args.sourceType,
+
+        sourceId:
+          args.sourceId,
+
+        externalRecordId:
+          record.externalRecordId,
+
+        accountReference:
+          record.accountReference,
+
+        amountMinor:
+          record.amountMinor,
+
+        currency:
+          record.currency,
+
+        direction:
+          record.direction,
+
+        valueDate:
+          record.valueDate,
+
+        externalTimestamp:
+          new Date(
+            record.bookingDate,
+          ),
+
+        rawPayloadHash:
+          record.rawRecordHash,
+      });
+
+      inserted++;
+    }
+
+    return {
+      inserted,
+      duplicates,
+    };
+  }
+}
+
+
+================================================================================
+12. PROVIDER REPORT INGESTION
+================================================================================
+
+export interface ProviderSettlementRecord {
+  providerId: string;
+  externalRecordId: string;
+  providerReference: string;
+  amountMinor: bigint;
+  currency: string;
+  status: string;
+  occurredAt: Date;
+  rawPayloadHash: string;
+}
+
+export class ProviderReportIngestor {
+  constructor(
+    private readonly repo:
+      ExternalSettlementRecordRepository,
+  ) {}
+
+  async ingest(
+    records:
+      ProviderSettlementRecord[],
+  ) {
+    for (
+      const record
+      of records
+    ) {
+      await this.repo.insertIgnoreDuplicate({
+        sourceType:
+          "PROVIDER_REPORT",
+
+        sourceId:
+          record.providerId,
+
+        externalRecordId:
+          record.externalRecordId,
+
+        providerId:
+          record.providerId,
+
+        accountReference:
+          record.providerReference,
+
+        amountMinor:
+          record.amountMinor,
+
+        currency:
+          record.currency,
+
+        direction:
+          "CREDIT",
+
+        externalStatus:
+          record.status,
+
+        externalTimestamp:
+          record.occurredAt,
+
+        rawPayloadHash:
+          record.rawPayloadHash,
+      });
+    }
+  }
+}
+
+
+================================================================================
+13. PHYSICAL / LIVE TRANSACTION CERTIFICATION MODEL
+================================================================================
+
+export type CertificationResult =
+  | "PASS"
+  | "FAIL"
+  | "BLOCKED"
+  | "NOT_RUN";
+
+export interface PhysicalTransactionCase {
+  caseId: string;
+
+  transferClass:
+    | "INTERNAL_DOMESTIC"
+    | "INTERNAL_CROSS_BORDER"
+    | "EXTERNAL_DOMESTIC"
+    | "EXTERNAL_CROSS_BORDER";
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  sourceCurrency: string;
+  destinationCurrency: string;
+
+  fundingMode: string;
+  receiveMode: string;
+
+  realFundingRequired: boolean;
+  realPayoutRequired: boolean;
+
+  expectedCapability:
+    "ENABLED"
+    | "CONDITIONAL"
+    | "BLOCKED";
+}
+
+export interface PhysicalTransactionEvidence {
+  caseId: string;
+
+  gitSha: string;
+  buildId: string;
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  transferId?: string;
+  providerReference?: string;
+
+  startedAt: string;
+  completedAt?: string;
+
+  result:
+    CertificationResult;
+
+  checks: Record<
+    string,
+    boolean
+  >;
+
+  evidenceFiles:
+    string[];
+
+  failureCode?: string;
+}
+
+
+================================================================================
+14. PHYSICAL TRANSACTION CERTIFIER
+================================================================================
+
+export class PhysicalTransactionCertifier {
+  constructor(
+    private readonly runner:
+      LiveTransferRunner,
+
+    private readonly evidence:
+      EvidenceBinderService,
+
+    private readonly repo:
+      CertificationEvidenceRepository,
+  ) {}
+
+  async run(
+    test:
+      PhysicalTransactionCase,
+    context: {
+      gitSha: string;
+      buildId: string;
+    },
+  ): Promise<
+    PhysicalTransactionEvidence
+  > {
+    const startedAt =
+      new Date();
+
+    const base = {
+      caseId:
+        test.caseId,
+
+      gitSha:
+        context.gitSha,
+
+      buildId:
+        context.buildId,
+
+      sourceCountry:
+        test.sourceCountry,
+
+      destinationCountry:
+        test.destinationCountry,
+
+      startedAt:
+        startedAt.toISOString(),
+
+      result:
+        "NOT_RUN" as
+        CertificationResult,
+
+      checks: {} as
+        Record<
+          string,
+          boolean
+        >,
+
+      evidenceFiles:
+        [] as string[],
+    };
+
+    try {
+      if (
+        test.expectedCapability ===
+        "BLOCKED"
+      ) {
+        const result =
+          await this.runner.tryBlockedTransfer(
+            test,
+          );
+
+        const passed =
+          result.blocked ===
+          true;
+
+        const evidence = {
+          ...base,
+
+          completedAt:
+            new Date()
+              .toISOString(),
+
+          result:
+            passed
+              ? "PASS"
+              : "FAIL",
+
+          checks: {
+            capabilityBlocked:
+              passed,
+            noFundingOccurred:
+              result.noFundingOccurred,
+            noLedgerPosting:
+              result.noLedgerPosting,
+            noPayout:
+              result.noPayout,
+          },
+
+          failureCode:
+            passed
+              ? undefined
+              : "EXPECTED_BLOCK_NOT_ENFORCED",
+        };
+
+        await this.repo.save(
+          evidence,
+        );
+
+        return evidence;
+      }
+
+      const run =
+        await this.runner.executeLiveTransfer(
+          test,
+        );
+
+      const checks = {
+        transferCreated:
+          !!run.transferId,
+
+        securityPassed:
+          run.securityPassed,
+
+        fundingAuthorized:
+          test.realFundingRequired
+            ? run.fundingAuthorized
+            : true,
+
+        ledgerBalanced:
+          run.ledgerBalanced,
+
+        recipientCredited:
+          run.recipientCredited,
+
+        payoutConfirmed:
+          test.realPayoutRequired
+            ? run.payoutConfirmed
+            : true,
+
+        reconciliationMatched:
+          run.reconciliationMatched,
+
+        exactSha:
+          run.serverGitSha ===
+          context.gitSha,
+
+        sameBuild:
+          run.serverBuildId ===
+          context.buildId,
+      };
+
+      const allPass =
+        Object.values(
+          checks,
+        ).every(Boolean);
+
+      const evidence = {
+        ...base,
+
+        transferId:
+          run.transferId,
+
+        providerReference:
+          run.providerReference,
+
+        completedAt:
+          new Date()
+            .toISOString(),
+
+        result:
+          allPass
+            ? "PASS"
+            : "FAIL",
+
+        checks,
+
+        evidenceFiles:
+          run.evidenceFiles,
+      };
+
+      await this.repo.save(
+        evidence,
+      );
+
+      return evidence;
+    } catch (error) {
+      const evidence = {
+        ...base,
+
+        completedAt:
+          new Date()
+            .toISOString(),
+
+        result:
+          "FAIL" as const,
+
+        failureCode:
+          error instanceof Error
+            ? error.message
+            : "UNKNOWN_FAILURE",
+      };
+
+      await this.repo.save(
+        evidence,
+      );
+
+      return evidence;
+    }
+  }
+}
+
+
+================================================================================
+15. REQUIRED PHYSICAL TEST CASES
+================================================================================
+
+C1 INTERNAL_DOMESTIC
+US -> US
+USD -> USD
+Linqa balance -> Linqa balance
+
+C2 INTERNAL_DOMESTIC
+NG -> NG
+NGN -> NGN
+Eligible local funding -> Linqa recipient
+
+C3 INTERNAL_CROSS_BORDER
+US -> GH
+USD -> GHS
+External funding -> Linqa recipient
+
+C4 EXTERNAL_DOMESTIC
+US -> US
+USD -> USD
+Linqa sender -> bank recipient
+
+C5 EXTERNAL_CROSS_BORDER
+US -> GH
+USD -> GHS
+Linqa sender -> external payout
+
+C6 BLOCKED_CORRIDOR
+Example restricted outbound route
+Expected: no funding, no ledger posting, no payout
+
+C7 NEW_RECIPIENT_SCAM_WARNING
+Expected warning + fresh authorization
+
+C8 ACCOUNT_RECOVERY_COOLDOWN
+Expected: blocked before funding
+
+C9 WEBHOOK_REPLAY
+Expected: duplicate ignored/rejected
+
+C10 REFUND
+Expected: approved privileged action + matching reconciliation
+
+C11 REVERSAL
+Expected: reversing journal
+
+C12 CHARGEBACK
+Expected: ledger + risk feedback + reconciliation
+
+C13 PROVIDER_OUTAGE
+Expected: safe pending/failed state, no duplicate movement
+
+C14 RECONCILIATION_BREAK
+Expected: break opened + no destructive correction
+
+C15 SAFEGUARDING_SHORTFALL
+Expected: EOD RED + alert + production gate block
+
+
+================================================================================
+16. RECONCILIATION FAILURE INJECTOR
+================================================================================
+
+export type ReconciliationFailureMode =
+  | "MISSING_EXTERNAL"
+  | "MISSING_INTERNAL"
+  | "AMOUNT_MISMATCH"
+  | "DUPLICATE_EXTERNAL"
+  | "LATE_EXTERNAL"
+  | "WRONG_CURRENCY"
+  | "WRONG_PROVIDER_REFERENCE";
+
+export class ReconciliationFailureInjector {
+  constructor(
+    private readonly sandbox:
+      ReconciliationSandboxRepository,
+  ) {}
+
+  async inject(args: {
+    transferId: string;
+    mode:
+      ReconciliationFailureMode;
+  }) {
+    switch (args.mode) {
+      case "MISSING_EXTERNAL":
+        return this.sandbox.removeExternalRecord(
+          args.transferId,
+        );
+
+      case "MISSING_INTERNAL":
+        return this.sandbox.removeInternalProjection(
+          args.transferId,
+        );
+
+      case "AMOUNT_MISMATCH":
+        return this.sandbox.offsetExternalAmount(
+          args.transferId,
+          100n,
+        );
+
+      case "DUPLICATE_EXTERNAL":
+        return this.sandbox.duplicateExternalRecord(
+          args.transferId,
+        );
+
+      case "LATE_EXTERNAL":
+        return this.sandbox.delayExternalAvailability(
+          args.transferId,
+        );
+
+      case "WRONG_CURRENCY":
+        return this.sandbox.changeExternalCurrency(
+          args.transferId,
+          "ZZZ",
+        );
+
+      case "WRONG_PROVIDER_REFERENCE":
+        return this.sandbox.changeProviderReference(
+          args.transferId,
+          `BROKEN-${args.transferId}`,
+        );
+    }
+  }
+}
+
+
+================================================================================
+17. FAILURE TEST EXPECTATIONS
+================================================================================
+
+MISSING_EXTERNAL
+- reconciliation status = MISSING_EXTERNAL
+- break opened
+- correct severity
+- no automatic fabricated external row
+
+MISSING_INTERNAL
+- reconciliation status = MISSING_INTERNAL
+- break opened
+- suspense if policy requires
+- ledger remains immutable
+
+AMOUNT_MISMATCH
+- delta recorded
+- break opened
+- amount preserved on both sides
+
+DUPLICATE_EXTERNAL
+- dedupe or DUPLICATE_EXTERNAL
+- no duplicate settlement credit
+
+LATE_EXTERNAL
+- temporary break
+- later run resolves without deleting prior evidence
+
+WRONG_CURRENCY
+- hard mismatch
+- critical if policy threshold met
+
+WRONG_PROVIDER_REFERENCE
+- reference matching fails
+- secondary matching may suggest but not silently auto-resolve
+
+
+================================================================================
+18. EXACT-SHA EVIDENCE BINDING
+================================================================================
+
+import {
+  createHash,
+} from "crypto";
+
+export interface EvidenceManifest {
+  gitSha: string;
+  buildId: string;
+
+  createdAt: string;
+
+  environment:
+    | "staging"
+    | "preprod"
+    | "production";
+
+  corridor:
+    string;
+
+  files: Array<{
+    path: string;
+    sha256: string;
+  }>;
+
+  testResults: Array<{
+    suite: string;
+    result:
+      | "PASS"
+      | "FAIL";
+  }>;
+
+  manifestHash: string;
+}
+
+export class EvidenceBinderService {
+  async create(args: {
+    gitSha: string;
+    buildId: string;
+    environment:
+      "staging"
+      | "preprod"
+      | "production";
+    corridor: string;
+    files: Array<{
+      path: string;
+      content: Buffer;
+    }>;
+    testResults: Array<{
+      suite: string;
+      result:
+        | "PASS"
+        | "FAIL";
+    }>;
+  }): Promise<EvidenceManifest> {
+    const files =
+      args.files.map(
+        (file) => ({
+          path:
+            file.path,
+
+          sha256:
+            createHash(
+              "sha256",
+            )
+              .update(
+                file.content,
+              )
+              .digest(
+                "hex",
+              ),
+        }),
+      );
+
+    const base = {
+      gitSha:
+        args.gitSha,
+
+      buildId:
+        args.buildId,
+
+      createdAt:
+        new Date()
+          .toISOString(),
+
+      environment:
+        args.environment,
+
+      corridor:
+        args.corridor,
+
+      files,
+
+      testResults:
+        args.testResults,
+    };
+
+    const manifestHash =
+      createHash("sha256")
+        .update(
+          JSON.stringify(
+            base,
+          ),
+        )
+        .digest("hex");
+
+    return {
+      ...base,
+      manifestHash,
+    };
+  }
+}
+
+
+================================================================================
+19. EVIDENCE FRESHNESS
+================================================================================
+
+export class EvidenceFreshnessService {
+  constructor(
+    private readonly repo:
+      CertificationEvidenceRepository,
+  ) {}
+
+  async assertFresh(args: {
+    corridor: string;
+    gitSha: string;
+    maxAgeHours: number;
+  }) {
+    const evidence =
+      await this.repo.getLatestPassing(
+        args.corridor,
+        args.gitSha,
+      );
+
+    if (!evidence) {
+      throw new Error(
+        "PASSING_EVIDENCE_NOT_FOUND",
+      );
+    }
+
+    const ageMs =
+      Date.now() -
+      evidence.completedAt.getTime();
+
+    const maxAgeMs =
+      args.maxAgeHours *
+      3_600_000;
+
+    if (
+      ageMs >
+      maxAgeMs
+    ) {
+      throw new Error(
+        "CERTIFICATION_EVIDENCE_STALE",
+      );
+    }
+
+    return evidence;
+  }
+}
+
+
+================================================================================
+20. MOCK / SKIPPED TEST DETECTION
+================================================================================
+
+export interface TestInventoryResult {
+  skippedTests: string[];
+  focusedTests: string[];
+  mockOnlySuites: string[];
+}
+
+export class TestTruthfulnessGate {
+  assertClean(
+    result:
+      TestInventoryResult,
+  ) {
+    if (
+      result.skippedTests.length
+    ) {
+      throw new Error(
+        `SKIPPED_TESTS_PRESENT:${result.skippedTests.join(",")}`,
+      );
+    }
+
+    if (
+      result.focusedTests.length
+    ) {
+      throw new Error(
+        `FOCUSED_TESTS_PRESENT:${result.focusedTests.join(",")}`,
+      );
+    }
+
+    if (
+      result.mockOnlySuites.length
+    ) {
+      throw new Error(
+        `MOCK_ONLY_CERTIFICATION_SUITES_PRESENT:${result.mockOnlySuites.join(",")}`,
+      );
+    }
+  }
+}
+
+
+================================================================================
+21. CORRIDOR CERTIFICATION
+================================================================================
+
+export interface CorridorCertification {
+  corridorId: string;
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  transferClass: string;
+
+  sourceCurrency: string;
+  destinationCurrency: string;
+
+  fundingProviderId?: string;
+  payoutProviderId?: string;
+  fxProviderId?: string;
+
+  capabilityPolicyVersion: string;
+
+  legalApprovalReference?: string;
+  partnerApprovalReference?: string;
+
+  testCaseIds: string[];
+
+  evidenceManifestHash?: string;
+
+  certifiedGitSha?: string;
+
+  certifiedAt?: Date;
+
+  status:
+    | "DRAFT"
+    | "TESTING"
+    | "BLOCKED"
+    | "CERTIFIED"
+    | "SUSPENDED";
+}
+
+export class CorridorCertificationService {
+  constructor(
+    private readonly repo:
+      CorridorCertificationRepository,
+
+    private readonly evidence:
+      EvidenceFreshnessService,
+
+    private readonly providers:
+      ProviderCertificationService,
+  ) {}
+
+  async certify(args: {
+    corridorId: string;
+    gitSha: string;
+    maxEvidenceAgeHours: number;
+  }) {
+    const corridor =
+      await this.repo.findById(
+        args.corridorId,
+      );
+
+    if (!corridor) {
+      throw new Error(
+        "CORRIDOR_CERTIFICATION_NOT_FOUND",
+      );
+    }
+
+    if (
+      !corridor.legalApprovalReference
+    ) {
+      throw new Error(
+        "LEGAL_APPROVAL_MISSING",
+      );
+    }
+
+    if (
+      !corridor.partnerApprovalReference
+    ) {
+      throw new Error(
+        "PARTNER_APPROVAL_MISSING",
+      );
+    }
+
+    for (
+      const providerId
+      of [
+        corridor.fundingProviderId,
+        corridor.payoutProviderId,
+        corridor.fxProviderId,
+      ].filter(Boolean)
+    ) {
+      await this.providers.assertCertified({
+        providerId:
+          providerId!,
+        gitSha:
+          args.gitSha,
+      });
+    }
+
+    const fresh =
+      await this.evidence.assertFresh({
+        corridor:
+          corridor.corridorId,
+        gitSha:
+          args.gitSha,
+        maxAgeHours:
+          args.maxEvidenceAgeHours,
+      });
+
+    return this.repo.markCertified({
+      corridorId:
+        corridor.corridorId,
+
+      certifiedGitSha:
+        args.gitSha,
+
+      evidenceManifestHash:
+        fresh.manifestHash,
+
+      certifiedAt:
+        new Date(),
+    });
+  }
+}
+
+
+================================================================================
+22. PROVIDER CERTIFICATION
+================================================================================
+
+export class ProviderCertificationService {
+  constructor(
+    private readonly repo:
+      ProviderCertificationRepository,
+  ) {}
+
+  async assertCertified(args: {
+    providerId: string;
+    gitSha: string;
+  }) {
+    const cert =
+      await this.repo.findActive(
+        args.providerId,
+      );
+
+    if (!cert) {
+      throw new Error(
+        `PROVIDER_NOT_CERTIFIED:${args.providerId}`,
+      );
+    }
+
+    if (
+      cert.status !==
+      "CERTIFIED"
+    ) {
+      throw new Error(
+        `PROVIDER_CERTIFICATION_NOT_GREEN:${args.providerId}`,
+      );
+    }
+
+    if (
+      cert.certifiedGitSha &&
+      cert.certifiedGitSha !==
+      args.gitSha
+    ) {
+      throw new Error(
+        `PROVIDER_CERTIFIED_FOR_DIFFERENT_SHA:${args.providerId}`,
+      );
+    }
+
+    return cert;
+  }
+}
+
+
+================================================================================
+23. GA GATE
+================================================================================
+
+export class LinqaSendGaGateService {
+  constructor(
+    private readonly corridors:
+      CorridorCertificationRepository,
+
+    private readonly evidence:
+      EvidenceFreshnessService,
+
+    private readonly eod:
+      EodControlRepository,
+
+    private readonly breaks:
+      ReconciliationBreakRepository,
+
+    private readonly safeguarding:
+      SafeguardingAccountService,
+
+    private readonly truth:
+      TestTruthfulnessGate,
+
+    private readonly release:
+      ReleaseManifestRepository,
+  ) {}
+
+  async evaluate(args: {
+    gitSha: string;
+    buildId: string;
+
+    enabledCorridorIds:
+      string[];
+
+    evidenceMaxAgeHours:
+      number;
+
+    testInventory:
+      TestInventoryResult;
+  }) {
+    const failures: string[] = [];
+
+    try {
+      this.truth.assertClean(
+        args.testInventory,
+      );
+    } catch (e) {
+      failures.push(
+        e instanceof Error
+          ? e.message
+          : "TEST_TRUTHFULNESS_FAILED",
+      );
+    }
+
+    for (
+      const corridorId
+      of args.enabledCorridorIds
+    ) {
+      const cert =
+        await this.corridors.findById(
+          corridorId,
+        );
+
+      if (
+        !cert ||
+        cert.status !==
+          "CERTIFIED"
+      ) {
+        failures.push(
+          `CORRIDOR_NOT_CERTIFIED:${corridorId}`,
+        );
+
+        continue;
+      }
+
+      if (
+        cert.certifiedGitSha !==
+        args.gitSha
+      ) {
+        failures.push(
+          `CORRIDOR_SHA_MISMATCH:${corridorId}`,
+        );
+      }
+
+      try {
+        await this.evidence.assertFresh({
+          corridor:
+            corridorId,
+          gitSha:
+            args.gitSha,
+          maxAgeHours:
+            args.evidenceMaxAgeHours,
+        });
+      } catch (error) {
+        failures.push(
+          error instanceof Error
+            ? `${corridorId}:${error.message}`
+            : `${corridorId}:EVIDENCE_FAILURE`,
+        );
+      }
+    }
+
+    const openCritical =
+      await this.breaks.countAllCriticalOpen();
+
+    if (
+      openCritical > 0
+    ) {
+      failures.push(
+        `CRITICAL_RECONCILIATION_BREAKS:${openCritical}`,
+      );
+    }
+
+    const latestEod =
+      await this.eod.latestAll();
+
+    for (
+      const item
+      of latestEod
+    ) {
+      if (
+        item.status ===
+        "RED"
+      ) {
+        failures.push(
+          `EOD_RED:${item.currency}`,
+        );
+      }
+    }
+
+    const release =
+      await this.release.findByGitSha(
+        args.gitSha,
+      );
+
+    if (
+      !release
+    ) {
+      failures.push(
+        "RELEASE_MANIFEST_MISSING",
+      );
+    } else if (
+      release.buildId !==
+      args.buildId
+    ) {
+      failures.push(
+        "RELEASE_BUILD_ID_MISMATCH",
+      );
+    }
+
+    return {
+      gate:
+        failures.length ===
+        0
+          ? "GREEN"
+          : "RED",
+
+      gitSha:
+        args.gitSha,
+
+      buildId:
+        args.buildId,
+
+      failures,
+    };
+  }
+}
+
+
+================================================================================
+24. RELEASE MANIFEST
+================================================================================
+
+export interface LinqaSendReleaseManifest {
+  gitSha: string;
+  buildId: string;
+
+  createdAt: string;
+
+  databaseMigrationHead:
+    string;
+
+  enabledCorridors:
+    string[];
+
+  certifiedProviders:
+    string[];
+
+  containerImageDigests:
+    string[];
+
+  mobileBuilds: Array<{
+    platform:
+      | "ios"
+      | "android";
+    buildId:
+      string;
+    artifactHash:
+      string;
+  }>;
+
+  serverArtifactHash:
+    string;
+
+  configurationHash:
+    string;
+
+  manifestHash:
+    string;
+}
+
+
+================================================================================
+25. RELEASE MANIFEST SERVICE
+================================================================================
+
+export class ReleaseManifestService {
+  async build(args: {
+    gitSha: string;
+    buildId: string;
+
+    migrationHead: string;
+
+    enabledCorridors:
+      string[];
+
+    certifiedProviders:
+      string[];
+
+    containerImageDigests:
+      string[];
+
+    mobileBuilds:
+      LinqaSendReleaseManifest["mobileBuilds"];
+
+    serverArtifact:
+      Buffer;
+
+    configuration:
+      unknown;
+  }) {
+    const serverArtifactHash =
+      sha256(
+        args.serverArtifact,
+      );
+
+    const configurationHash =
+      sha256(
+        Buffer.from(
+          stableJson(
+            args.configuration,
+          ),
+        ),
+      );
+
+    const base = {
+      gitSha:
+        args.gitSha,
+
+      buildId:
+        args.buildId,
+
+      createdAt:
+        new Date()
+          .toISOString(),
+
+      databaseMigrationHead:
+        args.migrationHead,
+
+      enabledCorridors:
+        [...args.enabledCorridors]
+          .sort(),
+
+      certifiedProviders:
+        [...args.certifiedProviders]
+          .sort(),
+
+      containerImageDigests:
+        [...args.containerImageDigests]
+          .sort(),
+
+      mobileBuilds:
+        args.mobileBuilds,
+
+      serverArtifactHash,
+
+      configurationHash,
+    };
+
+    return {
+      ...base,
+
+      manifestHash:
+        sha256(
+          Buffer.from(
+            stableJson(
+              base,
+            ),
+          ),
+        ),
+    };
+  }
+}
+
+function sha256(
+  input: Buffer,
+) {
+  return createHash(
+    "sha256",
+  )
+    .update(
+      input,
+    )
+    .digest(
+      "hex",
+    );
+}
+
+function stableJson(
+  value: unknown,
+) {
+  return JSON.stringify(
+    value,
+    Object.keys(
+      value as object,
+    ).sort(),
+  );
+}
+
+
+================================================================================
+26. PRODUCTION CERTIFICATION DATABASE MIGRATION
+================================================================================
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS linqasend_provider_certifications_v6 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  provider_id TEXT NOT NULL,
+
+  provider_type TEXT NOT NULL CHECK (
+    provider_type IN (
+      'FUNDING',
+      'PAYOUT',
+      'FX',
+      'SETTLEMENT',
+      'WEBHOOK'
+    )
+  ),
+
+  environment TEXT NOT NULL CHECK (
+    environment IN (
+      'SANDBOX',
+      'PREPROD',
+      'PRODUCTION'
+    )
+  ),
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'DRAFT',
+      'TESTING',
+      'BLOCKED',
+      'CERTIFIED',
+      'SUSPENDED'
+    )
+  ),
+
+  certified_git_sha TEXT,
+
+  evidence_manifest_hash TEXT,
+
+  certified_at TIMESTAMPTZ,
+
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+  UNIQUE(provider_id, provider_type, environment)
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_corridor_certifications_v6 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  corridor_id TEXT NOT NULL UNIQUE,
+
+  source_country CHAR(2) NOT NULL,
+  destination_country CHAR(2) NOT NULL,
+
+  transfer_class TEXT NOT NULL,
+
+  source_currency CHAR(3) NOT NULL,
+  destination_currency CHAR(3) NOT NULL,
+
+  funding_provider_id TEXT,
+  payout_provider_id TEXT,
+  fx_provider_id TEXT,
+
+  capability_policy_version TEXT NOT NULL,
+
+  legal_approval_reference TEXT,
+  partner_approval_reference TEXT,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'DRAFT',
+      'TESTING',
+      'BLOCKED',
+      'CERTIFIED',
+      'SUSPENDED'
+    )
+  ),
+
+  certified_git_sha TEXT,
+
+  evidence_manifest_hash TEXT,
+
+  certified_at TIMESTAMPTZ,
+
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_physical_certification_runs_v6 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  case_id TEXT NOT NULL,
+
+  corridor_id TEXT,
+
+  git_sha TEXT NOT NULL,
+  build_id TEXT NOT NULL,
+
+  environment TEXT NOT NULL,
+
+  transfer_id UUID,
+  provider_reference TEXT,
+
+  result TEXT NOT NULL CHECK (
+    result IN (
+      'PASS',
+      'FAIL',
+      'BLOCKED',
+      'NOT_RUN'
+    )
+  ),
+
+  checks JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+  evidence_files JSONB NOT NULL DEFAULT '[]'::jsonb,
+
+  failure_code TEXT,
+
+  started_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_evidence_manifests_v6 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  corridor_id TEXT,
+
+  git_sha TEXT NOT NULL,
+  build_id TEXT NOT NULL,
+
+  environment TEXT NOT NULL,
+
+  manifest_hash TEXT NOT NULL UNIQUE,
+
+  manifest JSONB NOT NULL,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_release_manifests_v6 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  git_sha TEXT NOT NULL UNIQUE,
+  build_id TEXT NOT NULL,
+
+  migration_head TEXT NOT NULL,
+
+  manifest_hash TEXT NOT NULL UNIQUE,
+
+  manifest JSONB NOT NULL,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_ga_gate_runs_v6 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  git_sha TEXT NOT NULL,
+  build_id TEXT NOT NULL,
+
+  gate_status TEXT NOT NULL CHECK (
+    gate_status IN ('GREEN','RED')
+  ),
+
+  failures JSONB NOT NULL DEFAULT '[]'::jsonb,
+
+  evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMIT;
+
+
+================================================================================
+27. GITHUB ACTIONS — PRODUCTION CERTIFICATION WORKFLOW
+FILE: .github/workflows/linqasend-production-certification.yml
+================================================================================
+
+name: LinqaSend Production Certification
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - release/**
+    tags:
+      - "linqasend-v*"
+
+permissions:
+  contents: read
+
+jobs:
+
+  code-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test -- --runInBand
+
+      - name: Reject skipped/focused tests
+        run: npm run linqasend:verify-no-skips
+
+      - name: Reject mock-only certification suites
+        run: npm run linqasend:verify-no-mocks
+
+
+  integration:
+    needs:
+      - code-quality
+
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - run: npm run db:migrate:test
+
+      - name: Integration tests
+        run: npm run test:linqasend:integration
+
+      - name: Reconciliation chaos
+        run: npm run test:linqasend:reconciliation-chaos
+
+      - name: Webhook replay suite
+        run: npm run test:linqasend:webhooks
+
+      - name: Ledger integrity suite
+        run: npm run test:linqasend:ledger-integrity
+
+
+  preprod-certification:
+    needs:
+      - integration
+
+    runs-on: ubuntu-latest
+
+    environment:
+      preprod-linqasend
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Exact SHA
+        run: echo "CERT_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+      - name: Run physical certification
+        run: |
+          npm run linqasend:certify:physical -- \
+            --sha "$CERT_SHA" \
+            --environment preprod
+
+      - name: Bind evidence
+        run: |
+          npm run linqasend:bind-evidence -- \
+            --sha "$CERT_SHA" \
+            --environment preprod
+
+      - name: Verify corridor certification
+        run: |
+          npm run linqasend:verify-corridors -- \
+            --sha "$CERT_SHA"
+
+      - name: Evaluate GA gate
+        run: |
+          npm run linqasend:ga-gate -- \
+            --sha "$CERT_SHA"
+
+
+================================================================================
+28. CORRIDOR CERTIFICATION MANIFEST EXAMPLE
+================================================================================
+
+{
+  "corridorId": "US-GH-INTERNAL-USD-GHS",
+  "sourceCountry": "US",
+  "destinationCountry": "GH",
+  "transferClass": "INTERNAL_CROSS_BORDER",
+  "sourceCurrency": "USD",
+  "destinationCurrency": "GHS",
+
+  "fundingProviderId": "funding_provider_prod",
+  "payoutProviderId": "ghana_payout_partner",
+  "fxProviderId": "fx_provider_prod",
+
+  "capabilityPolicyVersion": "US-GH-2026.08-v1",
+
+  "legalApprovalReference": "LEGAL-APPROVED-REFERENCE",
+  "partnerApprovalReference": "PARTNER-CORRIDOR-APPROVAL",
+
+  "requiredTests": [
+    "C3",
+    "C7",
+    "C9",
+    "C10",
+    "C13",
+    "C14"
+  ],
+
+  "releaseRule": "FAIL_CLOSED"
+}
+
+
+================================================================================
+29. CORRIDOR PRODUCTION GATE RULES
+================================================================================
+
+A corridor may be ENABLED in production only when:
+
+1. Country policy exists.
+2. Corridor policy exists.
+3. Policy is effective.
+4. Legal approval reference exists.
+5. Partner approval reference exists.
+6. Funding provider is certified.
+7. Payout provider is certified.
+8. FX provider is certified when FX is required.
+9. Webhook adapter is certified.
+10. Settlement/reconciliation support exists.
+11. Physical transaction certification passed.
+12. Failure-injection certification passed.
+13. Exact git SHA matches production artifact.
+14. Evidence is fresh.
+15. No critical reconciliation breaks are open.
+16. Latest safeguarding/EOD state is not RED.
+17. No skipped/focused tests exist.
+18. Certification suite is not mock-only.
+19. Release manifest matches deployed build.
+20. Corridor status is CERTIFIED.
+
+Otherwise:
+status = BLOCKED or SUSPENDED
+
+
+================================================================================
+30. PHYSICAL TEST EVIDENCE REQUIREMENTS
+================================================================================
+
+For every live/preprod transaction case record:
+
+- case_id
+- corridor_id
+- transfer_class
+- source country
+- destination country
+- source currency
+- destination currency
+- funding mode
+- receive mode
+- exact git SHA
+- exact server build ID
+- exact mobile build ID where applicable
+- transfer ID
+- provider funding reference
+- provider payout reference
+- FX quote/reference
+- capability policy version
+- risk decision
+- transaction authorization evidence ID
+- ledger journal IDs
+- settlement instruction IDs
+- reconciliation run ID
+- reconciliation match ID
+- safeguarding/EOD snapshot reference
+- start timestamp
+- completion timestamp
+- result
+- failure code where applicable
+- evidence file hashes
+
+
+================================================================================
+31. BANK INGESTION SECURITY REQUIREMENTS
+================================================================================
+
+1. Source account identity must be configured server-side.
+
+2. Ingestion file must be hashed before parsing.
+
+3. Duplicate files should be rejected/deduped using file hash.
+
+4. Duplicate bank records dedupe using:
+   source_type + source_id + external_record_id.
+
+5. Do not infer settlement success from filename.
+
+6. Reject malformed currency codes.
+
+7. Reject invalid dates.
+
+8. Parse amounts using decimal-to-minor exact arithmetic.
+
+9. Store raw row hash.
+
+10. Store import batch ID.
+
+11. Preserve original record reference.
+
+12. Import is append-only.
+
+13. Corrections use a later correcting statement/report.
+
+14. Never delete prior external evidence merely because bank sends replacement.
+
+15. Reconciliation determines economic effect.
+
+
+================================================================================
+32. RECONCILIATION FAILURE CERTIFICATION
+================================================================================
+
+Before GA, prove:
+
+- Missing provider payout creates break.
+- Missing bank settlement creates break.
+- Duplicate provider payout does not duplicate credit.
+- Wrong amount creates exact delta.
+- Wrong currency is never silently converted.
+- Delayed statement can resolve on later run.
+- Provider replay does not duplicate settlement.
+- Ledger mismatch produces alert.
+- Safeguarding shortfall produces RED.
+- Critical reconciliation break blocks GA gate.
+- Suspense cannot be cleared without reason/evidence.
+- Reversal resolves economic position using correcting entries.
+
+
+================================================================================
+33. EXACT-SHA RULE
+================================================================================
+
+Never certify:
+"latest"
+"main"
+"release branch"
+"same version number"
+
+Certification binds to:
+
+git SHA
++
+server artifact hash
++
+container image digest
++
+mobile artifact hash
++
+configuration hash
++
+database migration head
++
+corridor config version
++
+provider certification
++
+evidence manifest hash
+
+
+================================================================================
+34. RELEASE PROMOTION RULE
+================================================================================
+
+DEVELOPMENT
+  -> integration tests pass
+
+STAGING
+  -> provider sandbox tests pass
+  -> chaos tests pass
+
+PREPRODUCTION
+  -> provider production-like credentials
+  -> physical transaction certification
+  -> bank/provider statement ingestion
+  -> real reconciliation
+  -> exact-SHA evidence
+  -> corridor certification
+
+RELEASE CANDIDATE
+  -> all enabled corridors CERTIFIED
+  -> latest EOD not RED
+  -> no critical breaks
+  -> exact-SHA manifest verified
+  -> sign-offs captured
+
+PRODUCTION
+  -> promote exact previously certified artifact
+  -> do not rebuild between RC certification and production promotion
+
+GA
+  -> only if GA gate = GREEN
+
+
+================================================================================
+35. IMPLEMENTATION CLOSURE CHECKLIST
+================================================================================
+
+DATABASE
+- [ ] v3 capability schema migrated
+- [ ] v4 security schema migrated
+- [ ] v5 settlement schema migrated
+- [ ] v6 certification schema migrated
+- [ ] migration head recorded in release manifest
+- [ ] production backup/restore tested
+
+PROVIDERS
+- [ ] funding adapter implemented
+- [ ] payout adapter implemented
+- [ ] FX adapter implemented
+- [ ] settlement adapter implemented
+- [ ] webhook adapter implemented
+- [ ] provider idempotency verified
+- [ ] provider retry semantics verified
+- [ ] provider timeout behavior verified
+- [ ] provider certification recorded
+
+BANK / TREASURY
+- [ ] safeguarding account configured
+- [ ] operating account configured separately
+- [ ] settlement accounts configured
+- [ ] reserve accounts configured
+- [ ] bank statement ingestion enabled
+- [ ] provider report ingestion enabled
+- [ ] external-record dedupe verified
+
+RECONCILIATION
+- [ ] provider reconciliation runs
+- [ ] bank reconciliation runs
+- [ ] FX reconciliation runs
+- [ ] safeguarding reconciliation runs
+- [ ] break queue operational
+- [ ] suspense workflow operational
+- [ ] reconciliation escalation operational
+
+SECURITY
+- [ ] transaction hash binding enabled
+- [ ] device assertion enabled
+- [ ] single-use auth token enabled
+- [ ] risk engine enabled
+- [ ] scam warnings enabled
+- [ ] webhook signature verification enabled
+- [ ] webhook replay protection enabled
+- [ ] provider state guard enabled
+- [ ] ledger integrity seal enabled
+- [ ] maker-checker enabled
+
+PHYSICAL TESTING
+- [ ] C1 internal domestic passed
+- [ ] C2 domestic externally-funded passed
+- [ ] C3 internal cross-border passed
+- [ ] C4 external domestic passed
+- [ ] C5 external cross-border passed
+- [ ] C6 blocked corridor passed
+- [ ] C7 scam warning passed
+- [ ] C8 account recovery cooldown passed
+- [ ] C9 webhook replay passed
+- [ ] C10 refund passed
+- [ ] C11 reversal passed
+- [ ] C12 chargeback passed
+- [ ] C13 provider outage passed
+- [ ] C14 reconciliation break passed
+- [ ] C15 safeguarding shortfall passed
+
+EVIDENCE
+- [ ] git SHA captured
+- [ ] build ID captured
+- [ ] server artifact hash captured
+- [ ] container digest captured
+- [ ] mobile build hash captured
+- [ ] config hash captured
+- [ ] migration head captured
+- [ ] evidence manifest generated
+- [ ] evidence freshness valid
+
+CORRIDORS
+- [ ] each enabled corridor has legal approval
+- [ ] each enabled corridor has partner approval
+- [ ] each enabled corridor has provider certification
+- [ ] each enabled corridor has physical tests
+- [ ] each enabled corridor has fresh evidence
+- [ ] each enabled corridor certified to exact SHA
+
+RELEASE
+- [ ] no skipped tests
+- [ ] no focused tests
+- [ ] no mock-only certification
+- [ ] no critical breaks
+- [ ] EOD not RED
+- [ ] GA gate GREEN
+- [ ] exact certified artifact promoted
+
+
+================================================================================
+36. FINAL DEPLOYMENT RULE
+================================================================================
+
+DO NOT enable all countries globally.
+
+Enable production transfer corridors one at a time.
+
+Example:
+
+US -> GH
+CERTIFIED
+=> enable only that configured corridor.
+
+US -> NG
+NOT CERTIFIED
+=> remain disabled.
+
+NG -> US
+RESTRICTED
+=> remain blocked.
+
+NG -> NG internal domestic
+CERTIFIED under approved domestic model
+=> enable independently.
+
+This prevents one country's regulatory/provider readiness from implicitly
+enabling another country or direction.
+
+
+================================================================================
+37. FINAL LINQASEND RELEASE ARCHITECTURE
+================================================================================
+
+IDENTITY
+  |
+  v
+CAPABILITY ENGINE v3
+  |
+  v
+SECURITY / FRAUD v4
+  |
+  v
+MONEY MOVEMENT
+  |
+  v
+SETTLEMENT / TREASURY / SAFEGUARDING v5
+  |
+  v
+RECONCILIATION
+  |
+  v
+IMPLEMENTATION CLOSURE v6
+  |
+  +-- Real providers
+  +-- Real repositories
+  +-- Bank ingestion
+  +-- Provider reports
+  +-- Physical transaction tests
+  +-- Chaos / reconciliation failure tests
+  +-- Exact-SHA evidence
+  +-- Corridor certification
+  |
+  v
+RELEASE CANDIDATE
+  |
+  v
+GA GATE
+  |
+  +-- RED => BLOCK
+  |
+  +-- GREEN
+        |
+        v
+PRODUCTION CORRIDOR ENABLEMENT
+
+
+================================================================================
+38. FINAL RECOMMENDATION
+================================================================================
+
+After this v6 pack:
+
+DO NOT create another architecture pack.
+
+The next work is repo-native implementation:
+
+1. Map these interfaces to the actual Linqa database/service names.
+2. Select actual funding/payout/FX partners for the first launch corridor.
+3. Implement their production adapters.
+4. Run migrations.
+5. Run preproduction real-value or approved test-value transfers.
+6. Import actual provider settlement reports.
+7. Import actual bank statements.
+8. Prove reconciliation.
+9. Inject failures.
+10. Certify each corridor.
+11. Bind evidence to exact SHA.
+12. Promote only the certified artifact.
+
+================================================================================
+END — LINQASEND IMPLEMENTATION CLOSURE & PRODUCTION CERTIFICATION PACK v6
+================================================================================

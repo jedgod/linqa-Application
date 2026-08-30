@@ -1,0 +1,642 @@
+LINQA REPO-NATIVE CASE WORKSPACE + STAFF-ME + INTERNAL NOTES PACK
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Repo-Native Case Workspace + Staff-Me + Internal Notes Pack
+
+Narrow scope only:
+- GET /v1/admin/operations/staff/me
+- GET /v1/admin/operations/cases/:caseId/workspace
+- GET/POST internal notes
+- PATCH real case state
+- PATCH real case priority
+- clients/web case workspace page
+- accessToken prop auth
+- polling only
+
+No SLA, specialist workflows, or new realtime layer.
+
+
+====================================================================================================
+FILE: server/src/db/migrations/029_ops_case_workspace_notes.sql
+====================================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS ops_case_internal_notes_v2 (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL,
+  author_user_id uuid NOT NULL,
+  body text NOT NULL CHECK (length(body) BETWEEN 1 AND 10000),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_case_internal_notes_v2_case_created
+ON ops_case_internal_notes_v2(case_id, created_at DESC);
+
+
+====================================================================================================
+FILE: server/src/services/operations/staff-me.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+
+export class StaffMeService {
+  constructor(private pool: Pool) {}
+
+  async getByUserId(userId: string) {
+    const r = await this.pool.query(
+      `SELECT
+         id::text,
+         user_id::text AS "userId",
+         display_name AS "displayName",
+         staff_role AS "staffRole",
+         team_name AS "teamName",
+         presence::text,
+         active_case_count AS "activeCases",
+         max_concurrent_cases AS "maxConcurrentCases",
+         suspended,
+         last_seen_at AS "lastSeenAt"
+       FROM ops_staff_profiles
+       WHERE user_id=$1::uuid
+       LIMIT 1`,
+      [userId]
+    );
+
+    return r.rows[0] ?? null;
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/case-notes.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+
+export class CaseNotesService {
+  constructor(private pool: Pool) {}
+
+  async list(caseId: string) {
+    const r = await this.pool.query(
+      `SELECT
+         n.id::text,
+         n.case_id::text AS "caseId",
+         n.author_user_id::text AS "authorUserId",
+         COALESCE(p.display_name,'Staff') AS "authorName",
+         n.body,
+         n.created_at AS "createdAt"
+       FROM ops_case_internal_notes_v2 n
+       LEFT JOIN ops_staff_profiles p ON p.user_id=n.author_user_id
+       WHERE n.case_id=$1::uuid
+       ORDER BY n.created_at DESC`,
+      [caseId]
+    );
+    return r.rows;
+  }
+
+  async create(input:{
+    caseId:string;
+    authorUserId:string;
+    body:string;
+    requestId?:string|null;
+    scopes:string[];
+  }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const caseR = await client.query(
+        `SELECT id::text, case_number, state, priority
+         FROM support_cases_v2
+         WHERE id=$1::uuid
+         FOR UPDATE`,
+        [input.caseId]
+      );
+      if (!caseR.rowCount) throw Object.assign(new Error("CASE_NOT_FOUND"),{statusCode:404});
+
+      const noteR = await client.query(
+        `INSERT INTO ops_case_internal_notes_v2(case_id,author_user_id,body)
+         VALUES($1::uuid,$2::uuid,$3)
+         RETURNING id::text,case_id::text AS "caseId",
+                   author_user_id::text AS "authorUserId",
+                   body,created_at AS "createdAt"`,
+        [input.caseId,input.authorUserId,input.body]
+      );
+
+      await client.query(
+        `INSERT INTO support_case_events_v2(case_id,event_type,actor_id,metadata,created_at)
+         VALUES($1::uuid,'INTERNAL_NOTE_ADDED',$2::uuid,$3::jsonb,now())`,
+        [input.caseId,input.authorUserId,JSON.stringify({noteId:noteR.rows[0].id})]
+      );
+
+      await client.query(
+        `INSERT INTO ops_audit_events(
+           actor_user_id,actor_scope_snapshot,action,resource_type,
+           resource_id,reason_code,request_id,after_json
+         )
+         VALUES($1::uuid,$2::jsonb,'ops.case.note.create',
+                'support_case_v2',$3,'INTERNAL_NOTE',$4,$5::jsonb)`,
+        [
+          input.authorUserId,
+          JSON.stringify(input.scopes),
+          input.caseId,
+          input.requestId ?? null,
+          JSON.stringify({noteId:noteR.rows[0].id})
+        ]
+      );
+
+      await client.query("COMMIT");
+      return noteR.rows[0];
+    } catch(e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/case-workspace.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+import { CaseNotesService } from "./case-notes.service";
+
+export class CaseWorkspaceService {
+  private notes:CaseNotesService;
+
+  constructor(private pool:Pool) {
+    this.notes = new CaseNotesService(pool);
+  }
+
+  async get(caseId:string) {
+    const [caseR,eventsR,notes] = await Promise.all([
+      this.pool.query(
+        `SELECT
+           c.id::text,
+           c.case_number AS "caseNumber",
+           c.state::text,
+           c.priority::text,
+           c.category,
+           c.subject,
+           c.description,
+           c.assigned_team AS "assignedTeam",
+           c.assigned_agent AS "assignedAgent",
+           c.assigned_staff_id::text AS "assignedStaffId",
+           p.display_name AS "assignedStaffName",
+           c.created_at AS "createdAt",
+           c.updated_at AS "updatedAt"
+         FROM support_cases_v2 c
+         LEFT JOIN ops_staff_profiles p ON p.id=c.assigned_staff_id
+         WHERE c.id=$1::uuid
+         LIMIT 1`,
+        [caseId]
+      ),
+      this.pool.query(
+        `SELECT
+           e.id::text,
+           e.event_type AS "eventType",
+           e.actor_id::text AS "actorUserId",
+           COALESCE(p.display_name,'System') AS "actorName",
+           e.metadata,
+           e.created_at AS "createdAt"
+         FROM support_case_events_v2 e
+         LEFT JOIN ops_staff_profiles p ON p.user_id=e.actor_id
+         WHERE e.case_id=$1::uuid
+         ORDER BY e.created_at DESC
+         LIMIT 100`,
+        [caseId]
+      ),
+      this.notes.list(caseId)
+    ]);
+
+    if (!caseR.rowCount) return null;
+    return {case:caseR.rows[0],events:eventsR.rows,notes};
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/case-state.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+
+const STATES = new Set(["OPEN","WAITING_USER","WAITING_INTERNAL","RESOLVED","CLOSED"]);
+const PRIORITIES = new Set(["LOW","NORMAL","HIGH","URGENT"]);
+
+export class CaseStateService {
+  constructor(private pool:Pool) {}
+
+  async updateState(input:any) {
+    if(!STATES.has(input.state))
+      throw Object.assign(new Error("INVALID_CASE_STATE"),{statusCode:400});
+    return this.change(input,"state",input.state,"CASE_STATE_CHANGED","ops.case.state.change");
+  }
+
+  async updatePriority(input:any) {
+    if(!PRIORITIES.has(input.priority))
+      throw Object.assign(new Error("INVALID_CASE_PRIORITY"),{statusCode:400});
+    return this.change(input,"priority",input.priority,"CASE_PRIORITY_CHANGED","ops.case.priority.change");
+  }
+
+  private async change(input:any,column:"state"|"priority",value:string,eventType:string,auditAction:string) {
+    const client=await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const before=await client.query(
+        `SELECT id::text,state::text,priority::text
+         FROM support_cases_v2
+         WHERE id=$1::uuid
+         FOR UPDATE`,
+        [input.caseId]
+      );
+      if(!before.rowCount) throw Object.assign(new Error("CASE_NOT_FOUND"),{statusCode:404});
+
+      const sql = column==="state"
+        ? `UPDATE support_cases_v2 SET state=$2,updated_at=now()
+           WHERE id=$1::uuid
+           RETURNING id::text,state::text,priority::text,updated_at AS "updatedAt"`
+        : `UPDATE support_cases_v2 SET priority=$2,updated_at=now()
+           WHERE id=$1::uuid
+           RETURNING id::text,state::text,priority::text,updated_at AS "updatedAt"`;
+
+      const after=await client.query(sql,[input.caseId,value]);
+
+      await client.query(
+        `INSERT INTO support_case_events_v2(case_id,event_type,actor_id,metadata,created_at)
+         VALUES($1::uuid,$2,$3::uuid,$4::jsonb,now())`,
+        [
+          input.caseId,eventType,input.actorUserId,
+          JSON.stringify({
+            field:column,
+            before:before.rows[0][column],
+            after:value,
+            reasonCode:input.reasonCode
+          })
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO ops_audit_events(
+           actor_user_id,actor_scope_snapshot,action,resource_type,
+           resource_id,reason_code,request_id,before_json,after_json
+         )
+         VALUES($1::uuid,$2::jsonb,$3,'support_case_v2',
+                $4,$5,$6,$7::jsonb,$8::jsonb)`,
+        [
+          input.actorUserId,JSON.stringify(input.scopes),auditAction,input.caseId,
+          input.reasonCode,input.requestId ?? null,
+          JSON.stringify(before.rows[0]),JSON.stringify(after.rows[0])
+        ]
+      );
+
+      await client.query("COMMIT");
+      return after.rows[0];
+    } catch(e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/routes/operations/workspace-routes.ts
+====================================================================================================
+import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
+import { requireScope } from "../../auth/jwt";
+import { StaffMeService } from "../../services/operations/staff-me.service";
+import { CaseWorkspaceService } from "../../services/operations/case-workspace.service";
+import { CaseNotesService } from "../../services/operations/case-notes.service";
+import { CaseStateService } from "../../services/operations/case-state.service";
+
+const CaseParams=z.object({caseId:z.string().uuid()});
+const NoteBody=z.object({body:z.string().trim().min(1).max(10000)});
+const StateBody=z.object({
+  state:z.enum(["OPEN","WAITING_USER","WAITING_INTERNAL","RESOLVED","CLOSED"]),
+  reasonCode:z.string().min(3).max(100)
+});
+const PriorityBody=z.object({
+  priority:z.enum(["LOW","NORMAL","HIGH","URGENT"]),
+  reasonCode:z.string().min(3).max(100)
+});
+
+const scopes=(p:any):string[] => p?.scopes instanceof Set ? [...p.scopes] : [];
+
+export function buildWorkspaceRoutes(pool:any):FastifyPluginAsync {
+  return async function workspaceRoutes(app) {
+    const me=new StaffMeService(pool);
+    const workspace=new CaseWorkspaceService(pool);
+    const notes=new CaseNotesService(pool);
+    const caseState=new CaseStateService(pool);
+
+    app.get("/staff/me",async(request,reply)=>{
+      const p=await (app as any).authenticate(request,reply);
+      requireScope(p,"ops:case:read");
+      const result=await me.getByUserId(p.sub);
+      if(!result) return reply.code(404).send({error:"STAFF_PROFILE_NOT_FOUND"});
+      return result;
+    });
+
+    app.get("/cases/:caseId/workspace",async(request,reply)=>{
+      const p=await (app as any).authenticate(request,reply);
+      requireScope(p,"ops:case:read");
+      const {caseId}=CaseParams.parse(request.params);
+      const result=await workspace.get(caseId);
+      if(!result) return reply.code(404).send({error:"CASE_NOT_FOUND"});
+      return result;
+    });
+
+    app.get("/cases/:caseId/notes",async(request,reply)=>{
+      const p=await (app as any).authenticate(request,reply);
+      requireScope(p,"ops:case:read");
+      const {caseId}=CaseParams.parse(request.params);
+      return notes.list(caseId);
+    });
+
+    app.post("/cases/:caseId/notes",async(request,reply)=>{
+      const p=await (app as any).authenticate(request,reply);
+      requireScope(p,"ops:case:note");
+      const {caseId}=CaseParams.parse(request.params);
+      const body=NoteBody.parse(request.body);
+      return reply.code(201).send(await notes.create({
+        caseId,
+        authorUserId:p.sub,
+        body:body.body,
+        requestId:request.id,
+        scopes:scopes(p)
+      }));
+    });
+
+    app.patch("/cases/:caseId/state",async(request,reply)=>{
+      const p=await (app as any).authenticate(request,reply);
+      requireScope(p,"ops:case:resolve");
+      const {caseId}=CaseParams.parse(request.params);
+      const body=StateBody.parse(request.body);
+      return caseState.updateState({
+        caseId,actorUserId:p.sub,scopes:scopes(p),
+        state:body.state,reasonCode:body.reasonCode,requestId:request.id
+      });
+    });
+
+    app.patch("/cases/:caseId/priority",async(request,reply)=>{
+      const p=await (app as any).authenticate(request,reply);
+      requireScope(p,"ops:case:priority");
+      const {caseId}=CaseParams.parse(request.params);
+      const body=PriorityBody.parse(request.body);
+      return caseState.updatePriority({
+        caseId,actorUserId:p.sub,scopes:scopes(p),
+        priority:body.priority,reasonCode:body.reasonCode,requestId:request.id
+      });
+    });
+  };
+}
+
+
+====================================================================================================
+FILE: server/tests/operations-case-workspace.test.ts
+====================================================================================================
+import { describe,it } from "vitest";
+
+describe("repo-native case workspace",()=>{
+  it.todo("resolves /staff/me from principal.sub");
+  it.todo("reads workspace from real support_cases_v2");
+  it.todo("creates internal note + event + audit atomically");
+  it.todo("rejects note creation without ops:case:note");
+  it.todo("accepts only real support_cases_v2 state values");
+  it.todo("accepts only LOW/NORMAL/HIGH/URGENT priority");
+  it.todo("rolls back note/state update if event or audit write fails");
+});
+
+
+====================================================================================================
+FILE: clients/web/src/admin/api/case-workspace-api.ts
+====================================================================================================
+export type StaffMe={
+  id:string;userId:string;displayName:string;staffRole:string;
+  teamName?:string|null;presence:string;activeCases:number;
+  maxConcurrentCases:number;suspended:boolean;
+};
+
+export type CaseWorkspace={
+  case:{
+    id:string;caseNumber:number|string;
+    state:"OPEN"|"WAITING_USER"|"WAITING_INTERNAL"|"RESOLVED"|"CLOSED";
+    priority:"LOW"|"NORMAL"|"HIGH"|"URGENT";
+    category?:string|null;subject?:string|null;description?:string|null;
+    assignedTeam?:string|null;assignedAgent?:string|null;
+    assignedStaffId?:string|null;assignedStaffName?:string|null;
+    createdAt:string;updatedAt:string;
+  };
+  events:Array<any>;
+  notes:Array<{
+    id:string;caseId:string;authorUserId:string;authorName:string;
+    body:string;createdAt:string;
+  }>;
+};
+
+async function api<T>(accessToken:string,path:string,init?:RequestInit):Promise<T>{
+  const r=await fetch(path,{
+    ...init,
+    headers:{
+      authorization:`Bearer ${accessToken}`,
+      "content-type":"application/json",
+      ...(init?.headers??{})
+    }
+  });
+  const body=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(body.error??`HTTP_${r.status}`);
+  return body as T;
+}
+
+export const caseWorkspaceApi={
+  staffMe:(token:string)=>api<StaffMe>(token,"/v1/admin/operations/staff/me"),
+  workspace:(token:string,id:string)=>api<CaseWorkspace>(token,`/v1/admin/operations/cases/${id}/workspace`),
+  addNote:(token:string,id:string,body:string)=>api<any>(token,`/v1/admin/operations/cases/${id}/notes`,{
+    method:"POST",body:JSON.stringify({body})
+  }),
+  updateState:(token:string,id:string,state:CaseWorkspace["case"]["state"],reasonCode:string)=>api<any>(
+    token,`/v1/admin/operations/cases/${id}/state`,
+    {method:"PATCH",body:JSON.stringify({state,reasonCode})}
+  ),
+  updatePriority:(token:string,id:string,priority:CaseWorkspace["case"]["priority"],reasonCode:string)=>api<any>(
+    token,`/v1/admin/operations/cases/${id}/priority`,
+    {method:"PATCH",body:JSON.stringify({priority,reasonCode})}
+  )
+};
+
+
+====================================================================================================
+FILE: clients/web/src/admin/hooks/useCaseWorkspacePolling.ts
+====================================================================================================
+import useSWR from "swr";
+import { caseWorkspaceApi } from "../api/case-workspace-api";
+
+export const useStaffMe=(accessToken:string)=>useSWR(
+  accessToken?["ops:staff-me",accessToken]:null,
+  ()=>caseWorkspaceApi.staffMe(accessToken),
+  {refreshInterval:30000}
+);
+
+export const useCaseWorkspacePolling=(accessToken:string,caseId:string)=>useSWR(
+  accessToken&&caseId?["ops:case-workspace",caseId,accessToken]:null,
+  ()=>caseWorkspaceApi.workspace(accessToken,caseId),
+  {refreshInterval:10000}
+);
+
+
+====================================================================================================
+FILE: clients/web/src/admin/components/InternalNotesPanel.tsx
+====================================================================================================
+import { useState } from "react";
+
+export function InternalNotesPanel({notes,onAdd}:{notes:any[];onAdd:(body:string)=>Promise<void>}){
+  const [body,setBody]=useState("");
+  const [busy,setBusy]=useState(false);
+
+  async function submit(){
+    const value=body.trim();
+    if(!value) return;
+    setBusy(true);
+    try{await onAdd(value);setBody("");}
+    finally{setBusy(false);}
+  }
+
+  return <div className="rounded-xl border border-slate-800 bg-slate-900/70">
+    <div className="border-b border-slate-800 px-4 py-3">
+      <h3 className="font-semibold">Internal Notes</h3>
+      <p className="text-xs text-slate-500">Authorized staff only.</p>
+    </div>
+
+    <div className="p-4">
+      <textarea
+        value={body}
+        onChange={e=>setBody(e.target.value)}
+        className="min-h-24 w-full rounded-lg border border-slate-700 bg-slate-950 p-3 text-sm"
+        placeholder="Add an internal note…"
+      />
+      <button
+        disabled={busy||!body.trim()}
+        onClick={submit}
+        className="mt-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium disabled:opacity-50"
+      >
+        {busy?"Saving…":"Add Note"}
+      </button>
+    </div>
+
+    <div className="divide-y divide-slate-800 border-t border-slate-800">
+      {notes.map(note=>
+        <div key={note.id} className="px-4 py-3">
+          <div className="flex justify-between text-xs">
+            <strong>{note.authorName}</strong>
+            <span className="text-slate-500">{new Date(note.createdAt).toLocaleString()}</span>
+          </div>
+          <p className="mt-2 whitespace-pre-wrap text-sm text-slate-300">{note.body}</p>
+        </div>
+      )}
+    </div>
+  </div>;
+}
+
+
+====================================================================================================
+FILE: clients/web/src/admin/pages/CaseWorkspacePage.tsx
+====================================================================================================
+import { useState } from "react";
+import { caseWorkspaceApi } from "../api/case-workspace-api";
+import { useCaseWorkspacePolling } from "../hooks/useCaseWorkspacePolling";
+import { InternalNotesPanel } from "../components/InternalNotesPanel";
+
+export default function CaseWorkspacePage({accessToken,caseId}:{accessToken:string;caseId:string}){
+  const ws=useCaseWorkspacePolling(accessToken,caseId);
+  const [busy,setBusy]=useState(false);
+
+  if(ws.isLoading) return <div className="p-6 text-slate-300">Loading case…</div>;
+  if(ws.error||!ws.data) return <div className="p-6 text-rose-400">Unable to load case workspace.</div>;
+
+  const c=ws.data.case;
+
+  async function addNote(body:string){
+    await caseWorkspaceApi.addNote(accessToken,caseId,body);
+    await ws.mutate();
+  }
+
+  async function updateState(state:any){
+    setBusy(true);
+    try{
+      await caseWorkspaceApi.updateState(accessToken,caseId,state,"CASE_WORKSPACE");
+      await ws.mutate();
+    }finally{setBusy(false);}
+  }
+
+  async function updatePriority(priority:any){
+    setBusy(true);
+    try{
+      await caseWorkspaceApi.updatePriority(accessToken,caseId,priority,"CASE_WORKSPACE");
+      await ws.mutate();
+    }finally{setBusy(false);}
+  }
+
+  return <div className="min-h-screen bg-[#050d16] p-5 text-slate-100">
+    <div className="mx-auto max-w-7xl space-y-4">
+      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="text-xs text-slate-500">Case #{c.caseNumber}</div>
+            <h1 className="mt-1 text-2xl font-bold">{c.subject||"Support Case"}</h1>
+            <div className="mt-2 text-sm text-slate-400">
+              {c.category||"General"} • {c.assignedStaffName||c.assignedAgent||"Unassigned"}
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <select disabled={busy} value={c.state} onChange={e=>updateState(e.target.value)}
+              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm">
+              <option>OPEN</option><option>WAITING_USER</option><option>WAITING_INTERNAL</option>
+              <option>RESOLVED</option><option>CLOSED</option>
+            </select>
+
+            <select disabled={busy} value={c.priority} onChange={e=>updatePriority(e.target.value)}
+              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm">
+              <option>LOW</option><option>NORMAL</option><option>HIGH</option><option>URGENT</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5">
+            <h2 className="font-semibold">Case Details</h2>
+            <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-300">
+              {c.description||"No description."}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-slate-900/70">
+            <div className="border-b border-slate-800 px-4 py-3 font-semibold">Case History</div>
+            <div className="divide-y divide-slate-800">
+              {ws.data.events.map((e:any)=>
+                <div key={e.id} className="px-4 py-3">
+                  <div className="flex justify-between">
+                    <div className="text-sm font-medium">{e.eventType}</div>
+                    <div className="text-xs text-slate-500">{new Date(e.createdAt).toLocaleString()}</div>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">Actor: {e.actorName}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <InternalNotesPanel notes={ws.data.notes} onAdd={addNote}/>
+      </div>
+    </div>
+  </div>;
+}

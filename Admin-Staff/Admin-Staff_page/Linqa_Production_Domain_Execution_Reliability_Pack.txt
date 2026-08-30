@@ -1,0 +1,1070 @@
+LINQA PRODUCTION DOMAIN EXECUTION & RELIABILITY PACK
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Production Domain Execution & Reliability Pack
+
+This pack is the next layer after the Admin ↔ Staff Operations Orchestration Pack.
+
+It takes approved operational actions and executes them safely against Linqa domain services.
+
+## What this pack adds
+
+- Approved-action execution worker
+- Idempotent command execution
+- Service-to-service authentication
+- Identity service adapter
+- LinqaSend operations adapter
+- Vault operations adapter
+- Trust & Safety adapter
+- Notification adapter
+- Retry policy and exponential backoff
+- Dead-letter queue
+- Command status tracking
+- Execution receipts
+- Health/readiness endpoints
+- Event consumers
+- Audit evidence binding
+- E2E tests
+
+## Execution path
+
+Sensitive Action Approved
+→ ops_outbox event
+→ command planner
+→ execution_command
+→ execution worker
+→ domain adapter
+→ downstream service
+→ execution receipt
+→ command completed
+→ case event
+→ outbox
+→ Admin + Staff realtime update
+
+## Security guarantees
+
+- No direct DB mutation of Identity/Vault/LinqaSend internals from Ops.
+- All sensitive commands call owning services.
+- Each command uses an idempotency key.
+- Step-up and approval evidence is bound to the execution command.
+- Downstream credentials are service credentials, never user credentials.
+- Full card data, passwords, E2EE keys, Vault keys, and recovery secrets never enter this layer.
+
+
+====================================================================================================
+FILE: package.json
+====================================================================================================
+{
+  "name": "linqa-domain-execution",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:api": "tsx watch src/server.ts",
+    "dev:worker": "tsx watch src/jobs/execution-worker.ts",
+    "dev:consumer": "tsx watch src/events/approval-consumer.ts",
+    "db:migrate": "psql \"$DATABASE_URL\" -f db/001_domain_execution.sql",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.10",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.0",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.6.1",
+    "jose": "^6.0.10",
+    "nats": "^2.29.3",
+    "pg": "^8.13.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.2",
+    "zod": "^4.0.5"
+  },
+  "devDependencies": {
+    "supertest": "^7.1.1",
+    "vitest": "^3.2.4"
+  }
+}
+
+
+====================================================================================================
+FILE: tsconfig.json
+====================================================================================================
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}
+
+
+====================================================================================================
+FILE: .env.example
+====================================================================================================
+DATABASE_URL=postgresql://linqa:linqa@localhost:5432/linqa
+PORT=8090
+REDIS_URL=redis://localhost:6379
+NATS_URL=nats://localhost:4222
+
+IDENTITY_SERVICE_URL=http://localhost:8101
+LINQASEND_SERVICE_URL=http://localhost:8102
+VAULT_SERVICE_URL=http://localhost:8103
+TRUST_SAFETY_SERVICE_URL=http://localhost:8104
+NOTIFICATION_SERVICE_URL=http://localhost:8105
+
+SERVICE_JWT_ISSUER=linqa-ops
+SERVICE_JWT_AUDIENCE=linqa-internal
+SERVICE_JWT_PRIVATE_KEY_PEM=
+SERVICE_JWT_KEY_ID=ops-key-1
+
+EXECUTION_POLL_MS=1000
+EXECUTION_BATCH_SIZE=50
+MAX_EXECUTION_ATTEMPTS=8
+NODE_ENV=development
+
+
+====================================================================================================
+FILE: db/001_domain_execution.sql
+====================================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE execution_status AS ENUM (
+    'PENDING','RUNNING','RETRY','SUCCEEDED','FAILED','DEAD_LETTER','CANCELLED'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS execution_commands (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  approval_request_id uuid NOT NULL UNIQUE,
+  case_id uuid,
+  client_id uuid NOT NULL,
+  command_type text NOT NULL,
+  target_service text NOT NULL,
+  idempotency_key text NOT NULL UNIQUE,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  approval_evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status execution_status NOT NULL DEFAULT 'PENDING',
+  attempts integer NOT NULL DEFAULT 0,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  last_error_code text,
+  last_error_message text,
+  locked_at timestamptz,
+  locked_by text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_execution_commands_ready
+ON execution_commands(next_attempt_at, created_at)
+WHERE status IN ('PENDING','RETRY');
+
+CREATE TABLE IF NOT EXISTS execution_receipts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  command_id uuid NOT NULL REFERENCES execution_commands(id) ON DELETE CASCADE,
+  downstream_service text NOT NULL,
+  downstream_request_id text,
+  downstream_reference text,
+  http_status integer,
+  response_digest text,
+  execution_ms integer,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS execution_dead_letters (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  command_id uuid NOT NULL UNIQUE REFERENCES execution_commands(id) ON DELETE CASCADE,
+  command_type text NOT NULL,
+  target_service text NOT NULL,
+  error_code text,
+  error_message text,
+  payload jsonb,
+  attempts integer NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  reviewed_at timestamptz,
+  reviewed_by_staff_id uuid,
+  resolution text
+);
+
+CREATE TABLE IF NOT EXISTS service_health_state (
+  service_name text PRIMARY KEY,
+  status text NOT NULL CHECK(status IN ('HEALTHY','DEGRADED','DOWN')),
+  latency_ms integer,
+  last_success_at timestamptz,
+  last_failure_at timestamptz,
+  consecutive_failures integer NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+
+====================================================================================================
+FILE: src/common/db.ts
+====================================================================================================
+import { Pool, PoolClient, QueryResultRow } from "pg";
+
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: true } : false
+});
+
+export async function query<T extends QueryResultRow = any>(sql:string, params:unknown[] = []) {
+  return pool.query<T>(sql, params);
+}
+
+export async function tx<T>(fn:(client:PoolClient)=>Promise<T>) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch(e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+
+====================================================================================================
+FILE: src/common/errors.ts
+====================================================================================================
+export class DomainExecutionError extends Error {
+  constructor(
+    message:string,
+    public code:string,
+    public retryable:boolean,
+    public status?:number
+  ) {
+    super(message);
+  }
+}
+
+
+====================================================================================================
+FILE: src/common/digest.ts
+====================================================================================================
+import crypto from "node:crypto";
+
+export function digestJson(value:unknown) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(value))
+    .digest("hex");
+}
+
+
+====================================================================================================
+FILE: src/auth/service-token.ts
+====================================================================================================
+import crypto from "node:crypto";
+
+import { importPKCS8, SignJWT } from "jose";
+
+let privateKeyPromise:Promise<CryptoKey>|null = null;
+
+async function getKey() {
+  if (!privateKeyPromise) {
+    const pem = process.env.SERVICE_JWT_PRIVATE_KEY_PEM?.replace(/\\n/g,"\n");
+    if (!pem) throw new Error("SERVICE_JWT_PRIVATE_KEY_PEM missing");
+    privateKeyPromise = importPKCS8(pem,"RS256");
+  }
+  return privateKeyPromise;
+}
+
+export async function issueServiceToken(targetService:string) {
+  const key = await getKey();
+  const now = Math.floor(Date.now()/1000);
+  return new SignJWT({
+    scope:["ops.execute"],
+    service:"linqa-domain-execution",
+    targetService
+  })
+    .setProtectedHeader({
+      alg:"RS256",
+      kid:process.env.SERVICE_JWT_KEY_ID ?? "ops-key-1"
+    })
+    .setIssuer(process.env.SERVICE_JWT_ISSUER ?? "linqa-ops")
+    .setAudience(process.env.SERVICE_JWT_AUDIENCE ?? "linqa-internal")
+    .setIssuedAt(now)
+    .setExpirationTime(now+120)
+    .setJti(crypto.randomUUID())
+    .sign(key);
+}
+
+
+====================================================================================================
+FILE: src/adapters/base.ts
+====================================================================================================
+import { DomainExecutionError } from "../common/errors.js";
+import { issueServiceToken } from "../auth/service-token.js";
+
+export type AdapterResult = {
+  requestId?:string|null;
+  reference?:string|null;
+  status:number;
+  body:unknown;
+  durationMs:number;
+};
+
+export abstract class BaseAdapter {
+  constructor(
+    protected serviceName:string,
+    protected baseUrl:string
+  ) {}
+
+  protected async post(
+    path:string,
+    body:unknown,
+    idempotencyKey:string
+  ):Promise<AdapterResult> {
+    const token = await issueServiceToken(this.serviceName);
+    const started = Date.now();
+
+    let response:Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`,{
+        method:"POST",
+        headers:{
+          "content-type":"application/json",
+          "authorization":`Bearer ${token}`,
+          "x-idempotency-key":idempotencyKey
+        },
+        body:JSON.stringify(body),
+        signal:AbortSignal.timeout(10_000)
+      });
+    } catch(e:any) {
+      throw new DomainExecutionError(
+        e?.message ?? "downstream_network_error",
+        "DOWNSTREAM_NETWORK",
+        true
+      );
+    }
+
+    const durationMs = Date.now()-started;
+    const parsed = await response.json().catch(()=>({}));
+
+    if (!response.ok) {
+      const retryable = response.status >= 500 || response.status === 429;
+      throw new DomainExecutionError(
+        String((parsed as any)?.error ?? `downstream_${response.status}`),
+        String((parsed as any)?.code ?? "DOWNSTREAM_ERROR"),
+        retryable,
+        response.status
+      );
+    }
+
+    return {
+      requestId:response.headers.get("x-request-id"),
+      reference:String((parsed as any)?.reference ?? "") || null,
+      status:response.status,
+      body:parsed,
+      durationMs
+    };
+  }
+}
+
+
+====================================================================================================
+FILE: src/adapters/identity.adapter.ts
+====================================================================================================
+import { BaseAdapter } from "./base.js";
+
+export class IdentityAdapter extends BaseAdapter {
+  constructor() {
+    super("identity",process.env.IDENTITY_SERVICE_URL ?? "http://localhost:8101");
+  }
+
+  reset2FA(input:{clientId:string;caseId?:string|null;approvalRequestId:string}, idempotencyKey:string) {
+    return this.post("/internal/ops/reset-2fa",input,idempotencyKey);
+  }
+
+  changeRecoveryEmail(
+    input:{clientId:string;newEmail:string;caseId?:string|null;approvalRequestId:string},
+    idempotencyKey:string
+  ) {
+    return this.post("/internal/ops/change-recovery-email",input,idempotencyKey);
+  }
+}
+
+
+====================================================================================================
+FILE: src/adapters/linqasend.adapter.ts
+====================================================================================================
+import { BaseAdapter } from "./base.js";
+
+export class LinqaSendAdapter extends BaseAdapter {
+  constructor() {
+    super("linqasend",process.env.LINQASEND_SERVICE_URL ?? "http://localhost:8102");
+  }
+
+  releasePaymentHold(
+    input:{clientId:string;transactionId:string;caseId?:string|null;approvalRequestId:string},
+    idempotencyKey:string
+  ) {
+    return this.post("/internal/ops/release-hold",input,idempotencyKey);
+  }
+}
+
+
+====================================================================================================
+FILE: src/adapters/vault.adapter.ts
+====================================================================================================
+import { BaseAdapter } from "./base.js";
+
+export class VaultAdapter extends BaseAdapter {
+  constructor() {
+    super("vault",process.env.VAULT_SERVICE_URL ?? "http://localhost:8103");
+  }
+
+  restoreQuarantinedObject(
+    input:{clientId:string;objectId:string;caseId?:string|null;approvalRequestId:string},
+    idempotencyKey:string
+  ) {
+    return this.post("/internal/ops/restore-quarantine",input,idempotencyKey);
+  }
+}
+
+
+====================================================================================================
+FILE: src/adapters/trust-safety.adapter.ts
+====================================================================================================
+import { BaseAdapter } from "./base.js";
+
+export class TrustSafetyAdapter extends BaseAdapter {
+  constructor() {
+    super("trust-safety",process.env.TRUST_SAFETY_SERVICE_URL ?? "http://localhost:8104");
+  }
+
+  overrideEnforcement(
+    input:{clientId:string;enforcementId:string;caseId?:string|null;approvalRequestId:string},
+    idempotencyKey:string
+  ) {
+    return this.post("/internal/ops/enforcement-override",input,idempotencyKey);
+  }
+}
+
+
+====================================================================================================
+FILE: src/commands/types.ts
+====================================================================================================
+export type CommandType =
+  | "RESET_2FA"
+  | "CHANGE_RECOVERY_EMAIL"
+  | "RELEASE_PAYMENT_HOLD"
+  | "RESTORE_VAULT_QUARANTINE"
+  | "SAFETY_ENFORCEMENT_OVERRIDE";
+
+export type ExecutionCommand = {
+  id:string;
+  approvalRequestId:string;
+  caseId?:string|null;
+  clientId:string;
+  commandType:CommandType;
+  targetService:string;
+  idempotencyKey:string;
+  payload:any;
+  approvalEvidence:any;
+  attempts:number;
+};
+
+
+====================================================================================================
+FILE: src/commands/planner.ts
+====================================================================================================
+import crypto from "node:crypto";
+import type { PoolClient } from "pg";
+import type { CommandType } from "./types.js";
+
+const targets:Record<CommandType,string> = {
+  RESET_2FA:"identity",
+  CHANGE_RECOVERY_EMAIL:"identity",
+  RELEASE_PAYMENT_HOLD:"linqasend",
+  RESTORE_VAULT_QUARANTINE:"vault",
+  SAFETY_ENFORCEMENT_OVERRIDE:"trust-safety"
+};
+
+export async function createExecutionCommand(
+  client:PoolClient,
+  input:{
+    approvalRequestId:string;
+    caseId?:string|null;
+    clientId:string;
+    actionType:CommandType;
+    payload:unknown;
+    approvalEvidence:unknown;
+  }
+) {
+  const idempotencyKey = crypto
+    .createHash("sha256")
+    .update(`approval:${input.approvalRequestId}:${input.actionType}`)
+    .digest("hex");
+
+  const r = await client.query(`
+    INSERT INTO execution_commands(
+      approval_request_id,case_id,client_id,command_type,target_service,
+      idempotency_key,payload,approval_evidence
+    )
+    VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7::jsonb,$8::jsonb)
+    ON CONFLICT(approval_request_id) DO UPDATE SET
+      approval_evidence=EXCLUDED.approval_evidence,
+      updated_at=now()
+    RETURNING *
+  `,[
+    input.approvalRequestId,input.caseId ?? null,input.clientId,input.actionType,
+    targets[input.actionType],idempotencyKey,JSON.stringify(input.payload),
+    JSON.stringify(input.approvalEvidence)
+  ]);
+
+  return r.rows[0];
+}
+
+
+====================================================================================================
+FILE: src/execution/router.ts
+====================================================================================================
+import { IdentityAdapter } from "../adapters/identity.adapter.js";
+import { LinqaSendAdapter } from "../adapters/linqasend.adapter.js";
+import { VaultAdapter } from "../adapters/vault.adapter.js";
+import { TrustSafetyAdapter } from "../adapters/trust-safety.adapter.js";
+import type { ExecutionCommand } from "../commands/types.js";
+
+const identity = new IdentityAdapter();
+const linqasend = new LinqaSendAdapter();
+const vault = new VaultAdapter();
+const trustSafety = new TrustSafetyAdapter();
+
+export async function executeCommand(command:ExecutionCommand) {
+  const common = {
+    clientId:command.clientId,
+    caseId:command.caseId ?? null,
+    approvalRequestId:command.approvalRequestId
+  };
+
+  switch(command.commandType) {
+    case "RESET_2FA":
+      return identity.reset2FA(common,command.idempotencyKey);
+
+    case "CHANGE_RECOVERY_EMAIL":
+      return identity.changeRecoveryEmail({
+        ...common,
+        newEmail:String(command.payload.newEmail)
+      },command.idempotencyKey);
+
+    case "RELEASE_PAYMENT_HOLD":
+      return linqasend.releasePaymentHold({
+        ...common,
+        transactionId:String(command.payload.transactionId)
+      },command.idempotencyKey);
+
+    case "RESTORE_VAULT_QUARANTINE":
+      return vault.restoreQuarantinedObject({
+        ...common,
+        objectId:String(command.payload.objectId)
+      },command.idempotencyKey);
+
+    case "SAFETY_ENFORCEMENT_OVERRIDE":
+      return trustSafety.overrideEnforcement({
+        ...common,
+        enforcementId:String(command.payload.enforcementId)
+      },command.idempotencyKey);
+  }
+}
+
+
+====================================================================================================
+FILE: src/execution/retry.ts
+====================================================================================================
+export function backoffSeconds(attempt:number) {
+  const base = Math.min(300, 2 ** Math.min(attempt,8));
+  const jitter = Math.floor(Math.random()*3);
+  return base + jitter;
+}
+
+
+====================================================================================================
+FILE: src/execution/service.ts
+====================================================================================================
+import type { PoolClient } from "pg";
+import { digestJson } from "../common/digest.js";
+import { DomainExecutionError } from "../common/errors.js";
+import { executeCommand } from "./router.js";
+import { backoffSeconds } from "./retry.js";
+
+export async function runOneCommand(client:PoolClient, row:any) {
+  const maxAttempts = Number(process.env.MAX_EXECUTION_ATTEMPTS ?? 8);
+
+  await client.query(`
+    UPDATE execution_commands
+    SET status='RUNNING',attempts=attempts+1,locked_at=now(),updated_at=now()
+    WHERE id=$1::uuid
+  `,[row.id]);
+
+  try {
+    const result = await executeCommand({
+      id:row.id,
+      approvalRequestId:row.approval_request_id,
+      caseId:row.case_id,
+      clientId:row.client_id,
+      commandType:row.command_type,
+      targetService:row.target_service,
+      idempotencyKey:row.idempotency_key,
+      payload:row.payload,
+      approvalEvidence:row.approval_evidence,
+      attempts:row.attempts+1
+    });
+
+    await client.query(`
+      INSERT INTO execution_receipts(
+        command_id,downstream_service,downstream_request_id,downstream_reference,
+        http_status,response_digest,execution_ms
+      )
+      VALUES($1::uuid,$2,$3,$4,$5,$6,$7)
+    `,[
+      row.id,row.target_service,result.requestId ?? null,result.reference ?? null,
+      result.status,digestJson(result.body),result.durationMs
+    ]);
+
+    await client.query(`
+      UPDATE execution_commands
+      SET status='SUCCEEDED',completed_at=now(),locked_at=NULL,locked_by=NULL,
+          last_error_code=NULL,last_error_message=NULL,updated_at=now()
+      WHERE id=$1::uuid
+    `,[row.id]);
+
+    await client.query(`
+      UPDATE sensitive_action_requests
+      SET status='EXECUTED',executed_at=now(),
+          execution_reference=$2,updated_at=now()
+      WHERE id=$1::uuid
+    `,[row.approval_request_id,result.reference ?? row.id]);
+
+    if (row.case_id) {
+      await client.query(`
+        INSERT INTO case_events(case_id,event_type,payload)
+        VALUES($1::uuid,'SENSITIVE_ACTION_EXECUTED',$2::jsonb)
+      `,[row.case_id,JSON.stringify({
+        approvalRequestId:row.approval_request_id,
+        commandId:row.id,
+        commandType:row.command_type
+      })]);
+    }
+
+    await client.query(`
+      INSERT INTO ops_outbox(aggregate_type,aggregate_id,event_type,event_key,payload)
+      VALUES('command',$1,'command.succeeded',$1,$2::jsonb)
+    `,[row.id,JSON.stringify({
+      commandId:row.id,
+      caseId:row.case_id,
+      clientId:row.client_id,
+      commandType:row.command_type
+    })]);
+
+    return;
+  } catch(e:any) {
+    const err = e instanceof DomainExecutionError
+      ? e
+      : new DomainExecutionError(String(e?.message ?? e),"UNEXPECTED",true);
+
+    const attempt = row.attempts+1;
+    const shouldRetry = err.retryable && attempt < maxAttempts;
+
+    if (shouldRetry) {
+      const delay = backoffSeconds(attempt);
+      await client.query(`
+        UPDATE execution_commands
+        SET status='RETRY',
+            next_attempt_at=now()+make_interval(secs=>$2),
+            last_error_code=$3,last_error_message=$4,
+            locked_at=NULL,locked_by=NULL,updated_at=now()
+        WHERE id=$1::uuid
+      `,[row.id,delay,err.code,err.message.slice(0,1000)]);
+      return;
+    }
+
+    await client.query(`
+      UPDATE execution_commands
+      SET status='DEAD_LETTER',
+          last_error_code=$2,last_error_message=$3,
+          locked_at=NULL,locked_by=NULL,updated_at=now()
+      WHERE id=$1::uuid
+    `,[row.id,err.code,err.message.slice(0,1000)]);
+
+    await client.query(`
+      INSERT INTO execution_dead_letters(
+        command_id,command_type,target_service,error_code,error_message,payload,attempts
+      )
+      VALUES($1::uuid,$2,$3,$4,$5,$6::jsonb,$7)
+      ON CONFLICT(command_id) DO NOTHING
+    `,[row.id,row.command_type,row.target_service,err.code,err.message.slice(0,1000),JSON.stringify(row.payload),attempt]);
+
+    await client.query(`
+      INSERT INTO ops_outbox(aggregate_type,aggregate_id,event_type,event_key,payload)
+      VALUES('command',$1,'command.dead_letter',$1,$2::jsonb)
+    `,[row.id,JSON.stringify({
+      commandId:row.id,
+      caseId:row.case_id,
+      commandType:row.command_type,
+      errorCode:err.code
+    })]);
+  }
+}
+
+
+====================================================================================================
+FILE: src/jobs/execution-worker.ts
+====================================================================================================
+import "dotenv/config";
+import os from "node:os";
+import { pool } from "../common/db.js";
+import { runOneCommand } from "../execution/service.js";
+
+const workerId = `${os.hostname()}:${process.pid}`;
+const batch = Number(process.env.EXECUTION_BATCH_SIZE ?? 50);
+const pollMs = Number(process.env.EXECUTION_POLL_MS ?? 1000);
+
+async function tick() {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const r = await client.query(`
+      SELECT *
+      FROM execution_commands
+      WHERE status IN ('PENDING','RETRY')
+        AND next_attempt_at<=now()
+      ORDER BY created_at
+      FOR UPDATE SKIP LOCKED
+      LIMIT $1
+    `,[batch]);
+
+    for (const row of r.rows) {
+      await client.query(`
+        UPDATE execution_commands SET locked_by=$2 WHERE id=$1::uuid
+      `,[row.id,workerId]);
+
+      await runOneCommand(client,row);
+    }
+
+    await client.query("COMMIT");
+  } catch(e) {
+    await client.query("ROLLBACK");
+    console.error("execution worker error",e);
+  } finally {
+    client.release();
+  }
+}
+
+const timer = setInterval(tick,pollMs);
+tick().catch(console.error);
+
+process.on("SIGTERM",async()=>{
+  clearInterval(timer);
+  await pool.end();
+  process.exit(0);
+});
+
+
+====================================================================================================
+FILE: src/events/approval-consumer.ts
+====================================================================================================
+import "dotenv/config";
+import Redis from "ioredis";
+import { tx } from "../common/db.js";
+import { createExecutionCommand } from "../commands/planner.js";
+
+const redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379");
+let lastId = "$";
+
+async function handle(event:any) {
+  if (event.eventType !== "approval.approved") return;
+
+  const p = event.payload;
+  await tx(async client=>{
+    const reqR = await client.query(`
+      SELECT r.*,
+        COALESCE(jsonb_agg(
+          jsonb_build_object(
+            'approverStaffId',a.approver_staff_id,
+            'decision',a.decision,
+            'createdAt',a.created_at
+          )
+        ) FILTER (WHERE a.id IS NOT NULL),'[]'::jsonb) approvals
+      FROM sensitive_action_requests r
+      LEFT JOIN sensitive_action_approvals a ON a.request_id=r.id
+      WHERE r.id=$1::uuid
+      GROUP BY r.id
+    `,[p.requestId]);
+
+    if (!reqR.rowCount) return;
+    const r = reqR.rows[0];
+    if (r.status !== "APPROVED") return;
+
+    await createExecutionCommand(client,{
+      approvalRequestId:r.id,
+      caseId:r.case_id,
+      clientId:r.client_id,
+      actionType:r.action_type,
+      payload:r.payload,
+      approvalEvidence:{
+        requiredApprovals:r.required_approvals,
+        requiresStepUp:r.requires_step_up,
+        approvals:r.approvals
+      }
+    });
+  });
+}
+
+async function loop() {
+  while(true) {
+    const result = await redis.xread(
+      "BLOCK",5000,
+      "COUNT",100,
+      "STREAMS","linqa:ops:events",lastId
+    ) as any;
+
+    if (!result) continue;
+
+    for (const [,entries] of result) {
+      for (const [id,fields] of entries) {
+        lastId=id;
+        const obj:any={};
+        for(let i=0;i<fields.length;i+=2) obj[fields[i]]=fields[i+1];
+        await handle({
+          eventType:obj.eventType,
+          eventKey:obj.eventKey,
+          payload:JSON.parse(obj.payload)
+        });
+      }
+    }
+  }
+}
+
+loop().catch(e=>{
+  console.error(e);
+  process.exit(1);
+});
+
+
+====================================================================================================
+FILE: src/notifications/notification.adapter.ts
+====================================================================================================
+import { BaseAdapter } from "../adapters/base.js";
+
+export class NotificationAdapter extends BaseAdapter {
+  constructor() {
+    super("notification",process.env.NOTIFICATION_SERVICE_URL ?? "http://localhost:8105");
+  }
+
+  notifySensitiveActionResult(
+    input:{clientId:string;caseId?:string|null;actionType:string;status:string},
+    idempotencyKey:string
+  ) {
+    return this.post("/internal/ops/notify-action-result",input,idempotencyKey);
+  }
+}
+
+
+====================================================================================================
+FILE: src/health/health.service.ts
+====================================================================================================
+import { query } from "../common/db.js";
+
+export async function readiness() {
+  const started = Date.now();
+  await query("SELECT 1");
+  return {
+    ok:true,
+    database:{ok:true,latencyMs:Date.now()-started},
+    time:new Date().toISOString()
+  };
+}
+
+
+====================================================================================================
+FILE: src/api/routes.ts
+====================================================================================================
+import { Router } from "express";
+import { z } from "zod";
+import { query,tx } from "../common/db.js";
+import { readiness } from "../health/health.service.js";
+
+export const router = Router();
+
+router.get("/health/live",(_req,res)=>res.json({ok:true}));
+
+router.get("/health/ready",async(_req,res,next)=>{
+  try { res.json(await readiness()); } catch(e){ next(e); }
+});
+
+router.get("/commands/:id",async(req,res,next)=>{
+  try {
+    const r = await query(`
+      SELECT id::text,approval_request_id::text "approvalRequestId",
+             case_id::text "caseId",client_id::text "clientId",
+             command_type "commandType",target_service "targetService",
+             status::text,attempts,last_error_code "lastErrorCode",
+             last_error_message "lastErrorMessage",created_at "createdAt",
+             updated_at "updatedAt",completed_at "completedAt"
+      FROM execution_commands
+      WHERE id=$1::uuid
+    `,[req.params.id]);
+
+    if (!r.rowCount) return res.status(404).json({error:"command_not_found"});
+    res.json(r.rows[0]);
+  } catch(e){ next(e); }
+});
+
+router.get("/dead-letters",async(_req,res,next)=>{
+  try {
+    const r = await query(`
+      SELECT id::text,command_id::text "commandId",command_type "commandType",
+             target_service "targetService",error_code "errorCode",
+             error_message "errorMessage",attempts,created_at "createdAt"
+      FROM execution_dead_letters
+      WHERE reviewed_at IS NULL
+      ORDER BY created_at DESC
+      LIMIT 100
+    `);
+    res.json(r.rows);
+  } catch(e){next(e);}
+});
+
+router.post("/dead-letters/:id/retry",async(req,res,next)=>{
+  const schema=z.object({reasonCode:z.string().min(3).max(100)});
+  try {
+    schema.parse(req.body);
+    const result=await tx(async client=>{
+      const dl=await client.query(`
+        SELECT * FROM execution_dead_letters
+        WHERE id=$1::uuid
+        FOR UPDATE
+      `,[req.params.id]);
+      if(!dl.rowCount) throw Object.assign(new Error("dead_letter_not_found"),{status:404});
+
+      await client.query(`
+        UPDATE execution_commands
+        SET status='RETRY',next_attempt_at=now(),last_error_code=NULL,
+            last_error_message=NULL,updated_at=now()
+        WHERE id=$1::uuid
+      `,[dl.rows[0].command_id]);
+
+      await client.query(`
+        UPDATE execution_dead_letters
+        SET reviewed_at=now(),resolution='RETRY_REQUESTED'
+        WHERE id=$1::uuid
+      `,[req.params.id]);
+
+      return {ok:true};
+    });
+    res.json(result);
+  } catch(e){next(e);}
+});
+
+
+====================================================================================================
+FILE: src/server.ts
+====================================================================================================
+import "dotenv/config";
+import express from "express";
+import helmet from "helmet";
+import cors from "cors";
+import { router } from "./api/routes.js";
+
+export const app=express();
+app.disable("x-powered-by");
+app.use(helmet());
+app.use(cors({origin:false}));
+app.use(express.json({limit:"1mb"}));
+app.use("/internal/execution",router);
+
+app.use((err:any,_req:any,res:any,_next:any)=>{
+  const status=err.status ?? (err.name==="ZodError"?400:500);
+  if(status>=500) console.error(err);
+  res.status(status).json({
+    error:status===500?"internal_server_error":err.message
+  });
+});
+
+if(process.env.NODE_ENV!=="test"){
+  const port=Number(process.env.PORT ?? 8090);
+  app.listen(port,()=>console.log(`Linqa Domain Execution API :${port}`));
+}
+
+
+====================================================================================================
+FILE: tests/retry.test.ts
+====================================================================================================
+import { describe,it,expect } from "vitest";
+import { backoffSeconds } from "../src/execution/retry.js";
+
+describe("retry backoff",()=>{
+  it("increases with attempt and caps",()=>{
+    const a=backoffSeconds(1);
+    const b=backoffSeconds(6);
+    expect(b).toBeGreaterThan(a);
+    expect(backoffSeconds(20)).toBeLessThanOrEqual(302);
+  });
+});
+
+
+====================================================================================================
+FILE: tests/planner.test.ts
+====================================================================================================
+import { describe,it,expect,vi } from "vitest";
+import { createExecutionCommand } from "../src/commands/planner.js";
+
+describe("command planner",()=>{
+  it("uses deterministic idempotency key per approval/action",async()=>{
+    const query=vi.fn().mockResolvedValue({
+      rows:[{id:"1"}]
+    });
+    const client:any={query};
+
+    await createExecutionCommand(client,{
+      approvalRequestId:"00000000-0000-0000-0000-000000000001",
+      clientId:"00000000-0000-0000-0000-000000000002",
+      actionType:"RESET_2FA",
+      payload:{},
+      approvalEvidence:{}
+    });
+
+    const params=query.mock.calls[0][1];
+    expect(params[5]).toMatch(/^[a-f0-9]{64}$/);
+  });
+});
+
+
+====================================================================================================
+FILE: tests/api.test.ts
+====================================================================================================
+import { describe,it,expect } from "vitest";
+import request from "supertest";
+import { app } from "../src/server.js";
+
+describe("execution API",()=>{
+  it("has liveness endpoint",async()=>{
+    const r=await request(app).get("/internal/execution/health/live");
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+  });
+});

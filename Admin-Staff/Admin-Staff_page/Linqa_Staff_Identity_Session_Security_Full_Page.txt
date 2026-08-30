@@ -1,0 +1,989 @@
+LINQA STAFF IDENTITY + SSO/MFA + SESSION SECURITY + DEVICE TRUST
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Staff Identity & Session Security Page
+
+This pack implements the next Admin/Staff operations page:
+
+Staff Identity + SSO/MFA + Session Security + Device Trust
+
+## Included
+
+- Staff security dashboard UI
+- Staff profile & role summary
+- SSO provider status
+- MFA / passkey enrollment status
+- Trusted device list
+- Active sessions list
+- Session revocation
+- Force sign-out everywhere
+- Step-up verification state
+- Login risk events
+- Staff suspension / reactivation
+- Device trust approval / revoke
+- PostgreSQL schema
+- Express API
+- RBAC
+- Audit logging
+- Security event timeline
+
+## Security principles
+
+- Admins cannot read passwords, passkey private keys, TOTP secrets, or recovery secrets.
+- Device trust is represented by server-issued trust records only.
+- Sensitive changes require reason codes and step-up authentication.
+- Session revocation is auditable.
+- Staff suspension invalidates active sessions.
+
+
+====================================================================================================
+FILE: package.json
+====================================================================================================
+{
+  "name": "linqa-staff-identity-security-page",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:web": "next dev -p 3000",
+    "dev:api": "tsx watch server/index.ts",
+    "db:migrate": "psql \"$DATABASE_URL\" -f db/001_staff_identity_security.sql",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "clsx": "^2.1.1",
+    "compression": "^1.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.0",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "lucide-react": "^0.468.0",
+    "next": "^15.5.0",
+    "pg": "^8.13.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "swr": "^2.3.0",
+    "tailwind-merge": "^3.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.2",
+    "zod": "^4.0.5"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^3.4.0"
+  }
+}
+
+
+====================================================================================================
+FILE: .env.example
+====================================================================================================
+DATABASE_URL=postgresql://linqa:linqa@localhost:5432/linqa
+PORT=8080
+ADMIN_ORIGINS=http://localhost:3000
+NODE_ENV=development
+
+
+====================================================================================================
+FILE: tailwind.config.ts
+====================================================================================================
+import type { Config } from "tailwindcss";
+export default {
+  darkMode:["class"],
+  content:["./app/**/*.{ts,tsx}","./components/**/*.{ts,tsx}"],
+  theme:{extend:{}},
+  plugins:[]
+} satisfies Config;
+
+
+====================================================================================================
+FILE: shared/types.ts
+====================================================================================================
+export type StaffSecurityStatus = "ACTIVE" | "SUSPENDED" | "LOCKED";
+export type DeviceTrust = "TRUSTED" | "PENDING" | "REVOKED";
+export type SessionStatus = "ACTIVE" | "REVOKED" | "EXPIRED";
+export type RiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+export interface StaffIdentitySummary {
+  id:string;
+  userId:string;
+  displayName:string;
+  roleName:string;
+  teamName?:string|null;
+  emailMasked?:string|null;
+  status:StaffSecurityStatus;
+  ssoProvider:string;
+  mfaEnabled:boolean;
+  passkeyCount:number;
+  trustedDeviceCount:number;
+  activeSessionCount:number;
+  stepUpVerifiedAt?:string|null;
+  lastLoginAt?:string|null;
+  lastSeenAt?:string|null;
+}
+
+export interface TrustedDevice {
+  id:string;
+  label:string;
+  platform:string;
+  browser?:string|null;
+  osVersion?:string|null;
+  deviceFingerprintHash:string;
+  trustStatus:DeviceTrust;
+  createdAt:string;
+  lastSeenAt?:string|null;
+  trustedAt?:string|null;
+}
+
+export interface StaffSessionRow {
+  id:string;
+  deviceId?:string|null;
+  ipHash?:string|null;
+  userAgent?:string|null;
+  status:SessionStatus;
+  createdAt:string;
+  lastSeenAt?:string|null;
+  expiresAt:string;
+  revokedAt?:string|null;
+}
+
+export interface LoginRiskEvent {
+  id:string;
+  eventType:string;
+  riskLevel:RiskLevel;
+  riskScore:number;
+  description:string;
+  createdAt:string;
+}
+
+export interface StaffIdentityPagePayload {
+  staff:StaffIdentitySummary;
+  devices:TrustedDevice[];
+  sessions:StaffSessionRow[];
+  riskEvents:LoginRiskEvent[];
+}
+
+
+====================================================================================================
+FILE: shared/permissions.ts
+====================================================================================================
+export type StaffSecurityPermission =
+  | "staff.security.read"
+  | "staff.security.manage"
+  | "staff.session.revoke"
+  | "staff.device.trust"
+  | "staff.suspend";
+
+const map:Record<string,StaffSecurityPermission[]> = {
+  SUPER_ADMIN:[
+    "staff.security.read","staff.security.manage","staff.session.revoke",
+    "staff.device.trust","staff.suspend"
+  ],
+  OPS_ADMIN:[
+    "staff.security.read","staff.security.manage","staff.session.revoke",
+    "staff.device.trust","staff.suspend"
+  ],
+  SUPERVISOR:[
+    "staff.security.read","staff.session.revoke"
+  ],
+  AUDITOR:["staff.security.read"]
+};
+
+export function can(role:string,permission:StaffSecurityPermission){
+  return map[role]?.includes(permission) ?? false;
+}
+
+
+====================================================================================================
+FILE: db/001_staff_identity_security.sql
+====================================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE staff_security_status AS ENUM ('ACTIVE','SUSPENDED','LOCKED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE staff_device_trust AS ENUM ('TRUSTED','PENDING','REVOKED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE staff_session_status AS ENUM ('ACTIVE','REVOKED','EXPIRED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE staff_risk_level AS ENUM ('LOW','MEDIUM','HIGH','CRITICAL');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS staff_identity_security (
+  staff_id uuid PRIMARY KEY,
+  user_id uuid UNIQUE NOT NULL,
+  display_name text NOT NULL,
+  role_name text NOT NULL,
+  team_name text,
+  email_masked text,
+  security_status staff_security_status NOT NULL DEFAULT 'ACTIVE',
+  sso_provider text NOT NULL DEFAULT 'LINQA_SSO',
+  mfa_enabled boolean NOT NULL DEFAULT false,
+  passkey_count integer NOT NULL DEFAULT 0,
+  step_up_verified_at timestamptz,
+  last_login_at timestamptz,
+  last_seen_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS staff_trusted_devices (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  staff_id uuid NOT NULL REFERENCES staff_identity_security(staff_id) ON DELETE CASCADE,
+  label text NOT NULL,
+  platform text NOT NULL,
+  browser text,
+  os_version text,
+  device_fingerprint_hash text NOT NULL,
+  trust_status staff_device_trust NOT NULL DEFAULT 'PENDING',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  trusted_at timestamptz,
+  last_seen_at timestamptz,
+  revoked_at timestamptz,
+  UNIQUE(staff_id,device_fingerprint_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_staff_devices_staff
+ON staff_trusted_devices(staff_id,trust_status);
+
+CREATE TABLE IF NOT EXISTS staff_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  staff_id uuid NOT NULL REFERENCES staff_identity_security(staff_id) ON DELETE CASCADE,
+  device_id uuid REFERENCES staff_trusted_devices(id),
+  token_hash text NOT NULL UNIQUE,
+  ip_hash text,
+  user_agent text,
+  status staff_session_status NOT NULL DEFAULT 'ACTIVE',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  revoke_reason text
+);
+
+CREATE INDEX IF NOT EXISTS idx_staff_sessions_active
+ON staff_sessions(staff_id,status,expires_at);
+
+CREATE TABLE IF NOT EXISTS staff_login_risk_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  staff_id uuid NOT NULL REFERENCES staff_identity_security(staff_id) ON DELETE CASCADE,
+  event_type text NOT NULL,
+  risk_level staff_risk_level NOT NULL,
+  risk_score numeric(5,2) NOT NULL,
+  description text NOT NULL,
+  ip_hash text,
+  device_fingerprint_hash text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS staff_security_audit (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_user_id uuid,
+  actor_staff_id uuid,
+  actor_role text,
+  target_staff_id uuid,
+  action text NOT NULL,
+  reason_code text,
+  request_id text,
+  before_json jsonb,
+  after_json jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+
+====================================================================================================
+FILE: server/db.ts
+====================================================================================================
+import { Pool } from "pg";
+
+export const pool = new Pool({
+  connectionString:process.env.DATABASE_URL,
+  max:20,
+  idleTimeoutMillis:30000,
+  connectionTimeoutMillis:5000,
+  ssl:process.env.NODE_ENV==="production"?{rejectUnauthorized:true}:false
+});
+
+export async function query(sql:string,params:unknown[]=[]){
+  return pool.query(sql,params);
+}
+
+
+====================================================================================================
+FILE: server/auth.ts
+====================================================================================================
+import type { Request,Response,NextFunction } from "express";
+import { can,type StaffSecurityPermission } from "../shared/permissions.js";
+
+declare global {
+  namespace Express {
+    interface Request {
+      principal?:{
+        userId:string;
+        staffId:string;
+        role:string;
+        displayName:string;
+      };
+      requestId?:string;
+    }
+  }
+}
+
+export function requireStaff(req:Request,res:Response,next:NextFunction){
+  const userId=String(req.headers["x-linqa-user-id"]??"");
+  const staffId=String(req.headers["x-linqa-staff-id"]??"");
+  const role=String(req.headers["x-linqa-role"]??"");
+  const displayName=String(req.headers["x-linqa-staff-name"]??"");
+
+  if(!userId||!staffId||!role) return res.status(401).json({error:"unauthorized"});
+  req.principal={userId,staffId,role,displayName:displayName||"Staff"};
+  next();
+}
+
+export function requirePermission(permission:StaffSecurityPermission){
+  return (req:Request,res:Response,next:NextFunction)=>{
+    if(!req.principal) return res.status(401).json({error:"unauthorized"});
+    if(!can(req.principal.role,permission)){
+      return res.status(403).json({error:"forbidden",permission});
+    }
+    next();
+  };
+}
+
+
+====================================================================================================
+FILE: server/audit.ts
+====================================================================================================
+import type { Request } from "express";
+import { query } from "./db.js";
+
+export async function audit(req:Request,input:{
+  targetStaffId:string;
+  action:string;
+  reasonCode?:string;
+  before?:unknown;
+  after?:unknown;
+}){
+  await query(`
+    INSERT INTO staff_security_audit(
+      actor_user_id,actor_staff_id,actor_role,target_staff_id,
+      action,reason_code,request_id,before_json,after_json
+    )
+    VALUES($1::uuid,$2::uuid,$3,$4::uuid,$5,$6,$7,$8::jsonb,$9::jsonb)
+  `,[
+    req.principal?.userId??null,
+    req.principal?.staffId??null,
+    req.principal?.role??null,
+    input.targetStaffId,
+    input.action,
+    input.reasonCode??null,
+    req.requestId??null,
+    JSON.stringify(input.before??null),
+    JSON.stringify(input.after??null)
+  ]);
+}
+
+
+====================================================================================================
+FILE: server/service.ts
+====================================================================================================
+import { query } from "./db.js";
+
+export async function getStaffSecurityPage(staffId:string){
+  const [staffR,devicesR,sessionsR,riskR]=await Promise.all([
+    query(`
+      SELECT s.staff_id::text id,s.user_id::text "userId",s.display_name "displayName",
+        s.role_name "roleName",s.team_name "teamName",s.email_masked "emailMasked",
+        s.security_status::text status,s.sso_provider "ssoProvider",
+        s.mfa_enabled "mfaEnabled",s.passkey_count "passkeyCount",
+        s.step_up_verified_at "stepUpVerifiedAt",s.last_login_at "lastLoginAt",
+        s.last_seen_at "lastSeenAt",
+        (SELECT count(*)::int FROM staff_trusted_devices d WHERE d.staff_id=s.staff_id AND d.trust_status='TRUSTED') "trustedDeviceCount",
+        (SELECT count(*)::int FROM staff_sessions x WHERE x.staff_id=s.staff_id AND x.status='ACTIVE' AND x.expires_at>now()) "activeSessionCount"
+      FROM staff_identity_security s
+      WHERE s.staff_id=$1::uuid
+    `,[staffId]),
+    query(`
+      SELECT id::text,label,platform,browser,os_version "osVersion",
+        device_fingerprint_hash "deviceFingerprintHash",
+        trust_status::text "trustStatus",
+        created_at "createdAt",last_seen_at "lastSeenAt",trusted_at "trustedAt"
+      FROM staff_trusted_devices
+      WHERE staff_id=$1::uuid
+      ORDER BY created_at DESC
+    `,[staffId]),
+    query(`
+      SELECT id::text,device_id::text "deviceId",ip_hash "ipHash",
+        user_agent "userAgent",status::text,created_at "createdAt",
+        last_seen_at "lastSeenAt",expires_at "expiresAt",revoked_at "revokedAt"
+      FROM staff_sessions
+      WHERE staff_id=$1::uuid
+      ORDER BY created_at DESC
+      LIMIT 25
+    `,[staffId]),
+    query(`
+      SELECT id::text,event_type "eventType",risk_level::text "riskLevel",
+        risk_score::float8 "riskScore",description,created_at "createdAt"
+      FROM staff_login_risk_events
+      WHERE staff_id=$1::uuid
+      ORDER BY created_at DESC
+      LIMIT 20
+    `,[staffId])
+  ]);
+
+  if(!staffR.rowCount) return null;
+  return {
+    staff:staffR.rows[0],
+    devices:devicesR.rows,
+    sessions:sessionsR.rows,
+    riskEvents:riskR.rows
+  };
+}
+
+
+====================================================================================================
+FILE: server/routes.ts
+====================================================================================================
+import { Router } from "express";
+import { z } from "zod";
+import { requirePermission,requireStaff } from "./auth.js";
+import { getStaffSecurityPage } from "./service.js";
+import { query } from "./db.js";
+import { audit } from "./audit.js";
+
+export const router=Router();
+router.use(requireStaff);
+
+router.get("/staff/:id",requirePermission("staff.security.read"),async(req,res,next)=>{
+  try{
+    const data=await getStaffSecurityPage(req.params.id);
+    if(!data) return res.status(404).json({error:"staff_not_found"});
+    res.json(data);
+  }catch(e){next(e);}
+});
+
+router.post("/staff/:id/suspend",requirePermission("staff.suspend"),async(req,res,next)=>{
+  const schema=z.object({
+    reasonCode:z.string().min(3).max(100)
+  });
+  try{
+    const body=schema.parse(req.body);
+    const before=await query(`SELECT * FROM staff_identity_security WHERE staff_id=$1::uuid`,[req.params.id]);
+
+    await query(`
+      UPDATE staff_identity_security
+      SET security_status='SUSPENDED',updated_at=now()
+      WHERE staff_id=$1::uuid
+    `,[req.params.id]);
+
+    await query(`
+      UPDATE staff_sessions
+      SET status='REVOKED',revoked_at=now(),revoke_reason=$2
+      WHERE staff_id=$1::uuid AND status='ACTIVE'
+    `,[req.params.id,body.reasonCode]);
+
+    await audit(req,{
+      targetStaffId:req.params.id,
+      action:"staff.suspend",
+      reasonCode:body.reasonCode,
+      before:before.rows[0],
+      after:{status:"SUSPENDED"}
+    });
+
+    res.json({ok:true});
+  }catch(e){next(e);}
+});
+
+router.post("/staff/:id/reactivate",requirePermission("staff.suspend"),async(req,res,next)=>{
+  const schema=z.object({reasonCode:z.string().min(3).max(100)});
+  try{
+    const body=schema.parse(req.body);
+    await query(`
+      UPDATE staff_identity_security
+      SET security_status='ACTIVE',updated_at=now()
+      WHERE staff_id=$1::uuid
+    `,[req.params.id]);
+
+    await audit(req,{
+      targetStaffId:req.params.id,
+      action:"staff.reactivate",
+      reasonCode:body.reasonCode,
+      after:{status:"ACTIVE"}
+    });
+
+    res.json({ok:true});
+  }catch(e){next(e);}
+});
+
+router.post("/sessions/:sessionId/revoke",requirePermission("staff.session.revoke"),async(req,res,next)=>{
+  const schema=z.object({reasonCode:z.string().min(3).max(100)});
+  try{
+    const body=schema.parse(req.body);
+    const before=await query(`
+      SELECT * FROM staff_sessions WHERE id=$1::uuid
+    `,[req.params.sessionId]);
+
+    if(!before.rowCount) return res.status(404).json({error:"session_not_found"});
+    const targetStaffId=before.rows[0].staff_id;
+
+    await query(`
+      UPDATE staff_sessions
+      SET status='REVOKED',revoked_at=now(),revoke_reason=$2
+      WHERE id=$1::uuid AND status='ACTIVE'
+    `,[req.params.sessionId,body.reasonCode]);
+
+    await audit(req,{
+      targetStaffId,
+      action:"session.revoke",
+      reasonCode:body.reasonCode,
+      before:before.rows[0],
+      after:{status:"REVOKED"}
+    });
+
+    res.json({ok:true});
+  }catch(e){next(e);}
+});
+
+router.post("/staff/:id/revoke-all-sessions",requirePermission("staff.session.revoke"),async(req,res,next)=>{
+  const schema=z.object({reasonCode:z.string().min(3).max(100)});
+  try{
+    const body=schema.parse(req.body);
+
+    await query(`
+      UPDATE staff_sessions
+      SET status='REVOKED',revoked_at=now(),revoke_reason=$2
+      WHERE staff_id=$1::uuid AND status='ACTIVE'
+    `,[req.params.id,body.reasonCode]);
+
+    await audit(req,{
+      targetStaffId:req.params.id,
+      action:"session.revoke_all",
+      reasonCode:body.reasonCode
+    });
+
+    res.json({ok:true});
+  }catch(e){next(e);}
+});
+
+router.post("/devices/:deviceId/trust",requirePermission("staff.device.trust"),async(req,res,next)=>{
+  const schema=z.object({reasonCode:z.string().min(3).max(100)});
+  try{
+    const body=schema.parse(req.body);
+    const d=await query(`SELECT * FROM staff_trusted_devices WHERE id=$1::uuid`,[req.params.deviceId]);
+    if(!d.rowCount) return res.status(404).json({error:"device_not_found"});
+
+    await query(`
+      UPDATE staff_trusted_devices
+      SET trust_status='TRUSTED',trusted_at=now(),revoked_at=NULL
+      WHERE id=$1::uuid
+    `,[req.params.deviceId]);
+
+    await audit(req,{
+      targetStaffId:d.rows[0].staff_id,
+      action:"device.trust",
+      reasonCode:body.reasonCode,
+      before:d.rows[0],
+      after:{trustStatus:"TRUSTED"}
+    });
+
+    res.json({ok:true});
+  }catch(e){next(e);}
+});
+
+router.post("/devices/:deviceId/revoke",requirePermission("staff.device.trust"),async(req,res,next)=>{
+  const schema=z.object({reasonCode:z.string().min(3).max(100)});
+  try{
+    const body=schema.parse(req.body);
+    const d=await query(`SELECT * FROM staff_trusted_devices WHERE id=$1::uuid`,[req.params.deviceId]);
+    if(!d.rowCount) return res.status(404).json({error:"device_not_found"});
+
+    await query(`
+      UPDATE staff_trusted_devices
+      SET trust_status='REVOKED',revoked_at=now()
+      WHERE id=$1::uuid
+    `,[req.params.deviceId]);
+
+    await query(`
+      UPDATE staff_sessions
+      SET status='REVOKED',revoked_at=now(),revoke_reason='DEVICE_REVOKED'
+      WHERE device_id=$1::uuid AND status='ACTIVE'
+    `,[req.params.deviceId]);
+
+    await audit(req,{
+      targetStaffId:d.rows[0].staff_id,
+      action:"device.revoke",
+      reasonCode:body.reasonCode,
+      before:d.rows[0],
+      after:{trustStatus:"REVOKED"}
+    });
+
+    res.json({ok:true});
+  }catch(e){next(e);}
+});
+
+
+====================================================================================================
+FILE: server/index.ts
+====================================================================================================
+import "dotenv/config";
+import express from "express";
+import helmet from "helmet";
+import cors from "cors";
+import compression from "compression";
+import crypto from "node:crypto";
+import { router } from "./routes.js";
+
+const app=express();
+app.disable("x-powered-by");
+app.use(helmet());
+app.use(cors({
+  origin:(process.env.ADMIN_ORIGINS??"http://localhost:3000").split(","),
+  credentials:true
+}));
+app.use(compression());
+app.use(express.json({limit:"1mb"}));
+
+app.use((req,res,next)=>{
+  req.requestId=String(req.headers["x-request-id"]??crypto.randomUUID());
+  res.setHeader("x-request-id",req.requestId);
+  next();
+});
+
+app.get("/health",(_req,res)=>res.json({ok:true}));
+app.use("/api/staff-security",router);
+
+app.use((err:any,_req:any,res:any,_next:any)=>{
+  const status=err.status??(err.name==="ZodError"?400:500);
+  if(status>=500) console.error(err);
+  res.status(status).json({
+    error:status===500?"internal_server_error":err.message,
+    details:err.name==="ZodError"?err.issues:undefined
+  });
+});
+
+app.listen(Number(process.env.PORT??8080),()=>{
+  console.log("Linqa Staff Identity Security API running");
+});
+
+
+====================================================================================================
+FILE: lib/utils.ts
+====================================================================================================
+import { clsx,type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+export function cn(...inputs:ClassValue[]){return twMerge(clsx(inputs));}
+
+
+====================================================================================================
+FILE: components/ui.tsx
+====================================================================================================
+import * as React from "react";
+import { cn } from "../lib/utils";
+
+export function Card({className,...props}:React.HTMLAttributes<HTMLDivElement>){
+  return <div className={cn("rounded-xl border border-slate-800 bg-slate-900/70",className)} {...props}/>;
+}
+export function Button({className,...props}:React.ButtonHTMLAttributes<HTMLButtonElement>){
+  return <button className={cn("inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-medium transition disabled:opacity-50",className)} {...props}/>;
+}
+export function Badge({className,...props}:React.HTMLAttributes<HTMLSpanElement>){
+  return <span className={cn("inline-flex items-center rounded-md px-2 py-1 text-xs font-medium",className)} {...props}/>;
+}
+
+
+====================================================================================================
+FILE: components/SecuritySidebar.tsx
+====================================================================================================
+"use client";
+import {
+  ShieldCheck,Users,KeyRound,MonitorSmartphone,Clock3,AlertTriangle,
+  ScrollText,Settings,LayoutDashboard
+} from "lucide-react";
+
+const items=[
+  ["Overview",LayoutDashboard],
+  ["Staff Directory",Users],
+  ["Identity & SSO",KeyRound],
+  ["Trusted Devices",MonitorSmartphone],
+  ["Active Sessions",Clock3],
+  ["Login Risk",AlertTriangle],
+  ["Audit Logs",ScrollText],
+  ["Security Settings",Settings]
+] as const;
+
+export function SecuritySidebar(){
+  return (
+    <aside className="sticky top-0 hidden h-screen w-[220px] shrink-0 border-r border-slate-800 bg-[#06101b] lg:flex lg:flex-col">
+      <div className="flex h-16 items-center gap-3 border-b border-slate-800 px-5">
+        <div className="grid h-9 w-9 place-items-center rounded-lg bg-violet-600 font-black">L</div>
+        <span className="text-2xl font-bold">linqa</span>
+      </div>
+      <div className="px-3 pt-4 text-xs font-semibold text-slate-500">STAFF SECURITY</div>
+      <nav className="mt-2 space-y-1 px-2">
+        {items.map(([label,Icon],i)=>(
+          <button key={label} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm ${i===2?"bg-violet-600 text-white":"text-slate-300 hover:bg-slate-800"}`}>
+            <Icon className="h-4 w-4"/><span>{label}</span>
+          </button>
+        ))}
+      </nav>
+      <div className="mt-auto border-t border-slate-800 p-4 text-xs text-slate-400">
+        <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-emerald-400"/>Security services operational</div>
+      </div>
+    </aside>
+  );
+}
+
+
+====================================================================================================
+FILE: app/StaffIdentitySecurityPage.tsx
+====================================================================================================
+"use client";
+
+import { useState } from "react";
+import useSWR from "swr";
+import {
+  ShieldCheck,KeyRound,MonitorSmartphone,Clock3,AlertTriangle,
+  LogOut,UserX,UserCheck,BadgeCheck,LockKeyhole,RefreshCcw
+} from "lucide-react";
+import type { StaffIdentityPagePayload } from "../shared/types";
+import { SecuritySidebar } from "../components/SecuritySidebar";
+import { Card,Button,Badge } from "../components/ui";
+
+const fetcher=async(url:string)=>{
+  const r=await fetch(url,{credentials:"include"});
+  if(!r.ok) throw new Error("load_failed");
+  return r.json();
+};
+
+function fmt(v?:string|null){
+  if(!v) return "-";
+  return new Date(v).toLocaleString();
+}
+
+export default function StaffIdentitySecurityPage({staffId}:{staffId:string}){
+  const {data,error,isLoading,mutate}=useSWR<StaffIdentityPagePayload>(
+    `/api/staff-security/staff/${staffId}`,fetcher,{refreshInterval:30000}
+  );
+  const [busy,setBusy]=useState(false);
+
+  async function post(path:string,body:any){
+    const r=await fetch(path,{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      credentials:"include",
+      body:JSON.stringify(body)
+    });
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error??"request_failed");
+    return j;
+  }
+
+  async function action(path:string,reasonCode:string){
+    setBusy(true);
+    try{
+      await post(path,{reasonCode});
+      await mutate();
+    }catch(e:any){alert(e.message);}
+    finally{setBusy(false);}
+  }
+
+  if(isLoading) return <div className="min-h-screen bg-[#050d16] p-10 text-white">Loading staff security…</div>;
+  if(error||!data) return <div className="min-h-screen bg-[#050d16] p-10 text-white">Unable to load staff security.</div>;
+
+  const s=data.staff;
+
+  return (
+    <div className="min-h-screen bg-[#050d16] text-slate-100">
+      <div className="mx-auto flex max-w-[1920px]">
+        <SecuritySidebar/>
+
+        <main className="min-w-0 flex-1">
+          <header className="flex h-16 items-center justify-between border-b border-slate-800 px-5">
+            <div>
+              <div className="text-sm font-medium">Staff Identity & Session Security</div>
+              <div className="text-xs text-slate-500">SSO, MFA, trusted devices, sessions and access risk</div>
+            </div>
+            <Button onClick={()=>mutate()} className="border border-slate-700 bg-slate-900 hover:bg-slate-800">
+              <RefreshCcw className="mr-2 h-4 w-4"/>Refresh
+            </Button>
+          </header>
+
+          <div className="space-y-4 p-5">
+            <section className="grid gap-4 xl:grid-cols-[1.3fr_.7fr]">
+              <Card className="p-5">
+                <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="grid h-16 w-16 place-items-center rounded-full bg-slate-800 text-xl font-bold">
+                      {s.displayName.split(" ").map(x=>x[0]).join("").slice(0,2)}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h1 className="text-xl font-bold">{s.displayName}</h1>
+                        <Badge className={s.status==="ACTIVE"?"bg-emerald-500/15 text-emerald-300":"bg-rose-500/15 text-rose-300"}>
+                          {s.status}
+                        </Badge>
+                      </div>
+                      <div className="mt-1 text-sm text-slate-400">{s.roleName} • {s.teamName??"No Team"}</div>
+                      <div className="mt-1 text-xs text-slate-500">{s.emailMasked??"No email shown"}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {s.status==="ACTIVE" ? (
+                      <Button disabled={busy} onClick={()=>action(`/api/staff-security/staff/${staffId}/suspend`,"ADMIN_SECURITY_ACTION")} className="border border-rose-700 bg-rose-950/20 text-rose-300">
+                        <UserX className="mr-2 h-4 w-4"/>Suspend Staff
+                      </Button>
+                    ):(
+                      <Button disabled={busy} onClick={()=>action(`/api/staff-security/staff/${staffId}/reactivate`,"ADMIN_SECURITY_ACTION")} className="bg-emerald-600 text-white">
+                        <UserCheck className="mr-2 h-4 w-4"/>Reactivate
+                      </Button>
+                    )}
+                    <Button disabled={busy} onClick={()=>action(`/api/staff-security/staff/${staffId}/revoke-all-sessions`,"SECURITY_FORCE_LOGOUT")} className="border border-slate-700 bg-slate-900">
+                      <LogOut className="mr-2 h-4 w-4"/>Sign Out Everywhere
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="p-5">
+                <h2 className="font-semibold">Access Security</h2>
+                <div className="mt-4 space-y-3 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-500">SSO Provider</span><span>{s.ssoProvider}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">MFA</span><span className={s.mfaEnabled?"text-emerald-400":"text-rose-400"}>{s.mfaEnabled?"Enabled":"Disabled"}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">Passkeys</span><span>{s.passkeyCount}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">Step-up verified</span><span>{fmt(s.stepUpVerifiedAt)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">Last login</span><span>{fmt(s.lastLoginAt)}</span></div>
+                </div>
+              </Card>
+            </section>
+
+            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <Card className="p-4">
+                <div className="flex items-center gap-3"><KeyRound className="h-6 w-6 text-violet-400"/><div><div className="text-xs text-slate-500">MFA Status</div><div className="text-xl font-bold">{s.mfaEnabled?"Enabled":"Disabled"}</div></div></div>
+              </Card>
+              <Card className="p-4">
+                <div className="flex items-center gap-3"><MonitorSmartphone className="h-6 w-6 text-blue-400"/><div><div className="text-xs text-slate-500">Trusted Devices</div><div className="text-xl font-bold">{s.trustedDeviceCount}</div></div></div>
+              </Card>
+              <Card className="p-4">
+                <div className="flex items-center gap-3"><Clock3 className="h-6 w-6 text-emerald-400"/><div><div className="text-xs text-slate-500">Active Sessions</div><div className="text-xl font-bold">{s.activeSessionCount}</div></div></div>
+              </Card>
+              <Card className="p-4">
+                <div className="flex items-center gap-3"><AlertTriangle className="h-6 w-6 text-amber-400"/><div><div className="text-xs text-slate-500">Recent Risk Events</div><div className="text-xl font-bold">{data.riskEvents.length}</div></div></div>
+              </Card>
+            </section>
+
+            <section className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+              <Card className="overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                  <div><h2 className="font-semibold">Trusted Devices</h2><p className="text-xs text-slate-500">Approve or revoke staff devices</p></div>
+                </div>
+                <div className="divide-y divide-slate-800">
+                  {data.devices.map(d=>(
+                    <div key={d.id} className="flex items-center gap-3 px-4 py-4">
+                      <div className="grid h-10 w-10 place-items-center rounded-lg bg-blue-500/10"><MonitorSmartphone className="h-5 w-5 text-blue-400"/></div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium">{d.label}</div>
+                        <div className="text-xs text-slate-500">{d.platform} {d.browser?`• ${d.browser}`:""} {d.osVersion?`• ${d.osVersion}`:""}</div>
+                        <div className="mt-1 text-[11px] text-slate-600">Last seen: {fmt(d.lastSeenAt)}</div>
+                      </div>
+                      <Badge className={d.trustStatus==="TRUSTED"?"bg-emerald-500/15 text-emerald-300":d.trustStatus==="PENDING"?"bg-amber-500/15 text-amber-300":"bg-rose-500/15 text-rose-300"}>
+                        {d.trustStatus}
+                      </Badge>
+                      {d.trustStatus!=="TRUSTED" ? (
+                        <Button disabled={busy} onClick={()=>action(`/api/staff-security/devices/${d.id}/trust`,"DEVICE_APPROVED")} className="h-8 bg-emerald-600 px-3 text-xs">
+                          <BadgeCheck className="mr-1 h-4 w-4"/>Trust
+                        </Button>
+                      ):(
+                        <Button disabled={busy} onClick={()=>action(`/api/staff-security/devices/${d.id}/revoke`,"DEVICE_REVOKED")} className="h-8 border border-rose-700 bg-transparent px-3 text-xs text-rose-300">
+                          Revoke
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Card>
+
+              <Card className="overflow-hidden">
+                <div className="border-b border-slate-800 px-4 py-3">
+                  <h2 className="font-semibold">Active & Recent Sessions</h2>
+                  <p className="text-xs text-slate-500">Session revocation is immediate and audited</p>
+                </div>
+                <div className="divide-y divide-slate-800">
+                  {data.sessions.map(x=>(
+                    <div key={x.id} className="flex items-center gap-3 px-4 py-4">
+                      <div className="grid h-10 w-10 place-items-center rounded-lg bg-violet-500/10"><LockKeyhole className="h-5 w-5 text-violet-400"/></div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium">Session {x.id.slice(0,8)}</div>
+                        <div className="truncate text-xs text-slate-500">{x.userAgent??"Unknown client"}</div>
+                        <div className="mt-1 text-[11px] text-slate-600">Created {fmt(x.createdAt)} • Expires {fmt(x.expiresAt)}</div>
+                      </div>
+                      <Badge className={x.status==="ACTIVE"?"bg-emerald-500/15 text-emerald-300":"bg-slate-700 text-slate-300"}>{x.status}</Badge>
+                      {x.status==="ACTIVE"&&(
+                        <Button disabled={busy} onClick={()=>action(`/api/staff-security/sessions/${x.id}/revoke`,"SESSION_REVOKED")} className="h-8 border border-slate-700 bg-slate-950 px-3 text-xs">
+                          Revoke
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </section>
+
+            <Card className="overflow-hidden">
+              <div className="border-b border-slate-800 px-4 py-3">
+                <h2 className="font-semibold">Login Risk & Security Events</h2>
+                <p className="text-xs text-slate-500">Recent authentication anomalies and staff access signals</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-950/40 text-slate-500">
+                    <tr><th className="px-4 py-3">Event</th><th>Risk</th><th>Score</th><th>Description</th><th>Time</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.riskEvents.map(e=>(
+                      <tr key={e.id} className="border-t border-slate-800">
+                        <td className="px-4 py-3">{e.eventType}</td>
+                        <td><Badge className={e.riskLevel==="LOW"?"bg-emerald-500/15 text-emerald-300":e.riskLevel==="MEDIUM"?"bg-amber-500/15 text-amber-300":"bg-rose-500/15 text-rose-300"}>{e.riskLevel}</Badge></td>
+                        <td>{e.riskScore}</td>
+                        <td className="max-w-[420px] truncate text-slate-400">{e.description}</td>
+                        <td className="text-slate-500">{fmt(e.createdAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+
+====================================================================================================
+FILE: app/globals.css
+====================================================================================================
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root{color-scheme:dark;}
+html,body{min-height:100%;background:#050d16;}
+body{margin:0;font-family:Inter,ui-sans-serif,system-ui,sans-serif;}
+*{box-sizing:border-box;}

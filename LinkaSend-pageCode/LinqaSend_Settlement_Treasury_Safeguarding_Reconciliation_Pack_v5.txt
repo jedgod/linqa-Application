@@ -1,0 +1,3418 @@
+
+================================================================================
+LINQASEND™ — SETTLEMENT, TREASURY, SAFEGUARDING & RECONCILIATION PACK v5
+Final Major Money-Movement Control Layer
+Format: Notepad-friendly TXT
+
+POSITION IN ARCHITECTURE
+--------------------------------------------------------------------------------
+Authenticated User
+  -> Transfer Classification + Country Capability Engine v3
+  -> Transaction Security & Fraud Defense v4
+  -> Funding Authorization
+  -> Transfer-Class Router
+  -> Immutable Ledger
+  -> Recipient Credit
+  -> [ v5 SETTLEMENT / TREASURY / SAFEGUARDING / RECONCILIATION ]
+  -> Finality / Exception Handling
+  -> Server-Authoritative Completion
+
+PRIMARY DOMAINS
+--------------------------------------------------------------------------------
+1. Safeguarded customer-funds accounts
+2. Customer-liability accounting
+3. Settlement-account registry
+4. Treasury positions by currency
+5. FX liquidity and corridor liquidity
+6. Provider receivables/payables
+7. Bank/provider settlement instructions
+8. Settlement batches
+9. Reconciliation
+10. Reconciliation breaks
+11. Suspense accounts
+12. Fees / FX margin / revenue recognition
+13. Refunds and reversals
+14. Chargebacks
+15. Reserve / prefunding monitoring
+16. Treasury limits and alerts
+17. Maker-checker for treasury operations
+18. End-of-day controls
+19. Operational evidence
+20. Admin / Money Operations dashboard
+21. Automated workers
+22. Test matrix
+
+NON-NEGOTIABLE PRINCIPLES
+--------------------------------------------------------------------------------
+- Customer funds and Linqa operating funds must be separately accounted for.
+- Customer liability totals must reconcile to safeguarded/settlement assets as
+  required by the deployment's regulated operating model.
+- Do not treat "internal balance" as free money. It is a customer liability.
+- Ledger journals are immutable.
+- Corrections use reversals and correcting journals.
+- Reconciliation breaks never disappear through destructive edits.
+- Provider reports are external evidence, not the system of record.
+- Linqa ledger is internally authoritative, but must reconcile to bank/provider
+  settlement evidence.
+- Completion and settlement are distinct states.
+================================================================================
+
+
+================================================================================
+01. REPOSITORY LAYOUT
+================================================================================
+
+linqa/
+├── apps/server/src/services/linqasend/settlement-v5/
+│   ├── settlement-v5.module.ts
+│   ├── settlement-v5.controller.ts
+│   ├── treasury.controller.ts
+│   ├── reconciliation.controller.ts
+│   ├── types.ts
+│   ├── safeguarding-account.service.ts
+│   ├── customer-liability.service.ts
+│   ├── settlement-account.service.ts
+│   ├── treasury-position.service.ts
+│   ├── liquidity-policy.service.ts
+│   ├── fx-liquidity.service.ts
+│   ├── settlement-instruction.service.ts
+│   ├── settlement-batch.service.ts
+│   ├── provider-settlement.service.ts
+│   ├── reconciliation.service.ts
+│   ├── reconciliation-break.service.ts
+│   ├── suspense-account.service.ts
+│   ├── revenue-recognition.service.ts
+│   ├── refund-reversal.service.ts
+│   ├── chargeback.service.ts
+│   ├── reserve-monitor.service.ts
+│   ├── treasury-maker-checker.service.ts
+│   ├── end-of-day-control.service.ts
+│   ├── settlement-evidence.service.ts
+│   └── workers/
+│       ├── provider-reconciliation.worker.ts
+│       ├── bank-reconciliation.worker.ts
+│       ├── settlement-batch.worker.ts
+│       ├── liquidity-monitor.worker.ts
+│       ├── reserve-monitor.worker.ts
+│       ├── eod-control.worker.ts
+│       └── break-escalation.worker.ts
+│
+├── apps/web/src/features/linqasend-ops/
+│   ├── TreasuryDashboardPage.tsx
+│   ├── SettlementBatchesPage.tsx
+│   ├── ReconciliationPage.tsx
+│   ├── BreakQueuePage.tsx
+│   └── SafeguardingDashboardPage.tsx
+│
+└── server/migrations/
+    └── 20260820_linqasend_settlement_treasury_v5.sql
+
+
+================================================================================
+02. CORE TYPES
+FILE: apps/server/src/services/linqasend/settlement-v5/types.ts
+================================================================================
+
+export type SettlementAccountType =
+  | "SAFEGUARDING"
+  | "OPERATING"
+  | "PROVIDER_CLEARING"
+  | "FX_LIQUIDITY"
+  | "RESERVE"
+  | "SUSPENSE";
+
+export type SettlementInstructionStatus =
+  | "CREATED"
+  | "QUEUED"
+  | "SUBMITTED"
+  | "ACKNOWLEDGED"
+  | "SETTLED"
+  | "FAILED"
+  | "CANCELED"
+  | "REVERSED";
+
+export type ReconciliationStatus =
+  | "MATCHED"
+  | "PARTIAL_MATCH"
+  | "MISMATCH"
+  | "MISSING_INTERNAL"
+  | "MISSING_EXTERNAL"
+  | "DUPLICATE_EXTERNAL"
+  | "REQUIRES_REVIEW"
+  | "RESOLVED";
+
+export type BreakSeverity =
+  | "LOW"
+  | "MEDIUM"
+  | "HIGH"
+  | "CRITICAL";
+
+export type TreasuryActionType =
+  | "MOVE_LIQUIDITY"
+  | "TOP_UP_PREFUND"
+  | "REDUCE_PREFUND"
+  | "OPEN_FX_POSITION"
+  | "CLOSE_FX_POSITION"
+  | "REBALANCE"
+  | "RELEASE_RESERVE";
+
+export interface CurrencyPosition {
+  currency: string;
+
+  safeguardingAssetMinor: bigint;
+  customerLiabilityMinor: bigint;
+
+  providerReceivableMinor: bigint;
+  providerPayableMinor: bigint;
+
+  fxLiquidityMinor: bigint;
+  reserveMinor: bigint;
+
+  suspenseDebitMinor: bigint;
+  suspenseCreditMinor: bigint;
+
+  availableLiquidityMinor: bigint;
+}
+
+export interface SafeguardingCheckResult {
+  currency: string;
+  customerLiabilityMinor: bigint;
+  safeguardingAssetMinor: bigint;
+  deltaMinor: bigint;
+  status:
+    | "BALANCED"
+    | "ASSET_SHORTFALL"
+    | "ASSET_EXCESS"
+    | "REVIEW";
+}
+
+
+================================================================================
+03. POSTGRESQL MIGRATION
+FILE: server/migrations/20260820_linqasend_settlement_treasury_v5.sql
+================================================================================
+
+BEGIN;
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS linqasend_settlement_accounts_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  account_code TEXT NOT NULL UNIQUE,
+
+  account_type TEXT NOT NULL CHECK (
+    account_type IN (
+      'SAFEGUARDING',
+      'OPERATING',
+      'PROVIDER_CLEARING',
+      'FX_LIQUIDITY',
+      'RESERVE',
+      'SUSPENSE'
+    )
+  ),
+
+  currency CHAR(3) NOT NULL,
+
+  country_code CHAR(2),
+
+  provider_id TEXT,
+
+  bank_reference TEXT,
+
+  ledger_account_id UUID NOT NULL,
+
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (
+    status IN ('ACTIVE','RESTRICTED','SUSPENDED','CLOSED')
+  ),
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_settlement_accounts_currency_v5
+  ON linqasend_settlement_accounts_v5(currency, account_type, status);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_treasury_positions_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  position_date DATE NOT NULL,
+  currency CHAR(3) NOT NULL,
+
+  safeguarding_asset_minor BIGINT NOT NULL DEFAULT 0,
+  customer_liability_minor BIGINT NOT NULL DEFAULT 0,
+
+  provider_receivable_minor BIGINT NOT NULL DEFAULT 0,
+  provider_payable_minor BIGINT NOT NULL DEFAULT 0,
+
+  fx_liquidity_minor BIGINT NOT NULL DEFAULT 0,
+  reserve_minor BIGINT NOT NULL DEFAULT 0,
+
+  suspense_debit_minor BIGINT NOT NULL DEFAULT 0,
+  suspense_credit_minor BIGINT NOT NULL DEFAULT 0,
+
+  available_liquidity_minor BIGINT NOT NULL DEFAULT 0,
+
+  calculated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  UNIQUE(position_date, currency)
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_liquidity_policies_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  country_code CHAR(2),
+  currency CHAR(3) NOT NULL,
+
+  min_available_minor BIGINT NOT NULL,
+  target_available_minor BIGINT NOT NULL,
+  max_available_minor BIGINT NOT NULL,
+
+  min_prefund_minor BIGINT,
+  target_prefund_minor BIGINT,
+  max_prefund_minor BIGINT,
+
+  max_open_fx_position_minor BIGINT,
+
+  warning_threshold_pct NUMERIC(8,4) NOT NULL DEFAULT 20,
+  critical_threshold_pct NUMERIC(8,4) NOT NULL DEFAULT 10,
+
+  version INTEGER NOT NULL,
+
+  effective_from TIMESTAMPTZ NOT NULL,
+  effective_to TIMESTAMPTZ,
+
+  approved_by UUID,
+  approved_at TIMESTAMPTZ,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  CHECK(max_available_minor >= target_available_minor),
+  CHECK(target_available_minor >= min_available_minor)
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_fx_positions_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  source_currency CHAR(3) NOT NULL,
+  destination_currency CHAR(3) NOT NULL,
+
+  source_amount_minor BIGINT NOT NULL,
+  destination_amount_minor BIGINT NOT NULL,
+
+  average_rate NUMERIC(30,12) NOT NULL,
+
+  position_status TEXT NOT NULL CHECK (
+    position_status IN (
+      'OPEN',
+      'PARTIALLY_HEDGED',
+      'HEDGED',
+      'CLOSED'
+    )
+  ),
+
+  provider_id TEXT,
+
+  opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  closed_at TIMESTAMPTZ,
+
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_settlement_instructions_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  reference_type TEXT NOT NULL,
+  reference_id UUID NOT NULL,
+
+  transfer_id UUID,
+
+  source_settlement_account_id UUID
+    REFERENCES linqasend_settlement_accounts_v5(id),
+
+  destination_settlement_account_id UUID
+    REFERENCES linqasend_settlement_accounts_v5(id),
+
+  provider_id TEXT,
+
+  amount_minor BIGINT NOT NULL CHECK(amount_minor > 0),
+  currency CHAR(3) NOT NULL,
+
+  instruction_type TEXT NOT NULL CHECK (
+    instruction_type IN (
+      'FUNDING_SETTLEMENT',
+      'RECIPIENT_PAYOUT',
+      'FX_SETTLEMENT',
+      'PREFUND',
+      'TREASURY_MOVE',
+      'REFUND',
+      'REVERSAL',
+      'CHARGEBACK',
+      'RESERVE_MOVE'
+    )
+  ),
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'CREATED',
+      'QUEUED',
+      'SUBMITTED',
+      'ACKNOWLEDGED',
+      'SETTLED',
+      'FAILED',
+      'CANCELED',
+      'REVERSED'
+    )
+  ),
+
+  idempotency_key TEXT NOT NULL UNIQUE,
+
+  provider_reference TEXT,
+
+  scheduled_for TIMESTAMPTZ,
+  submitted_at TIMESTAMPTZ,
+  settled_at TIMESTAMPTZ,
+
+  failure_code TEXT,
+  failure_message TEXT,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_settlement_batches_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  provider_id TEXT NOT NULL,
+
+  currency CHAR(3) NOT NULL,
+
+  settlement_date DATE NOT NULL,
+
+  batch_type TEXT NOT NULL CHECK (
+    batch_type IN (
+      'FUNDING',
+      'PAYOUT',
+      'FX',
+      'REFUND',
+      'CHARGEBACK',
+      'TREASURY'
+    )
+  ),
+
+  instruction_count INTEGER NOT NULL DEFAULT 0,
+  total_amount_minor BIGINT NOT NULL DEFAULT 0,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'OPEN',
+      'SEALED',
+      'SUBMITTED',
+      'ACKNOWLEDGED',
+      'SETTLED',
+      'PARTIALLY_SETTLED',
+      'FAILED'
+    )
+  ),
+
+  checksum TEXT,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sealed_at TIMESTAMPTZ,
+  submitted_at TIMESTAMPTZ,
+  settled_at TIMESTAMPTZ,
+
+  UNIQUE(provider_id, currency, settlement_date, batch_type)
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_settlement_batch_items_v5 (
+  batch_id UUID NOT NULL
+    REFERENCES linqasend_settlement_batches_v5(id),
+
+  instruction_id UUID NOT NULL
+    REFERENCES linqasend_settlement_instructions_v5(id),
+
+  amount_minor BIGINT NOT NULL,
+
+  PRIMARY KEY(batch_id, instruction_id)
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_external_settlement_records_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  source_type TEXT NOT NULL CHECK (
+    source_type IN ('BANK_STATEMENT','PROVIDER_REPORT','NETWORK_REPORT')
+  ),
+
+  source_id TEXT NOT NULL,
+
+  external_record_id TEXT NOT NULL,
+
+  provider_id TEXT,
+
+  account_reference TEXT,
+
+  amount_minor BIGINT NOT NULL,
+  currency CHAR(3) NOT NULL,
+
+  direction TEXT NOT NULL CHECK (
+    direction IN ('DEBIT','CREDIT')
+  ),
+
+  external_status TEXT,
+
+  value_date DATE,
+  external_timestamp TIMESTAMPTZ,
+
+  raw_payload_hash TEXT NOT NULL,
+
+  imported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  UNIQUE(source_type, source_id, external_record_id)
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_reconciliation_runs_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  run_type TEXT NOT NULL CHECK (
+    run_type IN (
+      'BANK',
+      'PROVIDER',
+      'LEDGER',
+      'SAFEGUARDING',
+      'FX',
+      'EOD'
+    )
+  ),
+
+  provider_id TEXT,
+  currency CHAR(3),
+
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'RUNNING',
+      'COMPLETED',
+      'COMPLETED_WITH_BREAKS',
+      'FAILED'
+    )
+  ),
+
+  matched_count INTEGER NOT NULL DEFAULT 0,
+  break_count INTEGER NOT NULL DEFAULT 0,
+
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_reconciliation_matches_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  run_id UUID NOT NULL
+    REFERENCES linqasend_reconciliation_runs_v5(id),
+
+  internal_reference_type TEXT NOT NULL,
+  internal_reference_id TEXT NOT NULL,
+
+  external_record_id UUID
+    REFERENCES linqasend_external_settlement_records_v5(id),
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'MATCHED',
+      'PARTIAL_MATCH',
+      'MISMATCH',
+      'MISSING_INTERNAL',
+      'MISSING_EXTERNAL',
+      'DUPLICATE_EXTERNAL',
+      'REQUIRES_REVIEW',
+      'RESOLVED'
+    )
+  ),
+
+  internal_amount_minor BIGINT,
+  external_amount_minor BIGINT,
+
+  currency CHAR(3),
+
+  delta_minor BIGINT,
+
+  match_method TEXT,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_reconciliation_breaks_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  run_id UUID NOT NULL
+    REFERENCES linqasend_reconciliation_runs_v5(id),
+
+  match_id UUID
+    REFERENCES linqasend_reconciliation_matches_v5(id),
+
+  break_type TEXT NOT NULL,
+
+  severity TEXT NOT NULL CHECK (
+    severity IN ('LOW','MEDIUM','HIGH','CRITICAL')
+  ),
+
+  currency CHAR(3),
+
+  amount_minor BIGINT,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'OPEN',
+      'INVESTIGATING',
+      'AWAITING_PROVIDER',
+      'AWAITING_BANK',
+      'CORRECTING',
+      'RESOLVED',
+      'ACCEPTED_VARIANCE'
+    )
+  ),
+
+  owner_staff_id UUID,
+
+  root_cause_code TEXT,
+  resolution_code TEXT,
+
+  opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+
+  details JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_suspense_items_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  reconciliation_break_id UUID
+    REFERENCES linqasend_reconciliation_breaks_v5(id),
+
+  ledger_account_id UUID NOT NULL,
+
+  amount_minor BIGINT NOT NULL,
+  currency CHAR(3) NOT NULL,
+
+  direction TEXT NOT NULL CHECK (
+    direction IN ('DEBIT','CREDIT')
+  ),
+
+  status TEXT NOT NULL CHECK (
+    status IN ('OPEN','CLEARED','REVERSED')
+  ),
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  cleared_at TIMESTAMPTZ
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_revenue_events_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  transfer_id UUID NOT NULL,
+
+  revenue_type TEXT NOT NULL CHECK (
+    revenue_type IN (
+      'FX_MARGIN',
+      'PROVIDER_REBATE',
+      'SERVICE_REVENUE',
+      'OTHER'
+    )
+  ),
+
+  amount_minor BIGINT NOT NULL,
+  currency CHAR(3) NOT NULL,
+
+  ledger_journal_id UUID NOT NULL,
+
+  recognized_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_reserve_positions_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  provider_id TEXT,
+  currency CHAR(3) NOT NULL,
+
+  required_minor BIGINT NOT NULL,
+  actual_minor BIGINT NOT NULL,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'HEALTHY',
+      'WARNING',
+      'CRITICAL',
+      'EXCESS'
+    )
+  ),
+
+  calculated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_treasury_actions_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  action_type TEXT NOT NULL CHECK (
+    action_type IN (
+      'MOVE_LIQUIDITY',
+      'TOP_UP_PREFUND',
+      'REDUCE_PREFUND',
+      'OPEN_FX_POSITION',
+      'CLOSE_FX_POSITION',
+      'REBALANCE',
+      'RELEASE_RESERVE'
+    )
+  ),
+
+  source_account_id UUID,
+  destination_account_id UUID,
+
+  amount_minor BIGINT NOT NULL,
+  currency CHAR(3) NOT NULL,
+
+  requested_by UUID NOT NULL,
+  approved_by UUID,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'REQUESTED',
+      'APPROVED',
+      'REJECTED',
+      'EXECUTED',
+      'FAILED',
+      'CANCELED'
+    )
+  ),
+
+  reason_code TEXT NOT NULL,
+
+  idempotency_key TEXT NOT NULL UNIQUE,
+
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  approved_at TIMESTAMPTZ,
+  executed_at TIMESTAMPTZ,
+
+  CHECK(approved_by IS NULL OR approved_by <> requested_by)
+);
+
+
+CREATE TABLE IF NOT EXISTS linqasend_eod_controls_v5 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  control_date DATE NOT NULL,
+  currency CHAR(3) NOT NULL,
+
+  customer_liability_minor BIGINT NOT NULL,
+  safeguarding_asset_minor BIGINT NOT NULL,
+  safeguarding_delta_minor BIGINT NOT NULL,
+
+  open_break_count INTEGER NOT NULL DEFAULT 0,
+  critical_break_count INTEGER NOT NULL DEFAULT 0,
+
+  open_suspense_minor BIGINT NOT NULL DEFAULT 0,
+
+  provider_payable_minor BIGINT NOT NULL DEFAULT 0,
+  provider_receivable_minor BIGINT NOT NULL DEFAULT 0,
+
+  fx_open_position_minor BIGINT NOT NULL DEFAULT 0,
+
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'GREEN',
+      'AMBER',
+      'RED'
+    )
+  ),
+
+  evidence_hash TEXT NOT NULL,
+
+  calculated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  UNIQUE(control_date, currency)
+);
+
+COMMIT;
+
+
+================================================================================
+04. SETTLEMENT ACCOUNT SERVICE
+FILE: settlement-account.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class SettlementAccountService {
+  constructor(
+    private readonly repo: SettlementAccountRepository,
+  ) {}
+
+  async requireActive(args: {
+    accountCode: string;
+    currency: string;
+  }) {
+    const account =
+      await this.repo.findByCode(
+        args.accountCode,
+      );
+
+    if (!account) {
+      throw new Error(
+        "SETTLEMENT_ACCOUNT_NOT_FOUND",
+      );
+    }
+
+    if (
+      account.status !==
+      "ACTIVE"
+    ) {
+      throw new Error(
+        "SETTLEMENT_ACCOUNT_NOT_ACTIVE",
+      );
+    }
+
+    if (
+      account.currency !==
+      args.currency
+    ) {
+      throw new Error(
+        "SETTLEMENT_ACCOUNT_CURRENCY_MISMATCH",
+      );
+    }
+
+    return account;
+  }
+}
+
+
+================================================================================
+05. CUSTOMER LIABILITY SERVICE
+FILE: customer-liability.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class CustomerLiabilityService {
+  constructor(
+    private readonly ledger:
+      LedgerAggregateRepository,
+  ) {}
+
+  async getTotal(
+    currency: string,
+  ): Promise<bigint> {
+    return this.ledger.sumByAccountClass({
+      accountClass:
+        "LIABILITY",
+      ownerType:
+        "USER",
+      currency,
+    });
+  }
+
+  async getUserLiability(
+    userId: string,
+    currency: string,
+  ) {
+    return this.ledger.getUserBalance({
+      userId,
+      currency,
+    });
+  }
+}
+
+
+================================================================================
+06. SAFEGUARDING SERVICE
+FILE: safeguarding-account.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class SafeguardingAccountService {
+  constructor(
+    private readonly settlementAccounts:
+      SettlementAccountRepository,
+
+    private readonly externalBalances:
+      ExternalAccountBalanceProvider,
+
+    private readonly liabilities:
+      CustomerLiabilityService,
+  ) {}
+
+  async checkCurrency(
+    currency: string,
+  ): Promise<SafeguardingCheckResult> {
+    const accounts =
+      await this.settlementAccounts.listActive({
+        accountType:
+          "SAFEGUARDING",
+        currency,
+      });
+
+    let asset = 0n;
+
+    for (const account of accounts) {
+      const balance =
+        await this.externalBalances.getBalance(
+          account,
+        );
+
+      asset +=
+        balance.availableMinor;
+    }
+
+    const liability =
+      await this.liabilities.getTotal(
+        currency,
+      );
+
+    const delta =
+      asset - liability;
+
+    return {
+      currency,
+      customerLiabilityMinor:
+        liability,
+      safeguardingAssetMinor:
+        asset,
+      deltaMinor:
+        delta,
+      status:
+        delta === 0n
+          ? "BALANCED"
+          : delta < 0n
+            ? "ASSET_SHORTFALL"
+            : "ASSET_EXCESS",
+    };
+  }
+}
+
+
+================================================================================
+07. TREASURY POSITION SERVICE
+FILE: treasury-position.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class TreasuryPositionService {
+  constructor(
+    private readonly liabilities:
+      CustomerLiabilityService,
+
+    private readonly accounts:
+      TreasuryAccountAggregationRepository,
+
+    private readonly repo:
+      TreasuryPositionRepository,
+  ) {}
+
+  async calculate(
+    currency: string,
+    positionDate = new Date(),
+  ): Promise<CurrencyPosition> {
+    const [
+      customerLiabilityMinor,
+      safeguardingAssetMinor,
+      providerReceivableMinor,
+      providerPayableMinor,
+      fxLiquidityMinor,
+      reserveMinor,
+      suspense,
+    ] = await Promise.all([
+      this.liabilities.getTotal(
+        currency,
+      ),
+
+      this.accounts.sumExternalType(
+        "SAFEGUARDING",
+        currency,
+      ),
+
+      this.accounts.sumProviderReceivables(
+        currency,
+      ),
+
+      this.accounts.sumProviderPayables(
+        currency,
+      ),
+
+      this.accounts.sumExternalType(
+        "FX_LIQUIDITY",
+        currency,
+      ),
+
+      this.accounts.sumExternalType(
+        "RESERVE",
+        currency,
+      ),
+
+      this.accounts.sumSuspense(
+        currency,
+      ),
+    ]);
+
+    const availableLiquidityMinor =
+      safeguardingAssetMinor +
+      fxLiquidityMinor +
+      providerReceivableMinor -
+      providerPayableMinor -
+      customerLiabilityMinor;
+
+    const position = {
+      currency,
+
+      safeguardingAssetMinor,
+      customerLiabilityMinor,
+
+      providerReceivableMinor,
+      providerPayableMinor,
+
+      fxLiquidityMinor,
+      reserveMinor,
+
+      suspenseDebitMinor:
+        suspense.debitMinor,
+
+      suspenseCreditMinor:
+        suspense.creditMinor,
+
+      availableLiquidityMinor,
+    };
+
+    await this.repo.upsert({
+      positionDate,
+      ...position,
+    });
+
+    return position;
+  }
+}
+
+
+================================================================================
+08. LIQUIDITY POLICY
+FILE: liquidity-policy.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class LiquidityPolicyService {
+  constructor(
+    private readonly repo:
+      LiquidityPolicyRepository,
+  ) {}
+
+  async evaluate(args: {
+    country?: string;
+    currency: string;
+    availableMinor: bigint;
+  }) {
+    const policy =
+      await this.repo.getActive(
+        args.country,
+        args.currency,
+        new Date(),
+      );
+
+    if (!policy) {
+      return {
+        state: "NO_POLICY",
+        allowNewTransfers: false,
+      };
+    }
+
+    if (
+      args.availableMinor <
+      policy.minAvailableMinor
+    ) {
+      return {
+        state: "CRITICAL",
+        allowNewTransfers: false,
+        requiredTopUpMinor:
+          policy.targetAvailableMinor -
+          args.availableMinor,
+      };
+    }
+
+    if (
+      args.availableMinor <
+      policy.targetAvailableMinor
+    ) {
+      return {
+        state: "WARNING",
+        allowNewTransfers: true,
+        requiredTopUpMinor:
+          policy.targetAvailableMinor -
+          args.availableMinor,
+      };
+    }
+
+    if (
+      args.availableMinor >
+      policy.maxAvailableMinor
+    ) {
+      return {
+        state: "EXCESS",
+        allowNewTransfers: true,
+        excessMinor:
+          args.availableMinor -
+          policy.targetAvailableMinor,
+      };
+    }
+
+    return {
+      state: "HEALTHY",
+      allowNewTransfers: true,
+    };
+  }
+}
+
+
+================================================================================
+09. FX LIQUIDITY SERVICE
+FILE: fx-liquidity.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class FxLiquidityService {
+  constructor(
+    private readonly positions:
+      FxPositionRepository,
+
+    private readonly policies:
+      LiquidityPolicyRepository,
+
+    private readonly provider:
+      FxLiquidityProvider,
+  ) {}
+
+  async reserveForTransfer(args: {
+    transferId: string;
+
+    sourceCurrency: string;
+    destinationCurrency: string;
+
+    sourceAmountMinor: bigint;
+    destinationAmountMinor: bigint;
+
+    customerRate: string;
+  }) {
+    if (
+      args.sourceCurrency ===
+      args.destinationCurrency
+    ) {
+      return {
+        reserved: false,
+        reason:
+          "SAME_CURRENCY",
+      };
+    }
+
+    const policy =
+      await this.policies.getActive(
+        undefined,
+        args.destinationCurrency,
+        new Date(),
+      );
+
+    if (!policy) {
+      throw new Error(
+        "FX_LIQUIDITY_POLICY_MISSING",
+      );
+    }
+
+    const position =
+      await this.positions.getOpenPosition(
+        args.sourceCurrency,
+        args.destinationCurrency,
+      );
+
+    const projected =
+      (position?.destinationAmountMinor ??
+        0n) +
+      args.destinationAmountMinor;
+
+    if (
+      policy.maxOpenFxPositionMinor &&
+      projected >
+        policy.maxOpenFxPositionMinor
+    ) {
+      const hedge =
+        await this.provider.hedge({
+          sourceCurrency:
+            args.sourceCurrency,
+          destinationCurrency:
+            args.destinationCurrency,
+          destinationAmountMinor:
+            args.destinationAmountMinor,
+          reference:
+            args.transferId,
+        });
+
+      return {
+        reserved: true,
+        hedged: true,
+        providerReference:
+          hedge.reference,
+      };
+    }
+
+    await this.positions.addExposure({
+      transferId:
+        args.transferId,
+      sourceCurrency:
+        args.sourceCurrency,
+      destinationCurrency:
+        args.destinationCurrency,
+      sourceAmountMinor:
+        args.sourceAmountMinor,
+      destinationAmountMinor:
+        args.destinationAmountMinor,
+      rate:
+        args.customerRate,
+    });
+
+    return {
+      reserved: true,
+      hedged: false,
+    };
+  }
+}
+
+
+================================================================================
+10. SETTLEMENT INSTRUCTION SERVICE
+FILE: settlement-instruction.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class SettlementInstructionService {
+  constructor(
+    private readonly repo:
+      SettlementInstructionRepository,
+  ) {}
+
+  async create(args: {
+    referenceType: string;
+    referenceId: string;
+
+    transferId?: string;
+
+    sourceSettlementAccountId?: string;
+    destinationSettlementAccountId?: string;
+
+    providerId?: string;
+
+    amountMinor: bigint;
+    currency: string;
+
+    instructionType:
+      | "FUNDING_SETTLEMENT"
+      | "RECIPIENT_PAYOUT"
+      | "FX_SETTLEMENT"
+      | "PREFUND"
+      | "TREASURY_MOVE"
+      | "REFUND"
+      | "REVERSAL"
+      | "CHARGEBACK"
+      | "RESERVE_MOVE";
+
+    idempotencyKey: string;
+  }) {
+    const existing =
+      await this.repo.findByIdempotency(
+        args.idempotencyKey,
+      );
+
+    if (existing) {
+      return existing;
+    }
+
+    return this.repo.create({
+      ...args,
+      status: "CREATED",
+    });
+  }
+}
+
+
+================================================================================
+11. SETTLEMENT BATCH SERVICE
+FILE: settlement-batch.service.ts
+================================================================================
+
+import {
+  createHash,
+} from "crypto";
+import {
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class SettlementBatchService {
+  constructor(
+    private readonly batches:
+      SettlementBatchRepository,
+
+    private readonly instructions:
+      SettlementInstructionRepository,
+  ) {}
+
+  async build(args: {
+    providerId: string;
+    currency: string;
+    settlementDate: string;
+    batchType: string;
+  }) {
+    const batch =
+      await this.batches.getOrCreate({
+        ...args,
+        status: "OPEN",
+      });
+
+    const candidates =
+      await this.instructions.listEligibleForBatch({
+        providerId:
+          args.providerId,
+        currency:
+          args.currency,
+        batchType:
+          args.batchType,
+      });
+
+    let total = 0n;
+
+    for (const item of candidates) {
+      await this.batches.addItem(
+        batch.id,
+        item.id,
+        item.amountMinor,
+      );
+
+      total +=
+        item.amountMinor;
+    }
+
+    const checksum =
+      createHash("sha256")
+        .update(
+          candidates
+            .map(
+              (x) =>
+                `${x.id}|${x.amountMinor}|${x.currency}`,
+            )
+            .sort()
+            .join("\n"),
+        )
+        .digest("hex");
+
+    return this.batches.seal({
+      batchId:
+        batch.id,
+      instructionCount:
+        candidates.length,
+      totalAmountMinor:
+        total,
+      checksum,
+    });
+  }
+}
+
+
+================================================================================
+12. PROVIDER SETTLEMENT
+FILE: provider-settlement.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class ProviderSettlementService {
+  constructor(
+    private readonly providers:
+      SettlementProviderRegistry,
+
+    private readonly batches:
+      SettlementBatchRepository,
+
+    private readonly instructions:
+      SettlementInstructionRepository,
+  ) {}
+
+  async submitBatch(
+    batchId: string,
+  ) {
+    const batch =
+      await this.batches.findById(
+        batchId,
+      );
+
+    if (!batch) {
+      throw new Error(
+        "SETTLEMENT_BATCH_NOT_FOUND",
+      );
+    }
+
+    if (
+      batch.status !==
+      "SEALED"
+    ) {
+      throw new Error(
+        "SETTLEMENT_BATCH_NOT_SEALED",
+      );
+    }
+
+    const provider =
+      this.providers.get(
+        batch.providerId,
+      );
+
+    const result =
+      await provider.submitSettlementBatch(
+        batch,
+      );
+
+    await this.batches.markSubmitted({
+      batchId:
+        batch.id,
+      providerReference:
+        result.reference,
+    });
+
+    return result;
+  }
+}
+
+
+================================================================================
+13. EXTERNAL RECORD IMPORT
+FILE: reconciliation.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class ReconciliationService {
+  constructor(
+    private readonly external:
+      ExternalSettlementRecordRepository,
+
+    private readonly internal:
+      ReconciliationInternalRepository,
+
+    private readonly runs:
+      ReconciliationRunRepository,
+
+    private readonly matches:
+      ReconciliationMatchRepository,
+
+    private readonly breaks:
+      ReconciliationBreakService,
+  ) {}
+
+  async reconcileProvider(args: {
+    providerId: string;
+    currency: string;
+
+    periodStart: Date;
+    periodEnd: Date;
+  }) {
+    const run =
+      await this.runs.create({
+        runType:
+          "PROVIDER",
+        providerId:
+          args.providerId,
+        currency:
+          args.currency,
+        periodStart:
+          args.periodStart,
+        periodEnd:
+          args.periodEnd,
+        status:
+          "RUNNING",
+      });
+
+    const internalRows =
+      await this.internal.listProviderSettlementRows(
+        args,
+      );
+
+    const externalRows =
+      await this.external.listProviderRows(
+        args,
+      );
+
+    const externalByReference =
+      new Map(
+        externalRows.map(
+          (r) => [
+            r.externalRecordId,
+            r,
+          ],
+        ),
+      );
+
+    let matched = 0;
+    let breakCount = 0;
+
+    for (const internalRow of internalRows) {
+      const externalRow =
+        externalByReference.get(
+          internalRow.providerReference,
+        );
+
+      if (!externalRow) {
+        const match =
+          await this.matches.create({
+            runId:
+              run.id,
+            internalReferenceType:
+              internalRow.referenceType,
+            internalReferenceId:
+              internalRow.referenceId,
+            status:
+              "MISSING_EXTERNAL",
+            internalAmountMinor:
+              internalRow.amountMinor,
+            externalAmountMinor:
+              null,
+            currency:
+              internalRow.currency,
+            deltaMinor:
+              internalRow.amountMinor,
+            matchMethod:
+              "PROVIDER_REFERENCE",
+          });
+
+        await this.breaks.openFromMatch(
+          run.id,
+          match,
+        );
+
+        breakCount++;
+        continue;
+      }
+
+      const delta =
+        externalRow.amountMinor -
+        internalRow.amountMinor;
+
+      const status =
+        delta === 0n
+          ? "MATCHED"
+          : "MISMATCH";
+
+      const match =
+        await this.matches.create({
+          runId:
+            run.id,
+          internalReferenceType:
+            internalRow.referenceType,
+          internalReferenceId:
+            internalRow.referenceId,
+          externalRecordId:
+            externalRow.id,
+          status,
+          internalAmountMinor:
+            internalRow.amountMinor,
+          externalAmountMinor:
+            externalRow.amountMinor,
+          currency:
+            internalRow.currency,
+          deltaMinor:
+            delta,
+          matchMethod:
+            "PROVIDER_REFERENCE",
+        });
+
+      if (
+        status ===
+        "MATCHED"
+      ) {
+        matched++;
+      } else {
+        await this.breaks.openFromMatch(
+          run.id,
+          match,
+        );
+        breakCount++;
+      }
+
+      externalByReference.delete(
+        internalRow.providerReference,
+      );
+    }
+
+    for (const extra of externalByReference.values()) {
+      const match =
+        await this.matches.create({
+          runId:
+            run.id,
+          internalReferenceType:
+            "UNKNOWN",
+          internalReferenceId:
+            "NONE",
+          externalRecordId:
+            extra.id,
+          status:
+            "MISSING_INTERNAL",
+          internalAmountMinor:
+            null,
+          externalAmountMinor:
+            extra.amountMinor,
+          currency:
+            extra.currency,
+          deltaMinor:
+            extra.amountMinor,
+          matchMethod:
+            "UNMATCHED_EXTERNAL",
+        });
+
+      await this.breaks.openFromMatch(
+        run.id,
+        match,
+      );
+
+      breakCount++;
+    }
+
+    return this.runs.complete({
+      runId:
+        run.id,
+      matchedCount:
+        matched,
+      breakCount,
+      status:
+        breakCount > 0
+          ? "COMPLETED_WITH_BREAKS"
+          : "COMPLETED",
+    });
+  }
+}
+
+
+================================================================================
+14. RECONCILIATION BREAK SERVICE
+FILE: reconciliation-break.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class ReconciliationBreakService {
+  constructor(
+    private readonly repo:
+      ReconciliationBreakRepository,
+
+    private readonly suspense:
+      SuspenseAccountService,
+  ) {}
+
+  async openFromMatch(
+    runId: string,
+    match: ReconciliationMatch,
+  ) {
+    const severity =
+      classifyBreakSeverity(
+        match.deltaMinor ?? 0n,
+      );
+
+    const item =
+      await this.repo.create({
+        runId,
+        matchId:
+          match.id,
+        breakType:
+          match.status,
+        severity,
+        currency:
+          match.currency,
+        amountMinor:
+          absBigInt(
+            match.deltaMinor ?? 0n,
+          ),
+        status:
+          "OPEN",
+        details: {
+          internalReference:
+            match.internalReferenceId,
+          externalRecord:
+            match.externalRecordId,
+        },
+      });
+
+    if (
+      match.status ===
+        "MISSING_INTERNAL" ||
+      match.status ===
+        "MISMATCH"
+    ) {
+      await this.suspense.openForBreak(
+        item,
+      );
+    }
+
+    return item;
+  }
+}
+
+function absBigInt(
+  value: bigint,
+) {
+  return value < 0n
+    ? -value
+    : value;
+}
+
+function classifyBreakSeverity(
+  delta: bigint,
+): BreakSeverity {
+  const abs =
+    absBigInt(delta);
+
+  if (abs === 0n)
+    return "LOW";
+
+  if (abs < 10_000n)
+    return "LOW";
+
+  if (abs < 100_000n)
+    return "MEDIUM";
+
+  if (abs < 1_000_000n)
+    return "HIGH";
+
+  return "CRITICAL";
+}
+
+
+================================================================================
+15. SUSPENSE ACCOUNT SERVICE
+FILE: suspense-account.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class SuspenseAccountService {
+  constructor(
+    private readonly accounts:
+      SettlementAccountService,
+
+    private readonly ledger:
+      TreasuryLedgerService,
+
+    private readonly repo:
+      SuspenseItemRepository,
+  ) {}
+
+  async openForBreak(
+    item:
+      ReconciliationBreak,
+  ) {
+    if (
+      !item.currency ||
+      !item.amountMinor
+    ) {
+      return;
+    }
+
+    const suspense =
+      await this.accounts.requireActive({
+        accountCode:
+          `SUSPENSE_${item.currency}`,
+        currency:
+          item.currency,
+      });
+
+    const posting =
+      await this.ledger.postSuspense({
+        breakId:
+          item.id,
+        suspenseLedgerAccountId:
+          suspense.ledgerAccountId,
+        amountMinor:
+          item.amountMinor,
+        currency:
+          item.currency,
+      });
+
+    return this.repo.create({
+      reconciliationBreakId:
+        item.id,
+      ledgerAccountId:
+        suspense.ledgerAccountId,
+      amountMinor:
+        item.amountMinor,
+      currency:
+        item.currency,
+      direction:
+        posting.direction,
+      status:
+        "OPEN",
+    });
+  }
+}
+
+
+================================================================================
+16. REVENUE RECOGNITION
+FILE: revenue-recognition.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class RevenueRecognitionService {
+  constructor(
+    private readonly ledger:
+      TreasuryLedgerService,
+
+    private readonly repo:
+      RevenueEventRepository,
+  ) {}
+
+  async recognizeFxMargin(args: {
+    transferId: string;
+
+    sourceAmountMinor: bigint;
+    sourceCurrency: string;
+
+    providerExecutionRate: string;
+    customerRate: string;
+
+    realizedRevenueMinor: bigint;
+    revenueCurrency: string;
+  }) {
+    if (
+      args.realizedRevenueMinor <=
+      0n
+    ) {
+      return null;
+    }
+
+    const journal =
+      await this.ledger.postFxRevenue({
+        transferId:
+          args.transferId,
+        amountMinor:
+          args.realizedRevenueMinor,
+        currency:
+          args.revenueCurrency,
+      });
+
+    return this.repo.create({
+      transferId:
+        args.transferId,
+      revenueType:
+        "FX_MARGIN",
+      amountMinor:
+        args.realizedRevenueMinor,
+      currency:
+        args.revenueCurrency,
+      ledgerJournalId:
+        journal.id,
+      metadata: {
+        providerExecutionRate:
+          args.providerExecutionRate,
+        customerRate:
+          args.customerRate,
+      },
+    });
+  }
+}
+
+
+================================================================================
+17. REFUND + REVERSAL
+FILE: refund-reversal.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class RefundReversalService {
+  constructor(
+    private readonly transfers:
+      TransferReadRepository,
+
+    private readonly settlementInstructions:
+      SettlementInstructionService,
+
+    private readonly ledger:
+      TreasuryLedgerReversalService,
+
+    private readonly security:
+      PrivilegedMoneyActionVerifier,
+  ) {}
+
+  async refund(args: {
+    transferId: string;
+
+    approvedActionId: string;
+
+    amountMinor: bigint;
+
+    reasonCode: string;
+  }) {
+    await this.security.assertApproved({
+      actionId:
+        args.approvedActionId,
+      actionType:
+        "REFUND",
+      transferId:
+        args.transferId,
+    });
+
+    const transfer =
+      await this.transfers.findById(
+        args.transferId,
+      );
+
+    if (!transfer) {
+      throw new Error(
+        "TRANSFER_NOT_FOUND",
+      );
+    }
+
+    if (
+      args.amountMinor >
+      transfer.sourceAmountMinor
+    ) {
+      throw new Error(
+        "REFUND_EXCEEDS_TRANSFER",
+      );
+    }
+
+    const instruction =
+      await this.settlementInstructions.create({
+        referenceType:
+          "TRANSFER_REFUND",
+        referenceId:
+          transfer.id,
+        transferId:
+          transfer.id,
+        providerId:
+          transfer.fundingProvider,
+        amountMinor:
+          args.amountMinor,
+        currency:
+          transfer.sourceCurrency,
+        instructionType:
+          "REFUND",
+        idempotencyKey:
+          `refund:${transfer.id}:${args.approvedActionId}`,
+      });
+
+    await this.ledger.createPendingRefundJournal({
+      transfer,
+      refundInstruction:
+        instruction,
+      amountMinor:
+        args.amountMinor,
+      reasonCode:
+        args.reasonCode,
+    });
+
+    return instruction;
+  }
+
+  async reverse(args: {
+    transferId: string;
+    approvedActionId: string;
+    reasonCode: string;
+  }) {
+    await this.security.assertApproved({
+      actionId:
+        args.approvedActionId,
+      actionType:
+        "REVERSAL",
+      transferId:
+        args.transferId,
+    });
+
+    const transfer =
+      await this.transfers.findById(
+        args.transferId,
+      );
+
+    if (!transfer) {
+      throw new Error(
+        "TRANSFER_NOT_FOUND",
+      );
+    }
+
+    return this.ledger.reverseTransfer({
+      transfer,
+      reasonCode:
+        args.reasonCode,
+    });
+  }
+}
+
+
+================================================================================
+18. CHARGEBACK SERVICE
+FILE: chargeback.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class ChargebackService {
+  constructor(
+    private readonly instructions:
+      SettlementInstructionService,
+
+    private readonly ledger:
+      TreasuryLedgerService,
+
+    private readonly riskFeedback:
+      RiskFeedbackService,
+  ) {}
+
+  async record(args: {
+    transferId: string;
+
+    providerId: string;
+    providerReference: string;
+
+    amountMinor: bigint;
+    currency: string;
+
+    reasonCode: string;
+  }) {
+    const instruction =
+      await this.instructions.create({
+        referenceType:
+          "CHARGEBACK",
+        referenceId:
+          args.transferId,
+        transferId:
+          args.transferId,
+        providerId:
+          args.providerId,
+        amountMinor:
+          args.amountMinor,
+        currency:
+          args.currency,
+        instructionType:
+          "CHARGEBACK",
+        idempotencyKey:
+          `chargeback:${args.providerId}:${args.providerReference}`,
+      });
+
+    await this.ledger.postChargeback({
+      transferId:
+        args.transferId,
+      amountMinor:
+        args.amountMinor,
+      currency:
+        args.currency,
+      providerId:
+        args.providerId,
+    });
+
+    await this.riskFeedback.recordChargeback({
+      transferId:
+        args.transferId,
+      amountMinor:
+        args.amountMinor,
+      currency:
+        args.currency,
+      reasonCode:
+        args.reasonCode,
+    });
+
+    return instruction;
+  }
+}
+
+
+================================================================================
+19. RESERVE MONITOR
+FILE: reserve-monitor.service.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class ReserveMonitorService {
+  constructor(
+    private readonly providers:
+      ProviderReserveRequirementRepository,
+
+    private readonly balances:
+      ExternalAccountBalanceProvider,
+
+    private readonly settlementAccounts:
+      SettlementAccountRepository,
+
+    private readonly repo:
+      ReservePositionRepository,
+  ) {}
+
+  async check(
+    providerId: string,
+    currency: string,
+  ) {
+    const required =
+      await this.providers.getRequiredReserve(
+        providerId,
+        currency,
+      );
+
+    const accounts =
+      await this.settlementAccounts.listActive({
+        accountType:
+          "RESERVE",
+        currency,
+        providerId,
+      });
+
+    let actual = 0n;
+
+    for (const account of accounts) {
+      const balance =
+        await this.balances.getBalance(
+          account,
+        );
+
+      actual +=
+        balance.availableMinor;
+    }
+
+    const status =
+      actual < required
+        ? "CRITICAL"
+        : actual >
+            required * 2n
+          ? "EXCESS"
+          : "HEALTHY";
+
+    return this.repo.upsert({
+      providerId,
+      currency,
+      requiredMinor:
+        required,
+      actualMinor:
+        actual,
+      status,
+    });
+  }
+}
+
+
+================================================================================
+20. TREASURY MAKER-CHECKER
+FILE: treasury-maker-checker.service.ts
+================================================================================
+
+import {
+  ForbiddenException,
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class TreasuryMakerCheckerService {
+  constructor(
+    private readonly actions:
+      TreasuryActionRepository,
+
+    private readonly scopes:
+      StaffScopeService,
+
+    private readonly executor:
+      TreasuryActionExecutor,
+
+    private readonly audit:
+      SettlementEvidenceService,
+  ) {}
+
+  async request(args: {
+    staffUserId: string;
+
+    actionType:
+      TreasuryActionType;
+
+    sourceAccountId?: string;
+    destinationAccountId?: string;
+
+    amountMinor: bigint;
+    currency: string;
+
+    reasonCode: string;
+
+    idempotencyKey: string;
+  }) {
+    await this.scopes.require(
+      args.staffUserId,
+      "ops:treasury:request",
+    );
+
+    return this.actions.create({
+      ...args,
+      requestedBy:
+        args.staffUserId,
+      status:
+        "REQUESTED",
+    });
+  }
+
+  async approveAndExecute(args: {
+    approverUserId: string;
+    actionId: string;
+  }) {
+    await this.scopes.require(
+      args.approverUserId,
+      "ops:treasury:approve",
+    );
+
+    const action =
+      await this.actions.findById(
+        args.actionId,
+      );
+
+    if (!action) {
+      throw new Error(
+        "TREASURY_ACTION_NOT_FOUND",
+      );
+    }
+
+    if (
+      action.requestedBy ===
+      args.approverUserId
+    ) {
+      throw new ForbiddenException(
+        "TREASURY_SELF_APPROVAL_DENIED",
+      );
+    }
+
+    await this.actions.approve({
+      actionId:
+        action.id,
+      approvedBy:
+        args.approverUserId,
+    });
+
+    const result =
+      await this.executor.execute(
+        action,
+      );
+
+    await this.actions.markExecuted(
+      action.id,
+    );
+
+    await this.audit.append({
+      eventType:
+        "TREASURY_ACTION_EXECUTED",
+      referenceId:
+        action.id,
+      evidence: {
+        actionType:
+          action.actionType,
+        amountMinor:
+          action.amountMinor.toString(),
+        currency:
+          action.currency,
+        approvedBy:
+          args.approverUserId,
+      },
+    });
+
+    return result;
+  }
+}
+
+
+================================================================================
+21. END-OF-DAY CONTROL SERVICE
+FILE: end-of-day-control.service.ts
+================================================================================
+
+import {
+  createHash,
+} from "crypto";
+import {
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class EndOfDayControlService {
+  constructor(
+    private readonly safeguarding:
+      SafeguardingAccountService,
+
+    private readonly treasury:
+      TreasuryPositionService,
+
+    private readonly breaks:
+      ReconciliationBreakRepository,
+
+    private readonly suspense:
+      SuspenseItemRepository,
+
+    private readonly fx:
+      FxPositionRepository,
+
+    private readonly repo:
+      EodControlRepository,
+  ) {}
+
+  async run(
+    controlDate: Date,
+    currency: string,
+  ) {
+    const [
+      safeguard,
+      treasury,
+      openBreaks,
+      criticalBreaks,
+      openSuspense,
+      openFx,
+    ] = await Promise.all([
+      this.safeguarding.checkCurrency(
+        currency,
+      ),
+
+      this.treasury.calculate(
+        currency,
+        controlDate,
+      ),
+
+      this.breaks.countOpen(
+        currency,
+      ),
+
+      this.breaks.countOpenCritical(
+        currency,
+      ),
+
+      this.suspense.sumOpen(
+        currency,
+      ),
+
+      this.fx.sumOpenDestinationExposure(
+        currency,
+      ),
+    ]);
+
+    let status:
+      | "GREEN"
+      | "AMBER"
+      | "RED" =
+        "GREEN";
+
+    if (
+      safeguard.deltaMinor < 0n ||
+      criticalBreaks > 0
+    ) {
+      status = "RED";
+    } else if (
+      openBreaks > 0 ||
+      openSuspense > 0n ||
+      openFx > 0n
+    ) {
+      status = "AMBER";
+    }
+
+    const evidence = {
+      date:
+        controlDate
+          .toISOString()
+          .slice(0, 10),
+
+      currency,
+
+      safeguard: {
+        liability:
+          safeguard.customerLiabilityMinor.toString(),
+        asset:
+          safeguard.safeguardingAssetMinor.toString(),
+        delta:
+          safeguard.deltaMinor.toString(),
+      },
+
+      treasury: {
+        providerPayable:
+          treasury.providerPayableMinor.toString(),
+        providerReceivable:
+          treasury.providerReceivableMinor.toString(),
+      },
+
+      openBreaks,
+      criticalBreaks,
+
+      openSuspense:
+        openSuspense.toString(),
+
+      openFx:
+        openFx.toString(),
+
+      status,
+    };
+
+    const evidenceHash =
+      createHash("sha256")
+        .update(
+          JSON.stringify(
+            evidence,
+          ),
+        )
+        .digest("hex");
+
+    return this.repo.upsert({
+      controlDate,
+      currency,
+
+      customerLiabilityMinor:
+        safeguard.customerLiabilityMinor,
+
+      safeguardingAssetMinor:
+        safeguard.safeguardingAssetMinor,
+
+      safeguardingDeltaMinor:
+        safeguard.deltaMinor,
+
+      openBreakCount:
+        openBreaks,
+
+      criticalBreakCount:
+        criticalBreaks,
+
+      openSuspenseMinor:
+        openSuspense,
+
+      providerPayableMinor:
+        treasury.providerPayableMinor,
+
+      providerReceivableMinor:
+        treasury.providerReceivableMinor,
+
+      fxOpenPositionMinor:
+        openFx,
+
+      status,
+
+      evidenceHash,
+    });
+  }
+}
+
+
+================================================================================
+22. SETTLEMENT EVIDENCE
+FILE: settlement-evidence.service.ts
+================================================================================
+
+import {
+  createHash,
+} from "crypto";
+import {
+  Injectable,
+} from "@nestjs/common";
+
+@Injectable()
+export class SettlementEvidenceService {
+  constructor(
+    private readonly repo:
+      SettlementEvidenceRepository,
+  ) {}
+
+  async append(args: {
+    eventType: string;
+    referenceId: string;
+    evidence:
+      Record<string, unknown>;
+  }) {
+    const previous =
+      await this.repo.latest();
+
+    const canonical =
+      JSON.stringify({
+        eventType:
+          args.eventType,
+        referenceId:
+          args.referenceId,
+        evidence:
+          args.evidence,
+        previousHash:
+          previous?.hash ??
+          null,
+      });
+
+    const hash =
+      createHash("sha256")
+        .update(canonical)
+        .digest("hex");
+
+    return this.repo.insert({
+      ...args,
+      previousHash:
+        previous?.hash,
+      hash,
+    });
+  }
+}
+
+
+================================================================================
+23. BANK RECONCILIATION WORKER
+FILE: workers/bank-reconciliation.worker.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class BankReconciliationWorker {
+  constructor(
+    private readonly importer:
+      BankStatementImporter,
+
+    private readonly reconciliation:
+      BankReconciliationService,
+  ) {}
+
+  async run(args: {
+    bankAccountId: string;
+
+    from: Date;
+    to: Date;
+  }) {
+    await this.importer.importRange(
+      args,
+    );
+
+    return this.reconciliation.run(
+      args,
+    );
+  }
+}
+
+
+================================================================================
+24. PROVIDER RECONCILIATION WORKER
+FILE: workers/provider-reconciliation.worker.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class ProviderReconciliationWorker {
+  constructor(
+    private readonly importer:
+      ProviderSettlementReportImporter,
+
+    private readonly reconciliation:
+      ReconciliationService,
+  ) {}
+
+  async run(args: {
+    providerId: string;
+    currency: string;
+    from: Date;
+    to: Date;
+  }) {
+    await this.importer.importRange({
+      providerId:
+        args.providerId,
+      currency:
+        args.currency,
+      from:
+        args.from,
+      to:
+        args.to,
+    });
+
+    return this.reconciliation.reconcileProvider({
+      providerId:
+        args.providerId,
+      currency:
+        args.currency,
+      periodStart:
+        args.from,
+      periodEnd:
+        args.to,
+    });
+  }
+}
+
+
+================================================================================
+25. LIQUIDITY MONITOR WORKER
+FILE: workers/liquidity-monitor.worker.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class LiquidityMonitorWorker {
+  constructor(
+    private readonly treasury:
+      TreasuryPositionService,
+
+    private readonly policy:
+      LiquidityPolicyService,
+
+    private readonly alerts:
+      TreasuryAlertService,
+  ) {}
+
+  async run(
+    currencies: string[],
+  ) {
+    for (const currency of currencies) {
+      const position =
+        await this.treasury.calculate(
+          currency,
+        );
+
+      const result =
+        await this.policy.evaluate({
+          currency,
+          availableMinor:
+            position.availableLiquidityMinor,
+        });
+
+      if (
+        result.state ===
+          "CRITICAL" ||
+        result.state ===
+          "WARNING"
+      ) {
+        await this.alerts.raise({
+          currency,
+          state:
+            result.state,
+          position,
+          recommendation:
+            result,
+        });
+      }
+    }
+  }
+}
+
+
+================================================================================
+26. BREAK ESCALATION WORKER
+FILE: workers/break-escalation.worker.ts
+================================================================================
+
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class BreakEscalationWorker {
+  constructor(
+    private readonly breaks:
+      ReconciliationBreakRepository,
+
+    private readonly alerts:
+      OperationsAlertService,
+  ) {}
+
+  async run() {
+    const items =
+      await this.breaks.listOpen();
+
+    for (const item of items) {
+      const ageHours =
+        (
+          Date.now() -
+          item.openedAt.getTime()
+        ) /
+        3_600_000;
+
+      if (
+        item.severity ===
+          "CRITICAL" ||
+        ageHours >= 24
+      ) {
+        await this.alerts.raise({
+          type:
+            "RECONCILIATION_BREAK_ESCALATION",
+          breakId:
+            item.id,
+          severity:
+            item.severity,
+          ageHours,
+        });
+      }
+    }
+  }
+}
+
+
+================================================================================
+27. API CONTROLLERS
+FILE: settlement-v5.controller.ts
+================================================================================
+
+import {
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+} from "@nestjs/common";
+
+@Controller(
+  "v1/admin/linqasend/settlement",
+)
+export class SettlementV5Controller {
+  constructor(
+    private readonly safeguarding:
+      SafeguardingAccountService,
+
+    private readonly treasury:
+      TreasuryPositionService,
+
+    private readonly batches:
+      SettlementBatchService,
+
+    private readonly providerSettlement:
+      ProviderSettlementService,
+
+    private readonly reconciliation:
+      ReconciliationService,
+  ) {}
+
+  @Get("safeguarding/:currency")
+  safeguardingStatus(
+    @Param("currency")
+    currency: string,
+  ) {
+    return this.safeguarding.checkCurrency(
+      currency.toUpperCase(),
+    );
+  }
+
+  @Get("treasury/:currency")
+  treasuryPosition(
+    @Param("currency")
+    currency: string,
+  ) {
+    return this.treasury.calculate(
+      currency.toUpperCase(),
+    );
+  }
+
+  @Post("batches/:id/submit")
+  submitBatch(
+    @Param("id")
+    id: string,
+  ) {
+    return this.providerSettlement.submitBatch(
+      id,
+    );
+  }
+
+  @Post("reconcile/provider")
+  reconcileProvider(
+    @Req()
+    req: any,
+  ) {
+    return this.reconciliation.reconcileProvider(
+      req.body,
+    );
+  }
+}
+
+
+================================================================================
+28. MODULE
+FILE: settlement-v5.module.ts
+================================================================================
+
+import { Module } from "@nestjs/common";
+
+@Module({
+  controllers: [
+    SettlementV5Controller,
+    TreasuryController,
+    ReconciliationController,
+  ],
+
+  providers: [
+    SettlementAccountService,
+    CustomerLiabilityService,
+    SafeguardingAccountService,
+
+    TreasuryPositionService,
+    LiquidityPolicyService,
+    FxLiquidityService,
+
+    SettlementInstructionService,
+    SettlementBatchService,
+    ProviderSettlementService,
+
+    ReconciliationService,
+    ReconciliationBreakService,
+    SuspenseAccountService,
+
+    RevenueRecognitionService,
+    RefundReversalService,
+    ChargebackService,
+
+    ReserveMonitorService,
+    TreasuryMakerCheckerService,
+
+    EndOfDayControlService,
+    SettlementEvidenceService,
+
+    BankReconciliationWorker,
+    ProviderReconciliationWorker,
+    LiquidityMonitorWorker,
+    BreakEscalationWorker,
+  ],
+
+  exports: [
+    SafeguardingAccountService,
+    TreasuryPositionService,
+    FxLiquidityService,
+    SettlementInstructionService,
+    ReconciliationService,
+    EndOfDayControlService,
+  ],
+})
+export class
+  LinqaSendSettlementV5Module {}
+
+
+================================================================================
+29. INTEGRATION WITH v3 + v4
+================================================================================
+
+export class LinqaSendFinalMoneyMovementV5 {
+  constructor(
+    private readonly securityGate:
+      SecureMoneyMovementGateV4,
+
+    private readonly fxLiquidity:
+      FxLiquidityService,
+
+    private readonly settlement:
+      SettlementInstructionService,
+
+    private readonly evidence:
+      SettlementEvidenceService,
+  ) {}
+
+  async execute(args: {
+    transfer:
+      SecureTransferView;
+
+    sender:
+      SenderContext;
+
+    recipient:
+      ResolvedRecipient;
+
+    fundingSource:
+      FundingSource;
+
+    quote:
+      PersistedQuote;
+
+    installationId:
+      string;
+
+    deviceId:
+      string;
+
+    authorizationToken:
+      string;
+  }) {
+    if (
+      args.quote.sourceCurrency !==
+      args.quote.destinationCurrency
+    ) {
+      await this.fxLiquidity.reserveForTransfer({
+        transferId:
+          args.transfer.id,
+
+        sourceCurrency:
+          args.quote.sourceCurrency,
+
+        destinationCurrency:
+          args.quote.destinationCurrency,
+
+        sourceAmountMinor:
+          args.quote.sourceAmountMinor,
+
+        destinationAmountMinor:
+          args.quote.destinationAmountMinor,
+
+        customerRate:
+          args.quote.customerRate,
+      });
+    }
+
+    const result =
+      await this.securityGate.execute(
+        args,
+      );
+
+    await this.evidence.append({
+      eventType:
+        "MONEY_MOVEMENT_EXECUTED",
+      referenceId:
+        args.transfer.id,
+      evidence: {
+        transferClass:
+          args.transfer.transferClass,
+        sourceCurrency:
+          args.quote.sourceCurrency,
+        destinationCurrency:
+          args.quote.destinationCurrency,
+        sourceAmountMinor:
+          args.quote.sourceAmountMinor.toString(),
+        destinationAmountMinor:
+          args.quote.destinationAmountMinor.toString(),
+        resultStatus:
+          result.status,
+      },
+    });
+
+    return result;
+  }
+}
+
+
+================================================================================
+30. MONEY OPERATIONS DASHBOARD CONTRACT
+================================================================================
+
+export interface TreasuryDashboard {
+  asOf: string;
+
+  currencies: Array<{
+    currency: string;
+
+    customerLiabilityMinor: string;
+    safeguardingAssetMinor: string;
+    safeguardingDeltaMinor: string;
+
+    availableLiquidityMinor: string;
+
+    providerReceivableMinor: string;
+    providerPayableMinor: string;
+
+    openFxPositionMinor: string;
+
+    reserveRequiredMinor: string;
+    reserveActualMinor: string;
+
+    openBreakCount: number;
+    criticalBreakCount: number;
+
+    status:
+      | "GREEN"
+      | "AMBER"
+      | "RED";
+  }>;
+
+  settlementBatches: {
+    open: number;
+    submitted: number;
+    partiallySettled: number;
+    failed: number;
+  };
+
+  reconciliation: {
+    lastRunAt?: string;
+    matchedCount: number;
+    breakCount: number;
+  };
+}
+
+
+================================================================================
+31. WEB ADMIN PAGE SKELETON
+FILE: apps/web/src/features/linqasend-ops/TreasuryDashboardPage.tsx
+================================================================================
+
+import React from "react";
+
+export function TreasuryDashboardPage() {
+  return (
+    <main className="mx-auto max-w-7xl p-6">
+      <header>
+        <h1 className="text-2xl font-bold">
+          LinqaSend Treasury & Settlement
+        </h1>
+
+        <p className="mt-1 text-sm text-slate-500">
+          Safeguarding, liquidity, provider settlement,
+          reconciliation, reserves and exception monitoring.
+        </p>
+      </header>
+
+      <section className="mt-6 grid gap-4 md:grid-cols-4">
+        <MetricCard
+          label="Safeguarding"
+          value="GREEN"
+        />
+
+        <MetricCard
+          label="Open Breaks"
+          value="0"
+        />
+
+        <MetricCard
+          label="Critical Breaks"
+          value="0"
+        />
+
+        <MetricCard
+          label="Liquidity"
+          value="HEALTHY"
+        />
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-semibold">
+          Currency Positions
+        </h2>
+
+        <div className="mt-3 overflow-hidden rounded-2xl border">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="p-3">Currency</th>
+                <th className="p-3">Customer Liability</th>
+                <th className="p-3">Safeguarded Assets</th>
+                <th className="p-3">Liquidity</th>
+                <th className="p-3">Open FX</th>
+                <th className="p-3">Breaks</th>
+                <th className="p-3">Status</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              <tr className="border-t">
+                <td className="p-3">USD</td>
+                <td className="p-3">—</td>
+                <td className="p-3">—</td>
+                <td className="p-3">—</td>
+                <td className="p-3">—</td>
+                <td className="p-3">0</td>
+                <td className="p-3">GREEN</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function MetricCard(props: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-2xl border bg-white p-4">
+      <div className="text-sm text-slate-500">
+        {props.label}
+      </div>
+
+      <div className="mt-2 text-xl font-semibold">
+        {props.value}
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+32. SCHEDULED JOBS
+================================================================================
+
+Recommended production cadence:
+
+EVERY 5 MINUTES
+- liquidity monitor
+- reserve monitor
+- stale settlement instruction detection
+- failed provider settlement retry queue
+
+EVERY 15 MINUTES
+- provider settlement report import where supported
+- near-real-time provider reconciliation
+
+HOURLY
+- open reconciliation-break aging
+- provider payable/receivable recalculation
+- FX exposure monitor
+
+DAILY
+- bank statement import
+- bank reconciliation
+- safeguarding reconciliation
+- full provider reconciliation
+- FX position reconciliation
+- revenue reconciliation
+- end-of-day control pack
+
+MONTH-END
+- customer liability certification
+- safeguarding account certification
+- revenue close
+- open-break aging report
+- reserve attestation
+- settlement-account inventory certification
+
+
+================================================================================
+33. ALERTS
+================================================================================
+
+CRITICAL
+- safeguarding asset shortfall
+- negative available liquidity
+- critical reconciliation break
+- ledger integrity failure
+- duplicated settlement payout
+- provider settlement amount mismatch over threshold
+- bank account balance fetch unavailable past threshold
+- reserve below minimum
+- FX position exceeds hard maximum
+
+HIGH
+- unresolved break > 24h
+- settlement batch failed
+- suspense aging > policy
+- provider receivable aging
+- provider payable aging
+- liquidity below minimum
+
+WARNING
+- liquidity below target
+- excess prefunding
+- FX position above warning threshold
+- open reconciliation breaks
+- bank/provider report delayed
+
+
+================================================================================
+34. SECURITY + OPERATIONS INVARIANTS
+================================================================================
+
+1. Customer funds must not be booked as Linqa operating revenue.
+
+2. Customer balances are liabilities.
+
+3. Safeguarding/settlement assets are distinct from Linqa operating cash.
+
+4. Internal transfers reallocate customer liabilities; they do not create
+   revenue merely because the transfer is internal.
+
+5. FX margin is recognized through an explicit revenue event and journal.
+
+6. Reconciliation is evidence-driven and immutable.
+
+7. External provider reports do not overwrite the internal ledger.
+
+8. Mismatches create reconciliation breaks.
+
+9. Reconciliation breaks are never deleted to make reports appear green.
+
+10. Suspense usage requires a linked reconciliation break.
+
+11. Suspense balances must age and escalate.
+
+12. Treasury moves require scoped access and maker-checker approval.
+
+13. Treasury maker cannot approve own action.
+
+14. Settlement batches must be sealed before submission.
+
+15. Batch checksum must be stored before provider submission.
+
+16. Settlement instructions require idempotency.
+
+17. Duplicate external settlement records are deduplicated.
+
+18. Refunds/reversals require linked security/operations approval.
+
+19. Chargebacks feed back into fraud-risk models.
+
+20. Provider reserve/prefund status must be monitored.
+
+21. Cross-currency transfers require liquidity/FX exposure control.
+
+22. Open FX positions require policy limits.
+
+23. Ledger and bank/provider settlement are independently reconciled.
+
+24. Transfer COMPLETED does not imply provider settlement already occurred.
+    Distinguish customer-facing transfer finality from treasury settlement.
+
+25. End-of-day RED prevents silent GA-style "all green" reporting.
+
+26. Every EOD result has a deterministic evidence hash.
+
+27. Critical breaks and safeguarding shortfalls require immediate escalation.
+
+28. No destructive correction of ledger or reconciliation evidence.
+
+29. Historical capability/security/settlement evidence remains queryable.
+
+30. Production rollout must remain corridor/provider/license gated.
+
+
+================================================================================
+35. REQUIRED TEST MATRIX
+================================================================================
+
+SAFEGUARDING
+- liabilities = safeguarding assets => BALANCED
+- liabilities > assets => ASSET_SHORTFALL
+- assets > liabilities => ASSET_EXCESS
+- multiple safeguarding accounts aggregated
+- inactive account excluded
+- wrong currency rejected
+
+TREASURY
+- customer liability aggregation
+- provider payable calculation
+- provider receivable calculation
+- reserve aggregation
+- available liquidity calculation
+- target/min/max policy evaluation
+- missing policy fails closed
+
+FX
+- same-currency no FX position
+- cross-currency opens exposure
+- exposure under limit
+- exposure over limit triggers hedge
+- hedge provider failure
+- stale FX position escalation
+- closed position excluded
+
+SETTLEMENT
+- instruction idempotency
+- batch construction
+- duplicate instruction cannot be double-batched
+- checksum deterministic
+- unsealed batch cannot submit
+- provider submission failure
+- provider acknowledgment
+- partial settlement
+- failed settlement
+
+RECONCILIATION
+- exact match
+- amount mismatch
+- missing external
+- missing internal
+- duplicate external
+- provider-reference match
+- unresolved external record
+- break creation
+- break severity
+- break resolution
+- break cannot be deleted
+
+SUSPENSE
+- mismatch can create suspense
+- suspense links to break
+- suspense clearance
+- suspense reversal
+- aged suspense escalation
+
+REVENUE
+- FX margin event
+- zero revenue ignored
+- revenue journal linked
+- revenue not mixed with customer liability
+- provider rebate event
+
+REFUND / REVERSAL
+- approved refund
+- refund over transfer blocked
+- duplicate refund prevented
+- reversal creates reversing journal
+- unapproved privileged action blocked
+
+CHARGEBACK
+- chargeback settlement instruction
+- ledger posting
+- fraud-risk feedback
+- duplicate provider chargeback dedupe
+
+RESERVE
+- actual >= required => HEALTHY
+- actual < required => CRITICAL
+- large excess => EXCESS
+- provider-specific reserve
+
+MAKER-CHECKER
+- request permission
+- approval permission
+- maker self-approval blocked
+- execution audited
+- idempotency
+
+EOD
+- fully reconciled => GREEN
+- breaks/suspense/open FX => AMBER
+- safeguarding shortfall => RED
+- critical break => RED
+- deterministic evidence hash
+- historical EOD snapshot immutable
+
+
+================================================================================
+36. FINAL LINQASEND PRODUCTION STACK
+================================================================================
+
+LAYER 1 — IDENTITY / AUTH
+verified phone
+recovery identity
+device security
+passkeys / biometric
+
+        ↓
+
+LAYER 2 — TRANSFER CLASSIFICATION + COUNTRY CAPABILITY v3
+INTERNAL_DOMESTIC
+INTERNAL_CROSS_BORDER
+EXTERNAL_DOMESTIC
+EXTERNAL_CROSS_BORDER
+country policy
+corridor policy
+funding/receive mode
+FX capability
+rail capability
+
+        ↓
+
+LAYER 3 — TRANSACTION SECURITY & FRAUD DEFENSE v4
+device binding
+ATO cooldown
+recipient trust
+velocity
+funding fraud
+payment risk
+scam warning
+transaction hash
+challenge
+single-use authorization
+webhook security
+ledger integrity
+maker-checker
+
+        ↓
+
+LAYER 4 — MONEY MOVEMENT
+funding provider
+internal domestic router
+internal cross-border router
+external domestic router
+external cross-border router
+recipient credit
+
+        ↓
+
+LAYER 5 — SETTLEMENT / TREASURY / SAFEGUARDING v5
+customer liabilities
+safeguarding assets
+settlement accounts
+provider payable/receivable
+prefunding
+reserves
+FX exposure
+liquidity
+settlement batches
+
+        ↓
+
+LAYER 6 — RECONCILIATION
+provider reports
+bank statements
+ledger
+safeguarding
+FX
+break queue
+suspense
+resolution
+
+        ↓
+
+LAYER 7 — END-OF-DAY CONTROL
+GREEN / AMBER / RED
+evidence hash
+operations approval
+regulatory/financial evidence
+
+
+================================================================================
+37. FINAL RECOMMENDATION
+================================================================================
+
+After v5, do NOT add another major money-movement architecture layer before
+integration testing.
+
+The next work should be IMPLEMENTATION CLOSURE:
+
+1. Wire real database repositories.
+2. Bind to actual funding/payout/FX providers.
+3. Bind to actual bank/settlement accounts.
+4. Add real provider webhook adapters.
+5. Add bank statement ingestion.
+6. Implement reconciliation workers.
+7. Add Money Operations/Treasury admin RBAC.
+8. Execute same-country internal transfer tests.
+9. Execute cross-border internal tests.
+10. Execute external domestic tests.
+11. Execute external cross-border tests.
+12. Execute refund/reversal/chargeback tests.
+13. Execute provider-outage tests.
+14. Execute safeguarding shortfall tests.
+15. Execute ledger/reconciliation corruption tests.
+16. Certify exact release SHA and evidence freshness.
+17. Keep unsupported corridors fail-closed.
+18. Keep stored-value/balance features disabled where the required legal/
+    partner structure has not been established.
+
+================================================================================
+END — LINQASEND SETTLEMENT, TREASURY, SAFEGUARDING & RECONCILIATION PACK v5
+================================================================================

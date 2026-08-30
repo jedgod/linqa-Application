@@ -1,34 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
+  ImageBackground,
+  Linking,
   Modal,
   Pressable,
-  SafeAreaView,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
-import { MobileHubService, type HubContact, type HubConversation, type HubSnapshot } from "../../services/mobile-hub.service";
+import { MobileHubService, type HomeFeed, type HomeNewsStory, type HubContact, type HubSnapshot } from "../../services/mobile-hub.service";
 import { accessTokenProvider } from "../../services/session";
 import { colors, radius, spacing } from "../../theme/tokens";
 
 const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
-
-type Filter = "ALL" | "UNREAD" | "GROUPS" | "PINNED";
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: "ALL", label: "All" },
-  { key: "UNREAD", label: "Unread" },
-  { key: "GROUPS", label: "Groups" },
-  { key: "PINNED", label: "Pinned" }
-];
-
-function hueColor(hue: number, alpha = 1): string {
-  return `hsla(${hue}, 62%, 50%, ${alpha})`;
-}
 
 function formatRelative(epochMillis: number): string {
   if (!epochMillis) return "";
@@ -55,10 +48,9 @@ export default function HomeScreen() {
   const router = useRouter();
   const client = useMemo(() => new MobileHubService(API, () => accessTokenProvider.getAccessToken()), []);
   const [hub, setHub] = useState<HubSnapshot | null>(null);
+  const [homeFeed, setHomeFeed] = useState<HomeFeed | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<Filter>("ALL");
   const [statusModal, setStatusModal] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
   const [composeModal, setComposeModal] = useState(false);
@@ -66,34 +58,38 @@ export default function HomeScreen() {
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    client
-      .loadHub()
-      .then(setHub)
-      .catch((e) => setError(e instanceof Error ? e.message : "Unable to load your hub."))
+    Promise.allSettled([client.loadHub(), client.loadHomeFeed()])
+      .then(([hubResult, feedResult]) => {
+        const failures: string[] = [];
+        if (hubResult.status === "fulfilled") setHub(hubResult.value);
+        else failures.push(hubResult.reason instanceof Error ? hubResult.reason.message : "Unable to load your conversations.");
+        if (feedResult.status === "fulfilled") setHomeFeed(feedResult.value);
+        else failures.push(feedResult.reason instanceof Error ? feedResult.reason.message : "Unable to load your Home feed.");
+        setError(failures.length ? failures.join(" ") : null);
+      })
       .finally(() => setLoading(false));
   }, [client]);
 
   useEffect(load, [load]);
 
-  const conversations = hub?.conversations ?? [];
-  const filtered = useMemo(() => {
-    return conversations
-      .filter((c) => c.title.toLowerCase().includes(query.toLowerCase()))
-      .filter((c) => {
-        if (filter === "UNREAD") return c.unreadCount > 0;
-        if (filter === "GROUPS") return c.isGroup;
-        if (filter === "PINNED") return c.pinned;
-        return true;
-      })
-      .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.lastMessageAt - a.lastMessageAt);
-  }, [conversations, query, filter]);
+  const stories = homeFeed?.news.stories ?? [];
+  const heroStory = stories.find((story) => story.imageUrl) ?? stories[0];
+  const liveStories = stories.filter((story) => story.id !== heroStory?.id).slice(0, 3);
+  const spotlightStory = stories.find((story) => story.category === "TECHNOLOGY" && story.id !== heroStory?.id) ?? stories[1];
+  const worldStories = stories.filter((story) => story.id !== heroStory?.id && story.id !== spotlightStory?.id).slice(0, 3);
+  const totalUnread = (hub?.conversations ?? []).reduce((sum, conversation) => sum + conversation.unreadCount, 0);
 
-  const counts: Record<Filter, number> = {
-    ALL: conversations.length,
-    UNREAD: conversations.filter((c) => c.unreadCount > 0).length,
-    GROUPS: conversations.filter((c) => c.isGroup).length,
-    PINNED: conversations.filter((c) => c.pinned).length
-  };
+  async function openStory(story: HomeNewsStory | undefined) {
+    if (!story) {
+      router.push("/news");
+      return;
+    }
+    try {
+      await Linking.openURL(story.url);
+    } catch {
+      setError("This publisher link could not be opened.");
+    }
+  }
 
   async function submitStatus() {
     if (!statusDraft.trim()) return;
@@ -128,8 +124,12 @@ export default function HomeScreen() {
   ] as const;
 
   return (
-    <SafeAreaView style={s.screen}>
-      <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+    <SafeAreaView edges={["top", "left", "right"]} style={s.screen}>
+      <ScrollView
+        contentContainerStyle={s.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor="#5B4CFF" colors={["#5B4CFF"]} />}
+      >
         <View style={s.topRow}>
           <View style={s.brandWrap}>
             <View style={s.logoCircle}>
@@ -147,11 +147,13 @@ export default function HomeScreen() {
             </Pressable>
             <Pressable style={s.iconButton} onPress={() => router.push("/settings/notifications")} accessibilityLabel="Open notifications">
               <Ionicons name="notifications-outline" size={20} color="#0F172A" />
+              {totalUnread > 0 ? <View style={s.notificationBadge}><Text style={s.notificationBadgeText}>{Math.min(totalUnread, 99)}</Text></View> : null}
             </Pressable>
             <Pressable style={s.avatarButton} onPress={() => router.push("/account/manage")} accessibilityLabel="Open profile">
               <View style={s.avatarMini}>
                 <Text style={s.avatarMiniText}>{hub ? initialsOf(hub.profile.displayName) : "J"}</Text>
               </View>
+              <View style={s.onlineDot} />
             </Pressable>
           </View>
         </View>
@@ -159,27 +161,34 @@ export default function HomeScreen() {
         <Text style={s.greeting}>{greeting()}, {hub?.profile.displayName.split(" ")[0] || "there"} <Text style={s.emoji}>👋</Text></Text>
         <Text style={s.subtitle}>Here's what's happening in your world today.</Text>
 
-        <View style={s.heroCard}>
-          <View style={s.heroOverlay} />
-          <View style={s.heroContent}>
-            <Text style={s.heroKicker}>BREAKING NEWS</Text>
-            <Text style={s.heroTitle}>Global Tech Summit 2026</Text>
-            <Text style={s.heroTitle2}>announced in New York</Text>
-            <Text style={s.heroCopy}>Leaders, innovators and communities from 120+ countries expected to attend.</Text>
-            <Pressable style={s.heroButton} onPress={() => router.push("/countrylinqa/world")}>
-              <Text style={s.heroButtonText}>Read Full Story</Text>
-              <Ionicons name="arrow-forward" size={14} color="#FFFFFF" />
-            </Pressable>
-            <View style={s.dotRow}>
-              <View style={s.dotActive} />
-              <View style={s.dotInactive} />
-              <View style={s.dotInactive} />
+        <ImageBackground
+          source={heroStory?.imageUrl ? { uri: heroStory.imageUrl } : undefined}
+          style={s.heroCard}
+          imageStyle={s.heroImage}
+        >
+          <LinearGradient colors={["rgba(3,7,28,0.98)", "rgba(3,7,28,0.82)", "rgba(3,7,28,0.12)"]} locations={[0, 0.56, 1]} style={s.heroGradient}>
+            <View style={s.heroContent}>
+              <View style={s.kickerRow}><Ionicons name="flash" size={13} color="#FF3B4E" /><Text style={s.heroKicker}>BREAKING NEWS</Text></View>
+              <Text style={s.heroTitle} numberOfLines={3}>{heroStory?.title ?? (loading ? "Global news is refreshing" : "Global news is unavailable")}</Text>
+              <Text style={s.heroCopy} numberOfLines={2}>
+                {heroStory ? `${heroStory.source}${heroStory.sourceCountry ? ` · ${heroStory.sourceCountry}` : ""} · ${formatStoryAge(heroStory.publishedAt)}` : "No verified publisher story is available. Pull down or tap Retry."}
+              </Text>
+              <Pressable style={s.heroButton} onPress={() => heroStory ? void openStory(heroStory) : load()}>
+                <Text style={s.heroButtonText}>{heroStory ? "Read Full Story" : "Retry"}</Text>
+                <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
+              </Pressable>
+              <View style={s.dotRow}>
+                <View style={s.dotActive} />
+                <View style={s.dotInactive} />
+                <View style={s.dotInactive} />
+                <View style={s.dotInactive} />
+              </View>
             </View>
-          </View>
-          <View style={s.livePill}>
-            <Text style={s.livePillText}>LIVE</Text>
-          </View>
-        </View>
+            <View style={[s.livePill, homeFeed?.news.status !== "LIVE" && s.stalePill]}>
+              <Text style={s.livePillText}>{homeFeed?.news.status ?? "SYNC"}</Text>
+            </View>
+          </LinearGradient>
+        </ImageBackground>
 
         <View style={s.sectionHeader}>
           <Text style={s.sectionTitle}>QUICK ACTIONS</Text>
@@ -198,71 +207,69 @@ export default function HomeScreen() {
         </View>
 
         <View style={s.updateRow}>
-          <Text style={s.panelTitle}>LIVE UPDATES</Text>
-          <Text style={s.seeAll}>See all</Text>
+          <View style={s.liveHeading}><View style={s.liveDot} /><Text style={s.panelTitle}>LIVE UPDATES</Text></View>
+          <Pressable onPress={() => router.push("/news")}><Text style={s.seeAll}>See all</Text></Pressable>
         </View>
 
         <View style={s.updateGrid}>
           <View style={s.listPanel}>
-            {[
-              { title: "Climate Action Now", meta: "Global Community • 2.3K watching", tag: "LIVE", accent: "#0EA5E9" },
-              { title: "SpaceX Starship Launch", meta: "Science & Tech • Starting in 1h", tag: "LIVE", accent: "#7C3AED" },
-              { title: "Champions League", meta: "Semi-final • Real Madrid vs Bayern", tag: "LIVE", accent: "#EC4899" }
-            ].map((item) => (
-              <View key={item.title} style={s.listItem}>
-                <View style={[s.listThumb, { backgroundColor: item.accent }]} />
+            {liveStories.map((item) => (
+              <Pressable key={item.id} style={s.listItem} onPress={() => void openStory(item)}>
+                {item.imageUrl ? <Image source={{ uri: item.imageUrl }} style={s.listThumb} /> : <View style={[s.listThumb, s.listThumbFallback]}><Ionicons name="newspaper-outline" size={18} color="#FFFFFF" /></View>}
                 <View style={s.listBody}>
-                  <Text style={s.listTitle}>{item.title}</Text>
-                  <Text style={s.listMeta}>{item.meta}</Text>
+                  <Text style={s.listTitle} numberOfLines={2}>{item.title}</Text>
+                  <Text style={s.listMeta} numberOfLines={1}>{item.source} · {formatStoryAge(item.publishedAt)}</Text>
                 </View>
-                <View style={s.liveTag}><Text style={s.liveTagText}>{item.tag}</Text></View>
-              </View>
+                <Ionicons name="chevron-forward" size={14} color="#667085" />
+              </Pressable>
             ))}
+            {liveStories.length === 0 ? <View style={s.feedUnavailable}><Ionicons name="cloud-offline-outline" size={20} color="#667085" /><Text style={s.feedUnavailableText}>Live updates are reconnecting.</Text></View> : null}
           </View>
 
-          <View style={s.spotlightCard}>
-            <Text style={s.spotlightHeader}>SPOTLIGHT</Text>
-            <Text style={s.spotlightTitle}>AI is changing our future.</Text>
-            <Text style={s.spotlightText}>Join communities, share ideas and shape tomorrow.</Text>
-            <Pressable style={s.primaryButton} onPress={() => router.push("/countrylinqa/world")}>
-              <Text style={s.primaryButtonText}>Explore Now</Text>
-            </Pressable>
-            <View style={s.peopleStack}>
-              <View style={s.avatarStack}><Text style={s.avatarText}>A</Text></View>
-              <View style={[s.avatarStack, { marginLeft: -8, backgroundColor: "#8B5CF6" }]}><Text style={s.avatarText}>M</Text></View>
-              <View style={[s.avatarStack, { marginLeft: -8, backgroundColor: "#F59E0B" }]}><Text style={s.avatarText}>+24</Text></View>
-            </View>
-          </View>
+          <ImageBackground source={spotlightStory?.imageUrl ? { uri: spotlightStory.imageUrl } : undefined} style={s.spotlightCard} imageStyle={s.spotlightImage}>
+            <LinearGradient colors={["rgba(3,7,28,0.96)", "rgba(3,7,28,0.70)", "rgba(3,7,28,0.18)"]} style={s.spotlightGradient}>
+              <View style={s.spotlightHeading}><Ionicons name="star" size={12} color="#FFC928" /><Text style={s.spotlightHeader}>SPOTLIGHT</Text></View>
+              <View style={s.spotlightBottom}>
+                <Text style={s.spotlightTitle} numberOfLines={3}>{spotlightStory?.title ?? "Spotlight is unavailable"}</Text>
+                <Text style={s.spotlightText} numberOfLines={2}>{spotlightStory ? `${spotlightStory.source} · ${formatStoryAge(spotlightStory.publishedAt)}` : "Verified stories will appear here when the news service reconnects."}</Text>
+                <Pressable style={s.primaryButton} onPress={() => spotlightStory ? void openStory(spotlightStory) : load()}><Text style={s.primaryButtonText}>{spotlightStory ? "Explore Now" : "Retry"}</Text></Pressable>
+              </View>
+            </LinearGradient>
+          </ImageBackground>
         </View>
 
         <View style={s.sectionRow}>
           <Text style={s.panelTitle}>UPCOMING</Text>
-          <Text style={s.seeAll}>See all</Text>
+          <Pressable onPress={() => router.push("/modules/calendar")}><Text style={s.seeAll}>See all</Text></Pressable>
         </View>
 
         <View style={s.upcomingRow}>
-          {[
-            { day: "20", month: "MAY", time: "10:30 AM", title: "Design Review Meeting", type: "Video Call" },
-            { day: "20", month: "MAY", time: "2:00 PM", title: "Community Event: AI & You", type: "Online Event" },
-            { day: "21", month: "MAY", time: "6:00 PM", title: "Product Team Standup", type: "Google Meet" }
-          ].map((event) => (
-            <View key={event.title} style={s.eventCard}>
+          {(homeFeed?.upcomingEvents ?? []).map((event) => {
+            const date = new Date(event.startsAt);
+            return (
+            <Pressable key={event.id} style={s.eventCard} onPress={() => router.push("/countrylinqa/world")}>
               <View style={s.eventDate}>
-                <Text style={s.eventMonth}>{event.month}</Text>
-                <Text style={s.eventDay}>{event.day}</Text>
+                <Text style={s.eventMonth}>{date.toLocaleDateString(undefined, { month: "short" })}</Text>
+                <Text style={s.eventDay}>{date.getDate()}</Text>
               </View>
               <View style={s.eventBody}>
                 <Text style={s.eventTitle}>{event.title}</Text>
-                <View style={s.eventMetaRow}><Ionicons name="time-outline" size={12} color="#64748B" /><Text style={s.eventMeta}>{event.time}</Text></View>
-                <View style={s.eventMetaRow}><Ionicons name="videocam-outline" size={12} color="#64748B" /><Text style={s.eventMeta}>{event.type}</Text></View>
+                <View style={s.eventMetaRow}><Ionicons name="time-outline" size={12} color="#64748B" /><Text style={s.eventMeta}>{date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</Text></View>
+                <View style={s.eventMetaRow}><Ionicons name="globe-outline" size={12} color="#64748B" /><Text style={s.eventMeta}>{event.city ?? event.countryCode ?? "Online event"}</Text></View>
               </View>
-            </View>
-          ))}
+            </Pressable>
+          );})}
+          {(homeFeed?.upcomingEvents.length ?? 0) === 0 ? (
+            <Pressable style={[s.eventCard, s.emptyEventCard]} onPress={() => router.push("/countrylinqa/create?type=event")}>
+              <View style={s.emptyEventIcon}><Ionicons name="add" size={20} color="#5B4CFF" /></View>
+              <View style={s.eventBody}><Text style={s.eventTitle}>Plan your next event</Text><Text style={s.eventMeta}>Create a real CountryLinqa event</Text></View>
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={s.sectionRowWide}>
           <Text style={s.panelTitle}>CONTINUE YOUR DAY</Text>
-          <Text style={s.seeAll}>See all</Text>
+          <Pressable onPress={() => router.push("/(tabs)/chats")}><Text style={s.seeAll}>See all</Text></Pressable>
         </View>
 
         <View style={s.bottomSplit}>
@@ -288,49 +295,47 @@ export default function HomeScreen() {
           <View style={s.countryPanel}>
             <View style={s.countryHeader}>
               <Text style={s.countryTitle}>COUNTRYLINQA</Text>
-              <Text style={s.seeAll}>See all</Text>
+              <Pressable onPress={() => router.push("/countrylinqa/world")}><Text style={s.seeAll}>See all</Text></Pressable>
             </View>
             <View style={s.countryMetaRow}>
-              <Text style={s.countryLabel}>United States</Text>
-              <Text style={s.countryChange}>Change</Text>
+              <View style={s.countryIdentity}><Text style={s.countryFlag}>{countryFlag(homeFeed?.country.code)}</Text><Text style={s.countryLabel}>{homeFeed?.country.name ?? "Your country"}</Text></View>
+              <Pressable onPress={() => router.push("/settings/countrylinqa")}><Text style={s.countryChange}>Change</Text></Pressable>
             </View>
-            <Text style={s.countrySmall}>Trending in your country</Text>
-            {[
-              ["AI regulation debate", "12.5K posts", true],
-              ["Small business growth", "8.7K posts", true],
-              ["Renewable energy jobs", "5.2K posts", true]
-            ].map(([title, value, up]) => (
-              <View key={title as string} style={s.countryTrend}>
-                <View style={s.trendRank}><Text style={s.trendRankText}>{["1", "2", "3"][0] ?? "1"}</Text></View>
+            <Text style={s.countrySmall}>Trending in live global coverage</Text>
+            {(homeFeed?.trends ?? []).map((trend) => (
+              <Pressable key={trend.title} style={s.countryTrend} onPress={() => router.push({ pathname: "/news", params: { category: trend.title } })}>
+                <View style={s.trendRank}><Text style={s.trendRankText}>{trend.rank}</Text></View>
                 <View style={s.trendBody}>
-                  <Text style={s.trendTitle}>{title as string}</Text>
-                  <Text style={s.trendValue}>{value as string}</Text>
+                  <Text style={s.trendTitle}>{humanizeCategory(trend.title)}</Text>
+                  <Text style={s.trendValue}>{trend.storyCount} live {trend.storyCount === 1 ? "story" : "stories"}</Text>
                 </View>
-                <Text style={s.trendUp}>{up ? "↗" : "↘"}</Text>
-              </View>
+                <Ionicons name="trending-up" size={15} color="#22C55E" />
+              </Pressable>
             ))}
           </View>
         </View>
 
-        <View style={s.worldRow}>
-          <Text style={s.panelTitle}>BREAKING AROUND THE WORLD</Text>
-          <Text style={s.seeAll}>See all</Text>
+        <View style={s.worldPanel}>
+          <View style={s.worldRow}>
+            <View style={s.worldHeading}><Ionicons name="earth" size={14} color="#FFC928" /><Text style={s.worldPanelTitle}>BREAKING AROUND THE WORLD</Text></View>
+            <Pressable onPress={() => router.push("/news")}><Text style={s.worldSeeAll}>See all</Text></Pressable>
+          </View>
+          <View style={s.worldGrid}>
+            {worldStories.map((item) => (
+              <Pressable key={item.id} style={s.worldCard} onPress={() => void openStory(item)}>
+                {item.imageUrl ? <Image source={{ uri: item.imageUrl }} style={s.worldImage} /> : <View style={[s.worldImage, s.worldImageFallback]}><Ionicons name="newspaper-outline" size={20} color="#7C6CFF" /></View>}
+                <View style={s.worldBody}>
+                  <Text style={s.worldTag}>{item.category}</Text>
+                  <Text style={s.worldLabel} numberOfLines={3}>{item.title}</Text>
+                  <Text style={s.worldTime}>{formatStoryAge(item.publishedAt)}</Text>
+                </View>
+              </Pressable>
+            ))}
+          </View>
+          <View style={s.worldDots}><View style={s.worldDotActive} /><View style={s.worldDot} /><View style={s.worldDot} /><View style={s.worldDot} /></View>
         </View>
 
-        <View style={s.worldGrid}>
-          {[
-            { label: "New economic policy approved by senate", tag: "POLITICS", time: "12m ago", tone: "#1E293B" },
-            { label: "New AI model outperforms human experts", tag: "TECHNOLOGY", time: "25m ago", tone: "#0F172A" },
-            { label: "WHO declares new health initiative", tag: "HEALTH", time: "37m ago", tone: "#1E3A8A" }
-          ].map((item) => (
-            <View key={item.label} style={[s.worldCard, { backgroundColor: item.tone }]}>
-              <Text style={s.worldTag}>{item.tag}</Text>
-              <Text style={s.worldLabel}>{item.label}</Text>
-              <Text style={s.worldTime}>{item.time}</Text>
-            </View>
-          ))}
-        </View>
-
+        <View style={s.aiToolsRow}>
         <Pressable style={s.askRow} onPress={() => router.push("/modules/ai")} accessibilityRole="button">
           <View style={s.aiIconWrap}><Ionicons name="sparkles-outline" size={18} color="#FFFFFF" /></View>
           <View style={s.aiTextWrap}>
@@ -339,45 +344,18 @@ export default function HomeScreen() {
           </View>
           <Ionicons name="chevron-forward" size={20} color="#111827" />
         </Pressable>
+          <Pressable style={s.aiToolButton} onPress={() => router.push({ pathname: "/modules/ai", params: { mode: "voice" } })}><Ionicons name="mic-outline" size={18} color="#5B4CFF" /><Text style={s.aiToolText}>Voice</Text></Pressable>
+          <Pressable style={s.aiToolButton} onPress={() => router.push("/(tabs)/media")}><Ionicons name="camera-outline" size={18} color="#5B4CFF" /><Text style={s.aiToolText}>Camera</Text></Pressable>
+        </View>
+
+        {error ? <Pressable style={s.errorCard} onPress={load}><Ionicons name="warning-outline" size={18} color="#B42318" /><Text style={s.errorText}>{error} Tap to retry.</Text></Pressable> : null}
 
         {loading && (
           <View style={s.center}>
             <ActivityIndicator color={colors.accent} />
-            <Text style={s.muted}>Loading your conversations</Text>
+            <Text style={s.muted}>Refreshing your Linqa world</Text>
           </View>
         )}
-
-        {!loading && filtered.length === 0 && (
-          <Pressable style={s.emptyCard} onPress={() => { setQuery(""); setFilter("ALL"); }}>
-            <Ionicons name="chatbubble-outline" size={26} color={colors.accent} />
-            <Text style={s.emptyTitle}>{query ? "No matching conversations" : "Nothing here yet"}</Text>
-            <Text style={s.muted}>Tap to show every conversation</Text>
-          </Pressable>
-        )}
-
-        {!loading && filtered.map((conversation) => (
-          <Pressable key={conversation.id} style={s.conversationRow} onPress={() => router.push({ pathname: "/(tabs)/chats", params: { conversationId: conversation.id } })}>
-            <View style={[s.convAvatar, { backgroundColor: hueColor(hashHue(conversation.title)) }]}>
-              <Text style={s.convAvatarText}>{initialsOf(conversation.title)}</Text>
-            </View>
-            <View style={{ flex: 1, marginLeft: spacing.md }}>
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <Text style={s.convTitle} numberOfLines={1}>{conversation.title}</Text>
-                {conversation.muted && <Ionicons name="volume-mute-outline" size={13} color={colors.textFaint} />}
-                {conversation.pinned && <Ionicons name="pin" size={13} color={colors.accent} style={{ marginLeft: 4 }} />}
-              </View>
-              <Text style={s.convPreview} numberOfLines={1}>{conversation.lastMessagePreview}</Text>
-            </View>
-            <View style={{ alignItems: "flex-end" }}>
-              <Text style={[s.convTime, conversation.unreadCount > 0 && { color: colors.accent }]}>{formatRelative(conversation.lastMessageAt)}</Text>
-              {conversation.unreadCount > 0 && (
-                <View style={s.unreadBadge}>
-                  <Text style={s.unreadBadgeText}>{conversation.unreadCount}</Text>
-                </View>
-              )}
-            </View>
-          </Pressable>
-        ))}
       </ScrollView>
 
       <Modal visible={statusModal} transparent animationType="fade" onRequestClose={() => setStatusModal(false)}>
@@ -439,10 +417,17 @@ function initialsOf(name: string): string {
     .toUpperCase();
 }
 
-function hashHue(name: string): number {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
-  return Math.abs(hash) % 360;
+function formatStoryAge(value: string): string {
+  return formatRelative(new Date(value).getTime());
+}
+
+function humanizeCategory(value: string): string {
+  return value.charAt(0) + value.slice(1).toLowerCase();
+}
+
+function countryFlag(code: string | null | undefined): string {
+  if (!code || code.length !== 2) return "🌐";
+  return String.fromCodePoint(...code.toUpperCase().split("").map((character) => 127397 + character.charCodeAt(0)));
 }
 
 const s = StyleSheet.create({
@@ -474,8 +459,11 @@ const s = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: "#EEF2F7",
     alignItems: "center",
-    justifyContent: "center"
+    justifyContent: "center",
+    position: "relative"
   },
+  notificationBadge: { position: "absolute", top: -5, right: -5, minWidth: 17, height: 17, borderRadius: 9, paddingHorizontal: 3, alignItems: "center", justifyContent: "center", backgroundColor: "#FF3B4E", borderWidth: 2, borderColor: "#F4F6FB" },
+  notificationBadgeText: { color: "#FFFFFF", fontSize: 8, fontWeight: "900" },
   avatarButton: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E2E8F0", alignItems: "center", justifyContent: "center" },
   avatarMini: {
     width: 28,
@@ -486,6 +474,7 @@ const s = StyleSheet.create({
     justifyContent: "center"
   },
   avatarMiniText: { color: "#0F172A", fontSize: 10, fontWeight: "900" },
+  onlineDot: { position: "absolute", right: -1, bottom: -1, width: 10, height: 10, borderRadius: 5, backgroundColor: "#22C55E", borderWidth: 2, borderColor: "#FFFFFF" },
   greeting: { marginTop: 18, color: "#111827", fontSize: 20, fontWeight: "800", letterSpacing: -0.25 },
   emoji: { fontSize: 18 },
   subtitle: { color: "#475569", fontSize: 12.5, marginTop: 2 },
@@ -504,14 +493,17 @@ const s = StyleSheet.create({
     shadowOffset: { width: 0, height: 5 },
     elevation: 2
   },
+  heroImage: { borderRadius: 18 },
+  heroGradient: { flex: 1 },
   heroOverlay: {
     position: "absolute",
     inset: 0,
     backgroundColor: "rgba(10,14,28,0.30)"
   },
-  heroContent: { position: "absolute", inset: 0, paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12 },
-  heroKicker: { color: "#F8FAFC", fontSize: 9, fontWeight: "800", letterSpacing: 0.8 },
-  heroTitle: { marginTop: 8, color: "#FFFFFF", fontSize: 18.5, fontWeight: "900", letterSpacing: -0.35, lineHeight: 22 },
+  heroContent: { flex: 1, paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12 },
+  kickerRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  heroKicker: { color: "#FF4859", fontSize: 9, fontWeight: "900", letterSpacing: 0.8 },
+  heroTitle: { marginTop: 9, color: "#FFFFFF", fontSize: 19, fontWeight: "900", letterSpacing: -0.35, lineHeight: 23, maxWidth: "72%" },
   heroTitle2: { color: "#FFFFFF", fontSize: 18.5, fontWeight: "900", letterSpacing: -0.35, lineHeight: 22, marginTop: 0 },
   heroCopy: { marginTop: 6, color: "#E2E8F0", fontSize: 11.5, lineHeight: 15, maxWidth: 232 },
   heroButton: {
@@ -526,7 +518,7 @@ const s = StyleSheet.create({
     gap: 6
   },
   heroButtonText: { color: "#FFFFFF", fontWeight: "800", fontSize: 12 },
-  dotRow: { position: "absolute", bottom: 12, left: 18, flexDirection: "row", gap: 8 },
+  dotRow: { position: "absolute", bottom: 10, left: "49%", flexDirection: "row", gap: 7 },
   dotActive: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#FFFFFF" },
   dotInactive: { width: 8, height: 8, borderRadius: 4, backgroundColor: "rgba(255,255,255,0.45)" },
   livePill: {
@@ -539,6 +531,7 @@ const s = StyleSheet.create({
     paddingVertical: 5
   },
   livePillText: { color: "#FFFFFF", fontSize: 10, fontWeight: "900" },
+  stalePill: { backgroundColor: "#667085" },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 18 },
   sectionTitle: { color: "#111827", fontSize: 13, fontWeight: "900", letterSpacing: 0.12 },
   sectionLink: { color: "#475569", fontSize: 10.5, fontWeight: "700" },
@@ -561,27 +554,35 @@ const s = StyleSheet.create({
     width: 54
   },
   updateRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 18 },
+  liveHeading: { flexDirection: "row", alignItems: "center", gap: 7 },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#FF3B4E" },
   panelTitle: { color: "#111827", fontSize: 13, fontWeight: "900", letterSpacing: 0.1 },
   seeAll: { color: "#475569", fontSize: 12, fontWeight: "700" },
   updateGrid: { flexDirection: "row", gap: 10, marginTop: 10 },
   listPanel: { flex: 1, backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E2E8F0", padding: 8 },
   listItem: { flexDirection: "row", alignItems: "center", paddingVertical: 7, gap: 8 },
   listThumb: { width: 38, height: 38, borderRadius: 10 },
+  listThumbFallback: { backgroundColor: "#5B4CFF", alignItems: "center", justifyContent: "center" },
   listBody: { flex: 1 },
   listTitle: { color: "#111827", fontSize: 11.5, fontWeight: "800" },
   listMeta: { color: "#64748B", fontSize: 10, marginTop: 3 },
   liveTag: { backgroundColor: "#EEF2FF", borderRadius: 999, paddingHorizontal: 6, paddingVertical: 3 },
   liveTagText: { color: "#4F46E5", fontSize: 8.5, fontWeight: "900" },
+  feedUnavailable: { minHeight: 130, alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 10 },
+  feedUnavailableText: { color: "#667085", fontSize: 10.5, textAlign: "center" },
   spotlightCard: {
     flex: 1,
     backgroundColor: "#090C1A",
     borderRadius: 12,
     borderWidth: 1,
     borderColor: "#111827",
-    padding: 12,
-    justifyContent: "space-between",
-    overflow: "hidden"
+    overflow: "hidden",
+    minHeight: 178
   },
+  spotlightImage: { borderRadius: 12 },
+  spotlightGradient: { flex: 1, padding: 12, justifyContent: "space-between" },
+  spotlightHeading: { flexDirection: "row", alignItems: "center", gap: 5 },
+  spotlightBottom: { marginTop: 22 },
   spotlightHeader: { color: "#E2E8F0", fontSize: 9.5, fontWeight: "800", letterSpacing: 0.2 },
   spotlightTitle: { color: "#FFFFFF", fontSize: 17, fontWeight: "900", lineHeight: 22, marginTop: 10 },
   spotlightText: { color: "#DDE6F4", fontSize: 12, lineHeight: 17, marginTop: 7 },
@@ -625,6 +626,8 @@ const s = StyleSheet.create({
   eventTitle: { color: "#111827", fontSize: 11.5, fontWeight: "800", lineHeight: 15 },
   eventMetaRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 5 },
   eventMeta: { color: "#64748B", fontSize: 10 },
+  emptyEventCard: { minHeight: 86, alignItems: "center" },
+  emptyEventIcon: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#F0EEFF" },
   sectionRowWide: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 18 },
   bottomSplit: { flexDirection: "row", gap: 10, marginTop: 10 },
   continuePanel: {
@@ -666,6 +669,8 @@ const s = StyleSheet.create({
   countryHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   countryTitle: { color: "#111827", fontWeight: "900", fontSize: 11.5 },
   countryMetaRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 10 },
+  countryIdentity: { flexDirection: "row", alignItems: "center", gap: 5, flexShrink: 1 },
+  countryFlag: { fontSize: 15 },
   countryLabel: { color: "#111827", fontWeight: "800", fontSize: 11.5 },
   countryChange: { color: "#4F46E5", fontWeight: "700", fontSize: 10.5 },
   countrySmall: { color: "#64748B", fontSize: 10, marginTop: 8 },
@@ -676,22 +681,33 @@ const s = StyleSheet.create({
   trendTitle: { color: "#111827", fontSize: 11, fontWeight: "700" },
   trendValue: { color: "#64748B", fontSize: 9, marginTop: 2 },
   trendUp: { color: "#22C55E", fontSize: 15, fontWeight: "900" },
-  worldRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 18 },
-  worldGrid: { flexDirection: "row", gap: 8, marginTop: 10 },
+  worldPanel: { marginTop: 18, backgroundColor: "#071028", borderRadius: 15, padding: 11, overflow: "hidden" },
+  worldRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  worldHeading: { flexDirection: "row", alignItems: "center", gap: 6 },
+  worldPanelTitle: { color: "#FFFFFF", fontSize: 10.5, fontWeight: "900", letterSpacing: 0.1 },
+  worldSeeAll: { color: "#C9D2E3", fontSize: 10.5, fontWeight: "700" },
+  worldGrid: { flexDirection: "row", gap: 7, marginTop: 10 },
   worldCard: {
     flex: 1,
-    minHeight: 104,
-    borderRadius: 12,
+    minHeight: 112,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    padding: 10,
-    justifyContent: "flex-end"
+    borderColor: "rgba(255,255,255,0.12)",
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.04)"
   },
-  worldTag: { color: "#E2E8F0", fontSize: 7.5, fontWeight: "800", letterSpacing: 0.6 },
-  worldLabel: { color: "#FFFFFF", fontSize: 11.5, fontWeight: "800", marginTop: 8, lineHeight: 15 },
-  worldTime: { color: "#E2E8F0", fontSize: 9.5, marginTop: 5 },
+  worldImage: { width: "100%", height: 45 },
+  worldImageFallback: { backgroundColor: "#141A38", alignItems: "center", justifyContent: "center" },
+  worldBody: { padding: 7, flex: 1 },
+  worldTag: { color: "#B89CFF", fontSize: 6.8, fontWeight: "900", letterSpacing: 0.5 },
+  worldLabel: { color: "#FFFFFF", fontSize: 9.5, fontWeight: "800", marginTop: 4, lineHeight: 12 },
+  worldTime: { color: "#AEB9CC", fontSize: 8, marginTop: 4 },
+  worldDots: { marginTop: 9, flexDirection: "row", justifyContent: "center", gap: 5 },
+  worldDotActive: { width: 17, height: 4, borderRadius: 2, backgroundColor: "#6C55FF" },
+  worldDot: { width: 6, height: 4, borderRadius: 2, backgroundColor: "#536078" },
+  aiToolsRow: { flexDirection: "row", alignItems: "stretch", gap: 7, marginTop: 12 },
   askRow: {
-    marginTop: 18,
+    flex: 1,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#E2E8F0",
@@ -706,6 +722,10 @@ const s = StyleSheet.create({
   aiTextWrap: { flex: 1 },
   aiTitle: { color: "#111827", fontWeight: "900", fontSize: 12.5 },
   aiSubtitle: { color: "#64748B", fontSize: 11, marginTop: 2 },
+  aiToolButton: { minWidth: 58, borderRadius: 14, borderWidth: 1, borderColor: "#E2E8F0", backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center", paddingHorizontal: 6, gap: 3 },
+  aiToolText: { color: "#5B4CFF", fontSize: 9.5, fontWeight: "800" },
+  errorCard: { marginTop: 12, borderRadius: 12, padding: 10, backgroundColor: "#FEF3F2", borderWidth: 1, borderColor: "#FECDCA", flexDirection: "row", alignItems: "center", gap: 8 },
+  errorText: { color: "#B42318", fontSize: 10.5, flex: 1 },
   toolbarRow: {
     position: "absolute",
     left: 18,

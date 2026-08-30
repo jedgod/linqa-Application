@@ -1,3 +1,8 @@
+import { ed25519 } from "@noble/curves/ed25519.js";
+import { AccountSecureStorage } from "../account/AccountSecureStorage";
+import { getCachedInstallationServerId } from "../account/InstallationRegistry";
+import { base64ToBytes, bytesToBase64 } from "../crypto/device-enrollment-proof";
+
 export type LinqaSendRecipient = {
   id: string;
   displayName: string;
@@ -49,6 +54,28 @@ export type LinqaSendTransferDetail = LinqaSendTransferSummary & {
   timeline: Array<{ phase: string; status: string; errorCode: string | null; at: string }>;
 };
 
+export type LinqaSendSecurityWarning = { code: string; severity: "INFO" | "WARN" | "HIGH" | "CRITICAL"; messageKey: string };
+export class LinqaSendApiError extends Error {
+  constructor(message: string, readonly payload: Record<string, unknown>, readonly status: number) { super(message); }
+}
+export type PreparedLinqaSendTransfer = {
+  input: { quoteId: string; paymentMethodId: string; purposeCode?: string };
+  idempotencyKey: string;
+  installationId: string;
+  transactionHash: string;
+  securityAuthorizationId: string;
+};
+
+function jwtUserId(token: string): string {
+  const payload = token.split(".")[1];
+  if (!payload) throw new Error("Authenticated user identity is unavailable.");
+  const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), "=");
+  const json = JSON.parse(atob(padded)) as { user_id?: string };
+  if (!json.user_id) throw new Error("Authenticated user identity is unavailable.");
+  return json.user_id;
+}
+
 /**
  * Real client for `server/src/routes/linqasend/routes.ts`. Every value here
  * is genuine — FX pricing, transfer state, idempotent retry — the only
@@ -72,7 +99,7 @@ export class LinqaSendService {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       const message = typeof payload.error === "string" ? payload.error : "LinqaSend request failed";
-      throw new Error(message);
+      throw new LinqaSendApiError(message, payload as Record<string, unknown>, response.status);
     }
     return payload as T;
   }
@@ -87,6 +114,14 @@ export class LinqaSendService {
     return this.request<{ id: string }>("/v1/linqasend/payment-methods", { method: "POST", body: JSON.stringify(input) });
   }
 
+  setupPaymentMethod(input: { type: "DEBIT_CARD" | "CREDIT_CARD" | "BANK_ACCOUNT" | "MOBILE_WALLET"; billingCountry?: string }) {
+    return this.request<{ setupToken: string; clientSecret: string; expiresAt: string }>("/v1/linqasend/payment-methods/setup", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  confirmPaymentMethod(setupToken: string) {
+    return this.request<{ id: string; type: string; last4: string | null; verificationStatus: string }>("/v1/linqasend/payment-methods/confirm", { method: "POST", body: JSON.stringify({ setupToken }) });
+  }
+
   listRecipients() {
     return this.request<{ items: LinqaSendRecipient[] }>("/v1/linqasend/recipients");
   }
@@ -98,6 +133,18 @@ export class LinqaSendService {
     });
   }
 
+  getJurisdiction() {
+    return this.request<{ userId: string; verifiedResidenceCountry: string; accountCountry: string; currentPhysicalCountry: string | null; regulatoryJurisdiction: string; locationRelationship: string; migrationStatus: string; jurisdictionVersion: number }>("/v1/linqasend/jurisdiction");
+  }
+
+  listRelocations() {
+    return this.request<{ items: Array<{ id: string; from_country: string; requested_country: string; status: string; reason: string | null; requested_at: string }> }>("/v1/linqasend/jurisdiction/relocations");
+  }
+
+  requestRelocation(targetCountry: string, reason?: string) {
+    return this.request<{ id: string; status: string }>("/v1/linqasend/jurisdiction/relocations", { method: "POST", body: JSON.stringify({ targetCountry, ...(reason ? { reason } : {}) }) });
+  }
+
   findCorridor(input: { sourceCountry: string; destinationCountry: string; sourceCurrency: string; destinationCurrency: string }) {
     const params = new URLSearchParams(input).toString();
     return this.request<LinqaSendCorridor>(`/v1/linqasend/corridors?${params}`);
@@ -105,8 +152,8 @@ export class LinqaSendService {
 
   createQuote(input: {
     recipientId: string;
-    sourceCountry: string;
-    destinationCountry: string;
+    sourceCountry?: string;
+    destinationCountry?: string;
     sourceCurrency: string;
     destinationCurrency: string;
     paymentMethodId?: string;
@@ -115,19 +162,35 @@ export class LinqaSendService {
     return this.request<LinqaSendQuote>("/v1/linqasend/quotes", { method: "POST", body: JSON.stringify(input) });
   }
 
-  createTransfer(input: {
-    quoteId: string;
-    paymentMethodId: string;
-    senderLegalName: string;
-    senderCountry: string;
-    purposeCode?: string;
-  }) {
+  async prepareTransferConfirmation(input: PreparedLinqaSendTransfer["input"]): Promise<PreparedLinqaSendTransfer> {
     const idempotencyKey =
       typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    const installationId = await getCachedInstallationServerId();
+    if (!installationId) throw new Error("This installation is not registered for secure payments. Sign in again.");
+    const token = await this.token();
+    const userId = jwtUserId(token);
+    const challenge = await this.request<{ id: string; nonce: string; transactionHash: string }>("/v1/linqasend/security/challenges", {
+      method: "POST", headers: { "x-installation-id": installationId }, body: JSON.stringify({ quoteId: input.quoteId, paymentMethodId: input.paymentMethodId, idempotencyKey })
+    });
+    const privateKey = await new AccountSecureStorage().get(userId, "device.signingPrivateKey");
+    if (!privateKey) throw new Error("This device has no secure signing key. Re-enroll the device.");
+    const message = new TextEncoder().encode(`${challenge.nonce}|${challenge.transactionHash}`);
+    const signatureBase64 = bytesToBase64(ed25519.sign(message, base64ToBytes(privateKey)));
+    const authorization = await this.request<{ authorizationId: string; transactionHash: string }>("/v1/linqasend/security/authorizations", {
+      method: "POST", body: JSON.stringify({ challengeId: challenge.id, signatureBase64 })
+    });
+    return { input, idempotencyKey, installationId, transactionHash: authorization.transactionHash, securityAuthorizationId: authorization.authorizationId };
+  }
+
+  submitPreparedTransfer(prepared: PreparedLinqaSendTransfer, acknowledgedWarningCodes: string[] = []) {
     return this.request<{ transferId: string; status: string; reason?: string; action?: string; idempotentReplay: boolean }>(
       "/v1/linqasend/transfers",
-      { method: "POST", headers: { "idempotency-key": idempotencyKey }, body: JSON.stringify(input) }
+      { method: "POST", headers: { "idempotency-key": prepared.idempotencyKey, "x-installation-id": prepared.installationId }, body: JSON.stringify({ ...prepared.input, transactionHash: prepared.transactionHash, securityAuthorizationId: prepared.securityAuthorizationId, acknowledgedWarningCodes }) }
     );
+  }
+
+  async createTransfer(input: PreparedLinqaSendTransfer["input"]) {
+    return this.submitPreparedTransfer(await this.prepareTransferConfirmation(input));
   }
 
   listTransfers(limit = 30) {
@@ -136,5 +199,57 @@ export class LinqaSendService {
 
   getTransfer(id: string) {
     return this.request<LinqaSendTransferDetail>(`/v1/linqasend/transfers/${id}`);
+  }
+
+  getHome() {
+    return this.request<{ jurisdiction: string; recipientCount: number; verifiedFundingSourceCount: number; requests: { incoming: number; outgoing: number } }>("/v1/linqasend/home");
+  }
+
+  getReceiveProfile() {
+    return this.request<{ displayName: string | null; identifiers: Array<{ type: string; display_value: string }>; defaultCurrency: string | null; preferredFundingSource: { type: string; last4: string | null } | null }>("/v1/linqasend/receive-profile");
+  }
+
+  addExternalRecipient(input: { recipientKind: "EXTERNAL_PERSON" | "EXTERNAL_BUSINESS"; displayName: string; countryCode: string; currency: string; deliveryMethod: "BANK" | "CARD" | "MOBILE_MONEY" | "PHONE_CLAIM" | "EMAIL_CLAIM"; provider: string; providerToken: string; maskedDisplay: string }) {
+    return this.request<{ id: string; recipientId: string; endpointId: string }>("/v1/linqasend/external-recipients", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  listMoneyRequests() {
+    return this.request<{ items: Array<{ id: string; direction: "INCOMING" | "OUTGOING"; counterpartyName: string | null; amountMinor: string; currency: string; note: string | null; status: string; recipientId: string; expiresAt: string; createdAt: string }> }>("/v1/linqasend/requests");
+  }
+
+  createMoneyRequest(input: { payer: string; amountMinor: string; currency: string; note?: string }) {
+    return this.request<{ id: string; status: string }>("/v1/linqasend/requests", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  payMoneyRequest(id: string) {
+    return this.request<{ requestId: string; recipientId: string; amountMinor: string; currency: string; purposeCode: string }>(`/v1/linqasend/requests/${id}/pay`, { method: "POST" });
+  }
+
+  declineMoneyRequest(id: string) {
+    return this.request<void>(`/v1/linqasend/requests/${id}/decline`, { method: "POST" });
+  }
+
+  getLimits() {
+    return this.request<{ jurisdiction: string; countryCapability: Record<string, unknown> | null; corridors: Array<Record<string, unknown>>; rolling24Hours: { usedMinor: string; transferCount: number } }>("/v1/linqasend/limits");
+  }
+
+  getSettings() {
+    return this.request<{ default_currency: string | null; default_payment_method_id: string | null; transfer_notifications: boolean; request_notifications: boolean; scam_warning_level: "STANDARD" | "ENHANCED" }>("/v1/linqasend/settings");
+  }
+
+  updateSettings(input: { defaultCurrency?: string; defaultPaymentMethodId?: string; transferNotifications?: boolean; requestNotifications?: boolean; scamWarningLevel?: "STANDARD" | "ENHANCED" }) {
+    return this.request<{ updated: boolean }>("/v1/linqasend/settings", { method: "PATCH", body: JSON.stringify(input) });
+  }
+
+  deletePaymentMethod(id: string) {
+    return this.request<void>(`/v1/linqasend/payment-methods/${id}`, { method: "DELETE" });
+  }
+
+  cancelTransfer(id: string) {
+    return this.request<{ id: string; status: string }>(`/v1/linqasend/transfers/${id}/cancel`, { method: "POST" });
+  }
+
+  requestRefund(id: string, reasonCode: string, notes?: string) {
+    return this.request<{ actionId: string; adjustmentId: string; status: string }>(`/v1/linqasend/transfers/${id}/refund`, { method: "POST", body: JSON.stringify({ reasonCode, ...(notes ? { notes } : {}) }) });
   }
 }

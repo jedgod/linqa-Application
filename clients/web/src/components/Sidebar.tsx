@@ -13,6 +13,7 @@ interface SidebarProps {
   onOpenMedia: () => void;
   onOpenPrivacy: () => void;
   onOpenVault: () => void;
+  onOpenOperations?: () => void;
 }
 
 export function Sidebar({
@@ -23,7 +24,8 @@ export function Sidebar({
   onOpenCalls,
   onOpenMedia,
   onOpenPrivacy,
-  onOpenVault
+  onOpenVault,
+  onOpenOperations
 }: SidebarProps) {
   const [query, setQuery] = useState("");
 
@@ -54,6 +56,11 @@ export function Sidebar({
         <button className="icon-btn" onClick={onOpenVault} title="File Vault" aria-label="File Vault">
           🔒
         </button>
+        {onOpenOperations && (
+          <button className="icon-btn" onClick={onOpenOperations} title="Operations" aria-label="Operations">
+            🧑‍💼
+          </button>
+        )}
         <button className="icon-btn" onClick={onOpenSettings} title="Settings" aria-label="Settings">
           ⚙
         </button>

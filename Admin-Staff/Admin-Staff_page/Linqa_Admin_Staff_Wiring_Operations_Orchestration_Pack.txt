@@ -1,0 +1,1876 @@
+LINQA ADMIN ↔ STAFF WIRING & OPERATIONS ORCHESTRATION PACK
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Admin ↔ Staff Wiring & Operations Orchestration Pack
+
+This pack turns the Admin Monitoring and Staff Support interfaces into one shared operational system.
+
+## Included
+
+- Shared PostgreSQL schema migration
+- Unified staff identity/RBAC
+- Transaction-safe case ownership and reassignment
+- Workload/capacity-aware assignment engine
+- Transactional outbox
+- Redis Streams publisher
+- NATS publisher
+- WebSocket fanout gateway
+- SLA warning/breach worker
+- Supervisor reassignment / release / priority controls
+- Client 360 role-filtered projection gateway
+- Sensitive-action approval engine
+- Step-up / dual-approval policy hooks
+- REST API contracts
+- Audit events
+- End-to-end integration tests
+
+## Core event flow
+
+Admin/Supervisor action
+→ PostgreSQL transaction
+→ case assignment / case state update
+→ audit event
+→ ops_outbox row
+→ outbox dispatcher
+→ Redis Streams and/or NATS
+→ WebSocket gateway
+→ Admin dashboard + Staff My Work update
+
+## Important boundaries
+
+This operations layer must not create a master bypass into client privacy.
+
+Do not expose:
+- E2EE keys
+- arbitrary decrypted client conversations
+- Vault encryption keys / unrestricted Vault plaintext
+- passwords
+- recovery secrets
+- CVV
+- full payment card PAN
+- unrelated personal data
+
+Sensitive operational actions must be authorized and audited.
+High-impact actions may require dual approval and/or step-up authentication.
+
+## Suggested run order
+
+1. Apply DB migration.
+2. Start PostgreSQL.
+3. Start Redis and/or NATS.
+4. Start API.
+5. Start outbox dispatcher.
+6. Start SLA worker.
+7. Point Admin and Staff web clients to `/api/ops`.
+8. Subscribe both UIs to `/ws/ops`.
+9. Run integration tests.
+
+## Local environment
+
+npm install
+cp .env.example .env
+npm run db:migrate
+npm run dev:api
+npm run dev:outbox
+npm run dev:sla
+npm test
+
+
+====================================================================================================
+FILE: package.json
+====================================================================================================
+{
+  "name": "linqa-admin-staff-orchestration",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:api": "tsx watch src/server.ts",
+    "dev:outbox": "tsx watch src/events/outbox-worker.ts",
+    "dev:sla": "tsx watch src/sla/sla-worker.ts",
+    "db:migrate": "psql \"$DATABASE_URL\" -f db/001_unified_operations.sql",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.10",
+    "@types/ws": "^8.5.13",
+    "compression": "^1.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.0",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.6.1",
+    "nats": "^2.29.3",
+    "pg": "^8.13.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.2",
+    "ws": "^8.18.0",
+    "zod": "^4.0.5"
+  },
+  "devDependencies": {
+    "@types/compression": "^1.7.5",
+    "@types/cors": "^2.8.17",
+    "supertest": "^7.1.1",
+    "vitest": "^3.2.4"
+  }
+}
+
+
+====================================================================================================
+FILE: tsconfig.json
+====================================================================================================
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "outDir": "dist",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}
+
+
+====================================================================================================
+FILE: .env.example
+====================================================================================================
+DATABASE_URL=postgresql://linqa:linqa@localhost:5432/linqa
+PORT=8080
+OPS_WEB_ORIGINS=http://localhost:3000
+REDIS_URL=redis://localhost:6379
+NATS_URL=nats://localhost:4222
+EVENT_TRANSPORT=both
+OUTBOX_BATCH_SIZE=100
+OUTBOX_POLL_MS=1000
+SLA_POLL_MS=30000
+NODE_ENV=development
+
+
+====================================================================================================
+FILE: db/001_unified_operations.sql
+====================================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE ops_presence AS ENUM ('AVAILABLE','BUSY','AWAY','OFFLINE');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE ops_case_status AS ENUM (
+    'NEW','QUEUED','ASSIGNED','IN_PROGRESS','PENDING_CLIENT',
+    'ESCALATED','RESOLVED','CLOSED'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE ops_case_priority AS ENUM ('P1','P2','P3','P4');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE ops_approval_status AS ENUM (
+    'PENDING','APPROVED','REJECTED','EXPIRED','EXECUTED','CANCELLED'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS staff_users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid UNIQUE NOT NULL,
+  display_name text NOT NULL,
+  email_masked text,
+  role_name text NOT NULL,
+  team_name text,
+  presence ops_presence NOT NULL DEFAULT 'OFFLINE',
+  max_concurrent_cases integer NOT NULL DEFAULT 8 CHECK (max_concurrent_cases > 0),
+  active_case_count integer NOT NULL DEFAULT 0 CHECK (active_case_count >= 0),
+  step_up_verified_at timestamptz,
+  suspended boolean NOT NULL DEFAULT false,
+  last_seen_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_staff_users_role ON staff_users(role_name);
+CREATE INDEX IF NOT EXISTS idx_staff_users_presence ON staff_users(presence);
+CREATE INDEX IF NOT EXISTS idx_staff_users_team ON staff_users(team_name);
+
+CREATE TABLE IF NOT EXISTS ops_queues (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text UNIQUE NOT NULL,
+  category text NOT NULL,
+  required_role text,
+  sla_first_response_seconds integer NOT NULL DEFAULT 1800,
+  sla_resolution_seconds integer NOT NULL DEFAULT 86400,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS support_cases (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  public_id text UNIQUE NOT NULL,
+  client_id uuid NOT NULL,
+  queue_id uuid REFERENCES ops_queues(id),
+  case_type text NOT NULL,
+  category text NOT NULL,
+  channel text NOT NULL,
+  status ops_case_status NOT NULL DEFAULT 'NEW',
+  priority ops_case_priority NOT NULL DEFAULT 'P3',
+  owner_staff_id uuid REFERENCES staff_users(id),
+  source text NOT NULL DEFAULT 'USER_PORTAL',
+  reference_id text,
+  description text NOT NULL,
+  first_response_at timestamptz,
+  pending_client_at timestamptz,
+  resolved_at timestamptz,
+  closed_at timestamptz,
+  version bigint NOT NULL DEFAULT 1,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_support_cases_owner_status
+ON support_cases(owner_staff_id,status);
+
+CREATE INDEX IF NOT EXISTS idx_support_cases_queue_status
+ON support_cases(queue_id,status);
+
+CREATE INDEX IF NOT EXISTS idx_support_cases_priority
+ON support_cases(priority);
+
+CREATE TABLE IF NOT EXISTS case_assignments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES support_cases(id) ON DELETE CASCADE,
+  staff_id uuid NOT NULL REFERENCES staff_users(id),
+  assigned_by_staff_id uuid REFERENCES staff_users(id),
+  reason_code text NOT NULL,
+  assignment_type text NOT NULL CHECK (assignment_type IN ('AUTO','MANUAL','REASSIGN','ESCALATION')),
+  assigned_at timestamptz NOT NULL DEFAULT now(),
+  released_at timestamptz,
+  release_reason text
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_case_active_assignment
+ON case_assignments(case_id)
+WHERE released_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS case_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES support_cases(id) ON DELETE CASCADE,
+  actor_staff_id uuid REFERENCES staff_users(id),
+  event_type text NOT NULL,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_events_case_created
+ON case_events(case_id,created_at);
+
+CREATE TABLE IF NOT EXISTS case_sla_state (
+  case_id uuid PRIMARY KEY REFERENCES support_cases(id) ON DELETE CASCADE,
+  first_response_due_at timestamptz,
+  resolution_due_at timestamptz,
+  first_response_warned_at timestamptz,
+  first_response_breached_at timestamptz,
+  resolution_warned_at timestamptz,
+  resolution_breached_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS client360_snapshots (
+  client_id uuid PRIMARY KEY,
+  display_name text NOT NULL,
+  masked_email text,
+  masked_phone text,
+  country text,
+  account_status text,
+  risk_level text,
+  verified boolean NOT NULL DEFAULT false,
+  member_since date,
+  services_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  devices_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+  recovery_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  risk_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS sensitive_action_requests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid REFERENCES support_cases(id),
+  client_id uuid NOT NULL,
+  action_type text NOT NULL,
+  requested_by_staff_id uuid NOT NULL REFERENCES staff_users(id),
+  reason_code text NOT NULL,
+  justification text NOT NULL,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  required_approvals integer NOT NULL DEFAULT 1 CHECK (required_approvals >= 1),
+  requires_step_up boolean NOT NULL DEFAULT true,
+  status ops_approval_status NOT NULL DEFAULT 'PENDING',
+  expires_at timestamptz NOT NULL,
+  executed_at timestamptz,
+  execution_reference text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS sensitive_action_approvals (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id uuid NOT NULL REFERENCES sensitive_action_requests(id) ON DELETE CASCADE,
+  approver_staff_id uuid NOT NULL REFERENCES staff_users(id),
+  decision text NOT NULL CHECK (decision IN ('APPROVE','REJECT')),
+  note text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(request_id, approver_staff_id)
+);
+
+CREATE TABLE IF NOT EXISTS ops_outbox (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  aggregate_type text NOT NULL,
+  aggregate_id text NOT NULL,
+  event_type text NOT NULL,
+  event_key text NOT NULL,
+  payload jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  published_at timestamptz,
+  publish_attempts integer NOT NULL DEFAULT 0,
+  last_error text
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_outbox_unpublished
+ON ops_outbox(created_at)
+WHERE published_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS ops_audit_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_user_id uuid,
+  actor_staff_id uuid,
+  actor_role text,
+  action text NOT NULL,
+  resource_type text NOT NULL,
+  resource_id text,
+  reason_code text,
+  request_id text,
+  ip_hash text,
+  before_json jsonb,
+  after_json jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_audit_created
+ON ops_audit_log(created_at DESC);
+
+CREATE OR REPLACE FUNCTION enqueue_ops_event(
+  p_aggregate_type text,
+  p_aggregate_id text,
+  p_event_type text,
+  p_event_key text,
+  p_payload jsonb
+) RETURNS uuid AS $$
+DECLARE v_id uuid;
+BEGIN
+  INSERT INTO ops_outbox(
+    aggregate_type,aggregate_id,event_type,event_key,payload
+  )
+  VALUES (
+    p_aggregate_type,p_aggregate_id,p_event_type,p_event_key,p_payload
+  )
+  RETURNING id INTO v_id;
+  RETURN v_id;
+END;
+$$ LANGUAGE plpgsql;
+
+
+====================================================================================================
+FILE: src/common/db.ts
+====================================================================================================
+import { Pool, PoolClient, QueryResultRow } from "pg";
+
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 30,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: true } : false,
+});
+
+export async function query<T extends QueryResultRow = any>(
+  sql: string,
+  params: unknown[] = []
+) {
+  return pool.query<T>(sql, params);
+}
+
+export async function tx<T>(fn: (client: PoolClient) => Promise<T>) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+
+====================================================================================================
+FILE: src/common/errors.ts
+====================================================================================================
+export class HttpError extends Error {
+  constructor(public status: number, message: string, public details?: unknown) {
+    super(message);
+  }
+}
+
+
+====================================================================================================
+FILE: src/common/audit.ts
+====================================================================================================
+import crypto from "node:crypto";
+import type { Request } from "express";
+import type { PoolClient } from "pg";
+
+export async function writeAudit(
+  client: PoolClient,
+  req: Request,
+  input: {
+    action: string;
+    resourceType: string;
+    resourceId?: string;
+    reasonCode?: string;
+    before?: unknown;
+    after?: unknown;
+  }
+) {
+  const ipHash = req.ip
+    ? crypto.createHash("sha256").update(req.ip).digest("hex")
+    : null;
+
+  await client.query(`
+    INSERT INTO ops_audit_log(
+      actor_user_id,actor_staff_id,actor_role,action,resource_type,
+      resource_id,reason_code,request_id,ip_hash,before_json,after_json
+    )
+    VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb)
+  `, [
+    req.principal?.userId ?? null,
+    req.principal?.staffId ?? null,
+    req.principal?.role ?? null,
+    input.action,
+    input.resourceType,
+    input.resourceId ?? null,
+    input.reasonCode ?? null,
+    req.requestId ?? null,
+    ipHash,
+    JSON.stringify(input.before ?? null),
+    JSON.stringify(input.after ?? null),
+  ]);
+}
+
+
+====================================================================================================
+FILE: src/auth/rbac.ts
+====================================================================================================
+export type Permission =
+  | "ops.dashboard.read"
+  | "ops.staff.read"
+  | "ops.staff.manage"
+  | "ops.case.read"
+  | "ops.case.assign"
+  | "ops.case.reassign"
+  | "ops.case.release"
+  | "ops.case.reply"
+  | "ops.case.note"
+  | "ops.case.resolve"
+  | "ops.case.priority"
+  | "ops.case.escalate"
+  | "ops.client360.read"
+  | "ops.client360.sensitive"
+  | "ops.approval.request"
+  | "ops.approval.decide"
+  | "ops.audit.read";
+
+const roleMap: Record<string, Permission[]> = {
+  SUPER_ADMIN: [
+    "ops.dashboard.read","ops.staff.read","ops.staff.manage","ops.case.read",
+    "ops.case.assign","ops.case.reassign","ops.case.release","ops.case.reply",
+    "ops.case.note","ops.case.resolve","ops.case.priority","ops.case.escalate",
+    "ops.client360.read","ops.client360.sensitive","ops.approval.request",
+    "ops.approval.decide","ops.audit.read"
+  ],
+  OPS_ADMIN: [
+    "ops.dashboard.read","ops.staff.read","ops.staff.manage","ops.case.read",
+    "ops.case.assign","ops.case.reassign","ops.case.release","ops.case.priority",
+    "ops.case.escalate","ops.client360.read","ops.approval.request",
+    "ops.approval.decide","ops.audit.read"
+  ],
+  SUPERVISOR: [
+    "ops.dashboard.read","ops.staff.read","ops.case.read","ops.case.assign",
+    "ops.case.reassign","ops.case.release","ops.case.priority","ops.case.escalate",
+    "ops.client360.read","ops.approval.request","ops.approval.decide"
+  ],
+  SUPPORT_AGENT: [
+    "ops.case.read","ops.case.reply","ops.case.note","ops.case.escalate",
+    "ops.client360.read","ops.approval.request"
+  ],
+  RECOVERY_SPECIALIST: [
+    "ops.case.read","ops.case.reply","ops.case.note","ops.case.resolve",
+    "ops.case.escalate","ops.client360.read","ops.client360.sensitive",
+    "ops.approval.request","ops.approval.decide"
+  ],
+  FRAUD_ANALYST: [
+    "ops.case.read","ops.case.note","ops.case.resolve","ops.case.escalate",
+    "ops.client360.read","ops.client360.sensitive","ops.approval.request",
+    "ops.approval.decide"
+  ],
+  TRUST_SAFETY: [
+    "ops.case.read","ops.case.reply","ops.case.note","ops.case.resolve",
+    "ops.case.escalate","ops.client360.read","ops.approval.request",
+    "ops.approval.decide"
+  ],
+  FINANCE_OPS: [
+    "ops.case.read","ops.case.reply","ops.case.note","ops.case.resolve",
+    "ops.case.escalate","ops.client360.read","ops.approval.request"
+  ],
+  VAULT_OPS: [
+    "ops.case.read","ops.case.reply","ops.case.note","ops.case.resolve",
+    "ops.case.escalate","ops.client360.read","ops.approval.request"
+  ],
+  AUDITOR: [
+    "ops.dashboard.read","ops.staff.read","ops.case.read",
+    "ops.client360.read","ops.audit.read"
+  ],
+  EXECUTIVE_READONLY: ["ops.dashboard.read","ops.staff.read"]
+};
+
+export function hasPermission(role: string, permission: Permission) {
+  return roleMap[role]?.includes(permission) ?? false;
+}
+
+
+====================================================================================================
+FILE: src/auth/middleware.ts
+====================================================================================================
+import type { Request, Response, NextFunction } from "express";
+import crypto from "node:crypto";
+import { hasPermission, type Permission } from "./rbac.js";
+
+export interface Principal {
+  userId: string;
+  staffId: string;
+  role: string;
+  displayName: string;
+  stepUpVerifiedAt?: string | null;
+}
+
+declare global {
+  namespace Express {
+    interface Request {
+      principal?: Principal;
+      requestId?: string;
+    }
+  }
+}
+
+export function requestContext(req: Request, res: Response, next: NextFunction) {
+  req.requestId = String(req.headers["x-request-id"] ?? crypto.randomUUID());
+  res.setHeader("x-request-id", req.requestId);
+  next();
+}
+
+export function requireStaff(req: Request, res: Response, next: NextFunction) {
+  // Production: replace with Linqa Staff SSO/JWT/session validation.
+  const userId = String(req.headers["x-linqa-user-id"] ?? "");
+  const staffId = String(req.headers["x-linqa-staff-id"] ?? "");
+  const role = String(req.headers["x-linqa-role"] ?? "");
+  const displayName = String(req.headers["x-linqa-staff-name"] ?? "");
+  const stepUpVerifiedAt = req.headers["x-linqa-step-up-at"]
+    ? String(req.headers["x-linqa-step-up-at"])
+    : null;
+
+  if (!userId || !staffId || !role) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  req.principal = {
+    userId,
+    staffId,
+    role,
+    displayName: displayName || "Staff",
+    stepUpVerifiedAt
+  };
+  next();
+}
+
+export function requirePermission(permission: Permission) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.principal) return res.status(401).json({ error: "unauthorized" });
+    if (!hasPermission(req.principal.role, permission)) {
+      return res.status(403).json({ error: "forbidden", permission });
+    }
+    next();
+  };
+}
+
+
+====================================================================================================
+FILE: src/events/outbox.ts
+====================================================================================================
+import type { PoolClient } from "pg";
+
+export async function enqueueEvent(
+  client: PoolClient,
+  input: {
+    aggregateType: string;
+    aggregateId: string;
+    eventType: string;
+    eventKey: string;
+    payload: unknown;
+  }
+) {
+  const r = await client.query(`
+    INSERT INTO ops_outbox(
+      aggregate_type,aggregate_id,event_type,event_key,payload
+    )
+    VALUES ($1,$2,$3,$4,$5::jsonb)
+    RETURNING id::text
+  `, [
+    input.aggregateType,
+    input.aggregateId,
+    input.eventType,
+    input.eventKey,
+    JSON.stringify(input.payload),
+  ]);
+  return r.rows[0].id as string;
+}
+
+
+====================================================================================================
+FILE: src/events/publishers.ts
+====================================================================================================
+import Redis from "ioredis";
+import { connect, StringCodec } from "nats";
+
+const codec = StringCodec();
+
+export interface EventPublisher {
+  publish(eventType: string, eventKey: string, payload: unknown): Promise<void>;
+  close(): Promise<void>;
+}
+
+class RedisPublisher implements EventPublisher {
+  private redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379");
+
+  async publish(eventType: string, eventKey: string, payload: unknown) {
+    await this.redis.xadd(
+      "linqa:ops:events",
+      "*",
+      "eventType", eventType,
+      "eventKey", eventKey,
+      "payload", JSON.stringify(payload)
+    );
+  }
+
+  async close() {
+    await this.redis.quit();
+  }
+}
+
+class NatsPublisher implements EventPublisher {
+  private ncPromise = connect({ servers: process.env.NATS_URL ?? "nats://localhost:4222" });
+
+  async publish(eventType: string, eventKey: string, payload: unknown) {
+    const nc = await this.ncPromise;
+    nc.publish(
+      `linqa.ops.${eventType.replaceAll(".", "_")}`,
+      codec.encode(JSON.stringify({ eventType, eventKey, payload }))
+    );
+    await nc.flush();
+  }
+
+  async close() {
+    const nc = await this.ncPromise;
+    await nc.drain();
+  }
+}
+
+class BothPublisher implements EventPublisher {
+  constructor(private a: EventPublisher, private b: EventPublisher) {}
+  async publish(eventType: string, eventKey: string, payload: unknown) {
+    await Promise.all([
+      this.a.publish(eventType,eventKey,payload),
+      this.b.publish(eventType,eventKey,payload)
+    ]);
+  }
+  async close() { await Promise.all([this.a.close(),this.b.close()]); }
+}
+
+export function makePublisher(): EventPublisher {
+  const mode = process.env.EVENT_TRANSPORT ?? "both";
+  if (mode === "redis") return new RedisPublisher();
+  if (mode === "nats") return new NatsPublisher();
+  return new BothPublisher(new RedisPublisher(), new NatsPublisher());
+}
+
+
+====================================================================================================
+FILE: src/events/outbox-worker.ts
+====================================================================================================
+import "dotenv/config";
+import { pool } from "../common/db.js";
+import { makePublisher } from "./publishers.js";
+
+const publisher = makePublisher();
+const batchSize = Number(process.env.OUTBOX_BATCH_SIZE ?? 100);
+const pollMs = Number(process.env.OUTBOX_POLL_MS ?? 1000);
+
+async function dispatchOnce() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const r = await client.query(`
+      SELECT id::text, event_type "eventType", event_key "eventKey", payload
+      FROM ops_outbox
+      WHERE published_at IS NULL
+      ORDER BY created_at
+      FOR UPDATE SKIP LOCKED
+      LIMIT $1
+    `, [batchSize]);
+
+    for (const row of r.rows) {
+      try {
+        await publisher.publish(row.eventType,row.eventKey,row.payload);
+        await client.query(`
+          UPDATE ops_outbox
+          SET published_at=now(),publish_attempts=publish_attempts+1,last_error=NULL
+          WHERE id=$1::uuid
+        `,[row.id]);
+      } catch (e:any) {
+        await client.query(`
+          UPDATE ops_outbox
+          SET publish_attempts=publish_attempts+1,last_error=$2
+          WHERE id=$1::uuid
+        `,[row.id,String(e?.message ?? e).slice(0,1000)]);
+      }
+    }
+
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("outbox dispatch failed", e);
+  } finally {
+    client.release();
+  }
+}
+
+const timer = setInterval(dispatchOnce,pollMs);
+dispatchOnce().catch(console.error);
+
+process.on("SIGTERM", async () => {
+  clearInterval(timer);
+  await publisher.close();
+  await pool.end();
+  process.exit(0);
+});
+
+
+====================================================================================================
+FILE: src/cases/assignment.service.ts
+====================================================================================================
+import type { PoolClient } from "pg";
+import { HttpError } from "../common/errors.js";
+import { enqueueEvent } from "../events/outbox.js";
+
+const WORKABLE = ["NEW","QUEUED","ASSIGNED","IN_PROGRESS","PENDING_CLIENT","ESCALATED"];
+
+async function loadCaseForUpdate(client: PoolClient, caseId: string) {
+  const r = await client.query(`
+    SELECT c.*,q.required_role,q.name queue_name
+    FROM support_cases c
+    LEFT JOIN ops_queues q ON q.id=c.queue_id
+    WHERE c.id=$1::uuid
+    FOR UPDATE OF c
+  `,[caseId]);
+  if (!r.rowCount) throw new HttpError(404,"case_not_found");
+  return r.rows[0];
+}
+
+async function loadStaffForUpdate(client: PoolClient, staffId: string) {
+  const r = await client.query(`
+    SELECT * FROM staff_users
+    WHERE id=$1::uuid
+    FOR UPDATE
+  `,[staffId]);
+  if (!r.rowCount) throw new HttpError(404,"staff_not_found");
+  return r.rows[0];
+}
+
+function validateAssignee(staff:any, requiredRole?:string|null) {
+  if (staff.suspended) throw new HttpError(409,"staff_suspended");
+  if (staff.presence === "OFFLINE") throw new HttpError(409,"staff_offline");
+  if (staff.active_case_count >= staff.max_concurrent_cases) {
+    throw new HttpError(409,"staff_capacity_reached");
+  }
+  if (requiredRole && staff.role_name !== requiredRole && !["SUPER_ADMIN","OPS_ADMIN","SUPERVISOR"].includes(staff.role_name)) {
+    throw new HttpError(409,"staff_role_not_eligible");
+  }
+}
+
+export async function assignCase(
+  client: PoolClient,
+  input: {
+    caseId: string;
+    targetStaffId: string;
+    actorStaffId: string;
+    reasonCode: string;
+    assignmentType: "AUTO"|"MANUAL"|"REASSIGN"|"ESCALATION";
+  }
+) {
+  const c = await loadCaseForUpdate(client,input.caseId);
+  if (!WORKABLE.includes(c.status)) throw new HttpError(409,"case_not_assignable");
+
+  const target = await loadStaffForUpdate(client,input.targetStaffId);
+  validateAssignee(target,c.required_role);
+
+  const currentOwnerId = c.owner_staff_id as string | null;
+
+  if (currentOwnerId === input.targetStaffId) {
+    return c;
+  }
+
+  if (currentOwnerId) {
+    await client.query(`
+      UPDATE case_assignments
+      SET released_at=now(),release_reason='REASSIGNED'
+      WHERE case_id=$1::uuid AND released_at IS NULL
+    `,[input.caseId]);
+
+    await client.query(`
+      UPDATE staff_users
+      SET active_case_count=GREATEST(active_case_count-1,0),updated_at=now()
+      WHERE id=$1::uuid
+    `,[currentOwnerId]);
+  }
+
+  await client.query(`
+    INSERT INTO case_assignments(
+      case_id,staff_id,assigned_by_staff_id,reason_code,assignment_type
+    )
+    VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5)
+  `,[input.caseId,input.targetStaffId,input.actorStaffId,input.reasonCode,input.assignmentType]);
+
+  await client.query(`
+    UPDATE staff_users
+    SET active_case_count=active_case_count+1,updated_at=now()
+    WHERE id=$1::uuid
+  `,[input.targetStaffId]);
+
+  const updatedR = await client.query(`
+    UPDATE support_cases
+    SET owner_staff_id=$2::uuid,
+        status=CASE WHEN status IN ('NEW','QUEUED') THEN 'ASSIGNED'::ops_case_status ELSE status END,
+        version=version+1,
+        updated_at=now()
+    WHERE id=$1::uuid
+    RETURNING *
+  `,[input.caseId,input.targetStaffId]);
+
+  await client.query(`
+    INSERT INTO case_events(case_id,actor_staff_id,event_type,payload)
+    VALUES ($1::uuid,$2::uuid,'CASE_ASSIGNED',$3::jsonb)
+  `,[
+    input.caseId,input.actorStaffId,
+    JSON.stringify({fromStaffId:currentOwnerId,toStaffId:input.targetStaffId,reasonCode:input.reasonCode})
+  ]);
+
+  await enqueueEvent(client,{
+    aggregateType:"case",
+    aggregateId:input.caseId,
+    eventType:"case.assigned",
+    eventKey:input.caseId,
+    payload:{
+      caseId:input.caseId,
+      publicId:c.public_id,
+      fromStaffId:currentOwnerId,
+      toStaffId:input.targetStaffId,
+      assignmentType:input.assignmentType
+    }
+  });
+
+  return updatedR.rows[0];
+}
+
+export async function releaseCase(
+  client: PoolClient,
+  input: {
+    caseId:string;
+    actorStaffId:string;
+    reasonCode:string;
+  }
+) {
+  const c = await loadCaseForUpdate(client,input.caseId);
+  const currentOwnerId = c.owner_staff_id as string|null;
+  if (!currentOwnerId) return c;
+
+  await client.query(`
+    UPDATE case_assignments
+    SET released_at=now(),release_reason=$2
+    WHERE case_id=$1::uuid AND released_at IS NULL
+  `,[input.caseId,input.reasonCode]);
+
+  await client.query(`
+    UPDATE staff_users
+    SET active_case_count=GREATEST(active_case_count-1,0),updated_at=now()
+    WHERE id=$1::uuid
+  `,[currentOwnerId]);
+
+  const updated = await client.query(`
+    UPDATE support_cases
+    SET owner_staff_id=NULL,status='QUEUED',version=version+1,updated_at=now()
+    WHERE id=$1::uuid
+    RETURNING *
+  `,[input.caseId]);
+
+  await enqueueEvent(client,{
+    aggregateType:"case",aggregateId:input.caseId,eventType:"case.released",
+    eventKey:input.caseId,payload:{caseId:input.caseId,fromStaffId:currentOwnerId}
+  });
+
+  return updated.rows[0];
+}
+
+
+====================================================================================================
+FILE: src/cases/auto-assignment.service.ts
+====================================================================================================
+import type { PoolClient } from "pg";
+import { HttpError } from "../common/errors.js";
+import { assignCase } from "./assignment.service.js";
+
+export async function autoAssignCase(
+  client: PoolClient,
+  input: {caseId:string; actorStaffId:string; reasonCode:string}
+) {
+  const caseR = await client.query(`
+    SELECT c.id,q.required_role
+    FROM support_cases c
+    LEFT JOIN ops_queues q ON q.id=c.queue_id
+    WHERE c.id=$1::uuid
+  `,[input.caseId]);
+  if (!caseR.rowCount) throw new HttpError(404,"case_not_found");
+
+  const requiredRole = caseR.rows[0].required_role;
+
+  const staffR = await client.query(`
+    SELECT id::text
+    FROM staff_users
+    WHERE suspended=false
+      AND presence IN ('AVAILABLE','BUSY')
+      AND active_case_count < max_concurrent_cases
+      AND (
+        $1::text IS NULL
+        OR role_name=$1
+        OR role_name IN ('SUPER_ADMIN','OPS_ADMIN','SUPERVISOR')
+      )
+    ORDER BY
+      CASE presence WHEN 'AVAILABLE' THEN 0 ELSE 1 END,
+      (active_case_count::numeric / NULLIF(max_concurrent_cases,0)) ASC,
+      last_seen_at DESC NULLS LAST
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+  `,[requiredRole]);
+
+  if (!staffR.rowCount) throw new HttpError(409,"no_eligible_staff");
+
+  return assignCase(client,{
+    caseId:input.caseId,
+    targetStaffId:staffR.rows[0].id,
+    actorStaffId:input.actorStaffId,
+    reasonCode:input.reasonCode,
+    assignmentType:"AUTO"
+  });
+}
+
+
+====================================================================================================
+FILE: src/supervisor/supervisor.service.ts
+====================================================================================================
+import type { PoolClient } from "pg";
+import { HttpError } from "../common/errors.js";
+import { enqueueEvent } from "../events/outbox.js";
+
+export async function setCasePriority(
+  client:PoolClient,
+  input:{caseId:string;priority:"P1"|"P2"|"P3"|"P4";actorStaffId:string;reasonCode:string}
+) {
+  const before = await client.query(`
+    SELECT priority,status FROM support_cases WHERE id=$1::uuid FOR UPDATE
+  `,[input.caseId]);
+  if (!before.rowCount) throw new HttpError(404,"case_not_found");
+
+  const r = await client.query(`
+    UPDATE support_cases
+    SET priority=$2::ops_case_priority,version=version+1,updated_at=now()
+    WHERE id=$1::uuid
+    RETURNING *
+  `,[input.caseId,input.priority]);
+
+  await client.query(`
+    INSERT INTO case_events(case_id,actor_staff_id,event_type,payload)
+    VALUES ($1::uuid,$2::uuid,'PRIORITY_CHANGED',$3::jsonb)
+  `,[input.caseId,input.actorStaffId,JSON.stringify({from:before.rows[0].priority,to:input.priority,reasonCode:input.reasonCode})]);
+
+  await enqueueEvent(client,{
+    aggregateType:"case",aggregateId:input.caseId,eventType:"case.priority.changed",
+    eventKey:input.caseId,payload:{caseId:input.caseId,priority:input.priority}
+  });
+
+  return {before:before.rows[0],after:r.rows[0]};
+}
+
+
+====================================================================================================
+FILE: src/client360/client360.service.ts
+====================================================================================================
+import type { PoolClient } from "pg";
+
+const allowedBase = [
+  "client_id","display_name","masked_email","masked_phone","country",
+  "account_status","risk_level","verified","member_since","services_json","devices_json"
+] as const;
+
+export async function getClient360Projection(
+  client: PoolClient,
+  clientId: string,
+  opts: { sensitive: boolean }
+) {
+  const r = await client.query(`
+    SELECT *
+    FROM client360_snapshots
+    WHERE client_id=$1::uuid
+  `,[clientId]);
+
+  if (!r.rowCount) return null;
+
+  const row = r.rows[0];
+  const base:any = {
+    id: row.client_id,
+    displayName: row.display_name,
+    maskedEmail: row.masked_email,
+    maskedPhone: row.masked_phone,
+    country: row.country,
+    accountStatus: row.account_status,
+    riskLevel: row.risk_level,
+    verified: row.verified,
+    memberSince: row.member_since,
+    services: row.services_json,
+    devices: Array.isArray(row.devices_json)
+      ? row.devices_json.map((d:any)=>({
+          id:d.id,
+          label:d.label,
+          platform:d.platform,
+          trusted:!!d.trusted,
+          lastSeenAt:d.lastSeenAt
+        }))
+      : []
+  };
+
+  if (opts.sensitive) {
+    base.recovery = row.recovery_json;
+    base.risk = row.risk_json;
+  }
+
+  return base;
+}
+
+
+====================================================================================================
+FILE: src/approvals/policy.ts
+====================================================================================================
+export type SensitiveActionPolicy = {
+  requiredApprovals:number;
+  requiresStepUp:boolean;
+  allowedRequesterRoles:string[];
+  allowedApproverRoles:string[];
+};
+
+export const ACTION_POLICIES: Record<string,SensitiveActionPolicy> = {
+  RESET_2FA: {
+    requiredApprovals:1,
+    requiresStepUp:true,
+    allowedRequesterRoles:["RECOVERY_SPECIALIST","SUPERVISOR","OPS_ADMIN","SUPER_ADMIN"],
+    allowedApproverRoles:["RECOVERY_SPECIALIST","SUPERVISOR","OPS_ADMIN","SUPER_ADMIN"]
+  },
+  CHANGE_RECOVERY_EMAIL: {
+    requiredApprovals:2,
+    requiresStepUp:true,
+    allowedRequesterRoles:["RECOVERY_SPECIALIST","SUPERVISOR","OPS_ADMIN","SUPER_ADMIN"],
+    allowedApproverRoles:["SUPERVISOR","OPS_ADMIN","SUPER_ADMIN"]
+  },
+  RELEASE_PAYMENT_HOLD: {
+    requiredApprovals:2,
+    requiresStepUp:true,
+    allowedRequesterRoles:["FRAUD_ANALYST","FINANCE_OPS","SUPERVISOR","OPS_ADMIN","SUPER_ADMIN"],
+    allowedApproverRoles:["FRAUD_ANALYST","SUPERVISOR","OPS_ADMIN","SUPER_ADMIN"]
+  },
+  RESTORE_VAULT_QUARANTINE: {
+    requiredApprovals:2,
+    requiresStepUp:true,
+    allowedRequesterRoles:["VAULT_OPS","SUPERVISOR","OPS_ADMIN","SUPER_ADMIN"],
+    allowedApproverRoles:["VAULT_OPS","SUPERVISOR","OPS_ADMIN","SUPER_ADMIN"]
+  },
+  SAFETY_ENFORCEMENT_OVERRIDE: {
+    requiredApprovals:2,
+    requiresStepUp:true,
+    allowedRequesterRoles:["TRUST_SAFETY","SUPERVISOR","OPS_ADMIN","SUPER_ADMIN"],
+    allowedApproverRoles:["TRUST_SAFETY","SUPERVISOR","OPS_ADMIN","SUPER_ADMIN"]
+  }
+};
+
+
+====================================================================================================
+FILE: src/approvals/approval.service.ts
+====================================================================================================
+import type { PoolClient } from "pg";
+import { HttpError } from "../common/errors.js";
+import { ACTION_POLICIES } from "./policy.js";
+import { enqueueEvent } from "../events/outbox.js";
+
+function stepUpFresh(value?:string|null) {
+  if (!value) return false;
+  const t = new Date(value).getTime();
+  return Number.isFinite(t) && Date.now()-t <= 10*60*1000;
+}
+
+export async function createSensitiveActionRequest(
+  client:PoolClient,
+  input:{
+    caseId?:string|null;
+    clientId:string;
+    actionType:string;
+    requestedByStaffId:string;
+    requesterRole:string;
+    reasonCode:string;
+    justification:string;
+    payload:unknown;
+    stepUpVerifiedAt?:string|null;
+  }
+) {
+  const p = ACTION_POLICIES[input.actionType];
+  if (!p) throw new HttpError(400,"unknown_sensitive_action");
+  if (!p.allowedRequesterRoles.includes(input.requesterRole)) {
+    throw new HttpError(403,"requester_role_not_allowed");
+  }
+  if (p.requiresStepUp && !stepUpFresh(input.stepUpVerifiedAt)) {
+    throw new HttpError(403,"step_up_required");
+  }
+
+  const r = await client.query(`
+    INSERT INTO sensitive_action_requests(
+      case_id,client_id,action_type,requested_by_staff_id,reason_code,
+      justification,payload,required_approvals,requires_step_up,expires_at
+    )
+    VALUES ($1::uuid,$2::uuid,$3,$4::uuid,$5,$6,$7::jsonb,$8,$9,now()+interval '30 minutes')
+    RETURNING *
+  `,[
+    input.caseId ?? null,input.clientId,input.actionType,input.requestedByStaffId,
+    input.reasonCode,input.justification,JSON.stringify(input.payload),
+    p.requiredApprovals,p.requiresStepUp
+  ]);
+
+  await enqueueEvent(client,{
+    aggregateType:"approval",aggregateId:r.rows[0].id,eventType:"approval.requested",
+    eventKey:r.rows[0].id,payload:{
+      requestId:r.rows[0].id,actionType:input.actionType,clientId:input.clientId,
+      caseId:input.caseId ?? null
+    }
+  });
+
+  return r.rows[0];
+}
+
+export async function decideSensitiveAction(
+  client:PoolClient,
+  input:{
+    requestId:string;
+    approverStaffId:string;
+    approverRole:string;
+    decision:"APPROVE"|"REJECT";
+    note?:string|null;
+    stepUpVerifiedAt?:string|null;
+  }
+) {
+  const reqR = await client.query(`
+    SELECT * FROM sensitive_action_requests
+    WHERE id=$1::uuid
+    FOR UPDATE
+  `,[input.requestId]);
+  if (!reqR.rowCount) throw new HttpError(404,"approval_request_not_found");
+
+  const req = reqR.rows[0];
+  if (req.status !== "PENDING") throw new HttpError(409,"approval_request_not_pending");
+  if (new Date(req.expires_at).getTime() <= Date.now()) {
+    await client.query(`UPDATE sensitive_action_requests SET status='EXPIRED',updated_at=now() WHERE id=$1::uuid`,[input.requestId]);
+    throw new HttpError(409,"approval_request_expired");
+  }
+
+  const p = ACTION_POLICIES[req.action_type];
+  if (!p.allowedApproverRoles.includes(input.approverRole)) {
+    throw new HttpError(403,"approver_role_not_allowed");
+  }
+  if (req.requires_step_up && !stepUpFresh(input.stepUpVerifiedAt)) {
+    throw new HttpError(403,"step_up_required");
+  }
+  if (req.requested_by_staff_id === input.approverStaffId && req.required_approvals > 1) {
+    throw new HttpError(409,"requester_cannot_self_approve_dual_control");
+  }
+
+  await client.query(`
+    INSERT INTO sensitive_action_approvals(request_id,approver_staff_id,decision,note)
+    VALUES ($1::uuid,$2::uuid,$3,$4)
+  `,[input.requestId,input.approverStaffId,input.decision,input.note ?? null]);
+
+  if (input.decision === "REJECT") {
+    await client.query(`
+      UPDATE sensitive_action_requests
+      SET status='REJECTED',updated_at=now()
+      WHERE id=$1::uuid
+    `,[input.requestId]);
+
+    await enqueueEvent(client,{
+      aggregateType:"approval",aggregateId:input.requestId,eventType:"approval.rejected",
+      eventKey:input.requestId,payload:{requestId:input.requestId}
+    });
+
+    return {status:"REJECTED"};
+  }
+
+  const countR = await client.query(`
+    SELECT count(*)::int approved
+    FROM sensitive_action_approvals
+    WHERE request_id=$1::uuid AND decision='APPROVE'
+  `,[input.requestId]);
+
+  const approved = Number(countR.rows[0].approved);
+  if (approved >= Number(req.required_approvals)) {
+    await client.query(`
+      UPDATE sensitive_action_requests
+      SET status='APPROVED',updated_at=now()
+      WHERE id=$1::uuid
+    `,[input.requestId]);
+
+    await enqueueEvent(client,{
+      aggregateType:"approval",aggregateId:input.requestId,eventType:"approval.approved",
+      eventKey:input.requestId,payload:{
+        requestId:input.requestId,actionType:req.action_type,clientId:req.client_id,caseId:req.case_id
+      }
+    });
+
+    return {status:"APPROVED"};
+  }
+
+  return {status:"PENDING",approved,required:Number(req.required_approvals)};
+}
+
+
+====================================================================================================
+FILE: src/sla/sla.service.ts
+====================================================================================================
+import type { PoolClient } from "pg";
+import { enqueueEvent } from "../events/outbox.js";
+
+export async function initializeSla(
+  client:PoolClient,
+  caseId:string
+) {
+  await client.query(`
+    INSERT INTO case_sla_state(case_id,first_response_due_at,resolution_due_at)
+    SELECT c.id,
+      c.created_at + make_interval(secs=>q.sla_first_response_seconds),
+      c.created_at + make_interval(secs=>q.sla_resolution_seconds)
+    FROM support_cases c
+    JOIN ops_queues q ON q.id=c.queue_id
+    WHERE c.id=$1::uuid
+    ON CONFLICT(case_id) DO NOTHING
+  `,[caseId]);
+}
+
+export async function processSlaBatch(client:PoolClient) {
+  const r = await client.query(`
+    SELECT s.*,c.public_id,c.owner_staff_id,c.status
+    FROM case_sla_state s
+    JOIN support_cases c ON c.id=s.case_id
+    WHERE c.status NOT IN ('RESOLVED','CLOSED')
+    FOR UPDATE OF s SKIP LOCKED
+    LIMIT 200
+  `);
+
+  for (const row of r.rows) {
+    const now = Date.now();
+
+    if (row.first_response_due_at && !row.first_response_breached_at) {
+      const due = new Date(row.first_response_due_at).getTime();
+      if (!row.first_response_warned_at && due-now <= 5*60*1000 && due>now) {
+        await client.query(`
+          UPDATE case_sla_state SET first_response_warned_at=now(),updated_at=now()
+          WHERE case_id=$1::uuid
+        `,[row.case_id]);
+
+        await enqueueEvent(client,{
+          aggregateType:"case",aggregateId:row.case_id,eventType:"sla.first_response.warning",
+          eventKey:row.case_id,payload:{caseId:row.case_id,publicId:row.public_id,ownerStaffId:row.owner_staff_id}
+        });
+      }
+      if (due <= now) {
+        await client.query(`
+          UPDATE case_sla_state SET first_response_breached_at=now(),updated_at=now()
+          WHERE case_id=$1::uuid
+        `,[row.case_id]);
+
+        await enqueueEvent(client,{
+          aggregateType:"case",aggregateId:row.case_id,eventType:"sla.first_response.breached",
+          eventKey:row.case_id,payload:{caseId:row.case_id,publicId:row.public_id,ownerStaffId:row.owner_staff_id}
+        });
+      }
+    }
+
+    if (row.resolution_due_at && !row.resolution_breached_at) {
+      const due = new Date(row.resolution_due_at).getTime();
+      if (!row.resolution_warned_at && due-now <= 30*60*1000 && due>now) {
+        await client.query(`
+          UPDATE case_sla_state SET resolution_warned_at=now(),updated_at=now()
+          WHERE case_id=$1::uuid
+        `,[row.case_id]);
+
+        await enqueueEvent(client,{
+          aggregateType:"case",aggregateId:row.case_id,eventType:"sla.resolution.warning",
+          eventKey:row.case_id,payload:{caseId:row.case_id,publicId:row.public_id,ownerStaffId:row.owner_staff_id}
+        });
+      }
+      if (due <= now) {
+        await client.query(`
+          UPDATE case_sla_state SET resolution_breached_at=now(),updated_at=now()
+          WHERE case_id=$1::uuid
+        `,[row.case_id]);
+
+        await enqueueEvent(client,{
+          aggregateType:"case",aggregateId:row.case_id,eventType:"sla.resolution.breached",
+          eventKey:row.case_id,payload:{caseId:row.case_id,publicId:row.public_id,ownerStaffId:row.owner_staff_id}
+        });
+      }
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: src/sla/sla-worker.ts
+====================================================================================================
+import "dotenv/config";
+import { pool } from "../common/db.js";
+import { processSlaBatch } from "./sla.service.js";
+
+const pollMs = Number(process.env.SLA_POLL_MS ?? 30000);
+
+async function tick() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await processSlaBatch(client);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("sla worker failed",e);
+  } finally {
+    client.release();
+  }
+}
+
+const timer = setInterval(tick,pollMs);
+tick().catch(console.error);
+
+process.on("SIGTERM", async ()=>{
+  clearInterval(timer);
+  await pool.end();
+  process.exit(0);
+});
+
+
+====================================================================================================
+FILE: src/realtime/ws-gateway.ts
+====================================================================================================
+import { WebSocketServer, WebSocket } from "ws";
+import type { Server } from "node:http";
+import Redis from "ioredis";
+
+type Client = {
+  socket: WebSocket;
+  staffId: string;
+  role: string;
+  topics: Set<string>;
+};
+
+const clients = new Set<Client>();
+
+export function attachOpsWebSocket(server:Server) {
+  const wss = new WebSocketServer({server,path:"/ws/ops"});
+
+  wss.on("connection",(socket,request)=>{
+    // Production: validate the authenticated staff session/cookie/JWT here.
+    const url = new URL(request.url ?? "", "http://localhost");
+    const staffId = url.searchParams.get("staffId");
+    const role = url.searchParams.get("role");
+
+    if (!staffId || !role) {
+      socket.close(4401,"Unauthorized");
+      return;
+    }
+
+    const c:Client = {socket,staffId,role,topics:new Set([`staff:${staffId}`])};
+    if (["SUPER_ADMIN","OPS_ADMIN","SUPERVISOR"].includes(role)) {
+      c.topics.add("admin");
+    }
+    clients.add(c);
+
+    socket.on("message",raw=>{
+      try {
+        const msg = JSON.parse(String(raw));
+        if (msg.type==="subscribe.case" && typeof msg.caseId==="string") {
+          c.topics.add(`case:${msg.caseId}`);
+        }
+        if (msg.type==="unsubscribe.case" && typeof msg.caseId==="string") {
+          c.topics.delete(`case:${msg.caseId}`);
+        }
+      } catch {}
+    });
+
+    socket.on("close",()=>clients.delete(c));
+  });
+
+  return wss;
+}
+
+function fanout(event:any) {
+  const payload = JSON.stringify(event);
+  const eventPayload = event.payload ?? {};
+  const topics = new Set<string>(["admin"]);
+
+  if (eventPayload.caseId) topics.add(`case:${eventPayload.caseId}`);
+  if (eventPayload.toStaffId) topics.add(`staff:${eventPayload.toStaffId}`);
+  if (eventPayload.ownerStaffId) topics.add(`staff:${eventPayload.ownerStaffId}`);
+
+  for (const c of clients) {
+    if (c.socket.readyState !== WebSocket.OPEN) continue;
+    if ([...topics].some(t=>c.topics.has(t))) c.socket.send(payload);
+  }
+}
+
+export function startRedisRealtimeBridge() {
+  const redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379");
+  let lastId = "$";
+
+  async function loop() {
+    while (true) {
+      const result = await redis.xread(
+        "BLOCK",5000,
+        "COUNT",100,
+        "STREAMS","linqa:ops:events",lastId
+      ) as any;
+
+      if (!result) continue;
+
+      for (const [,entries] of result) {
+        for (const [id,fields] of entries) {
+          lastId = id;
+          const obj:any = {};
+          for (let i=0;i<fields.length;i+=2) obj[fields[i]]=fields[i+1];
+          fanout({
+            type:obj.eventType,
+            eventKey:obj.eventKey,
+            payload:JSON.parse(obj.payload)
+          });
+        }
+      }
+    }
+  }
+
+  loop().catch(e=>console.error("realtime redis bridge failed",e));
+  return redis;
+}
+
+
+====================================================================================================
+FILE: src/api/contracts.ts
+====================================================================================================
+import { z } from "zod";
+
+export const AssignCaseSchema = z.object({
+  targetStaffId:z.string().uuid(),
+  reasonCode:z.string().min(3).max(100)
+});
+
+export const AutoAssignCaseSchema = z.object({
+  reasonCode:z.string().min(3).max(100).default("AUTO_ASSIGNMENT")
+});
+
+export const ReleaseCaseSchema = z.object({
+  reasonCode:z.string().min(3).max(100)
+});
+
+export const PrioritySchema = z.object({
+  priority:z.enum(["P1","P2","P3","P4"]),
+  reasonCode:z.string().min(3).max(100)
+});
+
+export const SensitiveActionRequestSchema = z.object({
+  caseId:z.string().uuid().nullable().optional(),
+  clientId:z.string().uuid(),
+  actionType:z.string().min(3).max(100),
+  reasonCode:z.string().min(3).max(100),
+  justification:z.string().min(5).max(4000),
+  payload:z.record(z.string(),z.unknown()).default({})
+});
+
+export const SensitiveActionDecisionSchema = z.object({
+  decision:z.enum(["APPROVE","REJECT"]),
+  note:z.string().max(2000).optional()
+});
+
+
+====================================================================================================
+FILE: src/api/routes.ts
+====================================================================================================
+import { Router } from "express";
+import { query, tx } from "../common/db.js";
+import { requirePermission } from "../auth/middleware.js";
+import {
+  AssignCaseSchema,AutoAssignCaseSchema,ReleaseCaseSchema,
+  PrioritySchema,SensitiveActionRequestSchema,SensitiveActionDecisionSchema
+} from "./contracts.js";
+import { assignCase,releaseCase } from "../cases/assignment.service.js";
+import { autoAssignCase } from "../cases/auto-assignment.service.js";
+import { setCasePriority } from "../supervisor/supervisor.service.js";
+import { writeAudit } from "../common/audit.js";
+import { getClient360Projection } from "../client360/client360.service.js";
+import {
+  createSensitiveActionRequest,decideSensitiveAction
+} from "../approvals/approval.service.js";
+
+export const opsRouter = Router();
+
+opsRouter.get("/staff/my-work",requirePermission("ops.case.read"),async(req,res,next)=>{
+  try {
+    const r = await query(`
+      SELECT c.id::text,c.public_id "publicId",c.category,c.status::text,c.priority::text,
+             c.updated_at "updatedAt",q.name "queueName"
+      FROM support_cases c
+      LEFT JOIN ops_queues q ON q.id=c.queue_id
+      WHERE c.owner_staff_id=$1::uuid
+        AND c.status NOT IN ('RESOLVED','CLOSED')
+      ORDER BY
+        CASE c.priority WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4 END,
+        c.updated_at DESC
+    `,[req.principal!.staffId]);
+    res.json(r.rows);
+  } catch(e){next(e);}
+});
+
+opsRouter.get("/admin/live-staff",requirePermission("ops.staff.read"),async(_req,res,next)=>{
+  try {
+    const r = await query(`
+      SELECT id::text,display_name "displayName",role_name "roleName",team_name "teamName",
+             presence::text,active_case_count "activeCases",
+             max_concurrent_cases "maxConcurrentCases",last_seen_at "lastSeenAt"
+      FROM staff_users
+      WHERE suspended=false
+      ORDER BY presence='AVAILABLE' DESC,active_case_count DESC
+    `);
+    res.json(r.rows);
+  } catch(e){next(e);}
+});
+
+opsRouter.post("/cases/:id/assign",requirePermission("ops.case.assign"),async(req,res,next)=>{
+  try {
+    const body = AssignCaseSchema.parse(req.body);
+    const result = await tx(async client=>{
+      const updated = await assignCase(client,{
+        caseId:req.params.id,
+        targetStaffId:body.targetStaffId,
+        actorStaffId:req.principal!.staffId,
+        reasonCode:body.reasonCode,
+        assignmentType:"MANUAL"
+      });
+      await writeAudit(client,req,{
+        action:"case.assign",resourceType:"case",resourceId:req.params.id,
+        reasonCode:body.reasonCode,after:updated
+      });
+      return updated;
+    });
+    res.json(result);
+  } catch(e){next(e);}
+});
+
+opsRouter.post("/cases/:id/auto-assign",requirePermission("ops.case.assign"),async(req,res,next)=>{
+  try {
+    const body = AutoAssignCaseSchema.parse(req.body);
+    const result = await tx(async client=>{
+      const updated = await autoAssignCase(client,{
+        caseId:req.params.id,
+        actorStaffId:req.principal!.staffId,
+        reasonCode:body.reasonCode
+      });
+      await writeAudit(client,req,{
+        action:"case.auto_assign",resourceType:"case",resourceId:req.params.id,
+        reasonCode:body.reasonCode,after:updated
+      });
+      return updated;
+    });
+    res.json(result);
+  } catch(e){next(e);}
+});
+
+opsRouter.post("/cases/:id/reassign",requirePermission("ops.case.reassign"),async(req,res,next)=>{
+  try {
+    const body = AssignCaseSchema.parse(req.body);
+    const result = await tx(async client=>{
+      const updated = await assignCase(client,{
+        caseId:req.params.id,
+        targetStaffId:body.targetStaffId,
+        actorStaffId:req.principal!.staffId,
+        reasonCode:body.reasonCode,
+        assignmentType:"REASSIGN"
+      });
+      await writeAudit(client,req,{
+        action:"case.reassign",resourceType:"case",resourceId:req.params.id,
+        reasonCode:body.reasonCode,after:updated
+      });
+      return updated;
+    });
+    res.json(result);
+  } catch(e){next(e);}
+});
+
+opsRouter.post("/cases/:id/release",requirePermission("ops.case.release"),async(req,res,next)=>{
+  try {
+    const body = ReleaseCaseSchema.parse(req.body);
+    const result = await tx(async client=>{
+      const updated = await releaseCase(client,{
+        caseId:req.params.id,
+        actorStaffId:req.principal!.staffId,
+        reasonCode:body.reasonCode
+      });
+      await writeAudit(client,req,{
+        action:"case.release",resourceType:"case",resourceId:req.params.id,
+        reasonCode:body.reasonCode,after:updated
+      });
+      return updated;
+    });
+    res.json(result);
+  } catch(e){next(e);}
+});
+
+opsRouter.post("/cases/:id/priority",requirePermission("ops.case.priority"),async(req,res,next)=>{
+  try {
+    const body = PrioritySchema.parse(req.body);
+    const result = await tx(async client=>{
+      const x = await setCasePriority(client,{
+        caseId:req.params.id,priority:body.priority,
+        actorStaffId:req.principal!.staffId,reasonCode:body.reasonCode
+      });
+      await writeAudit(client,req,{
+        action:"case.priority",resourceType:"case",resourceId:req.params.id,
+        reasonCode:body.reasonCode,before:x.before,after:x.after
+      });
+      return x.after;
+    });
+    res.json(result);
+  } catch(e){next(e);}
+});
+
+opsRouter.get("/clients/:clientId/360",requirePermission("ops.client360.read"),async(req,res,next)=>{
+  try {
+    const sensitive = ["SUPER_ADMIN","OPS_ADMIN","RECOVERY_SPECIALIST","FRAUD_ANALYST"].includes(req.principal!.role);
+    const client = await tx(c=>getClient360Projection(c,req.params.clientId,{sensitive}));
+    if (!client) return res.status(404).json({error:"client_not_found"});
+    res.json(client);
+  } catch(e){next(e);}
+});
+
+opsRouter.post("/approvals",requirePermission("ops.approval.request"),async(req,res,next)=>{
+  try {
+    const body = SensitiveActionRequestSchema.parse(req.body);
+    const result = await tx(async client=>{
+      const created = await createSensitiveActionRequest(client,{
+        ...body,
+        requestedByStaffId:req.principal!.staffId,
+        requesterRole:req.principal!.role,
+        stepUpVerifiedAt:req.principal!.stepUpVerifiedAt
+      });
+      await writeAudit(client,req,{
+        action:"sensitive_action.request",resourceType:"approval",
+        resourceId:created.id,reasonCode:body.reasonCode,after:created
+      });
+      return created;
+    });
+    res.status(201).json(result);
+  } catch(e){next(e);}
+});
+
+opsRouter.post("/approvals/:id/decision",requirePermission("ops.approval.decide"),async(req,res,next)=>{
+  try {
+    const body = SensitiveActionDecisionSchema.parse(req.body);
+    const result = await tx(async client=>{
+      const decision = await decideSensitiveAction(client,{
+        requestId:req.params.id,
+        approverStaffId:req.principal!.staffId,
+        approverRole:req.principal!.role,
+        decision:body.decision,
+        note:body.note,
+        stepUpVerifiedAt:req.principal!.stepUpVerifiedAt
+      });
+      await writeAudit(client,req,{
+        action:"sensitive_action.decision",resourceType:"approval",
+        resourceId:req.params.id,reasonCode:body.decision,after:decision
+      });
+      return decision;
+    });
+    res.json(result);
+  } catch(e){next(e);}
+});
+
+
+====================================================================================================
+FILE: src/server.ts
+====================================================================================================
+import "dotenv/config";
+import http from "node:http";
+import express from "express";
+import helmet from "helmet";
+import cors from "cors";
+import compression from "compression";
+import { requestContext,requireStaff } from "./auth/middleware.js";
+import { opsRouter } from "./api/routes.js";
+import { attachOpsWebSocket,startRedisRealtimeBridge } from "./realtime/ws-gateway.js";
+
+export const app = express();
+
+app.disable("x-powered-by");
+app.use(helmet());
+app.use(cors({
+  origin:(process.env.OPS_WEB_ORIGINS ?? "http://localhost:3000").split(","),
+  credentials:true
+}));
+app.use(compression());
+app.use(express.json({limit:"1mb"}));
+app.use(requestContext);
+
+app.get("/health",(_req,res)=>res.json({ok:true}));
+app.use("/api/ops",requireStaff,opsRouter);
+
+app.use((err:any,_req:any,res:any,_next:any)=>{
+  const status = err.status ?? (err.name==="ZodError" ? 400 : 500);
+  if (status>=500) console.error(err);
+  res.status(status).json({
+    error:status===500?"internal_server_error":err.message,
+    details:err.name==="ZodError"?err.issues:err.details
+  });
+});
+
+const server = http.createServer(app);
+attachOpsWebSocket(server);
+startRedisRealtimeBridge();
+
+if (process.env.NODE_ENV !== "test") {
+  const port = Number(process.env.PORT ?? 8080);
+  server.listen(port,()=>console.log(`Linqa Ops Orchestration listening on :${port}`));
+}
+
+
+====================================================================================================
+FILE: tests/assignment.service.test.ts
+====================================================================================================
+import { describe,it,expect,vi } from "vitest";
+import { assignCase } from "../src/cases/assignment.service.js";
+
+describe("assignCase",()=>{
+  it("rejects assignment when target staff is offline",async()=>{
+    const client:any = {
+      query:vi.fn()
+        .mockResolvedValueOnce({rowCount:1,rows:[{
+          id:"case",status:"QUEUED",public_id:"CS-1",owner_staff_id:null,required_role:null
+        }]})
+        .mockResolvedValueOnce({rowCount:1,rows:[{
+          id:"staff",presence:"OFFLINE",suspended:false,active_case_count:0,max_concurrent_cases:5,role_name:"SUPPORT_AGENT"
+        }]})
+    };
+
+    await expect(assignCase(client,{
+      caseId:"00000000-0000-0000-0000-000000000001",
+      targetStaffId:"00000000-0000-0000-0000-000000000002",
+      actorStaffId:"00000000-0000-0000-0000-000000000003",
+      reasonCode:"TEST",
+      assignmentType:"MANUAL"
+    })).rejects.toThrow("staff_offline");
+  });
+});
+
+
+====================================================================================================
+FILE: tests/approval.policy.test.ts
+====================================================================================================
+import { describe,it,expect,vi } from "vitest";
+import { createSensitiveActionRequest } from "../src/approvals/approval.service.js";
+
+describe("sensitive action policy",()=>{
+  it("requires step-up authentication for RESET_2FA",async()=>{
+    const client:any={query:vi.fn()};
+    await expect(createSensitiveActionRequest(client,{
+      clientId:"00000000-0000-0000-0000-000000000001",
+      actionType:"RESET_2FA",
+      requestedByStaffId:"00000000-0000-0000-0000-000000000002",
+      requesterRole:"RECOVERY_SPECIALIST",
+      reasonCode:"RECOVERY",
+      justification:"Verified recovery workflow",
+      payload:{},
+      stepUpVerifiedAt:null
+    })).rejects.toThrow("step_up_required");
+  });
+});
+
+
+====================================================================================================
+FILE: tests/api.integration.test.ts
+====================================================================================================
+import { describe,it,expect } from "vitest";
+import request from "supertest";
+import { app } from "../src/server.js";
+
+describe("Ops API security",()=>{
+  it("rejects unauthenticated requests",async()=>{
+    const r = await request(app).get("/api/ops/staff/my-work");
+    expect(r.status).toBe(401);
+  });
+
+  it("rejects support agent from admin live staff endpoint",async()=>{
+    const r = await request(app)
+      .get("/api/ops/admin/live-staff")
+      .set("x-linqa-user-id","00000000-0000-0000-0000-000000000001")
+      .set("x-linqa-staff-id","00000000-0000-0000-0000-000000000002")
+      .set("x-linqa-role","SUPPORT_AGENT")
+      .set("x-linqa-staff-name","Agent");
+    expect(r.status).toBe(403);
+  });
+});

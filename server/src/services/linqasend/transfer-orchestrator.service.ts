@@ -5,6 +5,10 @@ import { ComplianceService } from "./compliance.service.js";
 import { LedgerService } from "./ledger.service.js";
 import { RiskEngineService } from "./risk-engine.service.js";
 import { assertTransition } from "./transfer-state.js";
+import { AtomicCompletionService } from "./atomic-completion.service.js";
+import { ProviderOperationService } from "./provider-operation.service.js";
+import type { ProviderTokenVaultService } from "./provider-token-vault.service.js";
+import { LinqaSendExecutionQueue } from "./execution-queue.service.js";
 
 function publicTransferId(): string {
   return `LS${Date.now().toString(36).toUpperCase()}${randomUUID().slice(0, 6).toUpperCase()}`;
@@ -12,14 +16,21 @@ function publicTransferId(): string {
 
 export class TransferOrchestratorService {
   private readonly compliance: ComplianceService;
+  private readonly completion: AtomicCompletionService;
+  private readonly operations: ProviderOperationService;
+  private readonly executionQueue: LinqaSendExecutionQueue;
 
   constructor(
     private readonly db: Database,
     private readonly risk: RiskEngineService,
-    private readonly ledger: LedgerService,
-    private readonly providers: LinqaSendProviders
+    _ledger: LedgerService,
+    private readonly providers: LinqaSendProviders,
+    private readonly tokenVault?: ProviderTokenVaultService
   ) {
     this.compliance = new ComplianceService(providers.compliance);
+    this.completion = new AtomicCompletionService(db);
+    this.operations = new ProviderOperationService(db);
+    this.executionQueue = new LinqaSendExecutionQueue(db);
   }
 
   /**
@@ -32,6 +43,9 @@ export class TransferOrchestratorService {
    * the original transfer instead of creating a second one.
    */
   async createTransfer(input: {
+    internalId?: string;
+    beforeAdvance?: (transferId: string) => Promise<void>;
+    deferExecution?: boolean;
     userId: string;
     quote: {
       id: string;
@@ -44,8 +58,9 @@ export class TransferOrchestratorService {
       marginBps: number;
       provider: string;
     };
-    recipient: { id: string; displayName: string; country: string };
+    recipient: { id: string; displayName: string; country: string; providerRecipientRef: string };
     paymentMethodId: string | null;
+    paymentMethodRef?: string | undefined;
     idempotencyKey: string;
     purposeCode?: string | undefined;
     authContext: {
@@ -74,7 +89,7 @@ export class TransferOrchestratorService {
       return { transferId: existing.rows[0].public_id as string, status: existing.rows[0].status as string, idempotentReplay: true };
     }
 
-    const id = randomUUID();
+    const id = input.internalId ?? randomUUID();
     const publicId = publicTransferId();
 
     await this.db.query(
@@ -102,8 +117,36 @@ export class TransferOrchestratorService {
       ]
     );
 
+    // Persist immutable jurisdiction/capability/responsibility evidence
+    // before compliance, funding, ledger, or payout can run.
+    if (input.beforeAdvance) {
+      try {
+        await input.beforeAdvance(id);
+      } catch (error) {
+        await this.db.query(`UPDATE linqasend_transfers SET status='FAILED',failure_code='READINESS_SNAPSHOT_FAILED',failure_message=$2,updated_at=now() WHERE id=$1`, [id, error instanceof Error ? error.message : "unknown"]);
+        throw error;
+      }
+    }
+
+    if (input.deferExecution) {
+      const executionId = await this.executionQueue.enqueue(id, {
+        ...input,
+        internalId: id,
+        beforeAdvance: undefined,
+        authContext: { ...input.authContext, velocity24hMinor: input.authContext.velocity24hMinor.toString() }
+      });
+      return { transferId: publicId, executionId, status: "QUEUED", idempotentReplay: false };
+    }
     const result = await this.advance(id, publicId, input);
     return { transferId: publicId, ...result, idempotentReplay: false };
+  }
+
+  async runClaimedExecution(claim: { id: string; transferId: string; context: any }): Promise<void> {
+    const input = claim.context as Parameters<TransferOrchestratorService["createTransfer"]>[0];
+    input.authContext.velocity24hMinor = BigInt(input.authContext.velocity24hMinor as unknown as string);
+    const transfer = await this.db.query(`SELECT public_id,status FROM linqasend_transfers WHERE id=$1`,[claim.transferId]);
+    if (!transfer.rows[0] || transfer.rows[0].status !== "CREATED") throw new Error("QUEUED_TRANSFER_NOT_EXECUTABLE");
+    await this.advance(claim.transferId,transfer.rows[0].public_id,input);
   }
 
   private async setStatus(
@@ -220,13 +263,20 @@ export class TransferOrchestratorService {
       return { status: "DECLINED", reason: "NO_PAYMENT_METHOD" };
     }
 
-    const authorization = await this.providers.funding.authorizeFunding({
+    if (!input.paymentMethodRef) throw new Error("VERIFIED_PROVIDER_PAYMENT_REFERENCE_REQUIRED");
+    const fundingReference = this.tokenVault ? await this.tokenVault.resolve(input.paymentMethodRef,{actorId:"linqasend-execution",purpose:"FUNDING_AUTHORIZATION",expectedOwnerUserId:input.userId}) : input.paymentMethodRef;
+    const fundingKey = `${input.idempotencyKey}:funding`;
+    const fundingOperation = await this.operations.register({transferId:id,providerId:input.quote.provider,operationType:"FUNDING_AUTHORIZATION",idempotencyKey:fundingKey,payload:{transferId:publicId,amountMinor:input.quote.sendAmountMinor,currency:input.quote.sendCurrency}});
+    await this.operations.submitted(fundingOperation.id);
+    let authorization;
+    try { authorization = await this.providers.funding.authorizeFunding({
       transferId: publicId,
-      providerPaymentMethodRef: input.paymentMethodId,
+      providerPaymentMethodRef: fundingReference,
       amountMinor: BigInt(input.quote.sendAmountMinor),
       currency: input.quote.sendCurrency,
-      idempotencyKey: `${input.idempotencyKey}:funding`
-    });
+      idempotencyKey: fundingKey
+    }); await this.operations.succeeded(fundingOperation.id,authorization.providerRef,authorization); }
+    catch (error) { await this.operations.unknown(fundingOperation.id,error); throw error; }
     await this.recordAttempt(id, "FUNDING_AUTHORIZATION", authorization.status, {
       provider: input.quote.provider,
       providerRef: authorization.providerRef,
@@ -253,25 +303,26 @@ export class TransferOrchestratorService {
     await this.setStatus(id, "FUNDS_AUTHORIZED", "TRANSFER_SUBMITTED");
     await this.setStatus(id, "TRANSFER_SUBMITTED", "PROCESSING");
 
-    const payout = await this.providers.payout.createPayout({
+    const payoutReference = input.recipient.providerRecipientRef.startsWith("vault:")
+      ? (this.tokenVault ? await this.tokenVault.resolve(input.recipient.providerRecipientRef,{actorId:"linqasend-execution",purpose:"PAYOUT_SUBMISSION",expectedOwnerUserId:input.userId}) : (() => { throw new Error("PROVIDER_TOKEN_VAULT_REQUIRED"); })())
+      : input.recipient.providerRecipientRef;
+    const payoutKey = `${input.idempotencyKey}:payout`;
+    const payoutOperation = await this.operations.register({transferId:id,providerId:input.quote.provider,operationType:"PAYOUT",idempotencyKey:payoutKey,payload:{transferId:publicId,amountMinor:input.quote.receiveAmountMinor,currency:input.quote.receiveCurrency}});
+    await this.operations.submitted(payoutOperation.id);
+    let payout;
+    try { payout = await this.providers.payout.createPayout({
       transferId: publicId,
-      recipientProviderRef: input.recipient.id,
+      recipientProviderRef: payoutReference,
       amountMinor: BigInt(input.quote.receiveAmountMinor),
       currency: input.quote.receiveCurrency,
-      idempotencyKey: `${input.idempotencyKey}:payout`
-    });
+      idempotencyKey: payoutKey
+    }); await this.operations.succeeded(payoutOperation.id,payout.providerRef,payout); }
+    catch (error) { await this.operations.unknown(payoutOperation.id,error); throw error; }
     await this.recordAttempt(id, "PAYOUT", payout.status, { provider: input.quote.provider, providerRef: payout.providerRef });
 
     await this.setStatus(id, "PROCESSING", "PAYOUT_SUBMITTED");
     if (payout.status === "COMPLETED") {
-      await this.setStatus(id, "PAYOUT_SUBMITTED", "COMPLETED");
-      await this.ledger.postCompletedTransfer({
-        transferId: id,
-        sendMinor: BigInt(input.quote.sendAmountMinor),
-        sendCurrency: input.quote.sendCurrency,
-        fxRevenueMinor: 0n,
-        processorCostMinor: 0n
-      });
+      await this.completion.complete({ transferId: id, providerReference: payout.providerRef, source: "EXECUTION_WORKER" });
       return { status: "COMPLETED" };
     }
 

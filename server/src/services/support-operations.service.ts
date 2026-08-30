@@ -39,6 +39,26 @@ export class SupportOperationsService {
     }
   }
 
+  async getCaseById(caseId: string) {
+    const result = await this.db.query(
+      `SELECT id, case_number, user_id, organization_id, category, priority, state,
+              assigned_team, assigned_agent, assigned_staff_id, subject, description,
+              created_at, updated_at, resolved_at
+       FROM support_cases_v2 WHERE id = $1`,
+      [caseId]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async listEvents(caseId: string) {
+    const result = await this.db.query(
+      `SELECT id, actor_type, actor_id, event_type, body, private, created_at
+       FROM support_case_events_v2 WHERE case_id = $1 ORDER BY created_at ASC`,
+      [caseId]
+    );
+    return result.rows;
+  }
+
   async addEvent(input: {
     caseId: string;
     actorType: "USER" | "STAFF" | "SYSTEM";

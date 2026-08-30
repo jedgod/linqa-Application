@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import cors from "@fastify/cors";
+import rawBody from "fastify-raw-body";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "./config.js";
 import type { Database } from "./db/pool.js";
@@ -28,7 +29,10 @@ export async function buildApp(config: AppConfig, db: Database) {
         "body.code",
         "body.refreshToken",
         "body.manifestHashBase64",
-        "body.tokens"
+        "body.tokens",
+        "body.providerToken",
+        "body.providerSecret",
+        "body.reference"
       ]
     },
     genReqId: () => randomUUID(),
@@ -65,6 +69,7 @@ export async function buildApp(config: AppConfig, db: Database) {
     max: 120,
     timeWindow: "1 minute"
   });
+  await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
 
   registerMetrics(app);
   const services = createServiceContainer(config, db);

@@ -17,6 +17,13 @@ const checks = [
   ["detected country comes from server state", read("server/src/services/onboarding.service.ts").includes("detected_country_code")],
   ["country clarification cannot overwrite evidence", read("server/src/services/countrylinqa/service.ts").includes("COUNTRY_CLARIFICATION_REQUESTED")],
   ["completion requires server acknowledgment", read("clients/mobile/app/onboarding/complete.tsx").includes("acknowledgeCompletion")],
+  ["Discovery Settings remains post-onboarding", !read("clients/mobile/app/onboarding/resolve.tsx").includes("settings/countrylinqa")],
+  ["Discovery Settings has separate outbound and inbound reach", read("clients/mobile/app/settings/countrylinqa.tsx").includes("Who I can discover") && read("clients/mobile/app/settings/countrylinqa.tsx").includes("Who can discover me")],
+  ["inbound reach is server persisted", read("server/src/db/migrations/027_countrylinqa_discovery_controls.sql").includes("country_inbound_reach")],
+  ["inbound reach is enforced in discovery scope", read("server/src/services/countrylinqa/feed-scope.ts").includes("country_inbound_links") && read("server/src/services/countrylinqa/feed-scope.ts").includes("CONTACTS_ONLY")],
+  ["profile country visibility is enforced in discovery results", read("server/src/services/countrylinqa/discovery.ts").includes("author_preferences.show_country")],
+  ["recommendation controls are server enforced", read("server/src/services/countrylinqa/golive/businessRanking.ts").includes("allow_businesses=TRUE") && read("server/src/services/countrylinqa/golive/eventRanking.ts").includes("allow_events=TRUE")],
+  ["plan refresh cannot grant local entitlement", !read("clients/mobile/app/settings/countrylinqa.tsx").includes("setPlan")],
   ["account switch clears scoped state", read("clients/mobile/account/AccountContext.tsx").includes("clearAccountScopedState")]
 ];
 const failed = checks.filter(([, ok]) => !ok);

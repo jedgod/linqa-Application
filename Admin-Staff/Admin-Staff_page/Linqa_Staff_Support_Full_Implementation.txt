@@ -1,0 +1,1501 @@
+LINQA STAFF SUPPORT WORKSPACE — FULL IMPLEMENTATION PACK
+================================================================================================
+
+
+================================================================================================
+FILE: README.md
+================================================================================================
+# Linqa Staff Support Workspace
+
+This pack implements the staff-support interface shown in the supplied design.
+
+## Included
+- My Work / active case workspace
+- Case header with status, priority, SLA, created/updated timestamps
+- Case details and tags
+- Client 360 summary with masked identity data
+- Account & services summary
+- Staff/client support chat
+- Internal notes
+- Case timeline/history
+- Quick actions
+- Recovery-verification API
+- 2FA-reset authorization API
+- Secure recovery links
+- Escalation and resolution APIs
+- Presence API
+- WebSocket case-event contract
+- RBAC
+- PostgreSQL persistence
+- Audit logging
+
+## Security model
+
+Ordinary support agents can communicate with the client, add notes, escalate,
+and issue limited secure recovery links. Sensitive identity/recovery actions
+are restricted to specialist roles.
+
+The staff workspace must NOT expose:
+- E2EE private keys or decrypted unrelated private messages
+- Vault encryption keys or arbitrary Vault plaintext
+- Passwords
+- recovery secrets
+- CVVs
+- full payment-card PANs
+- unrelated personal data
+
+## Production wiring
+
+1. Replace sample x-linqa-* header principal resolution with Linqa staff SSO/JWT.
+2. Require MFA/passkey for staff.
+3. Add CSRF protection if using cookie sessions.
+4. Put sensitive recovery actions behind step-up authentication.
+5. Deliver secure-link tokens through an approved user notification channel.
+6. Connect outbound client replies to the Linqa support messaging gateway.
+7. Publish case updates through Redis/NATS/Kafka for multi-instance WebSocket fanout.
+8. Send immutable audit events to SIEM/WORM storage.
+9. Add rate limits and per-case action throttles.
+10. Bind account recovery to Linqa's actual identity service—this pack authorizes the operation; it does not directly mutate authentication secrets.
+
+## Quick start
+
+npm install
+cp .env.example .env
+npm run db:migrate
+npm run dev:api
+npm run dev:web
+
+Mount `StaffSupportPage` under a route such as:
+`app/staff/cases/[id]/page.tsx`.
+
+
+================================================================================================
+FILE: package.json
+================================================================================================
+{
+  "name": "linqa-staff-support-workspace",
+  "private": true,
+  "scripts": {
+    "dev:web": "next dev -p 3000",
+    "dev:api": "tsx watch server/index.ts",
+    "build:web": "next build",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "psql \"$DATABASE_URL\" -f db/001_staff_support.sql"
+  },
+  "dependencies": {
+    "@types/compression": "^1.7.5",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.5.13",
+    "clsx": "^2.1.1",
+    "compression": "^1.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.0",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "lucide-react": "^0.468.0",
+    "next": "^15.5.0",
+    "pg": "^8.13.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "swr": "^2.3.0",
+    "tailwind-merge": "^3.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "ws": "^8.18.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^3.4.0"
+  }
+}
+
+
+================================================================================================
+FILE: .env.example
+================================================================================================
+DATABASE_URL=postgresql://linqa:linqa@localhost:5432/linqa
+PORT=8080
+STAFF_ORIGINS=http://localhost:3000
+PG_POOL_MAX=20
+NODE_ENV=development
+
+
+================================================================================================
+FILE: tailwind.config.ts
+================================================================================================
+import type { Config } from "tailwindcss";
+export default {
+  darkMode:["class"],
+  content:["./app/**/*.{ts,tsx}","./components/**/*.{ts,tsx}"],
+  theme:{extend:{}},
+  plugins:[]
+} satisfies Config;
+
+
+================================================================================================
+FILE: shared/types.ts
+================================================================================================
+export type StaffRole =
+  | "SUPPORT_AGENT"
+  | "SUPERVISOR"
+  | "RECOVERY_SPECIALIST"
+  | "TRUST_SAFETY"
+  | "FRAUD_ANALYST"
+  | "FINANCE_OPS"
+  | "VAULT_OPS";
+
+export type CaseStatus = "OPEN" | "PENDING" | "RESOLVED" | "CLOSED";
+export type CasePriority = "P1" | "P2" | "P3" | "P4";
+export type Presence = "AVAILABLE" | "BUSY" | "AWAY" | "OFFLINE";
+
+export interface StaffSession {
+  staffId: string;
+  userId: string;
+  displayName: string;
+  role: StaffRole;
+  presence: Presence;
+  sessionStartedAt: string;
+}
+
+export interface SupportCase {
+  id: string;
+  publicId: string;
+  clientId: string;
+  type: string;
+  category: string;
+  channel: string;
+  status: CaseStatus;
+  priority: CasePriority;
+  queueName: string;
+  assignedStaffId?: string | null;
+  assignedStaffName?: string | null;
+  source: string;
+  referenceId?: string | null;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+  slaTargetAt?: string | null;
+  tags: string[];
+}
+
+export interface ClientSummary {
+  id: string;
+  displayName: string;
+  maskedEmail: string;
+  maskedPhone: string;
+  accountStatus: string;
+  memberSince: string;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  country: string;
+  verified: boolean;
+  services: {
+    linqaAccount: boolean;
+    linqaSend: boolean;
+    vaultPlan: string | null;
+    twoFactorEnabled: boolean;
+    trustedDevices: number;
+  };
+}
+
+export interface ChatMessage {
+  id: string;
+  caseId: string;
+  senderType: "CLIENT" | "STAFF" | "SYSTEM";
+  senderName: string;
+  body: string;
+  createdAt: string;
+  deliveryStatus?: "SENT" | "DELIVERED" | "READ";
+  isInternal?: boolean;
+}
+
+export interface InternalNote {
+  id: string;
+  caseId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface CaseTimelineEvent {
+  id: string;
+  type: string;
+  text: string;
+  createdAt: string;
+  actorName?: string | null;
+}
+
+export interface RecoveryState {
+  smsVerified: boolean;
+  emailVerified: boolean;
+  trustedDeviceMatched: boolean;
+  carrierRisk: "LOW" | "MEDIUM" | "HIGH";
+  riskScore: number;
+  decision?: "APPROVED" | "REJECTED" | "ESCALATED" | null;
+}
+
+export interface StaffCaseWorkspacePayload {
+  session: StaffSession;
+  supportCase: SupportCase;
+  client: ClientSummary;
+  messages: ChatMessage[];
+  notes: InternalNote[];
+  timeline: CaseTimelineEvent[];
+  recovery?: RecoveryState | null;
+}
+
+
+================================================================================================
+FILE: shared/permissions.ts
+================================================================================================
+export type StaffPermission =
+  | "case.read"
+  | "case.reply"
+  | "case.note"
+  | "case.resolve"
+  | "case.escalate"
+  | "client360.read"
+  | "client360.sensitive.read"
+  | "recovery.verify"
+  | "recovery.reset2fa"
+  | "recovery.update_email"
+  | "recovery.add_method"
+  | "recovery.secure_link"
+  | "queue.read"
+  | "knowledge.read";
+
+export const ROLE_PERMISSIONS: Record<string, StaffPermission[]> = {
+  SUPPORT_AGENT: [
+    "case.read","case.reply","case.note","case.escalate","client360.read",
+    "queue.read","knowledge.read","recovery.secure_link"
+  ],
+  SUPERVISOR: [
+    "case.read","case.reply","case.note","case.resolve","case.escalate",
+    "client360.read","queue.read","knowledge.read"
+  ],
+  RECOVERY_SPECIALIST: [
+    "case.read","case.reply","case.note","case.resolve","case.escalate",
+    "client360.read","client360.sensitive.read","recovery.verify",
+    "recovery.reset2fa","recovery.update_email","recovery.add_method",
+    "recovery.secure_link","queue.read","knowledge.read"
+  ],
+  TRUST_SAFETY: ["case.read","case.reply","case.note","case.resolve","case.escalate","client360.read"],
+  FRAUD_ANALYST: ["case.read","case.note","case.resolve","case.escalate","client360.read","client360.sensitive.read"],
+  FINANCE_OPS: ["case.read","case.reply","case.note","case.resolve","case.escalate","client360.read"],
+  VAULT_OPS: ["case.read","case.reply","case.note","case.resolve","case.escalate","client360.read"],
+};
+
+export function can(role: string, permission: StaffPermission) {
+  return ROLE_PERMISSIONS[role]?.includes(permission) ?? false;
+}
+
+
+================================================================================================
+FILE: lib/utils.ts
+================================================================================================
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
+
+================================================================================================
+FILE: components/ui.tsx
+================================================================================================
+import * as React from "react";
+import { cn } from "../lib/utils";
+
+export function Card({className,...props}:React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("rounded-xl border border-slate-800 bg-slate-900/70",className)} {...props}/>;
+}
+export function Button({className,...props}:React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return <button className={cn("inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50",className)} {...props}/>;
+}
+export function Badge({className,...props}:React.HTMLAttributes<HTMLSpanElement>) {
+  return <span className={cn("inline-flex items-center rounded-md px-2 py-1 text-xs font-medium",className)} {...props}/>;
+}
+export function Textarea({className,...props}:React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea className={cn("min-h-24 w-full resize-none rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-sm outline-none placeholder:text-slate-500 focus:border-violet-500",className)} {...props}/>;
+}
+
+
+================================================================================================
+FILE: components/StaffSidebar.tsx
+================================================================================================
+"use client";
+import {
+  BriefcaseBusiness, LayoutDashboard, Users, MessagesSquare, Rows3,
+  BookOpen, Megaphone, UserRoundSearch, Send, LockKeyhole, ShieldCheck,
+  TriangleAlert, SlidersHorizontal, Keyboard
+} from "lucide-react";
+
+const primary = [
+  ["My Work",BriefcaseBusiness],
+  ["Dashboard",LayoutDashboard],
+  ["All Cases",Users],
+  ["Live Chat",MessagesSquare],
+  ["Queues",Rows3],
+  ["Knowledge Base",BookOpen],
+  ["Announcements",Megaphone],
+] as const;
+
+const tools = [
+  ["Client 360",UserRoundSearch],
+  ["LinqaSend",Send],
+  ["Vault",LockKeyhole],
+  ["Account Recovery",ShieldCheck],
+  ["Trust & Safety",ShieldCheck],
+  ["Fraud & Risk",TriangleAlert],
+] as const;
+
+export function StaffSidebar({name,role}:{name:string;role:string}) {
+  return (
+    <aside className="sticky top-0 hidden h-screen w-[205px] shrink-0 border-r border-slate-800 bg-[#06101b] lg:flex lg:flex-col">
+      <div className="flex h-16 items-center gap-3 border-b border-slate-800 px-5">
+        <div className="grid h-9 w-9 place-items-center rounded-lg bg-violet-600 font-black">L</div>
+        <div className="text-2xl font-bold">linqa</div>
+      </div>
+
+      <div className="m-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 rounded-full bg-slate-700"/>
+          <div>
+            <div className="text-sm font-semibold">{name}</div>
+            <div className="text-xs text-slate-400">{role.replaceAll("_"," ")}</div>
+            <div className="mt-1 flex items-center gap-1 text-xs text-slate-300"><span className="h-2 w-2 rounded-full bg-emerald-500"/>Online</div>
+          </div>
+        </div>
+      </div>
+
+      <nav className="space-y-1 px-2">
+        {primary.map(([label,Icon],i)=>(
+          <button key={label} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm ${i===0?"bg-violet-600 text-white":"text-slate-300 hover:bg-slate-800"}`}>
+            <Icon className="h-4 w-4"/><span className="flex-1 text-left">{label}</span>
+            {label==="My Work" && <span className="rounded border border-violet-300 px-1.5 text-[10px]">6</span>}
+          </button>
+        ))}
+      </nav>
+
+      <div className="mt-4 border-t border-slate-800 px-3 pt-4 text-xs font-semibold text-slate-400">TOOLS</div>
+      <nav className="mt-2 space-y-1 px-2">
+        {tools.map(([label,Icon])=>(
+          <button key={label} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-800">
+            <Icon className="h-4 w-4"/><span>{label}</span>
+          </button>
+        ))}
+      </nav>
+
+      <div className="mt-4 border-t border-slate-800 px-3 pt-4 text-xs font-semibold text-slate-400">SETTINGS</div>
+      <nav className="mt-2 space-y-1 px-2">
+        <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-800"><SlidersHorizontal className="h-4 w-4"/>Preferences</button>
+        <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-800"><Keyboard className="h-4 w-4"/>Shortcuts</button>
+      </nav>
+
+      <div className="mt-auto border-t border-slate-800 p-4 text-xs text-slate-400">
+        <div className="flex items-center gap-2 text-slate-200"><span className="h-3 w-3 rounded-full bg-emerald-500 ring-4 ring-emerald-500/10"/>Status: Online</div>
+        <div className="mt-3 pl-5">Version: 2.1.0</div>
+      </div>
+    </aside>
+  );
+}
+
+
+================================================================================================
+FILE: components/SupportChat.tsx
+================================================================================================
+"use client";
+import { useMemo, useState } from "react";
+import { Send, Smile, Paperclip, ShieldCheck, FileText } from "lucide-react";
+import type { ChatMessage } from "../shared/types";
+import { Button, Textarea } from "./ui";
+
+export function SupportChat({
+  messages, onSend, onAddNote, sending
+}:{
+  messages:ChatMessage[];
+  onSend:(body:string)=>Promise<void>;
+  onAddNote:(body:string)=>Promise<void>;
+  sending:boolean;
+}) {
+  const [mode,setMode] = useState<"reply"|"note">("reply");
+  const [text,setText] = useState("");
+
+  async function submit() {
+    const body = text.trim();
+    if (!body) return;
+    if (mode==="reply") await onSend(body);
+    else await onAddNote(body);
+    setText("");
+  }
+
+  return (
+    <div className="flex min-h-[560px] flex-col">
+      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+        {messages.map(m=>(
+          <div key={m.id} className={`flex ${m.senderType==="STAFF"?"justify-end":"justify-start"}`}>
+            <div className={`max-w-[72%] rounded-xl px-4 py-3 ${m.senderType==="STAFF"?"bg-emerald-800/80":"bg-slate-800"}`}>
+              <div className="mb-1 text-xs font-medium text-slate-300">{m.senderName}</div>
+              <div className="whitespace-pre-wrap text-sm text-slate-100">{m.body}</div>
+              <div className="mt-2 text-right text-[10px] text-slate-400">
+                {new Date(m.createdAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-t border-slate-800 p-3">
+        <div className="mb-2 flex gap-5 text-sm">
+          <button className={mode==="reply"?"text-violet-400":"text-slate-400"} onClick={()=>setMode("reply")}>Reply</button>
+          <button className={mode==="note"?"text-violet-400":"text-slate-400"} onClick={()=>setMode("note")}>Internal Note</button>
+        </div>
+        <Textarea value={text} onChange={e=>setText(e.target.value)} placeholder={mode==="reply"?"Type your message…":"Add a private internal note…"} />
+        <div className="mt-2 flex items-center justify-between">
+          <div className="flex gap-3 text-slate-400"><Smile className="h-4 w-4"/><Paperclip className="h-4 w-4"/><FileText className="h-4 w-4"/><ShieldCheck className="h-4 w-4"/></div>
+          <Button disabled={sending||!text.trim()} onClick={submit} className="bg-violet-600 text-white hover:bg-violet-500"><Send className="mr-2 h-4 w-4"/>Send</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================================
+FILE: components/QuickActions.tsx
+================================================================================================
+"use client";
+import { BadgeCheck, KeyRound, Mail, ShieldPlus, ArrowUpRight, Link2 } from "lucide-react";
+import { Button } from "./ui";
+
+const actions = [
+  ["Verify Identity",BadgeCheck,"verify"],
+  ["Reset 2FA",KeyRound,"reset2fa"],
+  ["Update Email",Mail,"email"],
+  ["Add Recovery Method",ShieldPlus,"method"],
+  ["Escalate Case",ArrowUpRight,"escalate"],
+  ["Send Secure Link",Link2,"secure"],
+] as const;
+
+export function QuickActions({
+  onAction, disabled
+}:{
+  onAction:(action:string)=>void;
+  disabled?:boolean;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {actions.map(([label,Icon,action])=>(
+        <Button key={action} disabled={disabled} onClick={()=>onAction(action)}
+          className="h-10 justify-start border border-slate-700 bg-slate-950/40 px-3 text-xs text-violet-300 hover:bg-slate-800">
+          <Icon className="mr-2 h-4 w-4"/>{label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+
+================================================================================================
+FILE: app/StaffSupportPage.tsx
+================================================================================================
+"use client";
+
+import { useMemo, useState } from "react";
+import useSWR from "swr";
+import { Bell, Clock3, MoreVertical, CheckCircle2 } from "lucide-react";
+import type { StaffCaseWorkspacePayload } from "../shared/types";
+import { StaffSidebar } from "../components/StaffSidebar";
+import { SupportChat } from "../components/SupportChat";
+import { QuickActions } from "../components/QuickActions";
+import { Card, Badge, Button } from "../components/ui";
+
+const fetcher = async (url:string) => {
+  const r = await fetch(url,{credentials:"include"});
+  if (!r.ok) throw new Error("request_failed");
+  return r.json();
+};
+
+function fmtDate(v:string) {
+  return new Date(v).toLocaleString([], {month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"});
+}
+
+export default function StaffSupportPage({caseId}:{caseId:string}) {
+  const {data,error,isLoading,mutate} = useSWR<StaffCaseWorkspacePayload>(`/api/staff/cases/${caseId}/workspace`,fetcher,{
+    refreshInterval:15000
+  });
+  const [sending,setSending] = useState(false);
+  const [busy,setBusy] = useState(false);
+
+  async function api(path:string,body:unknown) {
+    const r = await fetch(path,{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      credentials:"include",
+      body:JSON.stringify(body)
+    });
+    const json = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(json.error ?? "request_failed");
+    return json;
+  }
+
+  async function sendReply(body:string) {
+    setSending(true);
+    try {
+      await api(`/api/staff/cases/${caseId}/reply`,{body});
+      await mutate();
+    } finally { setSending(false); }
+  }
+
+  async function addNote(body:string) {
+    setSending(true);
+    try {
+      await api(`/api/staff/cases/${caseId}/notes`,{body});
+      await mutate();
+    } finally { setSending(false); }
+  }
+
+  async function action(a:string) {
+    if (!data) return;
+    setBusy(true);
+    try {
+      if (a==="escalate") {
+        await api(`/api/staff/cases/${caseId}/escalate`,{
+          reasonCode:"AGENT_ESCALATION",
+          note:"Escalated by support agent for specialist review."
+        });
+      } else if (a==="secure") {
+        await api(`/api/staff/cases/${caseId}/secure-link`,{
+          purpose:"RECOVERY_PROOF",reasonCode:"CLIENT_RECOVERY"
+        });
+      } else if (a==="verify") {
+        await api(`/api/staff/cases/${caseId}/recovery/verify`,{
+          smsVerified:true,reasonCode:"SMS_OTP_VERIFIED"
+        });
+      } else if (a==="reset2fa") {
+        await api(`/api/staff/cases/${caseId}/recovery/reset-2fa`,{
+          reasonCode:"RECOVERY_VERIFIED"
+        });
+      } else {
+        alert("This action should open a specialist workflow modal.");
+      }
+      await mutate();
+    } catch(e:any) {
+      alert(e.message);
+    } finally { setBusy(false); }
+  }
+
+  if (isLoading) return <div className="min-h-screen bg-[#050d16] p-10 text-white">Loading case workspace…</div>;
+  if (error || !data) return <div className="min-h-screen bg-[#050d16] p-10 text-white">Unable to load staff workspace.</div>;
+
+  const c = data.supportCase;
+  const client = data.client;
+  const session = data.session;
+  const slaTarget = c.slaTargetAt ? new Date(c.slaTargetAt).getTime() : null;
+  const msLeft = slaTarget ? Math.max(0,slaTarget-Date.now()) : 0;
+  const mins = Math.floor(msLeft/60000);
+  const secs = Math.floor((msLeft%60000)/1000);
+
+  return (
+    <div className="min-h-screen bg-[#050d16] text-slate-100">
+      <div className="mx-auto flex max-w-[1920px]">
+        <StaffSidebar name={session.displayName} role={session.role}/>
+
+        <main className="min-w-0 flex-1">
+          <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-800 bg-[#050d16]/95 px-5 backdrop-blur">
+            <div className="flex items-center gap-3 text-sm">
+              <button className="text-slate-400">☰</button>
+              <span>My Work</span><span className="text-slate-600">/</span><span>{c.publicId}</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="hidden rounded-lg border border-slate-800 px-3 py-2 text-xs md:block"><Clock3 className="mr-2 inline h-4 w-4 text-emerald-400"/>Active Session</div>
+              <button className="relative rounded-lg p-2 hover:bg-slate-800"><Bell className="h-5 w-5"/><span className="absolute -right-1 -top-1 rounded-full bg-rose-500 px-1.5 text-[10px]">5</span></button>
+              <select className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs"><option>Available</option><option>Busy</option><option>Away</option></select>
+            </div>
+          </header>
+
+          <div className="space-y-3 p-4">
+            <Card className="flex flex-wrap items-center gap-6 p-4">
+              <div className="min-w-[260px] flex-1">
+                <Badge className="bg-emerald-500/15 text-emerald-300">{c.status}</Badge>
+                <div className="mt-1 text-xl font-bold">{c.publicId}</div>
+                <div className="text-sm text-slate-400">{c.type} <span className="mx-2">›</span> {c.category}</div>
+              </div>
+              <div><div className="text-xs text-slate-500">Priority</div><Badge className="mt-2 border border-amber-600 bg-amber-950/40 text-amber-300">{c.priority} Medium</Badge></div>
+              <div className="border-l border-slate-800 pl-6"><div className="text-xs text-slate-500">SLA</div><div className="mt-2 text-sm font-semibold text-emerald-400">{String(mins).padStart(2,"0")}m {String(secs).padStart(2,"0")}s left</div></div>
+              <div className="border-l border-slate-800 pl-6"><div className="text-xs text-slate-500">Created</div><div className="mt-2 text-xs">{fmtDate(c.createdAt)}</div></div>
+              <div className="border-l border-slate-800 pl-6"><div className="text-xs text-slate-500">Updated</div><div className="mt-2 text-xs">{fmtDate(c.updatedAt)}</div></div>
+              <MoreVertical className="h-5 w-5 text-slate-400"/>
+            </Card>
+
+            <div className="grid gap-3 xl:grid-cols-[330px_minmax(0,1fr)_355px]">
+              <div className="space-y-3">
+                <Card className="p-4">
+                  <h2 className="font-semibold">Case Information</h2>
+                  <dl className="mt-4 grid grid-cols-[125px_1fr] gap-y-3 text-xs">
+                    <dt className="text-slate-500">Case Type</dt><dd>{c.type}</dd>
+                    <dt className="text-slate-500">Category</dt><dd>{c.category}</dd>
+                    <dt className="text-slate-500">Channel</dt><dd>{c.channel}</dd>
+                    <dt className="text-slate-500">Status</dt><dd>{c.status}</dd>
+                    <dt className="text-slate-500">Queue</dt><dd>{c.queueName}</dd>
+                    <dt className="text-slate-500">Assigned To</dt><dd>{c.assignedStaffName ?? "Unassigned"}</dd>
+                    <dt className="text-slate-500">Case Source</dt><dd>{c.source}</dd>
+                    <dt className="text-slate-500">Reference ID</dt><dd>{c.referenceId ?? "-"}</dd>
+                  </dl>
+                  <div className="my-5 border-t border-slate-800"/>
+                  <h3 className="text-sm font-semibold">Case Description</h3>
+                  <p className="mt-3 text-xs leading-5 text-slate-400">{c.description}</p>
+                  <div className="my-5 border-t border-slate-800"/>
+                  <h3 className="text-sm font-semibold">Case Tags</h3>
+                  <div className="mt-3 flex flex-wrap gap-2">{c.tags.map(t=><Badge key={t} className="bg-slate-800 text-slate-300">{t}</Badge>)}</div>
+                </Card>
+              </div>
+
+              <div className="space-y-3">
+                <Card className="overflow-hidden">
+                  <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+                    <Button className="h-8 bg-violet-600 px-3 text-xs">Internal Note</Button>
+                    <Button className="h-8 border border-rose-700 bg-transparent px-3 text-xs text-rose-400 hover:bg-rose-950/30">End Case</Button>
+                  </div>
+                  <SupportChat messages={data.messages} onSend={sendReply} onAddNote={addNote} sending={sending}/>
+                </Card>
+
+                <div className="grid gap-3 md:grid-cols-[1fr_1.3fr]">
+                  <Card className="p-4">
+                    <div className="flex items-center justify-between"><h3 className="font-semibold">Case Timeline</h3><button className="text-xs text-violet-400">View Full History</button></div>
+                    <div className="mt-4 space-y-3">
+                      {data.timeline.slice(-5).map(e=>(
+                        <div key={e.id} className="grid grid-cols-[90px_1fr] gap-3 text-xs">
+                          <div className="text-slate-500">{new Date(e.createdAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</div>
+                          <div>{e.text}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+
+                  <Card className="p-4">
+                    <div className="flex items-center justify-between"><h3 className="font-semibold">Internal Notes ({data.notes.length})</h3><button className="text-xs text-violet-400">Add Note</button></div>
+                    <div className="mt-4 space-y-3">
+                      {data.notes.slice(0,3).map(n=>(
+                        <div key={n.id} className="rounded-lg border border-amber-900/30 bg-amber-950/20 p-3">
+                          <div className="flex justify-between text-xs"><strong>{n.authorName}</strong><span className="text-slate-500">{fmtDate(n.createdAt)}</span></div>
+                          <p className="mt-3 text-xs leading-5 text-slate-300">{n.body}</p>
+                          <Badge className="mt-3 bg-amber-500/10 text-amber-300">Internal</Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <Card className="p-4">
+                  <div className="flex items-center justify-between"><h2 className="font-semibold">Client Summary</h2><button className="text-xs text-violet-400">View Full Profile</button></div>
+                  <div className="mt-4 flex items-center gap-3">
+                    <div className="h-12 w-12 rounded-full bg-slate-700"/>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2"><div className="font-semibold">{client.displayName}</div>{client.verified&&<Badge className="bg-emerald-500/15 text-emerald-300">Verified</Badge>}</div>
+                      <div className="mt-1 truncate text-xs text-slate-400">{client.maskedEmail} • {client.maskedPhone}</div>
+                      <div className="mt-1 text-xs text-slate-500">Client ID: {client.id}</div>
+                    </div>
+                  </div>
+                  <div className="my-4 border-t border-slate-800"/>
+                  <div className="space-y-3 text-xs">
+                    <div className="flex justify-between"><span className="text-slate-500">Account Status</span><span className="text-emerald-400">● {client.accountStatus}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Member Since</span><span>{client.memberSince}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Risk Level</span><span className={client.riskLevel==="LOW"?"text-emerald-400":"text-amber-400"}>● {client.riskLevel}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Country</span><span>{client.country}</span></div>
+                  </div>
+                </Card>
+
+                <Card className="p-4">
+                  <div className="flex items-center justify-between"><h2 className="font-semibold">Account & Services</h2><button className="text-xs text-violet-400">View All</button></div>
+                  <div className="mt-4 space-y-3 text-xs">
+                    <div className="flex justify-between"><span>Linqa Account</span><span className="text-emerald-400">{client.services.linqaAccount?"Active":"Inactive"}</span></div>
+                    <div className="flex justify-between"><span>LinqaSend</span><span className={client.services.linqaSend?"text-emerald-400":"text-slate-500"}>{client.services.linqaSend?"Active":"Inactive"}</span></div>
+                    <div className="flex justify-between"><span>Vault Storage</span><span>{client.services.vaultPlan ?? "None"}</span></div>
+                    <div className="flex justify-between"><span>2FA</span><span>{client.services.twoFactorEnabled?"Enabled":"Disabled"}</span></div>
+                    <div className="flex justify-between"><span>Trusted Devices</span><span>{client.services.trustedDevices}</span></div>
+                  </div>
+                </Card>
+
+                <Card className="p-4">
+                  <h2 className="font-semibold">Quick Actions</h2>
+                  <div className="mt-4"><QuickActions onAction={action} disabled={busy}/></div>
+                </Card>
+
+                <Card className="p-4">
+                  <div className="flex items-center justify-between"><h2 className="font-semibold">SLA & Priority</h2><button className="text-xs text-violet-400">Edit</button></div>
+                  <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
+                    <div><div className="text-slate-500">SLA Target</div><div className="mt-2">{c.slaTargetAt?fmtDate(c.slaTargetAt):"-"}</div></div>
+                    <div><div className="text-slate-500">Time Remaining</div><div className="mt-2 text-emerald-400">{mins}m {secs}s</div></div>
+                    <div><div className="text-slate-500">Priority</div><Badge className="mt-2 border border-amber-600 bg-amber-950/40 text-amber-300">{c.priority}</Badge></div>
+                  </div>
+                  <div className="mt-5 h-2 overflow-hidden rounded bg-slate-800"><div className="h-full w-[68%] bg-amber-500"/></div>
+                  <div className="mt-2 flex justify-between text-xs text-slate-500"><span>68%</span><span><CheckCircle2 className="mr-1 inline h-4 w-4 text-emerald-400"/>Breached: No</span></div>
+                </Card>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================================
+FILE: app/globals.css
+================================================================================================
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+html, body { min-height:100%; background:#050d16; }
+body { margin:0; font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
+* { box-sizing:border-box; }
+
+
+================================================================================================
+FILE: server/db.ts
+================================================================================================
+import { Pool, PoolClient, QueryResultRow } from "pg";
+
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: Number(process.env.PG_POOL_MAX ?? 20),
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: true } : false,
+});
+
+export async function query<T extends QueryResultRow = any>(sql: string, params: unknown[] = []) {
+  return pool.query<T>(sql, params);
+}
+
+export async function tx<T>(fn: (client: PoolClient) => Promise<T>) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+
+================================================================================================
+FILE: server/auth.ts
+================================================================================================
+import type { Request, Response, NextFunction } from "express";
+import { can, type StaffPermission } from "../shared/permissions";
+
+export interface StaffPrincipal {
+  userId: string;
+  staffId: string;
+  role: string;
+  displayName: string;
+}
+
+declare global {
+  namespace Express {
+    interface Request {
+      principal?: StaffPrincipal;
+      requestId?: string;
+    }
+  }
+}
+
+export function requireStaff(req: Request, res: Response, next: NextFunction) {
+  // Replace with Linqa staff SSO/JWT session validation in production.
+  const userId = String(req.headers["x-linqa-user-id"] ?? "");
+  const staffId = String(req.headers["x-linqa-staff-id"] ?? "");
+  const role = String(req.headers["x-linqa-role"] ?? "");
+  const displayName = String(req.headers["x-linqa-staff-name"] ?? "");
+
+  if (!userId || !staffId || !role) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  req.principal = { userId, staffId, role, displayName: displayName || "Staff" };
+  next();
+}
+
+export function requirePermission(permission: StaffPermission) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.principal) return res.status(401).json({ error: "unauthorized" });
+    if (!can(req.principal.role, permission)) {
+      return res.status(403).json({ error: "forbidden", permission });
+    }
+    next();
+  };
+}
+
+
+================================================================================================
+FILE: server/audit.ts
+================================================================================================
+import crypto from "node:crypto";
+import type { Request } from "express";
+import { query } from "./db";
+
+export async function audit(
+  req: Request,
+  input: {
+    action: string;
+    resourceType: string;
+    resourceId?: string;
+    reasonCode?: string;
+    before?: unknown;
+    after?: unknown;
+  }
+) {
+  const ipHash = req.ip
+    ? crypto.createHash("sha256").update(req.ip).digest("hex")
+    : null;
+
+  await query(`
+    INSERT INTO support_audit_log (
+      actor_user_id, actor_staff_id, actor_role, action, resource_type,
+      resource_id, reason_code, request_id, ip_hash, before_json, after_json
+    )
+    VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb)
+  `, [
+    req.principal?.userId ?? null,
+    req.principal?.staffId ?? null,
+    req.principal?.role ?? null,
+    input.action,
+    input.resourceType,
+    input.resourceId ?? null,
+    input.reasonCode ?? null,
+    req.requestId ?? null,
+    ipHash,
+    JSON.stringify(input.before ?? null),
+    JSON.stringify(input.after ?? null),
+  ]);
+}
+
+
+================================================================================================
+FILE: server/case.service.ts
+================================================================================================
+import { query } from "./db";
+import type { StaffCaseWorkspacePayload } from "../shared/types";
+
+export async function getCaseWorkspace(caseId: string, staffId: string): Promise<StaffCaseWorkspacePayload> {
+  const [caseR, clientR, messagesR, notesR, timelineR, recoveryR, staffR, tagsR] = await Promise.all([
+    query(`
+      SELECT c.id::text, c.public_id "publicId", c.client_id::text "clientId",
+        c.case_type "type", c.category, c.channel, c.status::text, c.priority::text,
+        q.name "queueName", c.assigned_staff_id::text "assignedStaffId",
+        s.display_name "assignedStaffName", c.source, c.reference_id "referenceId",
+        c.description, c.created_at "createdAt", c.updated_at "updatedAt",
+        (c.created_at + make_interval(secs => COALESCE(q.sla_seconds,1800))) "slaTargetAt"
+      FROM support_cases c
+      LEFT JOIN support_queues q ON q.id=c.queue_id
+      LEFT JOIN support_staff s ON s.id=c.assigned_staff_id
+      WHERE c.id=$1::uuid
+    `, [caseId]),
+    query(`
+      SELECT client_id::text id, display_name "displayName", masked_email "maskedEmail",
+        masked_phone "maskedPhone", account_status "accountStatus", member_since "memberSince",
+        risk_level "riskLevel", country, verified,
+        jsonb_build_object(
+          'linqaAccount',linqa_account_active,
+          'linqaSend',linqasend_active,
+          'vaultPlan',vault_plan,
+          'twoFactorEnabled',two_factor_enabled,
+          'trustedDevices',trusted_devices
+        ) services
+      FROM support_client_snapshot
+      WHERE client_id=(SELECT client_id FROM support_cases WHERE id=$1::uuid)
+    `, [caseId]),
+    query(`
+      SELECT id::text, case_id::text "caseId", sender_type::text "senderType",
+        sender_name "senderName", body, created_at "createdAt",
+        delivery_status "deliveryStatus", is_internal "isInternal"
+      FROM support_messages
+      WHERE case_id=$1::uuid AND is_internal=false
+      ORDER BY created_at ASC
+    `, [caseId]),
+    query(`
+      SELECT n.id::text, n.case_id::text "caseId", s.display_name "authorName",
+        n.body, n.created_at "createdAt"
+      FROM support_internal_notes n
+      JOIN support_staff s ON s.id=n.author_staff_id
+      WHERE n.case_id=$1::uuid
+      ORDER BY n.created_at DESC
+    `, [caseId]),
+    query(`
+      SELECT t.id::text, t.event_type type, t.text, t.created_at "createdAt",
+        s.display_name "actorName"
+      FROM support_case_timeline t
+      LEFT JOIN support_staff s ON s.id=t.actor_staff_id
+      WHERE t.case_id=$1::uuid
+      ORDER BY t.created_at ASC
+    `, [caseId]),
+    query(`
+      SELECT sms_verified "smsVerified", email_verified "emailVerified",
+        trusted_device_matched "trustedDeviceMatched", carrier_risk "carrierRisk",
+        risk_score::float8 "riskScore", decision
+      FROM support_recovery_reviews WHERE case_id=$1::uuid
+    `, [caseId]),
+    query(`
+      SELECT id::text "staffId", user_id::text "userId", display_name "displayName",
+        role_name role, presence::text, session_started_at "sessionStartedAt"
+      FROM support_staff WHERE id=$1::uuid
+    `, [staffId]),
+    query(`SELECT tag FROM support_case_tags WHERE case_id=$1::uuid ORDER BY tag`, [caseId])
+  ]);
+
+  if (!caseR.rowCount) throw Object.assign(new Error("case_not_found"), { status: 404 });
+  if (!staffR.rowCount) throw Object.assign(new Error("staff_not_found"), { status: 404 });
+
+  const supportCase = {
+    ...caseR.rows[0],
+    tags: tagsR.rows.map((r:any)=>r.tag)
+  } as any;
+
+  return {
+    session: staffR.rows[0] as any,
+    supportCase,
+    client: clientR.rows[0] as any,
+    messages: messagesR.rows as any,
+    notes: notesR.rows as any,
+    timeline: timelineR.rows as any,
+    recovery: recoveryR.rows[0] ?? null
+  };
+}
+
+
+================================================================================================
+FILE: server/routes.ts
+================================================================================================
+import { Router } from "express";
+import { z } from "zod";
+import crypto from "node:crypto";
+import { requirePermission, requireStaff } from "./auth";
+import { getCaseWorkspace } from "./case.service";
+import { query, tx } from "./db";
+import { audit } from "./audit";
+
+export const staffRouter = Router();
+staffRouter.use(requireStaff);
+
+staffRouter.get("/cases/:id/workspace", requirePermission("case.read"), async (req, res, next) => {
+  try {
+    res.json(await getCaseWorkspace(req.params.id, req.principal!.staffId));
+  } catch (e) { next(e); }
+});
+
+staffRouter.get("/my-cases", requirePermission("case.read"), async (req, res, next) => {
+  try {
+    const r = await query(`
+      SELECT c.id::text, c.public_id "publicId", c.category, c.status::text,
+        c.priority::text, c.updated_at "updatedAt", q.name "queueName"
+      FROM support_cases c
+      LEFT JOIN support_queues q ON q.id=c.queue_id
+      WHERE c.assigned_staff_id=$1::uuid AND c.status IN ('OPEN','PENDING')
+      ORDER BY
+        CASE c.priority WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4 END,
+        c.updated_at DESC
+    `, [req.principal!.staffId]);
+    res.json(r.rows);
+  } catch (e) { next(e); }
+});
+
+staffRouter.post("/cases/:id/reply", requirePermission("case.reply"), async (req, res, next) => {
+  const schema = z.object({ body: z.string().trim().min(1).max(8000) });
+  try {
+    const body = schema.parse(req.body);
+    const r = await query(`
+      INSERT INTO support_messages
+        (case_id, sender_type, sender_staff_id, sender_name, body, delivery_status)
+      VALUES ($1::uuid,'STAFF',$2::uuid,$3,$4,'SENT')
+      RETURNING id::text, case_id::text "caseId", sender_type::text "senderType",
+        sender_name "senderName", body, created_at "createdAt",
+        delivery_status "deliveryStatus", is_internal "isInternal"
+    `, [req.params.id, req.principal!.staffId, req.principal!.displayName, body.body]);
+
+    await query(`
+      UPDATE support_cases SET updated_at=now()
+      WHERE id=$1::uuid
+    `, [req.params.id]);
+
+    await query(`
+      INSERT INTO support_case_timeline(case_id,actor_staff_id,event_type,text)
+      VALUES ($1::uuid,$2::uuid,'STAFF_REPLY','Staff replied to client')
+    `, [req.params.id, req.principal!.staffId]);
+
+    await audit(req, {
+      action:"case.reply", resourceType:"case", resourceId:req.params.id,
+      after:{messageId:r.rows[0].id}
+    });
+
+    res.status(201).json(r.rows[0]);
+  } catch (e) { next(e); }
+});
+
+staffRouter.post("/cases/:id/notes", requirePermission("case.note"), async (req, res, next) => {
+  const schema = z.object({ body: z.string().trim().min(1).max(10000) });
+  try {
+    const body = schema.parse(req.body);
+    const r = await query(`
+      INSERT INTO support_internal_notes(case_id,author_staff_id,body)
+      VALUES ($1::uuid,$2::uuid,$3)
+      RETURNING id::text, case_id::text "caseId", body, created_at "createdAt"
+    `, [req.params.id, req.principal!.staffId, body.body]);
+
+    await query(`
+      INSERT INTO support_case_timeline(case_id,actor_staff_id,event_type,text)
+      VALUES ($1::uuid,$2::uuid,'INTERNAL_NOTE','Added internal note')
+    `, [req.params.id, req.principal!.staffId]);
+
+    await audit(req, {
+      action:"case.note.create", resourceType:"case", resourceId:req.params.id,
+      after:{noteId:r.rows[0].id}
+    });
+
+    res.status(201).json(r.rows[0]);
+  } catch (e) { next(e); }
+});
+
+staffRouter.post("/cases/:id/escalate", requirePermission("case.escalate"), async (req, res, next) => {
+  const schema = z.object({
+    reasonCode: z.string().min(3).max(100),
+    note: z.string().min(1).max(2000)
+  });
+  try {
+    const body = schema.parse(req.body);
+    const before = await query(`SELECT status, priority FROM support_cases WHERE id=$1::uuid`, [req.params.id]);
+    const r = await query(`
+      UPDATE support_cases
+      SET priority=CASE WHEN priority='P1' THEN 'P1'::support_case_priority ELSE 'P2'::support_case_priority END,
+          updated_at=now()
+      WHERE id=$1::uuid
+      RETURNING id::text, priority::text, status::text
+    `, [req.params.id]);
+
+    if (!r.rowCount) return res.status(404).json({error:"case_not_found"});
+
+    await query(`
+      INSERT INTO support_case_timeline(case_id,actor_staff_id,event_type,text)
+      VALUES ($1::uuid,$2::uuid,'ESCALATED',$3)
+    `, [req.params.id, req.principal!.staffId, body.note]);
+
+    await audit(req, {
+      action:"case.escalate",resourceType:"case",resourceId:req.params.id,
+      reasonCode:body.reasonCode,before:before.rows[0],after:r.rows[0]
+    });
+
+    res.json(r.rows[0]);
+  } catch (e) { next(e); }
+});
+
+staffRouter.post("/cases/:id/resolve", requirePermission("case.resolve"), async (req, res, next) => {
+  const schema = z.object({
+    reasonCode: z.string().min(3).max(100),
+    resolutionSummary: z.string().min(3).max(4000)
+  });
+  try {
+    const body = schema.parse(req.body);
+    const r = await tx(async client => {
+      const before = await client.query(`SELECT * FROM support_cases WHERE id=$1::uuid FOR UPDATE`, [req.params.id]);
+      if (!before.rowCount) throw Object.assign(new Error("case_not_found"), {status:404});
+
+      const updated = await client.query(`
+        UPDATE support_cases
+        SET status='RESOLVED', resolved_at=now(), updated_at=now()
+        WHERE id=$1::uuid
+        RETURNING *
+      `, [req.params.id]);
+
+      await client.query(`
+        INSERT INTO support_case_timeline(case_id,actor_staff_id,event_type,text)
+        VALUES ($1::uuid,$2::uuid,'RESOLVED',$3)
+      `, [req.params.id, req.principal!.staffId, body.resolutionSummary]);
+
+      return { before: before.rows[0], after: updated.rows[0] };
+    });
+
+    await audit(req, {
+      action:"case.resolve",resourceType:"case",resourceId:req.params.id,
+      reasonCode:body.reasonCode,before:r.before,after:r.after
+    });
+
+    res.json({ok:true});
+  } catch (e) { next(e); }
+});
+
+staffRouter.post("/cases/:id/recovery/verify", requirePermission("recovery.verify"), async (req, res, next) => {
+  const schema = z.object({
+    smsVerified: z.boolean().optional(),
+    emailVerified: z.boolean().optional(),
+    trustedDeviceMatched: z.boolean().optional(),
+    reasonCode: z.string().min(3).max(100)
+  });
+  try {
+    const body = schema.parse(req.body);
+    const r = await query(`
+      INSERT INTO support_recovery_reviews
+        (case_id,sms_verified,email_verified,trusted_device_matched)
+      VALUES ($1::uuid,COALESCE($2,false),COALESCE($3,false),COALESCE($4,false))
+      ON CONFLICT (case_id) DO UPDATE SET
+        sms_verified=COALESCE($2,support_recovery_reviews.sms_verified),
+        email_verified=COALESCE($3,support_recovery_reviews.email_verified),
+        trusted_device_matched=COALESCE($4,support_recovery_reviews.trusted_device_matched),
+        updated_at=now()
+      RETURNING *
+    `, [req.params.id, body.smsVerified ?? null, body.emailVerified ?? null, body.trustedDeviceMatched ?? null]);
+    await audit(req, {
+      action:"recovery.verify.update",resourceType:"case",resourceId:req.params.id,
+      reasonCode:body.reasonCode,after:r.rows[0]
+    });
+    res.json(r.rows[0]);
+  } catch (e) { next(e); }
+});
+
+staffRouter.post("/cases/:id/recovery/reset-2fa", requirePermission("recovery.reset2fa"), async (req, res, next) => {
+  const schema = z.object({
+    reasonCode: z.string().min(3).max(100),
+    recoveryReviewId: z.string().uuid().optional()
+  });
+  try {
+    const body = schema.parse(req.body);
+    const review = await query(`
+      SELECT * FROM support_recovery_reviews WHERE case_id=$1::uuid
+    `,[req.params.id]);
+    if (!review.rowCount) return res.status(409).json({error:"recovery_review_required"});
+    const r = review.rows[0];
+    const strongEvidence = Number(r.risk_score) < 50 && (r.sms_verified || r.email_verified) && r.carrier_risk !== 'HIGH';
+    if (!strongEvidence) return res.status(409).json({error:"insufficient_recovery_evidence"});
+
+    await query(`
+      INSERT INTO support_case_timeline(case_id,actor_staff_id,event_type,text)
+      VALUES ($1::uuid,$2::uuid,'RESET_2FA_AUTHORIZED','2FA reset authorized after recovery verification')
+    `,[req.params.id, req.principal!.staffId]);
+
+    await audit(req, {
+      action:"recovery.reset2fa.authorize",resourceType:"case",resourceId:req.params.id,
+      reasonCode:body.reasonCode,after:{authorized:true}
+    });
+
+    res.status(202).json({status:"authorized_for_identity_service"});
+  } catch (e) { next(e); }
+});
+
+staffRouter.post("/cases/:id/secure-link", requirePermission("recovery.secure_link"), async (req, res, next) => {
+  const schema = z.object({
+    purpose: z.enum(["EMAIL_RESET","RECOVERY_PROOF","DEVICE_CONFIRMATION"]),
+    reasonCode: z.string().min(3).max(100)
+  });
+  try {
+    const body = schema.parse(req.body);
+    const rawToken = crypto.randomBytes(32).toString("base64url");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+    await query(`
+      INSERT INTO support_secure_links
+        (case_id,token_hash,purpose,expires_at,created_by_staff_id)
+      VALUES ($1::uuid,$2,$3,now()+interval '15 minutes',$4::uuid)
+    `,[req.params.id, tokenHash, body.purpose, req.principal!.staffId]);
+
+    await audit(req, {
+      action:"secure_link.create",resourceType:"case",resourceId:req.params.id,
+      reasonCode:body.reasonCode,after:{purpose:body.purpose}
+    });
+
+    // In production, do not return raw token to logs. Deliver via approved client notification channel.
+    res.status(201).json({token:rawToken,expiresInSeconds:900});
+  } catch (e) { next(e); }
+});
+
+staffRouter.patch("/presence", async (req, res, next) => {
+  const schema = z.object({ presence: z.enum(["AVAILABLE","BUSY","AWAY","OFFLINE"]) });
+  try {
+    const body = schema.parse(req.body);
+    const r = await query(`
+      UPDATE support_staff SET presence=$2::support_presence,last_seen_at=now(),updated_at=now()
+      WHERE id=$1::uuid
+      RETURNING presence::text
+    `,[req.principal!.staffId, body.presence]);
+    res.json(r.rows[0]);
+  } catch (e) { next(e); }
+});
+
+
+================================================================================================
+FILE: server/realtime.ts
+================================================================================================
+import { WebSocketServer, WebSocket } from "ws";
+import type { Server } from "node:http";
+
+type Connection = {
+  socket: WebSocket;
+  staffId: string;
+  caseIds: Set<string>;
+};
+
+const connections = new Set<Connection>();
+
+export function attachSupportRealtime(server: Server) {
+  const wss = new WebSocketServer({ server, path: "/ws/support" });
+
+  wss.on("connection", (socket, request) => {
+    // Replace query-string auth with signed staff session/cookie validation.
+    const url = new URL(request.url ?? "", "http://localhost");
+    const staffId = url.searchParams.get("staffId");
+    if (!staffId) return socket.close(4401, "Unauthorized");
+
+    const conn: Connection = { socket, staffId, caseIds: new Set() };
+    connections.add(conn);
+
+    socket.on("message", raw => {
+      try {
+        const msg = JSON.parse(String(raw));
+        if (msg.type === "subscribe.case" && typeof msg.caseId === "string") {
+          conn.caseIds.add(msg.caseId);
+        }
+        if (msg.type === "unsubscribe.case" && typeof msg.caseId === "string") {
+          conn.caseIds.delete(msg.caseId);
+        }
+      } catch {}
+    });
+
+    socket.on("close", () => connections.delete(conn));
+  });
+}
+
+export function publishCaseEvent(caseId: string, event: unknown) {
+  const payload = JSON.stringify({ type: "case.event", caseId, event });
+  for (const c of connections) {
+    if (c.caseIds.has(caseId) && c.socket.readyState === WebSocket.OPEN) {
+      c.socket.send(payload);
+    }
+  }
+}
+
+
+================================================================================================
+FILE: server/index.ts
+================================================================================================
+import "dotenv/config";
+import http from "node:http";
+import crypto from "node:crypto";
+import express from "express";
+import helmet from "helmet";
+import cors from "cors";
+import compression from "compression";
+import { staffRouter } from "./routes";
+import { attachSupportRealtime } from "./realtime";
+
+const app = express();
+app.disable("x-powered-by");
+app.use(helmet());
+app.use(cors({
+  origin: (process.env.STAFF_ORIGINS ?? "http://localhost:3000").split(","),
+  credentials: true
+}));
+app.use(compression());
+app.use(express.json({limit:"1mb"}));
+
+app.use((req,res,next)=>{
+  req.requestId = String(req.headers["x-request-id"] ?? crypto.randomUUID());
+  res.setHeader("x-request-id",req.requestId);
+  next();
+});
+
+app.get("/health", (_req,res)=>res.json({ok:true}));
+app.use("/api/staff", staffRouter);
+
+app.use((err:any,_req:any,res:any,_next:any)=>{
+  const status = err.status ?? (err.name==="ZodError" ? 400 : 500);
+  if (status >= 500) console.error(err);
+  res.status(status).json({
+    error: status===500 ? "internal_server_error" : err.message,
+    details: err.name==="ZodError" ? err.issues : undefined
+  });
+});
+
+const server = http.createServer(app);
+attachSupportRealtime(server);
+
+const port = Number(process.env.PORT ?? 8080);
+server.listen(port,()=>console.log(`Linqa Staff Support API listening on :${port}`));
+
+
+================================================================================================
+FILE: db/001_staff_support.sql
+================================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE support_case_status AS ENUM ('OPEN','PENDING','RESOLVED','CLOSED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE support_case_priority AS ENUM ('P1','P2','P3','P4');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE support_sender_type AS ENUM ('CLIENT','STAFF','SYSTEM');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE support_presence AS ENUM ('AVAILABLE','BUSY','AWAY','OFFLINE');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS support_staff (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid UNIQUE NOT NULL,
+  display_name text NOT NULL,
+  role_name text NOT NULL,
+  presence support_presence NOT NULL DEFAULT 'OFFLINE',
+  session_started_at timestamptz,
+  last_seen_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS support_queues (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text UNIQUE NOT NULL,
+  sla_seconds integer NOT NULL DEFAULT 1800,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS support_cases (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  public_id text UNIQUE NOT NULL,
+  client_id uuid NOT NULL,
+  case_type text NOT NULL,
+  category text NOT NULL,
+  channel text NOT NULL,
+  status support_case_status NOT NULL DEFAULT 'OPEN',
+  priority support_case_priority NOT NULL DEFAULT 'P3',
+  queue_id uuid REFERENCES support_queues(id),
+  assigned_staff_id uuid REFERENCES support_staff(id),
+  source text NOT NULL DEFAULT 'USER_PORTAL',
+  reference_id text,
+  description text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  resolved_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_support_cases_assignee ON support_cases(assigned_staff_id);
+CREATE INDEX IF NOT EXISTS idx_support_cases_status ON support_cases(status);
+CREATE INDEX IF NOT EXISTS idx_support_cases_queue ON support_cases(queue_id);
+CREATE INDEX IF NOT EXISTS idx_support_cases_client ON support_cases(client_id);
+
+CREATE TABLE IF NOT EXISTS support_case_tags (
+  case_id uuid NOT NULL REFERENCES support_cases(id) ON DELETE CASCADE,
+  tag text NOT NULL,
+  PRIMARY KEY(case_id, tag)
+);
+
+CREATE TABLE IF NOT EXISTS support_messages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES support_cases(id) ON DELETE CASCADE,
+  sender_type support_sender_type NOT NULL,
+  sender_staff_id uuid REFERENCES support_staff(id),
+  sender_name text NOT NULL,
+  body text NOT NULL,
+  is_internal boolean NOT NULL DEFAULT false,
+  delivery_status text CHECK (delivery_status IN ('SENT','DELIVERED','READ')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_support_messages_case_created
+ON support_messages(case_id, created_at);
+
+CREATE TABLE IF NOT EXISTS support_internal_notes (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES support_cases(id) ON DELETE CASCADE,
+  author_staff_id uuid NOT NULL REFERENCES support_staff(id),
+  body text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS support_case_timeline (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES support_cases(id) ON DELETE CASCADE,
+  actor_staff_id uuid REFERENCES support_staff(id),
+  event_type text NOT NULL,
+  text text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS support_client_snapshot (
+  client_id uuid PRIMARY KEY,
+  display_name text NOT NULL,
+  masked_email text NOT NULL,
+  masked_phone text NOT NULL,
+  account_status text NOT NULL,
+  member_since date NOT NULL,
+  risk_level text NOT NULL CHECK (risk_level IN ('LOW','MEDIUM','HIGH','CRITICAL')),
+  country text NOT NULL,
+  verified boolean NOT NULL DEFAULT false,
+  linqa_account_active boolean NOT NULL DEFAULT true,
+  linqasend_active boolean NOT NULL DEFAULT false,
+  vault_plan text,
+  two_factor_enabled boolean NOT NULL DEFAULT false,
+  trusted_devices integer NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS support_recovery_reviews (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid UNIQUE NOT NULL REFERENCES support_cases(id) ON DELETE CASCADE,
+  sms_verified boolean NOT NULL DEFAULT false,
+  email_verified boolean NOT NULL DEFAULT false,
+  trusted_device_matched boolean NOT NULL DEFAULT false,
+  carrier_risk text NOT NULL DEFAULT 'LOW' CHECK (carrier_risk IN ('LOW','MEDIUM','HIGH')),
+  risk_score numeric(5,2) NOT NULL DEFAULT 0,
+  decision text CHECK (decision IN ('APPROVED','REJECTED','ESCALATED')),
+  decided_by_staff_id uuid REFERENCES support_staff(id),
+  decided_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS support_secure_links (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES support_cases(id) ON DELETE CASCADE,
+  token_hash text NOT NULL UNIQUE,
+  purpose text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  created_by_staff_id uuid NOT NULL REFERENCES support_staff(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS support_audit_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_user_id uuid,
+  actor_staff_id uuid,
+  actor_role text,
+  action text NOT NULL,
+  resource_type text NOT NULL,
+  resource_id text,
+  reason_code text,
+  request_id text,
+  ip_hash text,
+  before_json jsonb,
+  after_json jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_support_audit_created ON support_audit_log(created_at DESC);

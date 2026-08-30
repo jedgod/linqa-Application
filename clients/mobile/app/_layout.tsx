@@ -8,6 +8,7 @@ import "react-native-get-random-values";
 import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AccountProvider, useAccounts } from "../account/AccountContext";
 import { AccountSecureStorage } from "../account/AccountSecureStorage";
 import { AccountSessionStore } from "../account/AccountSessionStore";
@@ -76,15 +77,17 @@ function AccountSessionBridge() {
 
 export default function RootLayout() {
   return (
-    <AccountProvider>
-      <AccountSessionBridge />
-      <StatusBar style="light" />
-      <Stack screenOptions={{ headerShown: false }}>
+    <SafeAreaProvider>
+      <AccountProvider>
+        <AccountSessionBridge />
+        <StatusBar style="auto" />
+        <Stack screenOptions={{ headerShown: false, animation: "slide_from_right" }}>
         <Stack.Screen name="welcome" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="search" options={{ presentation: "modal" }} />
         <Stack.Screen name="message-requests" />
         <Stack.Screen name="privacy-center" />
+        <Stack.Screen name="news/index" />
         <Stack.Screen
           name="status/[statusId]"
           options={{ presentation: "fullScreenModal" }}
@@ -123,7 +126,8 @@ export default function RootLayout() {
         <Stack.Screen name="onboarding/country-discovery" />
         <Stack.Screen name="onboarding/complete" />
         <Stack.Screen name="onboarding/security-review" />
-      </Stack>
-    </AccountProvider>
+        </Stack>
+      </AccountProvider>
+    </SafeAreaProvider>
   );
 }

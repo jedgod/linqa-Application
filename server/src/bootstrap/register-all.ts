@@ -32,6 +32,7 @@ import { registerMobileHubRoutes } from "../routes/mobile-hub.js";
 import { registerMultiAccountRoutes } from "../routes/multi-account.routes.js";
 import { registerNextMobileFeatureRoutes } from "../routes/next-mobile-features.js";
 import { registerOnboardingRoutes } from "../routes/onboarding.js";
+import { registerOperationsRoutes } from "../routes/operations/index.js";
 import { registerPasskeyRoutes } from "../routes/passkeys.js";
 import { registerPrivacyRoutes } from "../routes/privacy.js";
 import { registerProtocolCapabilityRoutes } from "../routes/protocol-capability.js";
@@ -159,6 +160,7 @@ export async function registerAll(
   await registerCountryLinqaAdminRoutes(app, config, db);
   await registerCountryLinqaSecurityRoutes(app, config, db, services.countryReverification);
   await registerLinqaSendRoutes(app, config, db);
+  await registerOperationsRoutes(app, config, db, hub);
 
   await registerRealtime(app, config, db, hub);
   await registerSignaling(app, config, db, services.signaling, hub);

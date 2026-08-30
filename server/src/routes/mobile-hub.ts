@@ -1,9 +1,11 @@
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
 import type { RealtimeHub } from "../realtime/hub.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
+import { GlobalNewsService } from "../services/global-news.service.js";
+import { discoverEvents } from "../services/countrylinqa/golive/eventRanking.js";
 
 const DEMO_USER_ID = "00000000-0000-4000-8000-000000000001";
 const DEMO_DEVICE_ID = "10000000-0000-4000-8000-000000000001";
@@ -162,6 +164,7 @@ export async function registerMobileHubRoutes(
   hub: RealtimeHub
 ) {
   const authenticate = createAuthenticator(config);
+  const globalNews = new GlobalNewsService();
 
   app.get("/v1/mobile-hub", async (request, reply) => {
     try {
@@ -173,6 +176,50 @@ export async function registerMobileHubRoutes(
       return reply.code(401).send({ error: "unauthenticated" });
     }
   });
+
+  const loadHomeFeed = async (request: FastifyRequest, reply: FastifyReply) => {
+    let principal;
+    try {
+      principal = await authenticate(request);
+      requireScope(principal, "profile:read");
+    } catch (error) {
+      request.log.warn({ err: error }, "mobile home authentication rejected");
+      return reply.code(401).send({ error: "unauthenticated" });
+    }
+
+    try {
+      const [news, country, upcomingEvents] = await Promise.all([
+        globalNews.load(),
+        db.query(
+          `SELECT u.verified_country_code AS code, COALESCE(c.name, u.verified_country_code, 'Your country') AS name
+           FROM users u LEFT JOIN countries c ON c.code=u.verified_country_code WHERE u.id=$1`,
+          [principal.userId]
+        ),
+        discoverEvents(db, principal.userId, 3)
+      ]);
+      const categories = new Map<string, number>();
+      for (const story of news.stories) categories.set(story.category, (categories.get(story.category) ?? 0) + 1);
+      const trends = [...categories.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([title, storyCount], index) => ({ rank: index + 1, title, storyCount }));
+      return {
+        generatedAt: new Date().toISOString(),
+        news,
+        country: country.rows[0] ?? { code: null, name: "Your country" },
+        trends,
+        upcomingEvents
+      };
+    } catch (error) {
+      request.log.error({ err: error, userId: principal.userId }, "mobile home feed unavailable");
+      return reply.code(503).send({ error: "home_feed_unavailable" });
+    }
+  };
+
+  // `/v1/mobile/home` is the canonical production contract. Keep the older
+  // mobile-hub path during client rollout so installed builds remain usable.
+  app.get("/v1/mobile/home", loadHomeFeed);
+  app.get("/v1/mobile-hub/home-feed", loadHomeFeed);
 
   app.post("/v1/mobile-hub/statuses", async (request, reply) => {
     try {

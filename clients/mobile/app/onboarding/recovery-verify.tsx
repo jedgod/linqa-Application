@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { SafeAreaView, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { accessTokenProvider } from "../../services/session";
 import { ScreenHeader } from "../../components/ScreenHeader"; import { CodeInput } from "../../components/CodeInput";

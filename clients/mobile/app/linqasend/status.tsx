@@ -17,6 +17,17 @@ export default function LinqaSendStatus() {
   const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
   const [transfer, setTransfer] = useState<LinqaSendTransferDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+  async function cancel() {
+    try { await client.cancelTransfer(params.id); setTransfer(await client.getTransfer(params.id)); setActionMessage("Transfer canceled."); }
+    catch (e) { setActionMessage(e instanceof Error ? e.message.replace(/_/g, " ") : "Unable to cancel transfer."); }
+  }
+
+  async function refund() {
+    try { await client.requestRefund(params.id, "CUSTOMER_REQUEST"); setActionMessage("Refund request submitted for operations approval."); }
+    catch (e) { setActionMessage(e instanceof Error ? e.message.replace(/_/g, " ") : "Unable to request refund."); }
+  }
 
   useEffect(() => {
     let stopped = false;
@@ -68,6 +79,9 @@ export default function LinqaSendStatus() {
             </Text>
             <Text style={s.sub}>To {transfer.recipientName}</Text>
             {transfer.failureCode && <Text style={s.failure}>Reason: {transfer.failureCode.replace(/_/g, " ").toLowerCase()}</Text>}
+            {actionMessage && <Text style={s.actionMessage}>{actionMessage}</Text>}
+            {["CREATED","QUOTE_CREATED","AWAITING_CONFIRMATION","REQUIRES_ACTION"].includes(transfer.status) && <Pressable style={s.actionButton} onPress={cancel}><Text style={s.actionButtonText}>Cancel transfer</Text></Pressable>}
+            {transfer.status === "COMPLETED" && <Pressable style={s.actionButton} onPress={refund}><Text style={s.actionButtonText}>Request refund</Text></Pressable>}
           </View>
 
           <Text style={s.sectionTitle}>Timeline</Text>
@@ -97,6 +111,9 @@ const s = StyleSheet.create({
   amount: { color: colors.text, fontWeight: "800", fontSize: 20, marginTop: spacing.sm },
   sub: { color: colors.textMuted, fontSize: 12, marginTop: spacing.xs },
   failure: { color: colors.danger, fontSize: 12, marginTop: spacing.sm },
+  actionMessage: { color: colors.textMuted, fontSize: 12, marginTop: spacing.sm },
+  actionButton: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, alignItems: "center", marginTop: spacing.md },
+  actionButtonText: { color: colors.accent, fontWeight: "800", fontSize: 12 },
   sectionTitle: { color: colors.text, fontWeight: "800", marginBottom: spacing.sm },
   timelineRow: {
     flexDirection: "row",

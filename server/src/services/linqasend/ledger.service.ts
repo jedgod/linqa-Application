@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Database } from "../../db/pool.js";
 
 type LedgerEntryInput = { accountCode: string; side: "DEBIT" | "CREDIT"; amountMinor: bigint };
@@ -56,6 +57,12 @@ export class LedgerService {
         );
       }
 
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext('linqasend-ledger-integrity-v4'))`);
+      const previous = await client.query(`SELECT journal_hash FROM linqasend_ledger_integrity_v4 ORDER BY computed_at DESC,journal_id DESC LIMIT 1`);
+      const previousHash = previous.rows[0]?.journal_hash ?? null;
+      const journalHash = createHash("sha256").update(JSON.stringify({ version: "LINQASEND_LEDGER_V4", transactionId, externalRef: input.externalRef, transferId: input.transferId ?? null, description: input.description, currency: input.currency, entries: input.entries.map((entry) => ({ ...entry, amountMinor: entry.amountMinor.toString() })), previousHash })).digest("hex");
+      await client.query(`INSERT INTO linqasend_ledger_integrity_v4(journal_id,previous_hash,journal_hash,posting_count) VALUES($1,$2,$3,$4)`, [transactionId, previousHash, journalHash, input.entries.length]);
+
       await client.query("COMMIT");
       return { posted: true, alreadyPosted: false, debit: debit.toString(), credit: credit.toString() };
     } catch (error) {
@@ -92,6 +99,31 @@ export class LedgerService {
       description: "LinqaSend completed transfer accounting",
       currency: input.sendCurrency,
       entries
+    });
+  }
+
+  /** Creates a new, hash-chained journal with every debit/credit inverted. */
+  async reverseTransaction(input: { originalExternalRef: string; reversalExternalRef: string; description: string }) {
+    const original = await this.db.query(
+      `SELECT t.id,t.transfer_id,t.currency,a.code AS account_code,e.side,e.amount_minor
+         FROM linqasend_ledger_transactions t
+         JOIN linqasend_ledger_entries e ON e.ledger_transaction_id=t.id
+         JOIN linqasend_ledger_accounts a ON a.id=e.account_id
+        WHERE t.external_ref=$1 ORDER BY e.id`,
+      [input.originalExternalRef]
+    );
+    if (!original.rows.length) throw new Error("ORIGINAL_LEDGER_TRANSACTION_NOT_FOUND");
+    const first = original.rows[0];
+    return this.postBalancedTransaction({
+      externalRef: input.reversalExternalRef,
+      transferId: first.transfer_id,
+      description: input.description,
+      currency: first.currency,
+      entries: original.rows.map((row) => ({
+        accountCode: row.account_code,
+        side: row.side === "DEBIT" ? "CREDIT" as const : "DEBIT" as const,
+        amountMinor: BigInt(row.amount_minor)
+      }))
     });
   }
 }

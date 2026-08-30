@@ -14,8 +14,18 @@ const updatePreferencesSchema = z.object({
   mode: z.enum(["MY_COUNTRY", "SELECTED_COUNTRIES", "REGION", "GLOBAL"]),
   selectedCountries: z.array(countryCode).max(250).default([]),
   selectedRegions: z.array(regionCode).max(50).default([]),
-  locationPrecision: z.enum(["COUNTRY", "STATE", "CITY"]).default("COUNTRY"),
-  showCity: z.boolean().default(false)
+  locationPrecision: z.enum(["COUNTRY", "STATE", "CITY"]).optional(),
+  showCity: z.boolean().optional(),
+  inboundReach: z.enum(["MY_COUNTRY", "SELECTED_COUNTRIES", "REGION", "GLOBAL", "CONTACTS_ONLY"]).optional(),
+  inboundSelectedCountries: z.array(countryCode).max(250).optional(),
+  inboundSelectedRegions: z.array(regionCode).max(50).optional(),
+  showCountry: z.boolean().optional(),
+  showState: z.boolean().optional(),
+  verifiedOnly: z.boolean().optional(),
+  allowBusinesses: z.boolean().optional(),
+  allowCommunities: z.boolean().optional(),
+  allowEvents: z.boolean().optional(),
+  paused: z.boolean().optional()
 });
 
 const confirmCountrySchema = z.object({

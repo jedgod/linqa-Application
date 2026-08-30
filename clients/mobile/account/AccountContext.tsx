@@ -142,7 +142,12 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
       addAndActivate: (account) => {
         if (account.userId !== activeUserId) clearAccountScopedState();
         setAccountsState((prev) => {
-          if (prev.some((a) => a.userId === account.userId)) return prev;
+          const existingIndex = prev.findIndex((a) => a.userId === account.userId);
+          if (existingIndex >= 0) {
+            const next = prev.map((item, index) => index === existingIndex ? { ...item, ...account } : item);
+            void safeSetItem(REGISTRY_KEY, JSON.stringify(next));
+            return next;
+          }
           if (prev.length >= 3) {
             throw new Error("Linqa supports at most 3 active accounts.");
           }

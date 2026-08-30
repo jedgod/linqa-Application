@@ -1,0 +1,483 @@
+LINQA REPO-NATIVE CLIENT 360 ACCOUNT & SERVICES ENRICHMENT PACK
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Repo-Native Client 360 Account & Services Enrichment Pack
+
+Read-only enrichment only.
+
+Uses:
+- Fastify
+- principal.scopes Set
+- raw pg.Pool
+- support_cases_v2.user_id
+- existing domain services
+- existing ops:client360:read scope
+- clients/web accessToken + polling
+
+No new tables, no duplicated business logic, no specialist actions, no SLA, no new realtime.
+
+
+====================================================================================================
+FILE: server/src/services/operations/client360-domain.adapter.ts
+====================================================================================================
+export interface AccountSupportSummary {
+  userId:string;
+  displayName?:string|null;
+  maskedEmail?:string|null;
+  maskedPhone?:string|null;
+  accountState:string;
+  countryCode?:string|null;
+  createdAt?:string|Date|null;
+  emailVerified?:boolean|null;
+  phoneVerified?:boolean|null;
+}
+
+export interface DeviceSupportSummary {
+  trustedDeviceCount:number;
+  activeDeviceCount:number;
+  lastTrustedDeviceSeenAt?:string|Date|null;
+  platforms?:string[];
+}
+
+export interface LinqaSendSupportSummary {
+  enabled:boolean;
+  accountState?:string|null;
+  verificationState?:string|null;
+  activeHoldCount?:number|null;
+  lastTransactionAt?:string|Date|null;
+}
+
+export interface VaultSupportSummary {
+  enabled:boolean;
+  planName?:string|null;
+  usedBytes?:number|null;
+  quotaBytes?:number|null;
+  quarantineCount?:number|null;
+}
+
+export interface RecoverySupportSummary {
+  recoveryEmailConfigured:boolean;
+  trustedRecoveryDeviceCount?:number|null;
+  twoFactorEnabled?:boolean|null;
+  passkeyCount?:number|null;
+  lastRecoveryAt?:string|Date|null;
+}
+
+export interface RiskSupportSummary {
+  level:"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|"UNKNOWN";
+  score?:number|null;
+  openRiskCaseCount?:number|null;
+  safetyRestrictionActive?:boolean|null;
+  lastReviewedAt?:string|Date|null;
+}
+
+export interface Client360DomainAdapter {
+  getAccountSummary(userId:string):Promise<AccountSupportSummary|null>;
+  getDeviceSummary(userId:string):Promise<DeviceSupportSummary|null>;
+  getLinqaSendSummary(userId:string):Promise<LinqaSendSupportSummary|null>;
+  getVaultSummary(userId:string):Promise<VaultSupportSummary|null>;
+  getRecoverySummary(userId:string):Promise<RecoverySupportSummary|null>;
+  getRiskSummary(userId:string):Promise<RiskSupportSummary|null>;
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/client360-enrichment.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+import type { Client360DomainAdapter } from "./client360-domain.adapter";
+
+function iso(v:string|Date|null|undefined):string|null {
+  if(!v) return null;
+  const d=v instanceof Date?v:new Date(v);
+  return Number.isNaN(d.getTime())?null:d.toISOString();
+}
+
+export class Client360EnrichmentService {
+  constructor(private pool:Pool,private domains:Client360DomainAdapter){}
+
+  async getForCase(caseId:string){
+    const caseR=await this.pool.query(
+      `SELECT id::text,case_number AS "caseNumber",user_id::text AS "userId",
+              state::text,priority::text
+       FROM support_cases_v2
+       WHERE id=$1::uuid
+       LIMIT 1`,
+      [caseId]
+    );
+
+    if(!caseR.rowCount) return null;
+    const supportCase=caseR.rows[0];
+    const userId=supportCase.userId as string;
+
+    const results=await Promise.allSettled([
+      this.domains.getAccountSummary(userId),
+      this.domains.getDeviceSummary(userId),
+      this.domains.getLinqaSendSummary(userId),
+      this.domains.getVaultSummary(userId),
+      this.domains.getRecoverySummary(userId),
+      this.domains.getRiskSummary(userId)
+    ]);
+
+    const [accountR,devicesR,sendR,vaultR,recoveryR,riskR]=results;
+    const account=accountR.status==="fulfilled"?accountR.value:null;
+    const devices=devicesR.status==="fulfilled"?devicesR.value:null;
+    const linqaSend=sendR.status==="fulfilled"?sendR.value:null;
+    const vault=vaultR.status==="fulfilled"?vaultR.value:null;
+    const recovery=recoveryR.status==="fulfilled"?recoveryR.value:null;
+    const risk=riskR.status==="fulfilled"?riskR.value:null;
+
+    return {
+      caseId:supportCase.id,
+      caseNumber:supportCase.caseNumber,
+      userId,
+      identity:account?{
+        displayName:account.displayName??null,
+        maskedEmail:account.maskedEmail??null,
+        maskedPhone:account.maskedPhone??null,
+        accountState:account.accountState,
+        countryCode:account.countryCode??null,
+        emailVerified:account.emailVerified??null,
+        phoneVerified:account.phoneVerified??null,
+        memberSince:iso(account.createdAt)
+      }:null,
+      devices:devices?{
+        trustedDeviceCount:devices.trustedDeviceCount,
+        activeDeviceCount:devices.activeDeviceCount,
+        lastTrustedDeviceSeenAt:iso(devices.lastTrustedDeviceSeenAt),
+        platforms:devices.platforms??[]
+      }:null,
+      linqaSend:linqaSend?{
+        enabled:linqaSend.enabled,
+        accountState:linqaSend.accountState??null,
+        verificationState:linqaSend.verificationState??null,
+        activeHoldCount:linqaSend.activeHoldCount??null,
+        lastTransactionAt:iso(linqaSend.lastTransactionAt)
+      }:null,
+      vault:vault?{
+        enabled:vault.enabled,
+        planName:vault.planName??null,
+        usedBytes:vault.usedBytes??null,
+        quotaBytes:vault.quotaBytes??null,
+        quarantineCount:vault.quarantineCount??null
+      }:null,
+      recovery:recovery?{
+        recoveryEmailConfigured:recovery.recoveryEmailConfigured,
+        trustedRecoveryDeviceCount:recovery.trustedRecoveryDeviceCount??null,
+        twoFactorEnabled:recovery.twoFactorEnabled??null,
+        passkeyCount:recovery.passkeyCount??null,
+        lastRecoveryAt:iso(recovery.lastRecoveryAt)
+      }:null,
+      risk:risk?{
+        level:risk.level,
+        score:risk.score??null,
+        openRiskCaseCount:risk.openRiskCaseCount??null,
+        safetyRestrictionActive:risk.safetyRestrictionActive??null,
+        lastReviewedAt:iso(risk.lastReviewedAt)
+      }:null,
+      availability:{
+        account:accountR.status==="fulfilled",
+        devices:devicesR.status==="fulfilled",
+        linqaSend:sendR.status==="fulfilled",
+        vault:vaultR.status==="fulfilled",
+        recovery:recoveryR.status==="fulfilled",
+        risk:riskR.status==="fulfilled"
+      }
+    };
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/client360-existing-services.example.ts
+====================================================================================================
+import type { Client360DomainAdapter } from "./client360-domain.adapter";
+
+/**
+ * Delegate ONLY to existing domain services.
+ * If a service lacks a support-safe summary method, add it to that owning service.
+ */
+export function createClient360DomainAdapter(deps:{
+  accountService:any;
+  deviceService:any;
+  linqaSendService:any;
+  vaultService:any;
+  recoveryService:any;
+  riskService:any;
+}):Client360DomainAdapter {
+  return {
+    getAccountSummary:(userId)=>deps.accountService.getSupportSummary(userId),
+    getDeviceSummary:(userId)=>deps.deviceService.getSupportSummary(userId),
+    getLinqaSendSummary:(userId)=>deps.linqaSendService.getSupportSummary(userId),
+    getVaultSummary:(userId)=>deps.vaultService.getSupportSummary(userId),
+    getRecoverySummary:(userId)=>deps.recoveryService.getSupportSummary(userId),
+    getRiskSummary:(userId)=>deps.riskService.getSupportSummary(userId)
+  };
+}
+
+
+====================================================================================================
+FILE: server/src/routes/operations/client360-enrichment-routes.ts
+====================================================================================================
+import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
+import { requireScope } from "../../auth/jwt";
+import type { Client360DomainAdapter } from "../../services/operations/client360-domain.adapter";
+import { Client360EnrichmentService } from "../../services/operations/client360-enrichment.service";
+
+const Params=z.object({caseId:z.string().uuid()});
+
+export function buildClient360EnrichmentRoutes(
+  pool:any,
+  domains:Client360DomainAdapter
+):FastifyPluginAsync {
+  return async function client360EnrichmentRoutes(app){
+    const service=new Client360EnrichmentService(pool,domains);
+
+    app.get("/cases/:caseId/client360",async(request,reply)=>{
+      const p=await (app as any).authenticate(request,reply);
+      requireScope(p,"ops:client360:read");
+
+      const {caseId}=Params.parse(request.params);
+      const result=await service.getForCase(caseId);
+
+      if(!result) return reply.code(404).send({error:"CASE_NOT_FOUND"});
+      return result;
+    });
+  };
+}
+
+
+====================================================================================================
+FILE: server/src/routes/operations/register-client360.example.ts
+====================================================================================================
+import { buildClient360EnrichmentRoutes } from "./client360-enrichment-routes";
+import { createClient360DomainAdapter } from "../../services/operations/client360-existing-services.example";
+
+export async function registerClient360(app:any,pool:any,existingServices:any){
+  const domains=createClient360DomainAdapter(existingServices);
+  await app.register(buildClient360EnrichmentRoutes(pool,domains));
+}
+
+
+====================================================================================================
+FILE: server/tests/operations-client360-enrichment.test.ts
+====================================================================================================
+import { describe,it } from "vitest";
+
+describe("repo-native Client 360 enrichment",()=>{
+  it.todo("requires ops:client360:read");
+  it.todo("resolves user_id from support_cases_v2");
+  it.todo("delegates account summary to existing account service");
+  it.todo("delegates device summary to existing device service");
+  it.todo("delegates LinqaSend summary to existing LinqaSend service");
+  it.todo("delegates Vault summary to existing Vault service");
+  it.todo("delegates recovery summary to existing recovery service");
+  it.todo("delegates risk summary to existing risk service");
+  it.todo("returns partial projection if one optional domain is unavailable");
+  it.todo("performs no domain mutation");
+  it.todo("does not expose secrets, E2EE keys, CVV, or full PAN");
+});
+
+
+====================================================================================================
+FILE: clients/web/src/admin/api/client360-api.ts
+====================================================================================================
+export type Client360Projection={
+  caseId:string;
+  caseNumber:number|string;
+  userId:string;
+  identity:null|{
+    displayName?:string|null;
+    maskedEmail?:string|null;
+    maskedPhone?:string|null;
+    accountState:string;
+    countryCode?:string|null;
+    emailVerified?:boolean|null;
+    phoneVerified?:boolean|null;
+    memberSince?:string|null;
+  };
+  devices:null|{
+    trustedDeviceCount:number;
+    activeDeviceCount:number;
+    lastTrustedDeviceSeenAt?:string|null;
+    platforms:string[];
+  };
+  linqaSend:null|{
+    enabled:boolean;
+    accountState?:string|null;
+    verificationState?:string|null;
+    activeHoldCount?:number|null;
+    lastTransactionAt?:string|null;
+  };
+  vault:null|{
+    enabled:boolean;
+    planName?:string|null;
+    usedBytes?:number|null;
+    quotaBytes?:number|null;
+    quarantineCount?:number|null;
+  };
+  recovery:null|{
+    recoveryEmailConfigured:boolean;
+    trustedRecoveryDeviceCount?:number|null;
+    twoFactorEnabled?:boolean|null;
+    passkeyCount?:number|null;
+    lastRecoveryAt?:string|null;
+  };
+  risk:null|{
+    level:"LOW"|"MEDIUM"|"HIGH"|"CRITICAL"|"UNKNOWN";
+    score?:number|null;
+    openRiskCaseCount?:number|null;
+    safetyRestrictionActive?:boolean|null;
+    lastReviewedAt?:string|null;
+  };
+  availability:Record<"account"|"devices"|"linqaSend"|"vault"|"recovery"|"risk",boolean>;
+};
+
+async function api<T>(token:string,path:string):Promise<T>{
+  const r=await fetch(path,{headers:{authorization:`Bearer ${token}`}});
+  const body=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(body.error??`HTTP_${r.status}`);
+  return body as T;
+}
+
+export const client360Api={
+  getForCase:(token:string,caseId:string)=>
+    api<Client360Projection>(token,`/v1/admin/operations/cases/${caseId}/client360`)
+};
+
+
+====================================================================================================
+FILE: clients/web/src/admin/hooks/useClient360Polling.ts
+====================================================================================================
+import { client360Api } from "../api/client360-api";
+
+/**
+ * Use this loader with the repo's existing usePolling helper.
+ */
+export function createClient360Loader(accessToken:string,caseId:string){
+  return ()=>client360Api.getForCase(accessToken,caseId);
+}
+
+/*
+Example:
+const client360Poll = usePolling(
+  createClient360Loader(accessToken,caseId),
+  15000,
+  [accessToken,caseId]
+);
+*/
+
+
+====================================================================================================
+FILE: clients/web/src/admin/components/Client360EnrichmentPanel.tsx
+====================================================================================================
+import type { Client360Projection } from "../api/client360-api";
+
+const card={border:"1px solid #1e293b",borderRadius:12,background:"rgba(15,23,42,.72)",padding:14};
+const label={color:"#64748b",fontSize:12};
+const value={color:"#e2e8f0",fontSize:13,marginTop:4};
+
+function bytes(n?:number|null){
+  if(n==null) return "—";
+  const u=["B","KB","MB","GB","TB"];
+  let v=n,i=0;
+  while(v>=1024&&i<u.length-1){v/=1024;i++;}
+  return `${v.toFixed(i?1:0)} ${u[i]}`;
+}
+
+export function Client360EnrichmentPanel({data,loading,error}:{
+  data?:Client360Projection|null;loading?:boolean;error?:string|null;
+}){
+  if(loading&&!data) return <div style={card}>Loading Client 360…</div>;
+  if(error&&!data) return <div style={{...card,color:"#fb7185"}}>Client 360 unavailable.</div>;
+  if(!data) return null;
+
+  return <div style={{display:"grid",gap:12}}>
+    <div style={card}>
+      <div style={{fontWeight:700,marginBottom:10}}>Client 360</div>
+      <div style={{fontSize:18,fontWeight:700}}>{data.identity?.displayName??"Client"}</div>
+      <div style={{color:"#94a3b8",fontSize:12,marginTop:4}}>
+        {data.identity?.maskedEmail??"Email unavailable"} • {data.identity?.maskedPhone??"Phone unavailable"}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:14}}>
+        <div><div style={label}>Account</div><div style={value}>{data.identity?.accountState??"Unavailable"}</div></div>
+        <div><div style={label}>Country</div><div style={value}>{data.identity?.countryCode??"—"}</div></div>
+        <div><div style={label}>Email verified</div><div style={value}>{data.identity?.emailVerified==null?"—":data.identity.emailVerified?"Yes":"No"}</div></div>
+        <div><div style={label}>Phone verified</div><div style={value}>{data.identity?.phoneVerified==null?"—":data.identity.phoneVerified?"Yes":"No"}</div></div>
+      </div>
+    </div>
+
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12}}>
+      <div style={card}>
+        <div style={label}>Trusted devices</div>
+        <div style={{...value,fontSize:22,fontWeight:700}}>{data.devices?.trustedDeviceCount??"—"}</div>
+        <div style={value}>Active: {data.devices?.activeDeviceCount??"—"}</div>
+      </div>
+
+      <div style={card}>
+        <div style={label}>LinqaSend</div>
+        <div style={{...value,color:data.linqaSend?.enabled?"#34d399":"#94a3b8"}}>
+          {data.linqaSend?data.linqaSend.enabled?"Enabled":"Disabled":"Unavailable"}
+        </div>
+        <div style={value}>Holds: {data.linqaSend?.activeHoldCount??"—"}</div>
+      </div>
+
+      <div style={card}>
+        <div style={label}>Vault</div>
+        <div style={value}>{data.vault?.planName??(data.vault?.enabled?"Enabled":"Unavailable")}</div>
+        <div style={value}>{bytes(data.vault?.usedBytes)} / {bytes(data.vault?.quotaBytes)}</div>
+      </div>
+
+      <div style={card}>
+        <div style={label}>Recovery posture</div>
+        <div style={value}>2FA: {data.recovery?.twoFactorEnabled==null?"—":data.recovery.twoFactorEnabled?"Enabled":"Disabled"}</div>
+        <div style={value}>Passkeys: {data.recovery?.passkeyCount??"—"}</div>
+      </div>
+
+      <div style={card}>
+        <div style={label}>Risk</div>
+        <div style={{...value,color:
+          data.risk?.level==="HIGH"||data.risk?.level==="CRITICAL"?"#fb7185":
+          data.risk?.level==="MEDIUM"?"#fbbf24":"#34d399"}}>
+          {data.risk?.level??"Unavailable"}
+        </div>
+        <div style={value}>Open cases: {data.risk?.openRiskCaseCount??"—"}</div>
+      </div>
+    </div>
+
+    {Object.values(data.availability).some(v=>!v)&&
+      <div style={{color:"#94a3b8",fontSize:12}}>
+        Some service summaries are temporarily unavailable. Case operations remain available.
+      </div>
+    }
+  </div>;
+}
+
+
+====================================================================================================
+FILE: INTEGRATION_NOTES.md
+====================================================================================================
+# Integration notes
+
+Server:
+- No migration.
+- Add GET /cases/:caseId/client360 under existing /v1/admin/operations.
+- Use createAuthenticator/requireScope/withErrors.
+- Require existing ops:client360:read.
+- Resolve only support_cases_v2.user_id in operations.
+- Inject existing domain services.
+- If a domain lacks a support-safe summary, add it to that owning service.
+
+Client:
+- Fold Client360EnrichmentPanel into the existing CaseWorkspacePanel.
+- Use existing usePolling at ~15 seconds.
+- Keep it read-only.
+
+Never expose:
+password hashes, OTP/TOTP secrets, recovery secrets, passkey private material,
+E2EE keys, Vault encryption keys, CVV, full PAN, or unrelated private content.

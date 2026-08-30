@@ -12,7 +12,7 @@ import { StepUpService, type SensitiveAction, type StepUpVerifier } from "../sec
 const SensitiveActionSchema = z.enum([
   "PHONE_CHANGE", "RECOVERY_EMAIL_CHANGE", "ACCOUNT_RECOVERY", "DEVICE_REVOKE",
   "DATA_EXPORT", "ACCOUNT_DELETE", "PASSKEY_REMOVE", "BACKUP_KEY_ROTATE",
-  "COUNTRY_OVERRIDE", "LINQASEND_FUNDING_SOURCE_CHANGE"
+  "COUNTRY_OVERRIDE", "LINQASEND_FUNDING_SOURCE_CHANGE", "LINQASEND_TRANSFER_CONFIRM"
 ]);
 
 export async function registerPasskeyRoutes(

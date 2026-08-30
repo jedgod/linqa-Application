@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 export type SensitiveAction =
   | "PHONE_CHANGE" | "RECOVERY_EMAIL_CHANGE" | "ACCOUNT_RECOVERY"
   | "DEVICE_REVOKE" | "DATA_EXPORT" | "ACCOUNT_DELETE" | "PASSKEY_REMOVE"
-  | "BACKUP_KEY_ROTATE" | "COUNTRY_OVERRIDE" | "LINQASEND_FUNDING_SOURCE_CHANGE";
+  | "BACKUP_KEY_ROTATE" | "COUNTRY_OVERRIDE" | "LINQASEND_FUNDING_SOURCE_CHANGE"
+  | "LINQASEND_TRANSFER_CONFIRM";
 export interface StepUpClaims {
   iss: "linqa"; aud: "linqa-sensitive-actions"; sub: string; deviceId: string;
   action: SensitiveAction; authn: "PASSKEY" | "DEVICE_PROOF"; jti: string; iat: number; exp: number;

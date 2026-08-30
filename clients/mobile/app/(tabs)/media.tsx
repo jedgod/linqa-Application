@@ -1,12 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import {
-  FlatList,
-  Pressable,
-  SafeAreaView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { MediaService, type MediaItem } from "../../services/media.service";
 import { accessTokenProvider } from "../../services/session";
@@ -44,7 +38,7 @@ export default function MediaScreen() {
   }, [filter, service]);
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView edges={["left", "right"]} style={styles.screen}>
       <View style={styles.header}>
         <View>
           <Text style={styles.eyebrow}>SHARED CONTENT</Text>

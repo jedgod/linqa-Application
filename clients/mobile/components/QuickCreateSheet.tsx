@@ -1,6 +1,7 @@
 import React from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CreateAction, CreateActionKey, GLOBAL_CREATE_ACTIONS } from "../navigation/information-architecture";
 
 export function QuickCreateSheet({
@@ -12,9 +13,10 @@ export function QuickCreateSheet({
   actions?: readonly CreateAction[];
   contextLabel?: string;
 }) {
+  const insets = useSafeAreaInsets();
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
+      <Pressable style={[styles.backdrop, { paddingBottom: Math.max(insets.bottom, 12) }]} onPress={onClose}>
         <View style={styles.card}>
           <View style={styles.header}>
             <View>

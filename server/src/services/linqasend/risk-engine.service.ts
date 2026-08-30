@@ -1,5 +1,11 @@
 export type RiskDecision = "ALLOW" | "ALLOW_STEP_UP" | "REVIEW" | "TEMPORARY_HOLD" | "DECLINE" | "FREEZE_ACCOUNT";
 
+/** The amount (in minor units) at which this repo already calls a transfer
+ * high-value, used below to score HIGH_VALUE_TRANSFER. Exported so the
+ * admin/staff fraud & risk and LinqaSend evidence panels flag the same
+ * transfers the live risk engine does, instead of each picking a threshold. */
+export const HIGH_VALUE_TRANSFER_MINOR = 100_000n;
+
 /** Ported near-verbatim from the LinqaSend pack — pure scoring logic, no
  * external provider dependency, so it needs no fail-closed adapter. */
 export class RiskEngineService {
@@ -27,7 +33,7 @@ export class RiskEngineService {
     if (input.recentPasswordReset) add(20, "RECENT_PASSWORD_RESET");
     if (input.recentSimChange) add(25, "RECENT_SIM_CHANGE");
     if (!input.deviceTrusted) add(15, "UNTRUSTED_DEVICE");
-    if (input.amountMinor >= 100_000n) add(10, "HIGH_VALUE_TRANSFER");
+    if (input.amountMinor >= HIGH_VALUE_TRANSFER_MINOR) add(10, "HIGH_VALUE_TRANSFER");
     if (input.velocity24hMinor >= 500_000n) add(20, "HIGH_24H_VELOCITY");
     if (input.countryRiskScore > 70) add(20, "HIGH_COUNTRY_RISK");
 

@@ -5,6 +5,8 @@ import { assertEntitled, discoveryEntitlements } from "./entitlements.js";
 import type { PhoneEvidenceProvider, GeoIpProvider } from "./providers.js";
 import { evaluateCountryRisk } from "./risk.js";
 
+export type InboundReach = DiscoveryMode | "CONTACTS_ONLY";
+
 export class CountryLinqaService {
   constructor(
     private readonly db: Database,
@@ -30,7 +32,15 @@ export class CountryLinqaService {
     const [preferences, tier] = await Promise.all([
       this.preferencesWithClient(this.db, userId), this.subscriptions.getTier(userId)
     ]);
-    return { ...preferences, subscriptionTier: tier, allowedModes: discoveryEntitlements(tier) };
+    return {
+      ...preferences,
+      subscriptionTier: tier,
+      allowedModes: discoveryEntitlements(tier),
+      selectionLimits: {
+        countries: tier === "FREE" ? 0 : tier === "PREMIUM" ? this.config.COUNTRY_SELECTION_PREMIUM_LIMIT : 250,
+        regions: tier === "FREE" ? 0 : tier === "PREMIUM" ? 10 : 50
+      }
+    };
   }
 
   private async preferencesWithClient(client: { query: Database["query"] }, userId: string) {
@@ -41,8 +51,18 @@ export class CountryLinqaService {
          u.location_precision AS "locationPrecision",
          u.show_city AS "showCity",
          COALESCE(p.mode, 'MY_COUNTRY') AS mode,
+         COALESCE(p.inbound_reach, 'MY_COUNTRY') AS "inboundReach",
+         COALESCE(p.show_country, TRUE) AS "showCountry",
+         COALESCE(p.show_state, FALSE) AS "showState",
+         COALESCE(p.verified_only, TRUE) AS "verifiedOnly",
+         COALESCE(p.allow_businesses, TRUE) AS "allowBusinesses",
+         COALESCE(p.allow_communities, TRUE) AS "allowCommunities",
+         COALESCE(p.allow_events, TRUE) AS "allowEvents",
+         COALESCE(NOT p.enabled, FALSE) AS paused,
          COALESCE((SELECT json_agg(cl.country_code) FROM country_links cl WHERE cl.user_id = u.id), '[]'::json) AS "selectedCountries",
-         COALESCE((SELECT json_agg(rl.region_code) FROM regional_links rl WHERE rl.user_id = u.id), '[]'::json) AS "selectedRegions"
+         COALESCE((SELECT json_agg(rl.region_code) FROM regional_links rl WHERE rl.user_id = u.id), '[]'::json) AS "selectedRegions",
+         COALESCE((SELECT json_agg(cl.country_code) FROM country_inbound_links cl WHERE cl.user_id = u.id), '[]'::json) AS "inboundSelectedCountries",
+         COALESCE((SELECT json_agg(rl.region_code) FROM regional_inbound_links rl WHERE rl.user_id = u.id), '[]'::json) AS "inboundSelectedRegions"
        FROM users u
        LEFT JOIN country_discovery_preferences p ON p.user_id = u.id
        WHERE u.id = $1`,
@@ -63,15 +83,32 @@ export class CountryLinqaService {
       mode: DiscoveryMode;
       selectedCountries: string[];
       selectedRegions: string[];
-      locationPrecision: "COUNTRY" | "STATE" | "CITY";
-      showCity: boolean;
+      locationPrecision?: "COUNTRY" | "STATE" | "CITY" | undefined;
+      showCity?: boolean | undefined;
+      inboundReach?: InboundReach | undefined;
+      inboundSelectedCountries?: string[] | undefined;
+      inboundSelectedRegions?: string[] | undefined;
+      showCountry?: boolean | undefined;
+      showState?: boolean | undefined;
+      verifiedOnly?: boolean | undefined;
+      allowBusinesses?: boolean | undefined;
+      allowCommunities?: boolean | undefined;
+      allowEvents?: boolean | undefined;
+      paused?: boolean | undefined;
     }
   ) {
     const tier = await this.subscriptions.getTier(userId);
     const countries = Array.from(new Set(input.selectedCountries.map((c) => c.toUpperCase())));
     const regions = Array.from(new Set(input.selectedRegions.map((r) => r.toUpperCase())));
+    const inboundCountries = input.inboundSelectedCountries === undefined ? undefined
+      : Array.from(new Set(input.inboundSelectedCountries.map((c) => c.toUpperCase())));
+    const inboundRegions = input.inboundSelectedRegions === undefined ? undefined
+      : Array.from(new Set(input.inboundSelectedRegions.map((r) => r.toUpperCase())));
 
     assertEntitled(tier, input.mode, countries.length, regions.length, this.config);
+    if (input.inboundReach && input.inboundReach !== "CONTACTS_ONLY") {
+      assertEntitled(tier, input.inboundReach, inboundCountries?.length ?? 0, inboundRegions?.length ?? 0, this.config);
+    }
 
     if (input.mode === "SELECTED_COUNTRIES" && countries.length === 0) {
       const error: any = new Error("At least one country is required.");
@@ -85,29 +122,43 @@ export class CountryLinqaService {
       error.code = "REGION_REQUIRED";
       throw error;
     }
+    if (input.inboundReach === "SELECTED_COUNTRIES" && (inboundCountries?.length ?? 0) === 0) {
+      const error: any = new Error("At least one inbound country is required.");
+      error.status = 422;
+      error.code = "INBOUND_COUNTRY_REQUIRED";
+      throw error;
+    }
+    if (input.inboundReach === "REGION" && (inboundRegions?.length ?? 0) === 0) {
+      const error: any = new Error("At least one inbound region is required.");
+      error.status = 422;
+      error.code = "INBOUND_REGION_REQUIRED";
+      throw error;
+    }
 
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
 
-      if (countries.length > 0) {
+      const allCountries = Array.from(new Set([...countries, ...(inboundCountries ?? [])]));
+      if (allCountries.length > 0) {
         const found = await client.query(
           `SELECT code FROM countries WHERE code = ANY($1) AND enabled = TRUE`,
-          [countries]
+          [allCountries]
         );
-        if (found.rowCount !== countries.length) {
+        if (found.rowCount !== allCountries.length) {
           const error: any = new Error("One or more selected countries are invalid.");
           error.status = 422;
           error.code = "INVALID_COUNTRY";
           throw error;
         }
       }
-      if (regions.length > 0) {
+      const allRegions = Array.from(new Set([...regions, ...(inboundRegions ?? [])]));
+      if (allRegions.length > 0) {
         const found = await client.query(
           `SELECT code FROM geographic_regions WHERE code = ANY($1) AND enabled = TRUE`,
-          [regions]
+          [allRegions]
         );
-        if (found.rowCount !== regions.length) {
+        if (found.rowCount !== allRegions.length) {
           const error: any = new Error("One or more selected regions are invalid.");
           error.status = 422;
           error.code = "INVALID_REGION";
@@ -116,10 +167,24 @@ export class CountryLinqaService {
       }
 
       await client.query(
-        `INSERT INTO country_discovery_preferences (user_id, mode)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET mode = EXCLUDED.mode, updated_at = now()`,
-        [userId, input.mode]
+        `INSERT INTO country_discovery_preferences (
+           user_id, mode, inbound_reach, show_country, show_state, verified_only,
+           allow_businesses, allow_communities, allow_events, enabled
+         ) VALUES ($1,$2,COALESCE($3::country_inbound_reach,'MY_COUNTRY'),COALESCE($4,TRUE),COALESCE($5,FALSE),
+                   COALESCE($6,TRUE),COALESCE($7,TRUE),COALESCE($8,TRUE),COALESCE($9,TRUE),COALESCE(NOT $10,TRUE))
+         ON CONFLICT (user_id) DO UPDATE SET
+           mode=EXCLUDED.mode,
+           inbound_reach=COALESCE($3::country_inbound_reach,country_discovery_preferences.inbound_reach),
+           show_country=COALESCE($4,country_discovery_preferences.show_country),
+           show_state=COALESCE($5,country_discovery_preferences.show_state),
+           verified_only=COALESCE($6,country_discovery_preferences.verified_only),
+           allow_businesses=COALESCE($7,country_discovery_preferences.allow_businesses),
+           allow_communities=COALESCE($8,country_discovery_preferences.allow_communities),
+           allow_events=COALESCE($9,country_discovery_preferences.allow_events),
+           enabled=COALESCE(NOT $10,country_discovery_preferences.enabled), updated_at=now()`,
+        [userId, input.mode, input.inboundReach ?? null, input.showCountry ?? null, input.showState ?? null,
+          input.verifiedOnly ?? null, input.allowBusinesses ?? null, input.allowCommunities ?? null,
+          input.allowEvents ?? null, input.paused ?? null]
       );
 
       await client.query(`DELETE FROM country_links WHERE user_id = $1`, [userId]);
@@ -132,10 +197,28 @@ export class CountryLinqaService {
         await client.query(`INSERT INTO regional_links (user_id, region_code) VALUES ($1, $2)`, [userId, code]);
       }
 
-      const showCity = input.locationPrecision === "CITY" ? input.showCity : false;
+      if (inboundCountries !== undefined) {
+        await client.query(`DELETE FROM country_inbound_links WHERE user_id = $1`, [userId]);
+        for (const code of inboundCountries) {
+          await client.query(`INSERT INTO country_inbound_links (user_id, country_code) VALUES ($1, $2)`, [userId, code]);
+        }
+      }
+      if (inboundRegions !== undefined) {
+        await client.query(`DELETE FROM regional_inbound_links WHERE user_id = $1`, [userId]);
+        for (const code of inboundRegions) {
+          await client.query(`INSERT INTO regional_inbound_links (user_id, region_code) VALUES ($1, $2)`, [userId, code]);
+        }
+      }
+
       await client.query(
-        `UPDATE users SET location_precision = $2, show_city = $3 WHERE id = $1`,
-        [userId, input.locationPrecision, showCity]
+        `UPDATE users SET
+           location_precision = COALESCE($2, location_precision),
+           show_city = CASE
+             WHEN COALESCE($2, location_precision) = 'CITY' THEN COALESCE($3, show_city)
+             ELSE FALSE
+           END
+         WHERE id = $1`,
+        [userId, input.locationPrecision ?? null, input.showCity ?? null]
       );
 
       await client.query("COMMIT");

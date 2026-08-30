@@ -1,5 +1,7 @@
-import { Pressable, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
+import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { DottedGlobe } from "../components/DottedGlobe";
@@ -7,7 +9,8 @@ import { DottedGlobe } from "../components/DottedGlobe";
 export default function WelcomeScreen() {
   const router = useRouter();
   const { width, height } = useWindowDimensions();
-  const globeSize = Math.max(220, Math.min(width - 42, height * 0.39, 340));
+  const compact = height < 720;
+  const globeSize = Math.max(248, Math.min(width - 12, height * (compact ? 0.39 : 0.43), 405));
 
   return (
     <LinearGradient
@@ -17,14 +20,15 @@ export default function WelcomeScreen() {
       end={{ x: 0.48, y: 1 }}
       style={styles.gradient}
     >
+      <StatusBar style="light" />
       <View style={styles.glowTop} />
       <View style={styles.glowBottom} />
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.content}>
           <View style={styles.hero}>
-            <Ionicons name="location-outline" size={62} color="#FFFFFF" accessibilityElementsHidden />
-            <Text accessibilityRole="header" style={styles.title}>Linqa World</Text>
-            <Text style={styles.tagline}>Connect Locally. Connect Globally.</Text>
+            <Ionicons name="location-outline" size={compact ? 56 : 66} color="#FFFFFF" accessibilityElementsHidden />
+            <Text accessibilityRole="header" adjustsFontSizeToFit numberOfLines={1} style={[styles.title, compact && styles.titleCompact]}>Linqa World</Text>
+            <Text adjustsFontSizeToFit numberOfLines={1} style={[styles.tagline, compact && styles.taglineCompact]}>Connect Locally. Connect Globally.</Text>
             <View style={styles.globeWrap}><DottedGlobe size={globeSize} /></View>
           </View>
 
@@ -47,7 +51,7 @@ export default function WelcomeScreen() {
             </Pressable>
           </View>
         </View>
-        <View style={styles.homeIndicator} />
+        {Platform.OS === "ios" ? <View style={styles.homeIndicator} /> : null}
       </SafeAreaView>
     </LinearGradient>
   );
@@ -56,15 +60,17 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   gradient: { flex: 1 },
   safeArea: { flex: 1 },
-  glowTop: { position: "absolute", top: -120, left: -40, right: -40, height: 360, borderRadius: 180, backgroundColor: "rgba(119,76,255,0.25)" },
+  glowTop: { position: "absolute", top: -120, left: -40, right: -40, height: 360, borderRadius: 180, backgroundColor: "rgba(139,83,255,0.26)" },
   glowBottom: { position: "absolute", bottom: -180, left: -90, width: 330, height: 420, borderRadius: 210, backgroundColor: "rgba(19,20,91,0.27)" },
-  content: { flex: 1, paddingHorizontal: 28, paddingTop: 36, paddingBottom: 18 },
+  content: { flex: 1, paddingHorizontal: 30, paddingTop: 34, paddingBottom: 10 },
   hero: { flex: 1, alignItems: "center" },
-  title: { marginTop: 18, color: "#FFFFFF", fontSize: 42, lineHeight: 50, fontWeight: "700", letterSpacing: -1.7, textAlign: "center" },
-  tagline: { marginTop: 14, color: "rgba(255,255,255,0.68)", fontSize: 18, lineHeight: 25, fontWeight: "500", letterSpacing: -0.35, textAlign: "center" },
-  globeWrap: { flex: 1, minHeight: 235, justifyContent: "center", alignItems: "center", marginTop: 8 },
-  actions: { gap: 8 },
-  primary: { height: 66, borderRadius: 20, backgroundColor: "#FFFFFF", justifyContent: "center", alignItems: "center", shadowColor: "#09092B", shadowOpacity: 0.22, shadowRadius: 20, shadowOffset: { width: 0, height: 10 }, elevation: 7 },
+  title: { marginTop: 16, color: "#FFFFFF", fontSize: 45, lineHeight: 54, fontWeight: "700", letterSpacing: -1.8, textAlign: "center" },
+  titleCompact: { marginTop: 10, fontSize: 39, lineHeight: 46 },
+  tagline: { marginTop: 12, color: "rgba(230,224,255,0.77)", fontSize: 19, lineHeight: 27, fontWeight: "400", letterSpacing: -0.3, textAlign: "center" },
+  taglineCompact: { marginTop: 8, fontSize: 17 },
+  globeWrap: { flex: 1, minHeight: 248, justifyContent: "center", alignItems: "center", marginTop: 2 },
+  actions: { gap: 6 },
+  primary: { height: 66, borderRadius: 18, backgroundColor: "#FFFFFF", justifyContent: "center", alignItems: "center", shadowColor: "#09092B", shadowOpacity: 0.22, shadowRadius: 20, shadowOffset: { width: 0, height: 10 }, elevation: 7 },
   primaryText: { color: "#4E2BD4", fontSize: 22, fontWeight: "800", letterSpacing: -0.3 },
   pressed: { opacity: 0.93, transform: [{ scale: 0.992 }] },
   login: { height: 54, borderRadius: 16, justifyContent: "center", alignItems: "center" },

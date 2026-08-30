@@ -31,7 +31,7 @@ export function LinqaRuntimeProvider({
     () =>
       new RuntimeController(
         new HttpServerRuntimeProbe(
-          import.meta.env.VITE_LINQA_API_URL ?? "http://127.0.0.1:8080"
+          import.meta.env.VITE_LINQA_API_URL ?? "http://127.0.0.1:8088"
         ),
         new BrowserCoreRuntimeProbe(),
         new LocalAuthRuntimeProbe(),

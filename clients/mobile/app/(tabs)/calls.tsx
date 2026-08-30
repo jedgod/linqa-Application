@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  FlatList, Pressable, SafeAreaView, StyleSheet,
+  FlatList, Pressable, StyleSheet,
   Text, TextInput, View
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { CallsService, type CallHistoryItem } from "../../services/calls.service";
@@ -65,7 +66,7 @@ export default function CallsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView edges={["left", "right"]} style={styles.screen}>
       <View style={styles.header}>
         <View>
           <Text style={styles.eyebrow}>PRIVATE CALLING</Text>

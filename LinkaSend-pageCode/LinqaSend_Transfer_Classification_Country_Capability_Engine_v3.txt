@@ -1,0 +1,4358 @@
+
+================================================================================
+LINQASEND™ — TRANSFER CLASSIFICATION + COUNTRY CAPABILITY ENGINE v3
+Production-Safe Revision
+Format: Notepad-friendly TXT
+Targets:
+- TypeScript / Node.js / NestJS- or Express-compatible backend
+- PostgreSQL
+- Redis
+- Existing Linqa auth / device trust / risk / KYC
+- Existing LinqaSend internal + external transfer modules
+
+THIS v3 REPLACES THE v2 EXECUTION MODEL WHILE PRESERVING THE FOUR-CLASS MODEL:
+
+1. INTERNAL_DOMESTIC
+2. INTERNAL_CROSS_BORDER
+3. EXTERNAL_DOMESTIC
+4. EXTERNAL_CROSS_BORDER
+
+CRITICAL DESIGN CHANGES IN v3
+- Server derives sender country/account/KYC/risk context.
+- Client cannot submit authoritative sender eligibility fields.
+- TransferClass is separate from FundingMode and ReceiveMode.
+- INTERNAL_DOMESTIC no longer automatically means INTERNAL_LEDGER.
+- Same-country / different-currency is explicitly governed.
+- FX uses market reference rate + provider execution rate + Linqa customer rate.
+- FX math avoids binary floating-point settlement arithmetic.
+- Quotes are persisted and immutable after creation.
+- Country/corridor capability rules are effective-dated and versioned.
+- Every transfer stores a capability + policy snapshot.
+- RESTRICTED / RECEIVE_ONLY / SUSPENDED fail closed.
+- Create -> review -> warnings -> step-up authorization -> confirm -> execute.
+- Idempotency is mandatory.
+- Ledger is immutable; balance projection is updated atomically with journal entries.
+- INTERNAL_CROSS_BORDER has a dedicated router.
+- Request Money resolves both users server-side.
+- Send Back creates a fresh draft; it never executes automatically.
+- Recipient resolution is typed.
+- Transfer state machine is expanded for production operations.
+================================================================================
+
+
+================================================================================
+01. DOMAIN ENUMS
+================================================================================
+
+export enum TransferClass {
+  INTERNAL_DOMESTIC = "INTERNAL_DOMESTIC",
+  INTERNAL_CROSS_BORDER = "INTERNAL_CROSS_BORDER",
+  EXTERNAL_DOMESTIC = "EXTERNAL_DOMESTIC",
+  EXTERNAL_CROSS_BORDER = "EXTERNAL_CROSS_BORDER",
+}
+
+export enum CapabilityStatus {
+  ENABLED = "ENABLED",
+  CONDITIONAL = "CONDITIONAL",
+  RECEIVE_ONLY = "RECEIVE_ONLY",
+  BANK_OUTBOUND_ONLY = "BANK_OUTBOUND_ONLY",
+  RESTRICTED = "RESTRICTED",
+  TEMPORARILY_SUSPENDED = "TEMPORARILY_SUSPENDED",
+  UNSUPPORTED = "UNSUPPORTED",
+}
+
+export enum FundingMode {
+  LINQA_BALANCE = "LINQA_BALANCE",
+  BANK = "BANK",
+  DEBIT_CARD = "DEBIT_CARD",
+  CREDIT_CARD = "CREDIT_CARD",
+  MOBILE_MONEY = "MOBILE_MONEY",
+}
+
+export enum ReceiveMode {
+  LINQA_BALANCE = "LINQA_BALANCE",
+  BANK = "BANK",
+  CARD = "CARD",
+  MOBILE_MONEY = "MOBILE_MONEY",
+}
+
+export enum RailType {
+  INTERNAL_LEDGER = "INTERNAL_LEDGER",
+  DOMESTIC_FUNDING = "DOMESTIC_FUNDING",
+  LOCAL_BANK = "LOCAL_BANK",
+  MOBILE_MONEY = "MOBILE_MONEY",
+  CARD_PUSH = "CARD_PUSH",
+  RTP = "RTP",
+  IMTO = "IMTO",
+  CORRESPONDENT_BANK = "CORRESPONDENT_BANK",
+  CROSS_BORDER_INTERNAL_SETTLEMENT = "CROSS_BORDER_INTERNAL_SETTLEMENT",
+}
+
+export enum TransferState {
+  DRAFT = "DRAFT",
+  RECIPIENT_RESOLVED = "RECIPIENT_RESOLVED",
+  CLASSIFIED = "CLASSIFIED",
+  CAPABILITY_APPROVED = "CAPABILITY_APPROVED",
+  QUOTE_CREATED = "QUOTE_CREATED",
+  AWAITING_CONFIRMATION = "AWAITING_CONFIRMATION",
+
+  SCAM_WARNING_REQUIRED = "SCAM_WARNING_REQUIRED",
+
+  AUTHENTICATING = "AUTHENTICATING",
+  AUTHORIZED = "AUTHORIZED",
+
+  COMPLIANCE_SCREENING = "COMPLIANCE_SCREENING",
+  RISK_REVIEW = "RISK_REVIEW",
+
+  FUNDING_AUTHORIZATION = "FUNDING_AUTHORIZATION",
+  FUNDS_AUTHORIZED = "FUNDS_AUTHORIZED",
+
+  LEDGER_POSTING = "LEDGER_POSTING",
+  LEDGER_POSTED = "LEDGER_POSTED",
+
+  PAYOUT_SUBMITTED = "PAYOUT_SUBMITTED",
+  PAYOUT_PROCESSING = "PAYOUT_PROCESSING",
+
+  RECIPIENT_CREDITED = "RECIPIENT_CREDITED",
+  COMPLETED = "COMPLETED",
+
+  REQUIRES_ACTION = "REQUIRES_ACTION",
+  MANUAL_REVIEW = "MANUAL_REVIEW",
+  ON_HOLD = "ON_HOLD",
+  DECLINED = "DECLINED",
+  FAILED = "FAILED",
+  EXPIRED = "EXPIRED",
+  CANCELED = "CANCELED",
+  REVERSED = "REVERSED",
+  REFUNDED = "REFUNDED",
+}
+
+export enum ComplianceDecision {
+  ALLOW = "ALLOW",
+  REVIEW = "REVIEW",
+  DENY = "DENY",
+}
+
+export enum RecipientType {
+  LINQA_USER = "LINQA_USER",
+  BANK_RECIPIENT = "BANK_RECIPIENT",
+  MOBILE_MONEY_RECIPIENT = "MOBILE_MONEY_RECIPIENT",
+  CARD_RECIPIENT = "CARD_RECIPIENT",
+}
+
+
+================================================================================
+02. CLIENT-SAFE INPUT TYPES
+================================================================================
+
+export type RecipientReference =
+  | {
+      type: RecipientType.LINQA_USER;
+      value: string; // @handle, verified phone/email alias, or opaque recipient id
+    }
+  | {
+      type: RecipientType.BANK_RECIPIENT;
+      token: string;
+    }
+  | {
+      type: RecipientType.MOBILE_MONEY_RECIPIENT;
+      token: string;
+    }
+  | {
+      type: RecipientType.CARD_RECIPIENT;
+      token: string;
+    };
+
+export interface CreateTransferIntentRequest {
+  recipient: RecipientReference;
+
+  // String form so transport never forces JS floating-point.
+  amountMinor: string;
+  currency: string;
+
+  fundingSourceId: string;
+
+  note?: string;
+  purposeCode?: string;
+
+  sourceContext?:
+    | "LINQASEND"
+    | "CHAT"
+    | "REQUEST"
+    | "SEND_BACK";
+
+  sourceContextId?: string;
+}
+
+// IMPORTANT:
+// Client DOES NOT send authoritative:
+// userId
+// accountId
+// country
+// KYC level
+// risk score
+// recipient currency
+// capability status
+// rail
+// FX rate
+// receive amount
+
+
+================================================================================
+03. SERVER-AUTHORITATIVE CONTEXT
+================================================================================
+
+export interface SenderContext {
+  userId: string;
+  customerLedgerAccountId?: string;
+
+  verifiedCountry: string;
+  baseCurrency: string;
+
+  kycLevel: number;
+  kycStatus: string;
+
+  riskScore: number;
+  deviceTrust: "TRUSTED" | "UNKNOWN" | "RISKY";
+
+  accountStatus: "ACTIVE" | "RESTRICTED" | "SUSPENDED";
+}
+
+export interface ResolvedRecipient {
+  recipientType: RecipientType;
+  recipientId: string;
+
+  userId?: string;
+  customerLedgerAccountId?: string;
+
+  verifiedCountry: string;
+  receiveCurrency: string;
+
+  receiveMode: ReceiveMode;
+
+  bankRecipientToken?: string;
+  mobileMoneyToken?: string;
+  cardRecipientToken?: string;
+
+  verified: boolean;
+}
+
+export interface SenderContextService {
+  resolveFromAuthenticatedUser(
+    authenticatedUserId: string,
+  ): Promise<SenderContext>;
+}
+
+
+================================================================================
+04. MONEY + DECIMAL RULES
+================================================================================
+
+// Production recommendation:
+// Use decimal.js / big.js / Dinero.js (integer-safe mode), or exact rational
+// arithmetic. The examples below assume an injected DecimalMath abstraction.
+
+export interface Money {
+  amountMinor: bigint;
+  currency: string;
+}
+
+export interface DecimalMath {
+  multiplyMinorByRate(
+    amountMinor: bigint,
+    rateDecimal: string,
+  ): bigint;
+
+  applyBps(
+    rateDecimal: string,
+    bps: number,
+  ): string;
+
+  subtract(
+    a: string,
+    b: string,
+  ): string;
+}
+
+
+================================================================================
+05. CLASSIFICATION
+================================================================================
+
+export interface TransferClassification {
+  transferClass: TransferClass;
+  sameCountry: boolean;
+  sameCurrency: boolean;
+  internalRecipient: boolean;
+}
+
+export class TransferClassifier {
+  classify(
+    sender: SenderContext,
+    recipient: ResolvedRecipient,
+  ): TransferClassification {
+    const sameCountry =
+      sender.verifiedCountry.toUpperCase() ===
+      recipient.verifiedCountry.toUpperCase();
+
+    const sameCurrency =
+      sender.baseCurrency.toUpperCase() ===
+      recipient.receiveCurrency.toUpperCase();
+
+    const internalRecipient =
+      recipient.recipientType === RecipientType.LINQA_USER;
+
+    if (internalRecipient && sameCountry) {
+      return {
+        transferClass: TransferClass.INTERNAL_DOMESTIC,
+        sameCountry,
+        sameCurrency,
+        internalRecipient,
+      };
+    }
+
+    if (internalRecipient && !sameCountry) {
+      return {
+        transferClass: TransferClass.INTERNAL_CROSS_BORDER,
+        sameCountry,
+        sameCurrency,
+        internalRecipient,
+      };
+    }
+
+    if (!internalRecipient && sameCountry) {
+      return {
+        transferClass: TransferClass.EXTERNAL_DOMESTIC,
+        sameCountry,
+        sameCurrency,
+        internalRecipient,
+      };
+    }
+
+    return {
+      transferClass: TransferClass.EXTERNAL_CROSS_BORDER,
+      sameCountry,
+      sameCurrency,
+      internalRecipient,
+    };
+  }
+}
+
+
+================================================================================
+06. CAPABILITY / POLICY MODEL
+================================================================================
+
+export interface CountryCapabilityVersion {
+  id: string;
+  country: string;
+  version: number;
+
+  effectiveFrom: Date;
+  effectiveTo?: Date;
+
+  domesticInternalStatus: CapabilityStatus;
+  domesticBankInStatus: CapabilityStatus;
+  domesticBankOutStatus: CapabilityStatus;
+  domesticMerchantStatus: CapabilityStatus;
+  domesticRequestMoneyStatus: CapabilityStatus;
+
+  crossBorderInboundStatus: CapabilityStatus;
+  crossBorderOutboundStatus: CapabilityStatus;
+  crossBorderBankOutboundStatus: CapabilityStatus;
+
+  allowedFundingModes: FundingMode[];
+  allowedReceiveModes: ReceiveMode[];
+
+  sourceReference?: string;
+  approvedBy?: string;
+  approvedAt?: Date;
+}
+
+export interface CorridorRuleVersion {
+  id: string;
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  transferClass: TransferClass;
+
+  version: number;
+  status: CapabilityStatus;
+
+  effectiveFrom: Date;
+  effectiveTo?: Date;
+
+  sourceCurrencies: string[];
+  destinationCurrencies: string[];
+
+  permittedFundingModes: FundingMode[];
+  permittedReceiveModes: ReceiveMode[];
+  permittedRails: RailType[];
+
+  minAmountMinor?: bigint;
+  maxAmountMinor?: bigint;
+
+  minKycLevel?: number;
+
+  requiresPurposeCode?: boolean;
+  requiresSourceOfFunds?: boolean;
+  requiresManualReview?: boolean;
+
+  providerId?: string;
+}
+
+export interface CapabilityDecision {
+  allowed: boolean;
+
+  status: CapabilityStatus;
+
+  reasonCode?: string;
+
+  transferClass: TransferClass;
+
+  requiresFx: boolean;
+  requiresBankRail: boolean;
+
+  permittedRails: RailType[];
+  permittedFundingModes: FundingMode[];
+  permittedReceiveModes: ReceiveMode[];
+
+  countryPolicyId?: string;
+  countryPolicyVersion?: number;
+
+  corridorRuleId?: string;
+  corridorRuleVersion?: number;
+}
+
+export interface CapabilityRepository {
+  getActiveCountryVersion(
+    country: string,
+    at: Date,
+  ): Promise<CountryCapabilityVersion | null>;
+
+  getActiveCorridorVersion(
+    sourceCountry: string,
+    destinationCountry: string,
+    transferClass: TransferClass,
+    at: Date,
+  ): Promise<CorridorRuleVersion | null>;
+}
+
+
+================================================================================
+07. REGULATORY CAPABILITY ENGINE v3
+================================================================================
+
+export class RegulatoryCapabilityEngine {
+  constructor(
+    private readonly repo: CapabilityRepository,
+  ) {}
+
+  async decide(args: {
+    sender: SenderContext;
+    recipient: ResolvedRecipient;
+    classification: TransferClassification;
+
+    amount: Money;
+
+    fundingMode: FundingMode;
+    receiveMode: ReceiveMode;
+
+    purposeCode?: string;
+  }): Promise<CapabilityDecision> {
+    const now = new Date();
+
+    const source =
+      args.sender.verifiedCountry.toUpperCase();
+
+    const destination =
+      args.recipient.verifiedCountry.toUpperCase();
+
+    if (args.sender.accountStatus !== "ACTIVE") {
+      return this.block(
+        args.classification.transferClass,
+        "SENDER_ACCOUNT_NOT_ACTIVE",
+      );
+    }
+
+    // INTERNAL_DOMESTIC is special because cross-border outbound status
+    // must never automatically block valid domestic use.
+    if (
+      args.classification.transferClass ===
+      TransferClass.INTERNAL_DOMESTIC
+    ) {
+      const country =
+        await this.repo.getActiveCountryVersion(
+          source,
+          now,
+        );
+
+      if (!country) {
+        return this.block(
+          TransferClass.INTERNAL_DOMESTIC,
+          "COUNTRY_CAPABILITY_NOT_CONFIGURED",
+        );
+      }
+
+      switch (country.domesticInternalStatus) {
+        case CapabilityStatus.ENABLED:
+        case CapabilityStatus.CONDITIONAL:
+          break;
+
+        case CapabilityStatus.RECEIVE_ONLY:
+        case CapabilityStatus.BANK_OUTBOUND_ONLY:
+        case CapabilityStatus.RESTRICTED:
+        case CapabilityStatus.TEMPORARILY_SUSPENDED:
+        case CapabilityStatus.UNSUPPORTED:
+        default:
+          return {
+            ...this.block(
+              TransferClass.INTERNAL_DOMESTIC,
+              "DOMESTIC_INTERNAL_NOT_AVAILABLE",
+            ),
+            status:
+              country.domesticInternalStatus,
+            countryPolicyId:
+              country.id,
+            countryPolicyVersion:
+              country.version,
+          };
+      }
+
+      if (
+        !country.allowedFundingModes.includes(
+          args.fundingMode,
+        )
+      ) {
+        return this.blockWithPolicy(
+          TransferClass.INTERNAL_DOMESTIC,
+          country,
+          "DOMESTIC_FUNDING_MODE_NOT_ALLOWED",
+        );
+      }
+
+      if (
+        !country.allowedReceiveModes.includes(
+          args.receiveMode,
+        )
+      ) {
+        return this.blockWithPolicy(
+          TransferClass.INTERNAL_DOMESTIC,
+          country,
+          "DOMESTIC_RECEIVE_MODE_NOT_ALLOWED",
+        );
+      }
+
+      // Same country but different currency is NOT automatically approved.
+      // It requires a configured corridor-like domestic FX rule.
+      if (!args.classification.sameCurrency) {
+        const domesticFxRule =
+          await this.repo.getActiveCorridorVersion(
+            source,
+            destination,
+            TransferClass.INTERNAL_DOMESTIC,
+            now,
+          );
+
+        if (!domesticFxRule) {
+          return this.blockWithPolicy(
+            TransferClass.INTERNAL_DOMESTIC,
+            country,
+            "DOMESTIC_INTERNAL_FX_NOT_CONFIGURED",
+          );
+        }
+
+        return this.evaluateRule({
+          sender: args.sender,
+          recipient: args.recipient,
+          classification: args.classification,
+          amount: args.amount,
+          fundingMode: args.fundingMode,
+          receiveMode: args.receiveMode,
+          purposeCode: args.purposeCode,
+          country,
+          rule: domesticFxRule,
+        });
+      }
+
+      // Pure balance-to-balance same-currency domestic transfer.
+      if (
+        args.fundingMode ===
+          FundingMode.LINQA_BALANCE &&
+        args.receiveMode ===
+          ReceiveMode.LINQA_BALANCE
+      ) {
+        return {
+          allowed: true,
+          status:
+            country.domesticInternalStatus,
+          transferClass:
+            TransferClass.INTERNAL_DOMESTIC,
+          requiresFx: false,
+          requiresBankRail: false,
+          permittedRails: [
+            RailType.INTERNAL_LEDGER,
+          ],
+          permittedFundingModes:
+            country.allowedFundingModes,
+          permittedReceiveModes:
+            country.allowedReceiveModes,
+          countryPolicyId: country.id,
+          countryPolicyVersion:
+            country.version,
+        };
+      }
+
+      // Domestic Linqa-to-Linqa but externally funded / externally received.
+      return {
+        allowed: true,
+        status:
+          country.domesticInternalStatus,
+        transferClass:
+          TransferClass.INTERNAL_DOMESTIC,
+        requiresFx: false,
+        requiresBankRail:
+          args.fundingMode ===
+            FundingMode.BANK ||
+          args.receiveMode ===
+            ReceiveMode.BANK,
+        permittedRails: [
+          RailType.DOMESTIC_FUNDING,
+          RailType.LOCAL_BANK,
+          RailType.MOBILE_MONEY,
+          RailType.CARD_PUSH,
+        ],
+        permittedFundingModes:
+          country.allowedFundingModes,
+        permittedReceiveModes:
+          country.allowedReceiveModes,
+        countryPolicyId: country.id,
+        countryPolicyVersion:
+          country.version,
+      };
+    }
+
+    // All non-domestic-internal transfers require an effective-dated corridor.
+    const rule =
+      await this.repo.getActiveCorridorVersion(
+        source,
+        destination,
+        args.classification.transferClass,
+        now,
+      );
+
+    if (!rule) {
+      return this.block(
+        args.classification.transferClass,
+        "CORRIDOR_NOT_CONFIGURED",
+      );
+    }
+
+    return this.evaluateRule({
+      sender: args.sender,
+      recipient: args.recipient,
+      classification: args.classification,
+      amount: args.amount,
+      fundingMode: args.fundingMode,
+      receiveMode: args.receiveMode,
+      purposeCode: args.purposeCode,
+      rule,
+    });
+  }
+
+  private evaluateRule(args: {
+    sender: SenderContext;
+    recipient: ResolvedRecipient;
+    classification: TransferClassification;
+    amount: Money;
+    fundingMode: FundingMode;
+    receiveMode: ReceiveMode;
+    purposeCode?: string;
+
+    country?: CountryCapabilityVersion;
+    rule: CorridorRuleVersion;
+  }): CapabilityDecision {
+    const { rule } = args;
+
+    switch (rule.status) {
+      case CapabilityStatus.ENABLED:
+      case CapabilityStatus.CONDITIONAL:
+        break;
+
+      case CapabilityStatus.BANK_OUTBOUND_ONLY:
+        break;
+
+      case CapabilityStatus.RECEIVE_ONLY:
+        return this.ruleBlocked(
+          args,
+          "OUTBOUND_NOT_ALLOWED_RECEIVE_ONLY",
+        );
+
+      case CapabilityStatus.RESTRICTED:
+        return this.ruleBlocked(
+          args,
+          "CORRIDOR_RESTRICTED",
+        );
+
+      case CapabilityStatus.TEMPORARILY_SUSPENDED:
+        return this.ruleBlocked(
+          args,
+          "CORRIDOR_TEMPORARILY_SUSPENDED",
+        );
+
+      case CapabilityStatus.UNSUPPORTED:
+      default:
+        return this.ruleBlocked(
+          args,
+          "CORRIDOR_UNSUPPORTED",
+        );
+    }
+
+    if (
+      rule.minAmountMinor !== undefined &&
+      args.amount.amountMinor <
+        rule.minAmountMinor
+    ) {
+      return this.ruleBlocked(
+        args,
+        "CORRIDOR_MINIMUM_NOT_MET",
+      );
+    }
+
+    if (
+      rule.maxAmountMinor !== undefined &&
+      args.amount.amountMinor >
+        rule.maxAmountMinor
+    ) {
+      return this.ruleBlocked(
+        args,
+        "CORRIDOR_LIMIT_EXCEEDED",
+      );
+    }
+
+    if (
+      rule.minKycLevel !== undefined &&
+      args.sender.kycLevel <
+        rule.minKycLevel
+    ) {
+      return this.ruleBlocked(
+        args,
+        "KYC_LEVEL_INSUFFICIENT",
+      );
+    }
+
+    if (
+      !rule.sourceCurrencies.includes(
+        args.amount.currency.toUpperCase(),
+      )
+    ) {
+      return this.ruleBlocked(
+        args,
+        "SOURCE_CURRENCY_UNSUPPORTED",
+      );
+    }
+
+    if (
+      !rule.destinationCurrencies.includes(
+        args.recipient.receiveCurrency.toUpperCase(),
+      )
+    ) {
+      return this.ruleBlocked(
+        args,
+        "DESTINATION_CURRENCY_UNSUPPORTED",
+      );
+    }
+
+    if (
+      !rule.permittedFundingModes.includes(
+        args.fundingMode,
+      )
+    ) {
+      return this.ruleBlocked(
+        args,
+        "FUNDING_MODE_NOT_ALLOWED",
+      );
+    }
+
+    if (
+      !rule.permittedReceiveModes.includes(
+        args.receiveMode,
+      )
+    ) {
+      return this.ruleBlocked(
+        args,
+        "RECEIVE_MODE_NOT_ALLOWED",
+      );
+    }
+
+    if (
+      rule.requiresPurposeCode &&
+      !args.purposeCode
+    ) {
+      return this.ruleBlocked(
+        args,
+        "PURPOSE_CODE_REQUIRED",
+      );
+    }
+
+    const requiresBankRail =
+      rule.status ===
+      CapabilityStatus.BANK_OUTBOUND_ONLY;
+
+    const rails =
+      requiresBankRail
+        ? rule.permittedRails.filter(
+            (rail) =>
+              rail ===
+                RailType.LOCAL_BANK ||
+              rail ===
+                RailType.CORRESPONDENT_BANK,
+          )
+        : rule.permittedRails;
+
+    if (rails.length === 0) {
+      return this.ruleBlocked(
+        args,
+        "NO_PERMITTED_RAIL",
+      );
+    }
+
+    return {
+      allowed: true,
+      status: rule.status,
+      transferClass:
+        args.classification.transferClass,
+      requiresFx:
+        !args.classification.sameCurrency,
+      requiresBankRail,
+      permittedRails: rails,
+      permittedFundingModes:
+        rule.permittedFundingModes,
+      permittedReceiveModes:
+        rule.permittedReceiveModes,
+      countryPolicyId:
+        args.country?.id,
+      countryPolicyVersion:
+        args.country?.version,
+      corridorRuleId: rule.id,
+      corridorRuleVersion:
+        rule.version,
+    };
+  }
+
+  private block(
+    transferClass: TransferClass,
+    reasonCode: string,
+  ): CapabilityDecision {
+    return {
+      allowed: false,
+      status:
+        CapabilityStatus.UNSUPPORTED,
+      reasonCode,
+      transferClass,
+      requiresFx: false,
+      requiresBankRail: false,
+      permittedRails: [],
+      permittedFundingModes: [],
+      permittedReceiveModes: [],
+    };
+  }
+
+  private blockWithPolicy(
+    transferClass: TransferClass,
+    country: CountryCapabilityVersion,
+    reasonCode: string,
+  ): CapabilityDecision {
+    return {
+      ...this.block(
+        transferClass,
+        reasonCode,
+      ),
+      status:
+        country.domesticInternalStatus,
+      countryPolicyId:
+        country.id,
+      countryPolicyVersion:
+        country.version,
+    };
+  }
+
+  private ruleBlocked(
+    args: {
+      classification: TransferClassification;
+      country?: CountryCapabilityVersion;
+      rule: CorridorRuleVersion;
+    },
+    reasonCode: string,
+  ): CapabilityDecision {
+    return {
+      allowed: false,
+      status:
+        args.rule.status,
+      reasonCode,
+      transferClass:
+        args.classification.transferClass,
+      requiresFx:
+        !args.classification.sameCurrency,
+      requiresBankRail:
+        args.rule.status ===
+        CapabilityStatus.BANK_OUTBOUND_ONLY,
+      permittedRails:
+        args.rule.permittedRails,
+      permittedFundingModes:
+        args.rule.permittedFundingModes,
+      permittedReceiveModes:
+        args.rule.permittedReceiveModes,
+      countryPolicyId:
+        args.country?.id,
+      countryPolicyVersion:
+        args.country?.version,
+      corridorRuleId:
+        args.rule.id,
+      corridorRuleVersion:
+        args.rule.version,
+    };
+  }
+}
+
+
+================================================================================
+08. CAPABILITY SNAPSHOT
+================================================================================
+
+export interface CapabilitySnapshot {
+  evaluatedAt: string;
+
+  transferClass: TransferClass;
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  capabilityStatus:
+    CapabilityStatus;
+
+  countryPolicyId?: string;
+  countryPolicyVersion?: number;
+
+  corridorRuleId?: string;
+  corridorRuleVersion?: number;
+
+  fundingMode: FundingMode;
+  receiveMode: ReceiveMode;
+
+  permittedRails: RailType[];
+
+  requiresFx: boolean;
+  requiresBankRail: boolean;
+}
+
+export function makeCapabilitySnapshot(
+  sender: SenderContext,
+  recipient: ResolvedRecipient,
+  fundingMode: FundingMode,
+  receiveMode: ReceiveMode,
+  decision: CapabilityDecision,
+): CapabilitySnapshot {
+  return {
+    evaluatedAt:
+      new Date().toISOString(),
+
+    transferClass:
+      decision.transferClass,
+
+    sourceCountry:
+      sender.verifiedCountry,
+
+    destinationCountry:
+      recipient.verifiedCountry,
+
+    capabilityStatus:
+      decision.status,
+
+    countryPolicyId:
+      decision.countryPolicyId,
+
+    countryPolicyVersion:
+      decision.countryPolicyVersion,
+
+    corridorRuleId:
+      decision.corridorRuleId,
+
+    corridorRuleVersion:
+      decision.corridorRuleVersion,
+
+    fundingMode,
+    receiveMode,
+
+    permittedRails:
+      decision.permittedRails,
+
+    requiresFx:
+      decision.requiresFx,
+
+    requiresBankRail:
+      decision.requiresBankRail,
+  };
+}
+
+
+================================================================================
+09. TYPED RECIPIENT RESOLVER
+================================================================================
+
+export interface RecipientRepository {
+  findLinqaUserByReference(
+    value: string,
+  ): Promise<{
+    userId: string;
+    customerLedgerAccountId?: string;
+    verifiedCountry: string;
+    receiveCurrency: string;
+    receiveMode: ReceiveMode;
+  } | null>;
+
+  findBankRecipientByToken(
+    token: string,
+  ): Promise<{
+    recipientId: string;
+    verifiedCountry: string;
+    receiveCurrency: string;
+    bankRecipientToken: string;
+  } | null>;
+
+  findMobileRecipientByToken(
+    token: string,
+  ): Promise<{
+    recipientId: string;
+    verifiedCountry: string;
+    receiveCurrency: string;
+    mobileMoneyToken: string;
+  } | null>;
+
+  findCardRecipientByToken(
+    token: string,
+  ): Promise<{
+    recipientId: string;
+    verifiedCountry: string;
+    receiveCurrency: string;
+    cardRecipientToken: string;
+  } | null>;
+}
+
+export class RecipientResolver {
+  constructor(
+    private readonly repo:
+      RecipientRepository,
+  ) {}
+
+  async resolve(
+    ref: RecipientReference,
+  ): Promise<ResolvedRecipient> {
+    switch (ref.type) {
+      case RecipientType.LINQA_USER: {
+        const user =
+          await this.repo.findLinqaUserByReference(
+            ref.value,
+          );
+
+        if (!user) {
+          throw new Error(
+            "LINQA_RECIPIENT_NOT_FOUND",
+          );
+        }
+
+        return {
+          recipientType:
+            RecipientType.LINQA_USER,
+          recipientId:
+            user.userId,
+          userId:
+            user.userId,
+          customerLedgerAccountId:
+            user.customerLedgerAccountId,
+          verifiedCountry:
+            user.verifiedCountry,
+          receiveCurrency:
+            user.receiveCurrency,
+          receiveMode:
+            user.receiveMode,
+          verified: true,
+        };
+      }
+
+      case RecipientType.BANK_RECIPIENT: {
+        const item =
+          await this.repo.findBankRecipientByToken(
+            ref.token,
+          );
+
+        if (!item) {
+          throw new Error(
+            "BANK_RECIPIENT_NOT_FOUND",
+          );
+        }
+
+        return {
+          recipientType:
+            RecipientType.BANK_RECIPIENT,
+          recipientId:
+            item.recipientId,
+          verifiedCountry:
+            item.verifiedCountry,
+          receiveCurrency:
+            item.receiveCurrency,
+          receiveMode:
+            ReceiveMode.BANK,
+          bankRecipientToken:
+            item.bankRecipientToken,
+          verified: true,
+        };
+      }
+
+      case RecipientType.MOBILE_MONEY_RECIPIENT: {
+        const item =
+          await this.repo.findMobileRecipientByToken(
+            ref.token,
+          );
+
+        if (!item) {
+          throw new Error(
+            "MOBILE_RECIPIENT_NOT_FOUND",
+          );
+        }
+
+        return {
+          recipientType:
+            RecipientType.MOBILE_MONEY_RECIPIENT,
+          recipientId:
+            item.recipientId,
+          verifiedCountry:
+            item.verifiedCountry,
+          receiveCurrency:
+            item.receiveCurrency,
+          receiveMode:
+            ReceiveMode.MOBILE_MONEY,
+          mobileMoneyToken:
+            item.mobileMoneyToken,
+          verified: true,
+        };
+      }
+
+      case RecipientType.CARD_RECIPIENT: {
+        const item =
+          await this.repo.findCardRecipientByToken(
+            ref.token,
+          );
+
+        if (!item) {
+          throw new Error(
+            "CARD_RECIPIENT_NOT_FOUND",
+          );
+        }
+
+        return {
+          recipientType:
+            RecipientType.CARD_RECIPIENT,
+          recipientId:
+            item.recipientId,
+          verifiedCountry:
+            item.verifiedCountry,
+          receiveCurrency:
+            item.receiveCurrency,
+          receiveMode:
+            ReceiveMode.CARD,
+          cardRecipientToken:
+            item.cardRecipientToken,
+          verified: true,
+        };
+      }
+    }
+  }
+}
+
+
+================================================================================
+10. FUNDING SOURCE RESOLVER
+================================================================================
+
+export interface FundingSource {
+  id: string;
+  userId: string;
+
+  mode: FundingMode;
+
+  provider?: string;
+  providerToken?: string;
+
+  currency: string;
+
+  status:
+    | "ACTIVE"
+    | "RESTRICTED"
+    | "DISABLED";
+}
+
+export interface FundingSourceService {
+  resolveOwnedActive(
+    userId: string,
+    fundingSourceId: string,
+  ): Promise<FundingSource>;
+}
+
+
+================================================================================
+11. FX PRICING MODEL
+================================================================================
+
+export interface FxMarketQuote {
+  marketReferenceRate: string;
+  providerExecutionRate: string;
+
+  sourceTimestamp: Date;
+  expiresAt: Date;
+
+  provider: string;
+}
+
+export interface FxPricingRule {
+  id: string;
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  sourceCurrency: string;
+  destinationCurrency: string;
+
+  baseMarginBps: number;
+  minMarginBps: number;
+  maxMarginBps: number;
+
+  volatilityBufferBps: number;
+  liquidityBufferBps: number;
+  settlementBufferBps: number;
+
+  promotionAdjustmentBps: number;
+
+  version: number;
+}
+
+export interface FxPricingSnapshot {
+  pricingRuleId?: string;
+  pricingRuleVersion?: number;
+
+  marketReferenceRate?: string;
+  providerExecutionRate?: string;
+  customerRate: string;
+
+  marginBps: number;
+
+  provider?: string;
+
+  sourceTimestamp?: string;
+}
+
+export interface PersistedQuote {
+  id: string;
+
+  senderUserId: string;
+  recipientId: string;
+
+  transferClass: TransferClass;
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  sourceAmountMinor: bigint;
+  sourceCurrency: string;
+
+  destinationAmountMinor: bigint;
+  destinationCurrency: string;
+
+  senderFeeMinor: bigint;
+  recipientFeeMinor: bigint;
+
+  customerRate: string;
+
+  capabilitySnapshot:
+    CapabilitySnapshot;
+
+  pricingSnapshot:
+    FxPricingSnapshot;
+
+  rail: RailType;
+
+  expiresAt: Date;
+}
+
+export class FxPricingEngine {
+  constructor(
+    private readonly rates:
+      FxRateProviderV3,
+    private readonly pricing:
+      FxPricingRepositoryV3,
+    private readonly decimals:
+      DecimalMath,
+    private readonly quotes:
+      QuoteRepositoryV3,
+  ) {}
+
+  async createQuote(args: {
+    sender: SenderContext;
+    recipient: ResolvedRecipient;
+
+    classification:
+      TransferClassification;
+
+    capability:
+      CapabilityDecision;
+
+    capabilitySnapshot:
+      CapabilitySnapshot;
+
+    amount: Money;
+
+    rail: RailType;
+  }): Promise<PersistedQuote> {
+    const sameCurrency =
+      args.amount.currency.toUpperCase() ===
+      args.recipient.receiveCurrency.toUpperCase();
+
+    if (sameCurrency) {
+      return this.quotes.insert({
+        senderUserId:
+          args.sender.userId,
+        recipientId:
+          args.recipient.recipientId,
+
+        transferClass:
+          args.classification.transferClass,
+
+        sourceCountry:
+          args.sender.verifiedCountry,
+        destinationCountry:
+          args.recipient.verifiedCountry,
+
+        sourceAmountMinor:
+          args.amount.amountMinor,
+        sourceCurrency:
+          args.amount.currency.toUpperCase(),
+
+        destinationAmountMinor:
+          args.amount.amountMinor,
+        destinationCurrency:
+          args.recipient.receiveCurrency.toUpperCase(),
+
+        senderFeeMinor: 0n,
+        recipientFeeMinor: 0n,
+
+        customerRate: "1.000000000000",
+
+        capabilitySnapshot:
+          args.capabilitySnapshot,
+
+        pricingSnapshot: {
+          customerRate:
+            "1.000000000000",
+          marginBps: 0,
+        },
+
+        rail: args.rail,
+
+        expiresAt:
+          new Date(
+            Date.now() + 60_000,
+          ),
+      });
+    }
+
+    const market =
+      await this.rates.getRate({
+        sourceCurrency:
+          args.amount.currency,
+        destinationCurrency:
+          args.recipient.receiveCurrency,
+      });
+
+    const rule =
+      await this.pricing.getActiveRule({
+        sourceCountry:
+          args.sender.verifiedCountry,
+        destinationCountry:
+          args.recipient.verifiedCountry,
+        sourceCurrency:
+          args.amount.currency,
+        destinationCurrency:
+          args.recipient.receiveCurrency,
+      });
+
+    if (!rule) {
+      throw new Error(
+        "FX_PRICING_RULE_NOT_CONFIGURED",
+      );
+    }
+
+    const rawBps =
+      rule.baseMarginBps +
+      rule.volatilityBufferBps +
+      rule.liquidityBufferBps +
+      rule.settlementBufferBps -
+      rule.promotionAdjustmentBps;
+
+    const marginBps =
+      Math.max(
+        rule.minMarginBps,
+        Math.min(
+          rule.maxMarginBps,
+          rawBps,
+        ),
+      );
+
+    const customerRate =
+      this.decimals.applyBps(
+        market.providerExecutionRate,
+        -marginBps,
+      );
+
+    const destinationAmountMinor =
+      this.decimals.multiplyMinorByRate(
+        args.amount.amountMinor,
+        customerRate,
+      );
+
+    return this.quotes.insert({
+      senderUserId:
+        args.sender.userId,
+      recipientId:
+        args.recipient.recipientId,
+
+      transferClass:
+        args.classification.transferClass,
+
+      sourceCountry:
+        args.sender.verifiedCountry,
+      destinationCountry:
+        args.recipient.verifiedCountry,
+
+      sourceAmountMinor:
+        args.amount.amountMinor,
+      sourceCurrency:
+        args.amount.currency.toUpperCase(),
+
+      destinationAmountMinor,
+      destinationCurrency:
+        args.recipient.receiveCurrency.toUpperCase(),
+
+      senderFeeMinor: 0n,
+      recipientFeeMinor: 0n,
+
+      customerRate,
+
+      capabilitySnapshot:
+        args.capabilitySnapshot,
+
+      pricingSnapshot: {
+        pricingRuleId:
+          rule.id,
+        pricingRuleVersion:
+          rule.version,
+
+        marketReferenceRate:
+          market.marketReferenceRate,
+        providerExecutionRate:
+          market.providerExecutionRate,
+        customerRate,
+
+        marginBps,
+
+        provider:
+          market.provider,
+
+        sourceTimestamp:
+          market.sourceTimestamp.toISOString(),
+      },
+
+      rail: args.rail,
+
+      expiresAt:
+        new Date(
+          Math.min(
+            market.expiresAt.getTime(),
+            Date.now() + 30_000,
+          ),
+        ),
+    });
+  }
+}
+
+
+================================================================================
+12. COMPLIANCE + RISK + SCAM
+================================================================================
+
+export interface ComplianceResult {
+  decision:
+    ComplianceDecision;
+
+  reasonCodes: string[];
+
+  requiresManualReview: boolean;
+}
+
+export interface RiskDecisionV3 {
+  decision:
+    | "ALLOW"
+    | "WARN"
+    | "STEP_UP"
+    | "REVIEW"
+    | "HOLD"
+    | "DECLINE";
+
+  score: number;
+  reasons: string[];
+}
+
+export interface RiskSignalRepositoryV3 {
+  collect(args: {
+    senderUserId: string;
+    recipientId: string;
+    sourceCountry: string;
+    destinationCountry: string;
+    amountMinor: bigint;
+    currency: string;
+    transferClass: TransferClass;
+  }): Promise<{
+    firstRecipientPayment: boolean;
+    priorSuccessfulTransfers: number;
+    relationshipAgeDays: number;
+    recentPasswordReset: boolean;
+    recentRecoveryChange: boolean;
+    recentDeviceChange: boolean;
+    trustedDevice: boolean;
+    transferVelocity24h: number;
+    amountDeviationRatio: number;
+    countryAnomaly: boolean;
+  }>;
+}
+
+export class InternalAndCrossBorderRiskEngine {
+  assess(
+    s: Awaited<
+      ReturnType<
+        RiskSignalRepositoryV3["collect"]
+      >
+    >,
+  ): RiskDecisionV3 {
+    let score = 0;
+    const reasons: string[] = [];
+
+    const add = (
+      condition: boolean,
+      points: number,
+      reason: string,
+    ) => {
+      if (condition) {
+        score += points;
+        reasons.push(reason);
+      }
+    };
+
+    add(
+      s.firstRecipientPayment,
+      15,
+      "FIRST_PAYMENT_TO_RECIPIENT",
+    );
+
+    add(
+      s.recentPasswordReset,
+      20,
+      "RECENT_PASSWORD_RESET",
+    );
+
+    add(
+      s.recentRecoveryChange,
+      20,
+      "RECENT_RECOVERY_CHANGE",
+    );
+
+    add(
+      s.recentDeviceChange,
+      20,
+      "RECENT_DEVICE_CHANGE",
+    );
+
+    add(
+      !s.trustedDevice,
+      15,
+      "UNTRUSTED_DEVICE",
+    );
+
+    add(
+      s.transferVelocity24h >= 5,
+      15,
+      "HIGH_TRANSFER_VELOCITY",
+    );
+
+    add(
+      s.amountDeviationRatio >= 3,
+      20,
+      "AMOUNT_OUTSIDE_NORMAL_PATTERN",
+    );
+
+    add(
+      s.countryAnomaly,
+      15,
+      "COUNTRY_ANOMALY",
+    );
+
+    add(
+      s.priorSuccessfulTransfers === 0 &&
+        s.relationshipAgeDays < 1,
+      15,
+      "NO_ESTABLISHED_RELATIONSHIP",
+    );
+
+    if (score >= 85) {
+      return {
+        decision: "DECLINE",
+        score,
+        reasons,
+      };
+    }
+
+    if (score >= 65) {
+      return {
+        decision: "HOLD",
+        score,
+        reasons,
+      };
+    }
+
+    if (score >= 45) {
+      return {
+        decision: "REVIEW",
+        score,
+        reasons,
+      };
+    }
+
+    if (score >= 25) {
+      return {
+        decision: "WARN",
+        score,
+        reasons,
+      };
+    }
+
+    if (score >= 10) {
+      return {
+        decision: "STEP_UP",
+        score,
+        reasons,
+      };
+    }
+
+    return {
+      decision: "ALLOW",
+      score,
+      reasons,
+    };
+  }
+}
+
+export class ScamWarningEngineV3 {
+  build(args: {
+    risk:
+      RiskDecisionV3;
+    amountMinor: bigint;
+    currency: string;
+  }) {
+    const warnings: Array<{
+      type: string;
+      severity:
+        | "INFO"
+        | "WARN"
+        | "HIGH";
+      messageKey: string;
+    }> = [];
+
+    if (
+      args.risk.reasons.includes(
+        "FIRST_PAYMENT_TO_RECIPIENT",
+      )
+    ) {
+      warnings.push({
+        type: "NEW_RECIPIENT",
+        severity: "WARN",
+        messageKey:
+          "linqasend.scam.new_recipient",
+      });
+    }
+
+    if (
+      args.risk.reasons.includes(
+        "RECENT_DEVICE_CHANGE",
+      ) ||
+      args.risk.reasons.includes(
+        "RECENT_PASSWORD_RESET",
+      ) ||
+      args.risk.reasons.includes(
+        "RECENT_RECOVERY_CHANGE",
+      )
+    ) {
+      warnings.push({
+        type:
+          "SECURITY_CHANGE_PROXIMITY",
+        severity: "HIGH",
+        messageKey:
+          "linqasend.scam.security_change",
+      });
+    }
+
+    return warnings;
+  }
+}
+
+
+================================================================================
+13. RAIL ROUTER v3
+================================================================================
+
+export interface RailHealthService {
+  isHealthy(
+    rail: RailType,
+    providerId?: string,
+  ): Promise<boolean>;
+}
+
+export class RailRouterV3 {
+  constructor(
+    private readonly health:
+      RailHealthService,
+  ) {}
+
+  async select(args: {
+    classification:
+      TransferClassification;
+    capability:
+      CapabilityDecision;
+
+    fundingMode:
+      FundingMode;
+    receiveMode:
+      ReceiveMode;
+  }): Promise<RailType> {
+    // Pure balance-to-balance domestic internal.
+    if (
+      args.classification.transferClass ===
+        TransferClass.INTERNAL_DOMESTIC &&
+      args.classification.sameCurrency &&
+      args.fundingMode ===
+        FundingMode.LINQA_BALANCE &&
+      args.receiveMode ===
+        ReceiveMode.LINQA_BALANCE
+    ) {
+      if (
+        !args.capability.permittedRails.includes(
+          RailType.INTERNAL_LEDGER,
+        )
+      ) {
+        throw new Error(
+          "INTERNAL_LEDGER_NOT_PERMITTED",
+        );
+      }
+
+      return RailType.INTERNAL_LEDGER;
+    }
+
+    const candidates =
+      args.capability.requiresBankRail
+        ? args.capability.permittedRails.filter(
+            (x) =>
+              x ===
+                RailType.LOCAL_BANK ||
+              x ===
+                RailType.CORRESPONDENT_BANK,
+          )
+        : args.capability.permittedRails;
+
+    for (const rail of candidates) {
+      if (
+        await this.health.isHealthy(
+          rail,
+        )
+      ) {
+        return rail;
+      }
+    }
+
+    throw new Error(
+      "NO_HEALTHY_PERMITTED_RAIL",
+    );
+  }
+}
+
+
+================================================================================
+14. QUOTE REPOSITORY CONTRACT
+================================================================================
+
+export interface QuoteRepositoryV3 {
+  insert(
+    quote: Omit<
+      PersistedQuote,
+      "id"
+    >,
+  ): Promise<PersistedQuote>;
+
+  findValidOwned(args: {
+    quoteId: string;
+    senderUserId: string;
+    now: Date;
+  }): Promise<
+    PersistedQuote | null
+  >;
+}
+
+
+================================================================================
+15. TRANSFER AUTHORIZATION
+================================================================================
+
+export interface TransferAuthorizationClaims {
+  sub: string;
+
+  transferId: string;
+  recipientId: string;
+
+  quoteId: string;
+
+  sourceAmountMinor: string;
+  sourceCurrency: string;
+
+  jti: string;
+  exp: number;
+}
+
+export class TransferAuthorizationServiceV3 {
+  constructor(
+    private readonly signer:
+      TransactionTokenSigner,
+    private readonly redis:
+      RedisService,
+  ) {}
+
+  async issue(args: {
+    senderUserId: string;
+    transferId: string;
+    recipientId: string;
+    quoteId: string;
+    sourceAmountMinor: bigint;
+    sourceCurrency: string;
+  }) {
+    const jti =
+      crypto.randomUUID();
+
+    await this.redis.set(
+      `linqasend:v3:auth:${jti}`,
+      "ACTIVE",
+      120,
+    );
+
+    return this.signer.sign({
+      sub:
+        args.senderUserId,
+      transferId:
+        args.transferId,
+      recipientId:
+        args.recipientId,
+      quoteId:
+        args.quoteId,
+      sourceAmountMinor:
+        args.sourceAmountMinor.toString(),
+      sourceCurrency:
+        args.sourceCurrency,
+      jti,
+      exp:
+        Math.floor(
+          Date.now() / 1000,
+        ) + 120,
+    });
+  }
+
+  async consume(
+    token: string,
+    expected: Omit<
+      TransferAuthorizationClaims,
+      "jti" | "exp"
+    >,
+  ) {
+    const claims =
+      await this.signer.verify(
+        token,
+      );
+
+    if (
+      claims.sub !== expected.sub ||
+      claims.transferId !==
+        expected.transferId ||
+      claims.recipientId !==
+        expected.recipientId ||
+      claims.quoteId !==
+        expected.quoteId ||
+      claims.sourceAmountMinor !==
+        expected.sourceAmountMinor ||
+      claims.sourceCurrency !==
+        expected.sourceCurrency
+    ) {
+      throw new Error(
+        "TRANSFER_AUTHORIZATION_MISMATCH",
+      );
+    }
+
+    // Must be atomic: Redis GETDEL or Lua.
+    const state =
+      await this.redis.getDel(
+        `linqasend:v3:auth:${claims.jti}`,
+      );
+
+    if (state !== "ACTIVE") {
+      throw new Error(
+        "TRANSFER_AUTHORIZATION_USED_OR_EXPIRED",
+      );
+    }
+
+    return claims;
+  }
+}
+
+
+================================================================================
+16. LEDGER ACCOUNT MODEL
+================================================================================
+
+export enum LedgerAccountClass {
+  ASSET = "ASSET",
+  LIABILITY = "LIABILITY",
+  REVENUE = "REVENUE",
+  EXPENSE = "EXPENSE",
+  CLEARING = "CLEARING",
+}
+
+export interface LedgerAccount {
+  id: string;
+  code: string;
+
+  accountClass:
+    LedgerAccountClass;
+
+  currency: string;
+
+  ownerType?:
+    | "USER"
+    | "SYSTEM"
+    | "PROVIDER";
+
+  ownerId?: string;
+}
+
+export interface LedgerPosting {
+  accountId: string;
+
+  direction:
+    | "DEBIT"
+    | "CREDIT";
+
+  amountMinor: bigint;
+  currency: string;
+}
+
+
+================================================================================
+17. IMMUTABLE LEDGER + ATOMIC BALANCE PROJECTION
+================================================================================
+
+export interface LedgerRepositoryV3 {
+  withTransaction<T>(
+    fn: (
+      tx: unknown,
+    ) => Promise<T>,
+  ): Promise<T>;
+
+  createJournal(
+    tx: unknown,
+    input: {
+      referenceType: string;
+      referenceId: string;
+      description: string;
+      reversalOf?: string;
+    },
+  ): Promise<{
+    id: string;
+  }>;
+
+  insertPosting(
+    tx: unknown,
+    input: {
+      journalId: string;
+      accountId: string;
+      direction:
+        | "DEBIT"
+        | "CREDIT";
+      amountMinor: bigint;
+      currency: string;
+    },
+  ): Promise<void>;
+
+  // Projection update is only permitted inside same DB transaction as journal.
+  updateBalanceProjection(
+    tx: unknown,
+    input: {
+      accountId: string;
+      deltaMinor: bigint;
+    },
+  ): Promise<void>;
+
+  lockBalanceProjection(
+    tx: unknown,
+    accountId: string,
+  ): Promise<{
+    availableMinor: bigint;
+    currency: string;
+  }>;
+}
+
+export class DoubleEntryLedgerV3 {
+  constructor(
+    private readonly repo:
+      LedgerRepositoryV3,
+  ) {}
+
+  private assertBalanced(
+    postings: LedgerPosting[],
+  ) {
+    const currencies =
+      new Set(
+        postings.map(
+          (p) => p.currency,
+        ),
+      );
+
+    for (const currency of currencies) {
+      const scoped =
+        postings.filter(
+          (p) =>
+            p.currency ===
+            currency,
+        );
+
+      const debits =
+        scoped
+          .filter(
+            (p) =>
+              p.direction ===
+              "DEBIT",
+          )
+          .reduce(
+            (sum, p) =>
+              sum +
+              p.amountMinor,
+            0n,
+          );
+
+      const credits =
+        scoped
+          .filter(
+            (p) =>
+              p.direction ===
+              "CREDIT",
+          )
+          .reduce(
+            (sum, p) =>
+              sum +
+              p.amountMinor,
+            0n,
+          );
+
+      if (debits !== credits) {
+        throw new Error(
+          `UNBALANCED_LEDGER_${currency}`,
+        );
+      }
+    }
+  }
+
+  async postDomesticBalanceTransfer(args: {
+    transferId: string;
+
+    senderLiabilityAccountId: string;
+    recipientLiabilityAccountId: string;
+
+    amountMinor: bigint;
+    currency: string;
+  }) {
+    if (
+      args.senderLiabilityAccountId ===
+      args.recipientLiabilityAccountId
+    ) {
+      throw new Error(
+        "SELF_TRANSFER_NOT_ALLOWED",
+      );
+    }
+
+    const postings: LedgerPosting[] = [
+      {
+        accountId:
+          args.senderLiabilityAccountId,
+        direction: "DEBIT",
+        amountMinor:
+          args.amountMinor,
+        currency:
+          args.currency,
+      },
+      {
+        accountId:
+          args.recipientLiabilityAccountId,
+        direction: "CREDIT",
+        amountMinor:
+          args.amountMinor,
+        currency:
+          args.currency,
+      },
+    ];
+
+    this.assertBalanced(postings);
+
+    await this.repo.withTransaction(
+      async (tx) => {
+        const senderProjection =
+          await this.repo.lockBalanceProjection(
+            tx,
+            args.senderLiabilityAccountId,
+          );
+
+        if (
+          senderProjection.currency !==
+          args.currency
+        ) {
+          throw new Error(
+            "SENDER_LEDGER_CURRENCY_MISMATCH",
+          );
+        }
+
+        if (
+          senderProjection.availableMinor <
+          args.amountMinor
+        ) {
+          throw new Error(
+            "INSUFFICIENT_FUNDS",
+          );
+        }
+
+        const journal =
+          await this.repo.createJournal(
+            tx,
+            {
+              referenceType:
+                "LINQASEND_TRANSFER",
+              referenceId:
+                args.transferId,
+              description:
+                "Internal domestic balance transfer",
+            },
+          );
+
+        for (const p of postings) {
+          await this.repo.insertPosting(
+            tx,
+            {
+              journalId:
+                journal.id,
+              ...p,
+            },
+          );
+        }
+
+        await this.repo.updateBalanceProjection(
+          tx,
+          {
+            accountId:
+              args.senderLiabilityAccountId,
+            deltaMinor:
+              -args.amountMinor,
+          },
+        );
+
+        await this.repo.updateBalanceProjection(
+          tx,
+          {
+            accountId:
+              args.recipientLiabilityAccountId,
+            deltaMinor:
+              args.amountMinor,
+          },
+        );
+      },
+    );
+  }
+}
+
+
+================================================================================
+18. FOUR DISTINCT EXECUTION ROUTERS
+================================================================================
+
+export interface TransferExecutionContext {
+  transferId: string;
+
+  sender: SenderContext;
+  recipient: ResolvedRecipient;
+
+  quote: PersistedQuote;
+
+  fundingSource:
+    FundingSource;
+
+  capabilitySnapshot:
+    CapabilitySnapshot;
+}
+
+export interface TransferClassRouter {
+  execute(
+    context:
+      TransferExecutionContext,
+  ): Promise<{
+    status: TransferState;
+    providerReference?: string;
+  }>;
+}
+
+export class InternalDomesticRouter
+  implements TransferClassRouter
+{
+  constructor(
+    private readonly ledger:
+      DoubleEntryLedgerV3,
+    private readonly externalFunding:
+      DomesticFundingExecutor,
+    private readonly recipientCredit:
+      DomesticRecipientCreditService,
+  ) {}
+
+  async execute(
+    ctx: TransferExecutionContext,
+  ) {
+    const pureBalance =
+      ctx.fundingSource.mode ===
+        FundingMode.LINQA_BALANCE &&
+      ctx.recipient.receiveMode ===
+        ReceiveMode.LINQA_BALANCE &&
+      ctx.quote.sourceCurrency ===
+        ctx.quote.destinationCurrency;
+
+    if (pureBalance) {
+      if (
+        !ctx.sender.customerLedgerAccountId ||
+        !ctx.recipient.customerLedgerAccountId
+      ) {
+        throw new Error(
+          "CUSTOMER_LEDGER_ACCOUNT_MISSING",
+        );
+      }
+
+      await this.ledger.postDomesticBalanceTransfer({
+        transferId:
+          ctx.transferId,
+        senderLiabilityAccountId:
+          ctx.sender.customerLedgerAccountId,
+        recipientLiabilityAccountId:
+          ctx.recipient.customerLedgerAccountId,
+        amountMinor:
+          ctx.quote.sourceAmountMinor,
+        currency:
+          ctx.quote.sourceCurrency,
+      });
+
+      return {
+        status:
+          TransferState.COMPLETED,
+      };
+    }
+
+    const funding =
+      await this.externalFunding.authorizeAndSettle({
+        transferId:
+          ctx.transferId,
+        sender:
+          ctx.sender,
+        fundingSource:
+          ctx.fundingSource,
+        quote:
+          ctx.quote,
+      });
+
+    const credit =
+      await this.recipientCredit.credit({
+        transferId:
+          ctx.transferId,
+        recipient:
+          ctx.recipient,
+        quote:
+          ctx.quote,
+      });
+
+    return {
+      status:
+        credit.completed
+          ? TransferState.COMPLETED
+          : TransferState.PAYOUT_PROCESSING,
+      providerReference:
+        credit.reference ??
+        funding.reference,
+    };
+  }
+}
+
+export class InternalCrossBorderRouter
+  implements TransferClassRouter
+{
+  constructor(
+    private readonly settlement:
+      CrossBorderInternalSettlementExecutor,
+  ) {}
+
+  execute(
+    ctx: TransferExecutionContext,
+  ) {
+    // NEVER downgrade to INTERNAL_LEDGER solely because recipient is Linqa.
+    return this.settlement.execute(
+      ctx,
+    );
+  }
+}
+
+export class ExternalDomesticRouter
+  implements TransferClassRouter
+{
+  constructor(
+    private readonly domestic:
+      ExternalDomesticExecutor,
+  ) {}
+
+  execute(
+    ctx: TransferExecutionContext,
+  ) {
+    return this.domestic.execute(
+      ctx,
+    );
+  }
+}
+
+export class ExternalCrossBorderRouter
+  implements TransferClassRouter
+{
+  constructor(
+    private readonly international:
+      InternationalRemittanceExecutor,
+  ) {}
+
+  execute(
+    ctx: TransferExecutionContext,
+  ) {
+    return this.international.execute(
+      ctx,
+    );
+  }
+}
+
+
+================================================================================
+19. TRANSFER CLASS ROUTER REGISTRY
+================================================================================
+
+export class TransferClassRouterRegistry {
+  constructor(
+    private readonly internalDomestic:
+      InternalDomesticRouter,
+    private readonly internalCrossBorder:
+      InternalCrossBorderRouter,
+    private readonly externalDomestic:
+      ExternalDomesticRouter,
+    private readonly externalCrossBorder:
+      ExternalCrossBorderRouter,
+  ) {}
+
+  get(
+    transferClass: TransferClass,
+  ): TransferClassRouter {
+    switch (transferClass) {
+      case TransferClass.INTERNAL_DOMESTIC:
+        return this.internalDomestic;
+
+      case TransferClass.INTERNAL_CROSS_BORDER:
+        return this.internalCrossBorder;
+
+      case TransferClass.EXTERNAL_DOMESTIC:
+        return this.externalDomestic;
+
+      case TransferClass.EXTERNAL_CROSS_BORDER:
+        return this.externalCrossBorder;
+    }
+  }
+}
+
+
+================================================================================
+20. TRANSFER REPOSITORY CONTRACT
+================================================================================
+
+export interface TransferRecordV3 {
+  id: string;
+
+  senderUserId: string;
+  recipientId: string;
+
+  transferClass:
+    TransferClass;
+
+  sourceCountry: string;
+  destinationCountry: string;
+
+  fundingSourceId: string;
+
+  fundingMode: FundingMode;
+  receiveMode: ReceiveMode;
+
+  quoteId: string;
+
+  state: TransferState;
+
+  capabilitySnapshot:
+    CapabilitySnapshot;
+
+  regulatoryPolicyVersion:
+    string;
+
+  idempotencyKey: string;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface TransferRepositoryV3 {
+  findByIdempotency(args: {
+    senderUserId: string;
+    idempotencyKey: string;
+  }): Promise<
+    TransferRecordV3 | null
+  >;
+
+  create(
+    input: Omit<
+      TransferRecordV3,
+      "id" |
+      "createdAt" |
+      "updatedAt"
+    >,
+  ): Promise<TransferRecordV3>;
+
+  findOwned(
+    senderUserId: string,
+    transferId: string,
+  ): Promise<
+    TransferRecordV3 | null
+  >;
+
+  updateState(
+    transferId: string,
+    state: TransferState,
+    metadata?: Record<
+      string,
+      unknown
+    >,
+  ): Promise<void>;
+}
+
+
+================================================================================
+21. PREPARE SERVICE
+================================================================================
+
+export class LinqaSendPrepareServiceV3 {
+  constructor(
+    private readonly senderContexts:
+      SenderContextService,
+    private readonly recipients:
+      RecipientResolver,
+    private readonly fundingSources:
+      FundingSourceService,
+    private readonly classifier:
+      TransferClassifier,
+    private readonly capabilities:
+      RegulatoryCapabilityEngine,
+    private readonly rails:
+      RailRouterV3,
+    private readonly fx:
+      FxPricingEngine,
+  ) {}
+
+  async prepare(args: {
+    authenticatedUserId: string;
+
+    request:
+      CreateTransferIntentRequest;
+  }) {
+    const sender =
+      await this.senderContexts.resolveFromAuthenticatedUser(
+        args.authenticatedUserId,
+      );
+
+    const recipient =
+      await this.recipients.resolve(
+        args.request.recipient,
+      );
+
+    if (
+      recipient.userId ===
+      sender.userId
+    ) {
+      throw new Error(
+        "SELF_TRANSFER_NOT_ALLOWED",
+      );
+    }
+
+    const fundingSource =
+      await this.fundingSources.resolveOwnedActive(
+        sender.userId,
+        args.request.fundingSourceId,
+      );
+
+    const classification =
+      this.classifier.classify(
+        sender,
+        recipient,
+      );
+
+    const amount: Money = {
+      amountMinor:
+        BigInt(
+          args.request.amountMinor,
+        ),
+      currency:
+        args.request.currency.toUpperCase(),
+    };
+
+    const capability =
+      await this.capabilities.decide({
+        sender,
+        recipient,
+        classification,
+        amount,
+        fundingMode:
+          fundingSource.mode,
+        receiveMode:
+          recipient.receiveMode,
+        purposeCode:
+          args.request.purposeCode,
+      });
+
+    if (!capability.allowed) {
+      throw new Error(
+        capability.reasonCode ??
+          "CAPABILITY_BLOCKED",
+      );
+    }
+
+    const capabilitySnapshot =
+      makeCapabilitySnapshot(
+        sender,
+        recipient,
+        fundingSource.mode,
+        recipient.receiveMode,
+        capability,
+      );
+
+    const rail =
+      await this.rails.select({
+        classification,
+        capability,
+        fundingMode:
+          fundingSource.mode,
+        receiveMode:
+          recipient.receiveMode,
+      });
+
+    const quote =
+      await this.fx.createQuote({
+        sender,
+        recipient,
+        classification,
+        capability,
+        capabilitySnapshot,
+        amount,
+        rail,
+      });
+
+    return {
+      sender: {
+        userId:
+          sender.userId,
+        verifiedCountry:
+          sender.verifiedCountry,
+        baseCurrency:
+          sender.baseCurrency,
+      },
+
+      recipient: {
+        recipientId:
+          recipient.recipientId,
+        recipientType:
+          recipient.recipientType,
+        verifiedCountry:
+          recipient.verifiedCountry,
+        receiveCurrency:
+          recipient.receiveCurrency,
+        receiveMode:
+          recipient.receiveMode,
+      },
+
+      classification,
+      capability:
+        capabilitySnapshot,
+      fundingMode:
+        fundingSource.mode,
+      rail,
+      quote,
+    };
+  }
+}
+
+
+================================================================================
+22. CREATE TRANSFER
+================================================================================
+
+export class LinqaSendCreateTransferServiceV3 {
+  constructor(
+    private readonly prepareService:
+      LinqaSendPrepareServiceV3,
+    private readonly transfers:
+      TransferRepositoryV3,
+    private readonly riskSignals:
+      RiskSignalRepositoryV3,
+    private readonly risk:
+      InternalAndCrossBorderRiskEngine,
+    private readonly scam:
+      ScamWarningEngineV3,
+  ) {}
+
+  async create(args: {
+    authenticatedUserId: string;
+
+    request:
+      CreateTransferIntentRequest;
+
+    idempotencyKey: string;
+  }) {
+    const existing =
+      await this.transfers.findByIdempotency({
+        senderUserId:
+          args.authenticatedUserId,
+        idempotencyKey:
+          args.idempotencyKey,
+      });
+
+    if (existing) {
+      return existing;
+    }
+
+    const prepared =
+      await this.prepareService.prepare({
+        authenticatedUserId:
+          args.authenticatedUserId,
+        request:
+          args.request,
+      });
+
+    const transfer =
+      await this.transfers.create({
+        senderUserId:
+          prepared.sender.userId,
+        recipientId:
+          prepared.recipient.recipientId,
+        transferClass:
+          prepared.classification.transferClass,
+        sourceCountry:
+          prepared.sender.verifiedCountry,
+        destinationCountry:
+          prepared.recipient.verifiedCountry,
+        fundingSourceId:
+          args.request.fundingSourceId,
+        fundingMode:
+          prepared.fundingMode,
+        receiveMode:
+          prepared.recipient.receiveMode,
+        quoteId:
+          prepared.quote.id,
+        state:
+          TransferState.AWAITING_CONFIRMATION,
+        capabilitySnapshot:
+          prepared.capability,
+        regulatoryPolicyVersion:
+          this.policyVersionLabel(
+            prepared.capability,
+          ),
+        idempotencyKey:
+          args.idempotencyKey,
+      });
+
+    const signals =
+      await this.riskSignals.collect({
+        senderUserId:
+          prepared.sender.userId,
+        recipientId:
+          prepared.recipient.recipientId,
+        sourceCountry:
+          prepared.sender.verifiedCountry,
+        destinationCountry:
+          prepared.recipient.verifiedCountry,
+        amountMinor:
+          prepared.quote.sourceAmountMinor,
+        currency:
+          prepared.quote.sourceCurrency,
+        transferClass:
+          prepared.classification.transferClass,
+      });
+
+    const risk =
+      this.risk.assess(
+        signals,
+      );
+
+    if (
+      risk.decision === "DECLINE"
+    ) {
+      await this.transfers.updateState(
+        transfer.id,
+        TransferState.DECLINED,
+        { risk },
+      );
+
+      return this.transfers.findOwned(
+        prepared.sender.userId,
+        transfer.id,
+      );
+    }
+
+    if (
+      risk.decision === "HOLD"
+    ) {
+      await this.transfers.updateState(
+        transfer.id,
+        TransferState.ON_HOLD,
+        { risk },
+      );
+
+      return this.transfers.findOwned(
+        prepared.sender.userId,
+        transfer.id,
+      );
+    }
+
+    if (
+      risk.decision === "REVIEW"
+    ) {
+      await this.transfers.updateState(
+        transfer.id,
+        TransferState.MANUAL_REVIEW,
+        { risk },
+      );
+
+      return this.transfers.findOwned(
+        prepared.sender.userId,
+        transfer.id,
+      );
+    }
+
+    const warnings =
+      this.scam.build({
+        risk,
+        amountMinor:
+          prepared.quote.sourceAmountMinor,
+        currency:
+          prepared.quote.sourceCurrency,
+      });
+
+    if (warnings.length > 0) {
+      await this.transfers.updateState(
+        transfer.id,
+        TransferState.SCAM_WARNING_REQUIRED,
+        {
+          warnings,
+          risk,
+        },
+      );
+    }
+
+    return this.transfers.findOwned(
+      prepared.sender.userId,
+      transfer.id,
+    );
+  }
+
+  private policyVersionLabel(
+    snapshot:
+      CapabilitySnapshot,
+  ) {
+    return [
+      snapshot.countryPolicyId ??
+        "none",
+      snapshot.countryPolicyVersion ??
+        "none",
+      snapshot.corridorRuleId ??
+        "none",
+      snapshot.corridorRuleVersion ??
+        "none",
+    ].join(":");
+  }
+}
+
+
+================================================================================
+23. CONFIRM + EXECUTE SERVICE
+================================================================================
+
+export class LinqaSendConfirmServiceV3 {
+  constructor(
+    private readonly transfers:
+      TransferRepositoryV3,
+    private readonly quotes:
+      QuoteRepositoryV3,
+    private readonly senderContexts:
+      SenderContextService,
+    private readonly recipients:
+      RecipientRepositoryForExecution,
+    private readonly fundingSources:
+      FundingSourceService,
+    private readonly authz:
+      TransferAuthorizationServiceV3,
+    private readonly routers:
+      TransferClassRouterRegistry,
+  ) {}
+
+  async issueAuthorization(args: {
+    authenticatedUserId: string;
+    transferId: string;
+  }) {
+    const transfer =
+      await this.transfers.findOwned(
+        args.authenticatedUserId,
+        args.transferId,
+      );
+
+    if (!transfer) {
+      throw new Error(
+        "TRANSFER_NOT_FOUND",
+      );
+    }
+
+    if (
+      transfer.state !==
+      TransferState.AWAITING_CONFIRMATION
+    ) {
+      throw new Error(
+        "TRANSFER_NOT_READY_FOR_AUTHORIZATION",
+      );
+    }
+
+    const quote =
+      await this.quotes.findValidOwned({
+        quoteId:
+          transfer.quoteId,
+        senderUserId:
+          transfer.senderUserId,
+        now:
+          new Date(),
+      });
+
+    if (!quote) {
+      await this.transfers.updateState(
+        transfer.id,
+        TransferState.EXPIRED,
+      );
+
+      throw new Error(
+        "QUOTE_EXPIRED",
+      );
+    }
+
+    await this.transfers.updateState(
+      transfer.id,
+      TransferState.AUTHENTICATING,
+    );
+
+    return this.authz.issue({
+      senderUserId:
+        transfer.senderUserId,
+      transferId:
+        transfer.id,
+      recipientId:
+        transfer.recipientId,
+      quoteId:
+        quote.id,
+      sourceAmountMinor:
+        quote.sourceAmountMinor,
+      sourceCurrency:
+        quote.sourceCurrency,
+    });
+  }
+
+  async confirm(args: {
+    authenticatedUserId: string;
+    transferId: string;
+    authorizationToken: string;
+  }) {
+    const transfer =
+      await this.transfers.findOwned(
+        args.authenticatedUserId,
+        args.transferId,
+      );
+
+    if (!transfer) {
+      throw new Error(
+        "TRANSFER_NOT_FOUND",
+      );
+    }
+
+    const quote =
+      await this.quotes.findValidOwned({
+        quoteId:
+          transfer.quoteId,
+        senderUserId:
+          transfer.senderUserId,
+        now:
+          new Date(),
+      });
+
+    if (!quote) {
+      await this.transfers.updateState(
+        transfer.id,
+        TransferState.EXPIRED,
+      );
+
+      throw new Error(
+        "QUOTE_EXPIRED",
+      );
+    }
+
+    await this.authz.consume(
+      args.authorizationToken,
+      {
+        sub:
+          transfer.senderUserId,
+        transferId:
+          transfer.id,
+        recipientId:
+          transfer.recipientId,
+        quoteId:
+          quote.id,
+        sourceAmountMinor:
+          quote.sourceAmountMinor.toString(),
+        sourceCurrency:
+          quote.sourceCurrency,
+      },
+    );
+
+    await this.transfers.updateState(
+      transfer.id,
+      TransferState.AUTHORIZED,
+    );
+
+    const sender =
+      await this.senderContexts.resolveFromAuthenticatedUser(
+        transfer.senderUserId,
+      );
+
+    const recipient =
+      await this.recipients.resolveForExecution(
+        transfer.recipientId,
+        transfer.receiveMode,
+      );
+
+    const fundingSource =
+      await this.fundingSources.resolveOwnedActive(
+        transfer.senderUserId,
+        transfer.fundingSourceId,
+      );
+
+    const router =
+      this.routers.get(
+        transfer.transferClass,
+      );
+
+    const result =
+      await router.execute({
+        transferId:
+          transfer.id,
+        sender,
+        recipient,
+        quote,
+        fundingSource,
+        capabilitySnapshot:
+          transfer.capabilitySnapshot,
+      });
+
+    await this.transfers.updateState(
+      transfer.id,
+      result.status,
+      {
+        providerReference:
+          result.providerReference,
+      },
+    );
+
+    return {
+      transferId:
+        transfer.id,
+      state:
+        result.status,
+    };
+  }
+}
+
+
+================================================================================
+24. REQUEST MONEY v3
+================================================================================
+
+export interface RequestMoneyRepositoryV3 {
+  create(input: {
+    requesterUserId: string;
+    payerUserId: string;
+
+    sourceCountry: string;
+    payerCountry: string;
+
+    amountMinor: bigint;
+    currency: string;
+
+    note?: string;
+
+    status: "PENDING";
+
+    expiresAt: Date;
+  }): Promise<{
+    id: string;
+  }>;
+}
+
+export class RequestMoneyServiceV3 {
+  constructor(
+    private readonly senderContexts:
+      SenderContextService,
+    private readonly userResolver:
+      InternalUserResolver,
+    private readonly capabilities:
+      CapabilityRepository,
+    private readonly permissions:
+      PaymentRequestPermissionService,
+    private readonly blocks:
+      UserBlockService,
+    private readonly requests:
+      RequestMoneyRepositoryV3,
+  ) {}
+
+  async create(args: {
+    authenticatedUserId: string;
+    payerReference: string;
+    amountMinor: string;
+    currency: string;
+    note?: string;
+  }) {
+    const requester =
+      await this.senderContexts.resolveFromAuthenticatedUser(
+        args.authenticatedUserId,
+      );
+
+    const payer =
+      await this.userResolver.resolveVerifiedUser(
+        args.payerReference,
+      );
+
+    if (
+      requester.userId ===
+      payer.userId
+    ) {
+      throw new Error(
+        "CANNOT_REQUEST_FROM_SELF",
+      );
+    }
+
+    if (
+      await this.blocks.isBlockedEitherDirection(
+        requester.userId,
+        payer.userId,
+      )
+    ) {
+      throw new Error(
+        "REQUEST_NOT_ALLOWED",
+      );
+    }
+
+    await this.permissions.assertCanRequest({
+      requesterUserId:
+        requester.userId,
+      payerUserId:
+        payer.userId,
+    });
+
+    const sameCountry =
+      requester.verifiedCountry ===
+      payer.verifiedCountry;
+
+    if (sameCountry) {
+      const country =
+        await this.capabilities.getActiveCountryVersion(
+          requester.verifiedCountry,
+          new Date(),
+        );
+
+      if (
+        !country ||
+        ![
+          CapabilityStatus.ENABLED,
+          CapabilityStatus.CONDITIONAL,
+        ].includes(
+          country.domesticRequestMoneyStatus,
+        )
+      ) {
+        throw new Error(
+          "DOMESTIC_REQUEST_MONEY_DISABLED",
+        );
+      }
+    }
+
+    return this.requests.create({
+      requesterUserId:
+        requester.userId,
+      payerUserId:
+        payer.userId,
+      sourceCountry:
+        requester.verifiedCountry,
+      payerCountry:
+        payer.verifiedCountry,
+      amountMinor:
+        BigInt(
+          args.amountMinor,
+        ),
+      currency:
+        args.currency.toUpperCase(),
+      note:
+        args.note,
+      status:
+        "PENDING",
+      expiresAt:
+        new Date(
+          Date.now() +
+          7 * 24 * 60 * 60 * 1000,
+        ),
+    });
+  }
+}
+
+
+================================================================================
+25. SEND BACK v3 — DRAFT ONLY
+================================================================================
+
+export interface SendBackDraft {
+  recipient: RecipientReference;
+
+  suggestedAmountMinor: string;
+  suggestedCurrency: string;
+
+  sourceContext: "SEND_BACK";
+  sourceContextId: string;
+}
+
+export class SendBackServiceV3 {
+  constructor(
+    private readonly transfers:
+      CompletedTransferReadRepository,
+  ) {}
+
+  async createDraft(args: {
+    authenticatedUserId: string;
+    receivedTransferId: string;
+  }): Promise<SendBackDraft> {
+    const original =
+      await this.transfers.findReceivedCompletedTransfer(
+        args.receivedTransferId,
+        args.authenticatedUserId,
+      );
+
+    if (!original) {
+      throw new Error(
+        "RECEIVED_TRANSFER_NOT_FOUND",
+      );
+    }
+
+    return {
+      recipient: {
+        type:
+          RecipientType.LINQA_USER,
+        value:
+          original.senderUserId,
+      },
+
+      suggestedAmountMinor:
+        original.destinationAmountMinor.toString(),
+
+      suggestedCurrency:
+        original.destinationCurrency,
+
+      sourceContext:
+        "SEND_BACK",
+
+      sourceContextId:
+        original.id,
+    };
+  }
+}
+
+
+================================================================================
+26. CHAT SEND INTENT v3
+================================================================================
+
+export interface ChatSendIntent {
+  id: string;
+
+  senderUserId: string;
+  recipientUserId: string;
+
+  conversationId: string;
+
+  expiresAt: Date;
+}
+
+export class ChatSendIntentServiceV3 {
+  constructor(
+    private readonly conversations:
+      ConversationRepository,
+    private readonly intents:
+      ChatSendIntentRepositoryV3,
+  ) {}
+
+  async create(args: {
+    authenticatedUserId: string;
+    conversationId: string;
+  }) {
+    const conversation =
+      await this.conversations.findMemberConversation(
+        args.conversationId,
+        args.authenticatedUserId,
+      );
+
+    if (!conversation) {
+      throw new Error(
+        "CONVERSATION_NOT_FOUND",
+      );
+    }
+
+    const recipientUserId =
+      conversation.memberIds.find(
+        (id: string) =>
+          id !==
+          args.authenticatedUserId,
+      );
+
+    if (!recipientUserId) {
+      throw new Error(
+        "DIRECT_CHAT_RECIPIENT_NOT_FOUND",
+      );
+    }
+
+    return this.intents.create({
+      senderUserId:
+        args.authenticatedUserId,
+      recipientUserId,
+      conversationId:
+        args.conversationId,
+      expiresAt:
+        new Date(
+          Date.now() + 10 * 60_000,
+        ),
+    });
+  }
+}
+
+// CHAT SECURITY BOUNDARY:
+// Allowed back into chat:
+// transfer display id
+// safe status
+// amount/currency if product policy allows
+// recipient display name
+//
+// Never back into chat:
+// funding provider token
+// bank account
+// card PAN/CVV
+// KYC documents
+// risk score
+// AML result
+// sanctions result
+// customer ledger account id
+
+
+================================================================================
+27. API CONTROLLER EXAMPLE
+================================================================================
+
+/*
+POST /v1/linqasend/transfers/prepare
+POST /v1/linqasend/transfers
+POST /v1/linqasend/transfers/:id/warnings/ack
+POST /v1/linqasend/transfers/:id/authorization-challenge
+POST /v1/linqasend/transfers/:id/confirm
+
+POST /v1/linqasend/requests
+POST /v1/linqasend/requests/:id/decline
+POST /v1/linqasend/requests/:id/pay
+
+POST /v1/linqasend/chat-intents
+
+POST /v1/linqasend/transfers/:id/send-back-draft
+
+All money-mutating endpoints require:
+- authenticated session
+- idempotency key where applicable
+- server-derived sender context
+*/
+
+
+================================================================================
+28. EXPRESS-COMPATIBLE ROUTER
+================================================================================
+
+/*
+import { Router } from "express";
+import { randomUUID } from "crypto";
+
+export function createLinqaSendV3Router(deps: {
+  prepareService: LinqaSendPrepareServiceV3;
+  createService: LinqaSendCreateTransferServiceV3;
+  confirmService: LinqaSendConfirmServiceV3;
+  sendBack: SendBackServiceV3;
+}) {
+  const router = Router();
+
+  router.post(
+    "/v1/linqasend/transfers/prepare",
+    async (req, res) => {
+      try {
+        const result =
+          await deps.prepareService.prepare({
+            authenticatedUserId:
+              req.user.id,
+            request:
+              req.body,
+          });
+
+        res.json(result);
+      } catch (error) {
+        res.status(400).json({
+          error:
+            error instanceof Error
+              ? error.message
+              : "UNKNOWN_ERROR",
+        });
+      }
+    },
+  );
+
+  router.post(
+    "/v1/linqasend/transfers",
+    async (req, res) => {
+      try {
+        const idempotencyKey =
+          req.header("Idempotency-Key");
+
+        if (!idempotencyKey) {
+          return res.status(400).json({
+            error:
+              "IDEMPOTENCY_KEY_REQUIRED",
+          });
+        }
+
+        const result =
+          await deps.createService.create({
+            authenticatedUserId:
+              req.user.id,
+            request:
+              req.body,
+            idempotencyKey,
+          });
+
+        res.status(201).json(result);
+      } catch (error) {
+        res.status(400).json({
+          error:
+            error instanceof Error
+              ? error.message
+              : "UNKNOWN_ERROR",
+        });
+      }
+    },
+  );
+
+  router.post(
+    "/v1/linqasend/transfers/:id/authorization-challenge",
+    async (req, res) => {
+      try {
+        const token =
+          await deps.confirmService.issueAuthorization({
+            authenticatedUserId:
+              req.user.id,
+            transferId:
+              req.params.id,
+          });
+
+        res.json({ authorizationToken: token });
+      } catch (error) {
+        res.status(400).json({
+          error:
+            error instanceof Error
+              ? error.message
+              : "UNKNOWN_ERROR",
+        });
+      }
+    },
+  );
+
+  router.post(
+    "/v1/linqasend/transfers/:id/confirm",
+    async (req, res) => {
+      try {
+        const result =
+          await deps.confirmService.confirm({
+            authenticatedUserId:
+              req.user.id,
+            transferId:
+              req.params.id,
+            authorizationToken:
+              req.body.authorizationToken,
+          });
+
+        res.json(result);
+      } catch (error) {
+        res.status(400).json({
+          error:
+            error instanceof Error
+              ? error.message
+              : "UNKNOWN_ERROR",
+        });
+      }
+    },
+  );
+
+  router.post(
+    "/v1/linqasend/transfers/:id/send-back-draft",
+    async (req, res) => {
+      try {
+        const draft =
+          await deps.sendBack.createDraft({
+            authenticatedUserId:
+              req.user.id,
+            receivedTransferId:
+              req.params.id,
+          });
+
+        res.json(draft);
+      } catch (error) {
+        res.status(400).json({
+          error:
+            error instanceof Error
+              ? error.message
+              : "UNKNOWN_ERROR",
+        });
+      }
+    },
+  );
+
+  return router;
+}
+*/
+
+
+================================================================================
+29. POSTGRESQL v3
+================================================================================
+
+/*
+
+CREATE TYPE linqasend_transfer_class_v3 AS ENUM (
+  'INTERNAL_DOMESTIC',
+  'INTERNAL_CROSS_BORDER',
+  'EXTERNAL_DOMESTIC',
+  'EXTERNAL_CROSS_BORDER'
+);
+
+CREATE TYPE linqasend_capability_status_v3 AS ENUM (
+  'ENABLED',
+  'CONDITIONAL',
+  'RECEIVE_ONLY',
+  'BANK_OUTBOUND_ONLY',
+  'RESTRICTED',
+  'TEMPORARILY_SUSPENDED',
+  'UNSUPPORTED'
+);
+
+CREATE TYPE linqasend_transfer_state_v3 AS ENUM (
+  'DRAFT',
+  'RECIPIENT_RESOLVED',
+  'CLASSIFIED',
+  'CAPABILITY_APPROVED',
+  'QUOTE_CREATED',
+  'AWAITING_CONFIRMATION',
+  'SCAM_WARNING_REQUIRED',
+  'AUTHENTICATING',
+  'AUTHORIZED',
+  'COMPLIANCE_SCREENING',
+  'RISK_REVIEW',
+  'FUNDING_AUTHORIZATION',
+  'FUNDS_AUTHORIZED',
+  'LEDGER_POSTING',
+  'LEDGER_POSTED',
+  'PAYOUT_SUBMITTED',
+  'PAYOUT_PROCESSING',
+  'RECIPIENT_CREDITED',
+  'COMPLETED',
+  'REQUIRES_ACTION',
+  'MANUAL_REVIEW',
+  'ON_HOLD',
+  'DECLINED',
+  'FAILED',
+  'EXPIRED',
+  'CANCELED',
+  'REVERSED',
+  'REFUNDED'
+);
+
+CREATE TABLE country_capability_versions_v3 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  country_code CHAR(2) NOT NULL,
+
+  version INTEGER NOT NULL,
+
+  domestic_internal_status linqasend_capability_status_v3
+    NOT NULL DEFAULT 'UNSUPPORTED',
+
+  domestic_bank_in_status linqasend_capability_status_v3
+    NOT NULL DEFAULT 'UNSUPPORTED',
+
+  domestic_bank_out_status linqasend_capability_status_v3
+    NOT NULL DEFAULT 'UNSUPPORTED',
+
+  domestic_merchant_status linqasend_capability_status_v3
+    NOT NULL DEFAULT 'UNSUPPORTED',
+
+  domestic_request_money_status linqasend_capability_status_v3
+    NOT NULL DEFAULT 'UNSUPPORTED',
+
+  cross_border_inbound_status linqasend_capability_status_v3
+    NOT NULL DEFAULT 'UNSUPPORTED',
+
+  cross_border_outbound_status linqasend_capability_status_v3
+    NOT NULL DEFAULT 'UNSUPPORTED',
+
+  cross_border_bank_outbound_status linqasend_capability_status_v3
+    NOT NULL DEFAULT 'UNSUPPORTED',
+
+  allowed_funding_modes TEXT[] NOT NULL DEFAULT '{}',
+  allowed_receive_modes TEXT[] NOT NULL DEFAULT '{}',
+
+  effective_from TIMESTAMPTZ NOT NULL,
+  effective_to TIMESTAMPTZ,
+
+  source_reference TEXT,
+
+  approved_by TEXT,
+  approved_at TIMESTAMPTZ,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  UNIQUE(country_code, version),
+
+  CHECK(
+    effective_to IS NULL OR
+    effective_to > effective_from
+  )
+);
+
+CREATE INDEX idx_country_capability_active_v3
+  ON country_capability_versions_v3(
+    country_code,
+    effective_from,
+    effective_to
+  );
+
+
+CREATE TABLE transfer_corridor_versions_v3 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  source_country CHAR(2) NOT NULL,
+  destination_country CHAR(2) NOT NULL,
+
+  transfer_class linqasend_transfer_class_v3 NOT NULL,
+
+  version INTEGER NOT NULL,
+
+  status linqasend_capability_status_v3 NOT NULL,
+
+  source_currencies CHAR(3)[] NOT NULL,
+  destination_currencies CHAR(3)[] NOT NULL,
+
+  permitted_funding_modes TEXT[] NOT NULL,
+  permitted_receive_modes TEXT[] NOT NULL,
+  permitted_rails TEXT[] NOT NULL,
+
+  min_kyc_level INTEGER,
+
+  min_amount_minor BIGINT,
+  max_amount_minor BIGINT,
+
+  requires_purpose_code BOOLEAN NOT NULL DEFAULT FALSE,
+  requires_source_of_funds BOOLEAN NOT NULL DEFAULT FALSE,
+  requires_manual_review BOOLEAN NOT NULL DEFAULT FALSE,
+
+  provider_id UUID,
+
+  effective_from TIMESTAMPTZ NOT NULL,
+  effective_to TIMESTAMPTZ,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  UNIQUE(
+    source_country,
+    destination_country,
+    transfer_class,
+    version
+  ),
+
+  CHECK(
+    effective_to IS NULL OR
+    effective_to > effective_from
+  ),
+
+  CHECK(
+    max_amount_minor IS NULL OR
+    min_amount_minor IS NULL OR
+    max_amount_minor >= min_amount_minor
+  )
+);
+
+CREATE INDEX idx_corridor_active_v3
+  ON transfer_corridor_versions_v3(
+    source_country,
+    destination_country,
+    transfer_class,
+    effective_from,
+    effective_to
+  );
+
+
+CREATE TABLE linqasend_quotes_v3 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  sender_user_id UUID NOT NULL,
+  recipient_id TEXT NOT NULL,
+
+  transfer_class linqasend_transfer_class_v3 NOT NULL,
+
+  source_country CHAR(2) NOT NULL,
+  destination_country CHAR(2) NOT NULL,
+
+  source_amount_minor BIGINT NOT NULL CHECK(source_amount_minor > 0),
+  source_currency CHAR(3) NOT NULL,
+
+  destination_amount_minor BIGINT NOT NULL CHECK(destination_amount_minor >= 0),
+  destination_currency CHAR(3) NOT NULL,
+
+  market_reference_rate NUMERIC(30,12),
+  provider_execution_rate NUMERIC(30,12),
+  customer_rate NUMERIC(30,12) NOT NULL,
+
+  fx_margin_bps INTEGER NOT NULL DEFAULT 0,
+
+  sender_fee_minor BIGINT NOT NULL DEFAULT 0,
+  recipient_fee_minor BIGINT NOT NULL DEFAULT 0,
+
+  rail_type TEXT NOT NULL,
+
+  capability_snapshot JSONB NOT NULL,
+  pricing_snapshot JSONB NOT NULL,
+
+  expires_at TIMESTAMPTZ NOT NULL,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_quotes_sender_v3
+  ON linqasend_quotes_v3(
+    sender_user_id,
+    created_at DESC
+  );
+
+
+CREATE TABLE linqasend_transfers_v3 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  sender_user_id UUID NOT NULL,
+  recipient_id TEXT NOT NULL,
+
+  transfer_class linqasend_transfer_class_v3 NOT NULL,
+
+  source_country CHAR(2) NOT NULL,
+  destination_country CHAR(2) NOT NULL,
+
+  funding_source_id UUID NOT NULL,
+
+  funding_mode TEXT NOT NULL,
+  receive_mode TEXT NOT NULL,
+
+  quote_id UUID NOT NULL REFERENCES linqasend_quotes_v3(id),
+
+  state linqasend_transfer_state_v3 NOT NULL,
+
+  rail_type TEXT,
+
+  capability_status linqasend_capability_status_v3,
+
+  capability_snapshot JSONB NOT NULL,
+  regulatory_policy_version TEXT NOT NULL,
+
+  provider_reference TEXT,
+
+  idempotency_key TEXT NOT NULL,
+
+  failure_code TEXT,
+  failure_message TEXT,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+
+  UNIQUE(sender_user_id, idempotency_key)
+);
+
+CREATE INDEX idx_transfers_sender_v3
+  ON linqasend_transfers_v3(
+    sender_user_id,
+    created_at DESC
+  );
+
+CREATE INDEX idx_transfers_class_corridor_v3
+  ON linqasend_transfers_v3(
+    transfer_class,
+    source_country,
+    destination_country,
+    created_at DESC
+  );
+
+
+CREATE TABLE linqasend_transfer_events_v3 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  transfer_id UUID NOT NULL REFERENCES linqasend_transfers_v3(id),
+
+  state linqasend_transfer_state_v3 NOT NULL,
+
+  source TEXT NOT NULL,
+
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE linqasend_ledger_accounts_v3 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  code TEXT NOT NULL,
+
+  account_class TEXT NOT NULL
+    CHECK(account_class IN (
+      'ASSET',
+      'LIABILITY',
+      'REVENUE',
+      'EXPENSE',
+      'CLEARING'
+    )),
+
+  currency CHAR(3) NOT NULL,
+
+  owner_type TEXT,
+  owner_id UUID,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  UNIQUE(
+    code,
+    currency,
+    owner_type,
+    owner_id
+  )
+);
+
+
+CREATE TABLE linqasend_ledger_journals_v3 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  reference_type TEXT NOT NULL,
+  reference_id UUID NOT NULL,
+
+  description TEXT NOT NULL,
+
+  reversal_of UUID REFERENCES linqasend_ledger_journals_v3(id),
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE linqasend_ledger_postings_v3 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  journal_id UUID NOT NULL REFERENCES linqasend_ledger_journals_v3(id),
+
+  account_id UUID NOT NULL REFERENCES linqasend_ledger_accounts_v3(id),
+
+  direction TEXT NOT NULL
+    CHECK(direction IN (
+      'DEBIT',
+      'CREDIT'
+    )),
+
+  amount_minor BIGINT NOT NULL CHECK(amount_minor > 0),
+
+  currency CHAR(3) NOT NULL,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE linqasend_balance_projection_v3 (
+  account_id UUID PRIMARY KEY REFERENCES linqasend_ledger_accounts_v3(id),
+
+  available_minor BIGINT NOT NULL DEFAULT 0,
+
+  currency CHAR(3) NOT NULL,
+
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE linqasend_request_money_v3 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  requester_user_id UUID NOT NULL,
+  payer_user_id UUID NOT NULL,
+
+  requester_country CHAR(2) NOT NULL,
+  payer_country CHAR(2) NOT NULL,
+
+  amount_minor BIGINT NOT NULL CHECK(amount_minor > 0),
+  currency CHAR(3) NOT NULL,
+
+  note TEXT,
+
+  status TEXT NOT NULL DEFAULT 'PENDING',
+
+  resulting_transfer_id UUID REFERENCES linqasend_transfers_v3(id),
+
+  expires_at TIMESTAMPTZ NOT NULL,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE linqasend_chat_send_intents_v3 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  sender_user_id UUID NOT NULL,
+  recipient_user_id UUID NOT NULL,
+
+  conversation_id TEXT NOT NULL,
+
+  status TEXT NOT NULL DEFAULT 'CREATED',
+
+  expires_at TIMESTAMPTZ NOT NULL,
+
+  consumed_at TIMESTAMPTZ,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+*/
+
+
+================================================================================
+30. EXAMPLE NIGERIA POLICY — CONFIG ONLY, NOT LEGAL ASSUMPTION
+================================================================================
+
+/*
+
+INSERT INTO country_capability_versions_v3 (
+  country_code,
+  version,
+
+  domestic_internal_status,
+  domestic_bank_in_status,
+  domestic_bank_out_status,
+  domestic_merchant_status,
+  domestic_request_money_status,
+
+  cross_border_inbound_status,
+  cross_border_outbound_status,
+  cross_border_bank_outbound_status,
+
+  allowed_funding_modes,
+  allowed_receive_modes,
+
+  effective_from,
+
+  source_reference,
+
+  approved_by,
+  approved_at
+)
+VALUES (
+  'NG',
+  1,
+
+  'ENABLED',
+  'CONDITIONAL',
+  'CONDITIONAL',
+  'CONDITIONAL',
+  'ENABLED',
+
+  'ENABLED',
+  'RESTRICTED',
+  'CONDITIONAL',
+
+  ARRAY[
+    'LINQA_BALANCE',
+    'BANK',
+    'DEBIT_CARD'
+  ],
+
+  ARRAY[
+    'LINQA_BALANCE',
+    'BANK',
+    'MOBILE_MONEY'
+  ],
+
+  now(),
+
+  'LEGAL_AND_PARTNER_APPROVAL_REQUIRED',
+
+  'compliance-team',
+  now()
+);
+
+-- IMPORTANT:
+-- These example values are configuration examples.
+-- They must be approved against actual Linqa licenses/partner capabilities.
+*/
+
+
+================================================================================
+31. UI STATE MODEL v3
+================================================================================
+
+export type LinqaSendUiStateV3 =
+  | {
+      type:
+        "ENTER_RECIPIENT";
+    }
+  | {
+      type:
+        "RECIPIENT_RESOLVED";
+      recipient:
+        ResolvedRecipient;
+    }
+  | {
+      type:
+        "CAPABILITY_BLOCKED";
+      reasonCode:
+        string;
+    }
+  | {
+      type:
+        "QUOTE_READY";
+      quote:
+        PersistedQuote;
+      classification:
+        TransferClassification;
+    }
+  | {
+      type:
+        "SCAM_WARNING_REQUIRED";
+      warnings:
+        Array<{
+          type: string;
+          severity: string;
+          messageKey: string;
+        }>;
+    }
+  | {
+      type:
+        "AWAITING_AUTHORIZATION";
+      transferId:
+        string;
+    }
+  | {
+      type:
+        "PROCESSING";
+      transferId:
+        string;
+      state:
+        TransferState;
+    }
+  | {
+      type:
+        "MANUAL_REVIEW";
+      transferId:
+        string;
+    }
+  | {
+      type:
+        "ON_HOLD";
+      transferId:
+        string;
+    }
+  | {
+      type:
+        "SUCCESS";
+      transferId:
+        string;
+    }
+  | {
+      type:
+        "ERROR";
+      code:
+        string;
+    };
+
+
+================================================================================
+32. CLIENT-FACING POLICY MESSAGES
+================================================================================
+
+export const LinqaSendMessagesV3 = {
+  INTERNAL_DOMESTIC_AVAILABLE:
+    "You can send money to this Linqa user within your country.",
+
+  CROSS_BORDER_RESTRICTED:
+    "International sending from your country is currently limited for this route.",
+
+  BANK_OUTBOUND_AVAILABLE:
+    "An eligible bank-transfer option may be available.",
+
+  RECEIVE_ONLY:
+    "You can receive eligible international transfers, but outbound international transfers are not currently supported through this route.",
+
+  DOMESTIC_INTERNAL_FX_NOT_CONFIGURED:
+    "This same-country currency combination is not currently supported.",
+
+  TEMPORARILY_SUSPENDED:
+    "This transfer route is temporarily unavailable.",
+
+  COMPLIANCE_REVIEW:
+    "This transfer requires an additional compliance review.",
+
+  QUOTE_EXPIRED:
+    "The exchange rate expired. Review the updated amount before continuing.",
+
+  SCAM_NEW_RECIPIENT:
+    "Only send money to someone you know and trust.",
+};
+
+
+================================================================================
+33. DECISION FLOW v3
+================================================================================
+
+AUTHENTICATED USER
+        |
+        v
+SERVER DERIVES SENDER CONTEXT
+        |
+        v
+TYPED RECIPIENT RESOLVER
+        |
+        v
+TRANSFER CLASSIFIER
+        |
+        +-------------------------------+
+        |                               |
+    LINQA USER                       NON-LINQA
+        |                               |
+   Same country?                    Same country?
+      /    \                           /    \
+    YES     NO                       YES     NO
+     |       |                        |       |
+     v       v                        v       v
+ INTERNAL  INTERNAL                EXTERNAL EXTERNAL
+ DOMESTIC  CROSS_BORDER            DOMESTIC CROSS_BORDER
+     |       |                        |       |
+     +-------+-----------+------------+-------+
+                         |
+                         v
+             COUNTRY/CORRIDOR CAPABILITY
+                         |
+                         v
+              EFFECTIVE POLICY SNAPSHOT
+                         |
+                         v
+          FUNDING MODE + RECEIVE MODE CHECK
+                         |
+                         v
+                SAME / CROSS CURRENCY
+                         |
+                         v
+                PERSISTED FX QUOTE
+                         |
+                         v
+                    RISK / AML
+                         |
+                         v
+                  SCAM WARNINGS
+                         |
+                         v
+                    USER REVIEW
+                         |
+                         v
+              BIOMETRIC / PASSKEY STEP-UP
+                         |
+                         v
+             ONE-TIME AUTHORIZATION TOKEN
+                         |
+                         v
+                  CONFIRM TRANSFER
+                         |
+                         v
+          TRANSFER-CLASS-SPECIFIC ROUTER
+                         |
+         +---------------+------------------+
+         |               |                  |
+  Internal ledger   Domestic rail      Cross-border rail
+         |               |                  |
+         +---------------+------------------+
+                         |
+                         v
+               IMMUTABLE LEDGER/JOURNAL
+                         |
+                         v
+                 RECIPIENT CREDIT
+                         |
+                         v
+                  RECONCILIATION
+                         |
+                         v
+          SERVER-AUTHORITATIVE COMPLETION
+
+
+================================================================================
+34. TEST MATRIX v3
+================================================================================
+
+CLASSIFICATION
+- NG Linqa -> NG Linqa => INTERNAL_DOMESTIC
+- NG Linqa -> US Linqa => INTERNAL_CROSS_BORDER
+- NG Linqa -> NG bank => EXTERNAL_DOMESTIC
+- NG Linqa -> US bank => EXTERNAL_CROSS_BORDER
+- internal cross-border never downgraded
+
+TRUST BOUNDARY
+- client-supplied country ignored/rejected
+- client-supplied KYC ignored/rejected
+- client-supplied risk score ignored/rejected
+- sender account derived from authenticated user
+- recipient country derived from server recipient record
+
+CAPABILITY
+- missing country config => UNSUPPORTED
+- missing corridor => UNSUPPORTED
+- RECEIVE_ONLY outbound => blocked
+- RESTRICTED => blocked
+- TEMPORARILY_SUSPENDED => blocked
+- BANK_OUTBOUND_ONLY filters rails
+- funding mode rejected when not permitted
+- receive mode rejected when not permitted
+- effective-dated policy selection
+- historical policy remains queryable
+
+DOMESTIC INTERNAL
+- same currency balance->balance => INTERNAL_LEDGER
+- debit card->Linqa balance => no pure INTERNAL_LEDGER shortcut
+- bank->Linqa balance => domestic funding route
+- same country/different currency without rule => blocked
+- same country/different currency with rule => FX route
+
+FX
+- rate uses exact decimal arithmetic
+- no Number(bigint) conversion
+- market rate stored
+- provider execution rate stored
+- customer rate stored
+- margin bps stored
+- sender fee = 0
+- recipient fee = 0
+- quote immutable
+- quote expiry enforced
+
+AUTHORIZATION
+- transfer cannot execute from create request
+- authorization challenge required
+- token bound to sender/transfer/recipient/quote/amount/currency
+- token expires
+- token replay rejected
+
+IDEMPOTENCY
+- duplicate create returns original transfer
+- duplicate confirm does not double debit
+- duplicate external payout prevented
+- duplicate reversal prevented
+
+LEDGER
+- postings immutable
+- per-currency debits equal credits
+- sender customer liability debit
+- recipient customer liability credit
+- balance projection updated in same transaction
+- projection cannot diverge from journal in successful commit
+- reversal creates reversing journal
+
+REQUEST MONEY
+- payer resolved server-side
+- requester resolved from auth
+- block/privacy permissions checked
+- domestic request capability checked
+- request never auto-debits payer
+
+SEND BACK
+- returns draft only
+- original sender becomes new recipient
+- new quote required
+- new capability check required
+- new auth required
+
+CHAT
+- chat intent derives recipient from conversation membership
+- chat never receives payout token
+- chat never receives bank/card data
+- chat never receives risk score/AML result
+
+FAILURE
+- quote expires after transfer created
+- provider outage
+- Redis outage
+- DB outage
+- ledger failure
+- recipient credit failure
+- reconciliation mismatch
+- worker replay
+- duplicate provider webhook
+
+
+================================================================================
+35. MIGRATION / MERGE PLAN
+================================================================================
+
+1. Keep TransferClass enum from v2.
+2. Replace client SenderContext input with server SenderContextService.
+3. Replace free-form recipient input with RecipientReference union.
+4. Add FundingMode and ReceiveMode.
+5. Replace country_capabilities_v2 with versioned country_capability_versions_v3.
+6. Replace transfer_corridors_v2 with versioned transfer_corridor_versions_v3.
+7. Add persisted linqasend_quotes_v3.
+8. Add capability_snapshot + regulatory_policy_version to transfers.
+9. Add idempotency_key unique by sender.
+10. Expand transfer state machine.
+11. Insert create/review/auth/confirm lifecycle.
+12. Replace Number(bigint)*rate FX calculation with DecimalMath.
+13. Split router into four transfer-class routers.
+14. Make pure INTERNAL_LEDGER conditional on:
+    - INTERNAL_DOMESTIC
+    - same currency
+    - FundingMode.LINQA_BALANCE
+    - ReceiveMode.LINQA_BALANCE
+    - capability permits INTERNAL_LEDGER
+15. Add dedicated InternalCrossBorderRouter.
+16. Replace SendBack.execute() with SendBack.createDraft().
+17. Harden Request Money with server-side user resolution and permissions.
+18. Make ledger immutable and balance projection atomic.
+19. Add reconciliation + provider webhook dedupe at the shared money-movement layer.
+20. Gate rollout by country/corridor feature flags.
+
+
+================================================================================
+36. NON-NEGOTIABLE SECURITY INVARIANTS
+================================================================================
+
+1. INTERNAL_DOMESTIC requires:
+   sender verified country == recipient verified country
+   AND recipient is a verified Linqa user.
+
+2. INTERNAL_CROSS_BORDER can NEVER be reclassified as INTERNAL_DOMESTIC.
+
+3. Linqa membership can NEVER bypass:
+   - sanctions
+   - AML/CFT
+   - capital controls
+   - FX restrictions
+   - outbound remittance restrictions
+   - KYC/KYB requirements
+   - local stored-value/payment licensing
+
+4. Client cannot determine:
+   - regulatory eligibility
+   - sender country
+   - recipient country
+   - KYC level
+   - risk score
+   - transfer class
+   - rail
+   - FX rate
+   - receive amount
+   - completion status
+
+5. Missing policy config fails closed.
+
+6. Every quote is persisted.
+
+7. Every transfer stores the policy/capability snapshot that authorized it.
+
+8. Pure internal ledger routing is permitted only for eligible domestic balance-to-balance transfers.
+
+9. Same-country different-currency transfers require explicit domestic FX capability.
+
+10. All money-moving mutation endpoints require idempotency.
+
+11. Every completed transfer is backed by server-authoritative ledger/settlement evidence.
+
+12. Chat/social never receives payment secrets.
+
+13. Send Back never executes automatically.
+
+14. Request Money never debits automatically.
+
+15. Ledger corrections are reversing entries, never destructive edits.
+
+
+================================================================================
+END — LINQASEND TRANSFER CLASSIFICATION + COUNTRY CAPABILITY ENGINE v3
+================================================================================

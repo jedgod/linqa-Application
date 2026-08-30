@@ -7,6 +7,7 @@ import type { Database } from "../db/pool.js";
 import type { SubscriptionProvider } from "../services/countrylinqa/entitlements.js";
 import type { PhoneEvidenceProvider } from "../services/countrylinqa/providers.js";
 import type { GeoIpProvider } from "../services/countrylinqa/providers.js";
+import { authorScopePredicate, viewerScopeCte } from "../services/countrylinqa/feed-scope.js";
 
 /**
  * Real tests against the ALREADY-EXISTING CountryLinqa implementation
@@ -136,6 +137,43 @@ describe("CountryLinqaService.savePreferences invariants", () => {
       })
     ).rejects.toThrow(/Upgrade required/);
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("enforces the same server entitlement rules for inbound reach", async () => {
+    const connect = vi.fn();
+    const service = makeService({ connect, subscriptions: { getTier: vi.fn(async () => "PREMIUM" as const) } });
+    await expect(service.savePreferences("user-1", {
+      mode: "MY_COUNTRY", selectedCountries: [], selectedRegions: [],
+      inboundReach: "GLOBAL", inboundSelectedCountries: [], inboundSelectedRegions: []
+    })).rejects.toMatchObject({ code: "UPGRADE_REQUIRED" });
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("requires explicit selections for selected inbound countries and regions", async () => {
+    const query = vi.fn();
+    const service = makeService({ query, subscriptions: { getTier: vi.fn(async () => "ELITE" as const) } });
+    await expect(service.savePreferences("user-1", {
+      mode: "MY_COUNTRY", selectedCountries: [], selectedRegions: [],
+      inboundReach: "SELECTED_COUNTRIES", inboundSelectedCountries: [], inboundSelectedRegions: []
+    })).rejects.toMatchObject({ code: "INBOUND_COUNTRY_REQUIRED" });
+    await expect(service.savePreferences("user-1", {
+      mode: "MY_COUNTRY", selectedCountries: [], selectedRegions: [],
+      inboundReach: "REGION", inboundSelectedCountries: [], inboundSelectedRegions: []
+    })).rejects.toMatchObject({ code: "INBOUND_REGION_REQUIRED" });
+    expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe("CountryLinqa bidirectional reach predicates", () => {
+  it("applies pause, verified-only, inbound country/region, and contacts-only controls", () => {
+    const cte = viewerScopeCte(1);
+    const predicate = authorScopePredicate("author");
+    expect(cte).toContain("discovery_enabled");
+    expect(cte).toContain("verified_only");
+    expect(predicate).toContain("country_inbound_links");
+    expect(predicate).toContain("regional_inbound_links");
+    expect(predicate).toContain("contact_requests");
+    expect(predicate).toContain("cr.status='ACCEPTED'");
   });
 });
 

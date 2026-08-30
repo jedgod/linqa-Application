@@ -1,0 +1,721 @@
+LINQA REPO-NATIVE FRAUD & RISK SPECIALIST REVIEW PACK
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Repo-Native Fraud & Risk Specialist Review Pack
+
+Narrow workflow only.
+
+Uses real repo concepts:
+- support_cases_v2
+- safety_reports
+- linqasend_payment_methods
+- linqasend_transfers
+- users.status
+- ops_audit_events
+- current operations case workspace
+
+Adds read-only evidence review plus APPROVED / REJECTED / ESCALATED decision recording.
+Does not release holds, reverse transfers, suspend users, mutate payment methods,
+or change Trust & Safety enforcement.
+
+
+====================================================================================================
+FILE: server/src/db/migrations/032_ops_fraud_risk_review.sql
+====================================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE ops_fraud_risk_review_decision AS ENUM (
+    'PENDING','APPROVED','REJECTED','ESCALATED'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS ops_fraud_risk_reviews_v1 (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL UNIQUE REFERENCES support_cases_v2(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reviewer_user_id uuid REFERENCES users(id),
+  decision ops_fraud_risk_review_decision NOT NULL DEFAULT 'PENDING',
+  evidence_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+  specialist_note text,
+  reason_code text,
+  reviewed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_fraud_risk_reviews_v1_user
+ON ops_fraud_risk_reviews_v1(user_id, created_at DESC);
+
+
+====================================================================================================
+FILE: server/src/services/operations/fraud-risk-policy.ts
+====================================================================================================
+export type RiskLevel = "LOW"|"MEDIUM"|"HIGH"|"CRITICAL";
+
+export function deriveRiskLevel(
+  reports:{severity?:string|null;status?:string|null}[],
+  userStatus?:string|null
+):RiskLevel {
+  if(String(userStatus??"").toUpperCase()==="SUSPENDED") return "CRITICAL";
+
+  const active = reports
+    .filter(r=>!["CLOSED","RESOLVED","DISMISSED"].includes(String(r.status??"").toUpperCase()))
+    .map(r=>String(r.severity??"").toUpperCase());
+
+  if(active.includes("CRITICAL")) return "CRITICAL";
+  if(active.includes("HIGH")) return "HIGH";
+  if(active.includes("MEDIUM")) return "MEDIUM";
+  return "LOW";
+}
+
+export function requiredScopeForRiskDecision(
+  decision:"APPROVED"|"REJECTED"|"ESCALATED"
+){
+  return decision==="APPROVED" ? "ops:risk:approve" : "ops:risk:review";
+}
+
+export function hasActionableRiskEvidence(input:{
+  openSafetyReportCount:number;
+  highValueTransferCount:number;
+  unverifiedPaymentMethodCount:number;
+  userSuspended:boolean;
+}){
+  return input.openSafetyReportCount>0 ||
+    input.highValueTransferCount>0 ||
+    input.unverifiedPaymentMethodCount>0 ||
+    input.userSuspended;
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/fraud-risk-evidence.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+import { deriveRiskLevel } from "./fraud-risk-policy";
+
+export class FraudRiskEvidenceService {
+  constructor(private pool:Pool){}
+
+  async getForCase(caseId:string){
+    const caseR=await this.pool.query(
+      `SELECT id::text,case_number AS "caseNumber",user_id::text AS "userId",
+              state::text,priority::text
+       FROM support_cases_v2 WHERE id=$1::uuid LIMIT 1`,
+      [caseId]
+    );
+    if(!caseR.rowCount) return null;
+
+    const supportCase=caseR.rows[0];
+    const userId=supportCase.userId as string;
+
+    const [userR,safetyR,paymentsR,transfersR,reviewR]=await Promise.all([
+      this.pool.query(`SELECT id::text,status::text FROM users WHERE id=$1::uuid LIMIT 1`,[userId]),
+      this.pool.query(
+        `SELECT to_jsonb(s) AS row FROM safety_reports s
+         WHERE s.user_id=$1::uuid
+         ORDER BY COALESCE((to_jsonb(s)->>'updated_at')::timestamptz,
+                           (to_jsonb(s)->>'created_at')::timestamptz) DESC NULLS LAST
+         LIMIT 100`,
+        [userId]
+      ),
+      this.pool.query(
+        `SELECT to_jsonb(p) AS row FROM linqasend_payment_methods p
+         WHERE p.user_id=$1::uuid
+         ORDER BY COALESCE((to_jsonb(p)->>'updated_at')::timestamptz,
+                           (to_jsonb(p)->>'created_at')::timestamptz) DESC NULLS LAST`,
+        [userId]
+      ),
+      this.pool.query(
+        `SELECT to_jsonb(t) AS row FROM linqasend_transfers t
+         WHERE t.sender_user_id=$1::uuid OR t.recipient_user_id=$1::uuid
+         ORDER BY COALESCE((to_jsonb(t)->>'updated_at')::timestamptz,
+                           (to_jsonb(t)->>'created_at')::timestamptz) DESC NULLS LAST
+         LIMIT 100`,
+        [userId]
+      ),
+      this.pool.query(
+        `SELECT id::text,decision::text,reviewer_user_id::text AS "reviewerUserId",
+                specialist_note AS "specialistNote",reason_code AS "reasonCode",
+                evidence_snapshot AS "evidenceSnapshot",reviewed_at AS "reviewedAt",
+                created_at AS "createdAt",updated_at AS "updatedAt"
+         FROM ops_fraud_risk_reviews_v1 WHERE case_id=$1::uuid LIMIT 1`,
+        [caseId]
+      )
+    ]);
+
+    const userStatus=userR.rows[0]?.status??null;
+
+    const safetyReports=safetyR.rows.map(({row}:any)=>({
+      id:row.id??null,
+      severity:row.severity??row.risk_level??null,
+      status:row.status??row.state??null,
+      category:row.category??row.report_type??null,
+      createdAt:row.created_at??null
+    }));
+
+    const paymentMethods=paymentsR.rows.map(({row}:any)=>{
+      const verification=row.verification_status??row.status??row.state??null;
+      return {
+        id:row.id??null,
+        type:row.method_type??row.type??null,
+        verificationStatus:verification,
+        verified:["VERIFIED","ACTIVE"].includes(String(verification??"").toUpperCase()),
+        createdAt:row.created_at??null
+      };
+    });
+
+    const transfers=transfersR.rows.map(({row}:any)=>{
+      const amount=Number(row.amount??row.send_amount??row.source_amount??0)||0;
+      return {
+        id:row.id??null,
+        status:row.status??row.state??null,
+        amount,
+        currency:row.currency??row.send_currency??row.source_currency??null,
+        senderUserId:row.sender_user_id??null,
+        recipientUserId:row.recipient_user_id??null,
+        createdAt:row.created_at??null
+      };
+    });
+
+    const openSafetyReports=safetyReports.filter((r:any)=>
+      !["CLOSED","RESOLVED","DISMISSED"].includes(String(r.status??"").toUpperCase())
+    );
+
+    // Display-only threshold. Replace with an existing compliance threshold if the repo has one.
+    const highValueTransfers=transfers.filter((t:any)=>t.amount>=1000);
+    const unverifiedPaymentMethods=paymentMethods.filter((p:any)=>!p.verified);
+
+    return {
+      caseId:supportCase.id,
+      caseNumber:supportCase.caseNumber,
+      userId,
+      caseState:supportCase.state,
+      priority:supportCase.priority,
+      evidence:{
+        user:{
+          status:userStatus,
+          suspended:String(userStatus??"").toUpperCase()==="SUSPENDED"
+        },
+        risk:{
+          level:deriveRiskLevel(safetyReports,userStatus),
+          score:null
+        },
+        safetyReports,
+        paymentMethods,
+        transfers,
+        summary:{
+          openSafetyReportCount:openSafetyReports.length,
+          highValueTransferCount:highValueTransfers.length,
+          unverifiedPaymentMethodCount:unverifiedPaymentMethods.length,
+          userSuspended:String(userStatus??"").toUpperCase()==="SUSPENDED"
+        }
+      },
+      review:reviewR.rows[0]??null
+    };
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/fraud-risk-review.service.ts
+====================================================================================================
+import type { Pool } from "pg";
+import { FraudRiskEvidenceService } from "./fraud-risk-evidence.service";
+
+export class FraudRiskReviewService {
+  private evidence:FraudRiskEvidenceService;
+
+  constructor(private pool:Pool){
+    this.evidence=new FraudRiskEvidenceService(pool);
+  }
+
+  async saveReview(input:{
+    caseId:string;
+    reviewerUserId:string;
+    reviewerScopes:string[];
+    decision:"APPROVED"|"REJECTED"|"ESCALATED";
+    specialistNote:string;
+    reasonCode:string;
+    requestId?:string|null;
+  }){
+    const evidence=await this.evidence.getForCase(input.caseId);
+    if(!evidence) throw Object.assign(new Error("CASE_NOT_FOUND"),{statusCode:404});
+    if(evidence.caseState==="CLOSED") throw Object.assign(new Error("CASE_CLOSED"),{statusCode:409});
+
+    const client=await this.pool.connect();
+    try{
+      await client.query("BEGIN");
+
+      const before=await client.query(
+        `SELECT id::text,decision::text,reviewer_user_id::text AS "reviewerUserId",
+                specialist_note AS "specialistNote",reason_code AS "reasonCode",
+                reviewed_at AS "reviewedAt"
+         FROM ops_fraud_risk_reviews_v1
+         WHERE case_id=$1::uuid FOR UPDATE`,
+        [input.caseId]
+      );
+
+      const review=await client.query(
+        `INSERT INTO ops_fraud_risk_reviews_v1(
+           case_id,user_id,reviewer_user_id,decision,evidence_snapshot,
+           specialist_note,reason_code,reviewed_at
+         )
+         VALUES($1::uuid,$2::uuid,$3::uuid,$4::ops_fraud_risk_review_decision,
+                $5::jsonb,$6,$7,now())
+         ON CONFLICT(case_id) DO UPDATE SET
+           reviewer_user_id=EXCLUDED.reviewer_user_id,
+           decision=EXCLUDED.decision,
+           evidence_snapshot=EXCLUDED.evidence_snapshot,
+           specialist_note=EXCLUDED.specialist_note,
+           reason_code=EXCLUDED.reason_code,
+           reviewed_at=now(),updated_at=now()
+         RETURNING id::text,case_id::text AS "caseId",user_id::text AS "userId",
+                   reviewer_user_id::text AS "reviewerUserId",decision::text,
+                   evidence_snapshot AS "evidenceSnapshot",
+                   specialist_note AS "specialistNote",reason_code AS "reasonCode",
+                   reviewed_at AS "reviewedAt",created_at AS "createdAt",
+                   updated_at AS "updatedAt"`,
+        [
+          input.caseId,evidence.userId,input.reviewerUserId,input.decision,
+          JSON.stringify(evidence.evidence),input.specialistNote,input.reasonCode
+        ]
+      );
+
+      // Prefer SupportOperationsService.addEvent() if that is the repo-standard helper.
+      await client.query(
+        `INSERT INTO support_case_events_v2(case_id,event_type,actor_id,body,created_at)
+         VALUES($1::uuid,'FRAUD_RISK_SPECIALIST_DECISION',$2::uuid,$3,now())`,
+        [
+          input.caseId,input.reviewerUserId,
+          `Fraud/Risk specialist decision: ${input.decision}. Reason: ${input.reasonCode}`
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO ops_audit_events(
+           actor_user_id,actor_scope_snapshot,action,resource_type,
+           resource_id,reason_code,request_id,before_json,after_json
+         )
+         VALUES($1::uuid,$2::jsonb,'ops.risk.review.decision','support_case_v2',
+                $3,$4,$5,$6::jsonb,$7::jsonb)`,
+        [
+          input.reviewerUserId,JSON.stringify(input.reviewerScopes),input.caseId,
+          input.reasonCode,input.requestId??null,
+          JSON.stringify(before.rows[0]??null),JSON.stringify(review.rows[0])
+        ]
+      );
+
+      await client.query("COMMIT");
+      return review.rows[0];
+    }catch(e){
+      await client.query("ROLLBACK");
+      throw e;
+    }finally{
+      client.release();
+    }
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/routes/operations/fraud-risk-specialist-routes.ts
+====================================================================================================
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { requireScope } from "../../auth/jwt";
+import { FraudRiskEvidenceService } from "../../services/operations/fraud-risk-evidence.service";
+import { FraudRiskReviewService } from "../../services/operations/fraud-risk-review.service";
+import { requiredScopeForRiskDecision } from "../../services/operations/fraud-risk-policy";
+
+const Params=z.object({caseId:z.string().uuid()});
+const DecisionBody=z.object({
+  decision:z.enum(["APPROVED","REJECTED","ESCALATED"]),
+  specialistNote:z.string().trim().min(3).max(4000),
+  reasonCode:z.string().trim().min(3).max(100)
+});
+
+const scopes=(p:any):string[]=>p?.scopes instanceof Set?[...p.scopes]:[];
+
+export function registerFraudRiskSpecialistRoutes(
+  app:FastifyInstance,
+  pool:any,
+  authenticate:any,
+  withErrors:any
+){
+  const evidence=new FraudRiskEvidenceService(pool);
+  const reviews=new FraudRiskReviewService(pool);
+
+  app.get("/cases/:caseId/risk",withErrors(async(request:any,reply:any)=>{
+    const p=await authenticate(request,reply);
+    requireScope(p,"ops:risk:read");
+    const {caseId}=Params.parse(request.params);
+    const result=await evidence.getForCase(caseId);
+    if(!result) return reply.code(404).send({error:"CASE_NOT_FOUND"});
+    return result;
+  }));
+
+  app.post("/cases/:caseId/risk/decision",withErrors(async(request:any,reply:any)=>{
+    const p=await authenticate(request,reply);
+    const {caseId}=Params.parse(request.params);
+    const body=DecisionBody.parse(request.body);
+
+    requireScope(p,requiredScopeForRiskDecision(body.decision));
+
+    return reply.code(200).send(await reviews.saveReview({
+      caseId,
+      reviewerUserId:p.sub,
+      reviewerScopes:scopes(p),
+      decision:body.decision,
+      specialistNote:body.specialistNote,
+      reasonCode:body.reasonCode,
+      requestId:request.id
+    }));
+  }));
+}
+
+
+====================================================================================================
+FILE: server/src/auth/ops-risk-scopes.example.ts
+====================================================================================================
+export const RISK_OPS_SCOPES = [
+  "ops:risk:read",
+  "ops:risk:review",
+  "ops:risk:approve"
+] as const;
+
+/*
+Suggested FRAUD_ANALYST scopes:
+- ops:case:read
+- ops:case:assign
+- ops:case:release
+- ops:case:note
+- ops:risk:read
+- ops:risk:review
+- ops:risk:approve
+
+SUPPORT_AGENT:
+- ops:risk:read
+
+SUPERVISOR:
+- ops:risk:read
+- ops:risk:review
+
+Do not grant ops:risk:approve broadly unless policy explicitly requires it.
+*/
+
+
+====================================================================================================
+FILE: server/tests/fraud-risk-specialist.test.ts
+====================================================================================================
+import { describe,it,expect } from "vitest";
+import {
+  deriveRiskLevel,
+  requiredScopeForRiskDecision,
+  hasActionableRiskEvidence
+} from "../src/services/operations/fraud-risk-policy";
+
+describe("fraud/risk pure policy",()=>{
+  it("suspended user is CRITICAL",()=>{
+    expect(deriveRiskLevel([],"SUSPENDED")).toBe("CRITICAL");
+  });
+
+  it("highest active safety severity wins",()=>{
+    expect(deriveRiskLevel([
+      {severity:"MEDIUM",status:"OPEN"},
+      {severity:"HIGH",status:"OPEN"}
+    ],"ACTIVE")).toBe("HIGH");
+  });
+
+  it("resolved reports are ignored",()=>{
+    expect(deriveRiskLevel([
+      {severity:"CRITICAL",status:"RESOLVED"}
+    ],"ACTIVE")).toBe("LOW");
+  });
+
+  it("APPROVED needs approve scope",()=>{
+    expect(requiredScopeForRiskDecision("APPROVED")).toBe("ops:risk:approve");
+    expect(requiredScopeForRiskDecision("ESCALATED")).toBe("ops:risk:review");
+  });
+
+  it("detects actionable evidence",()=>{
+    expect(hasActionableRiskEvidence({
+      openSafetyReportCount:1,
+      highValueTransferCount:0,
+      unverifiedPaymentMethodCount:0,
+      userSuspended:false
+    })).toBe(true);
+  });
+});
+
+describe("repo-native fraud/risk specialist",()=>{
+  it.todo("requires ops:risk:read");
+  it.todo("requires ops:risk:review for reject/escalate");
+  it.todo("requires ops:risk:approve for approve");
+  it.todo("reads safety_reports without mutating");
+  it.todo("reads LinqaSend tables without mutating");
+  it.todo("records evidence snapshot + decision atomically");
+  it.todo("writes audit + support timeline event");
+  it.todo("rejects decisions on CLOSED cases");
+  it.todo("performs no financial/account mutation");
+});
+
+
+====================================================================================================
+FILE: clients/web/src/admin/api/fraud-risk-specialist-api.ts
+====================================================================================================
+export type FraudRiskEvidence={
+  caseId:string;
+  caseNumber:string|number;
+  userId:string;
+  caseState:string;
+  priority:string;
+  evidence:{
+    user:{status?:string|null;suspended:boolean};
+    risk:{level:"LOW"|"MEDIUM"|"HIGH"|"CRITICAL";score:null};
+    safetyReports:Array<any>;
+    paymentMethods:Array<any>;
+    transfers:Array<any>;
+    summary:{
+      openSafetyReportCount:number;
+      highValueTransferCount:number;
+      unverifiedPaymentMethodCount:number;
+      userSuspended:boolean;
+    };
+  };
+  review:null|{
+    id:string;
+    decision:"PENDING"|"APPROVED"|"REJECTED"|"ESCALATED";
+    reviewerUserId?:string|null;
+    specialistNote?:string|null;
+    reasonCode?:string|null;
+    reviewedAt?:string|null;
+  };
+};
+
+async function api<T>(token:string,path:string,init?:RequestInit):Promise<T>{
+  const r=await fetch(path,{
+    ...init,
+    headers:{
+      authorization:`Bearer ${token}`,
+      "content-type":"application/json",
+      ...(init?.headers??{})
+    }
+  });
+  const body=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(body.error??`HTTP_${r.status}`);
+  return body as T;
+}
+
+export const fraudRiskSpecialistApi={
+  get:(token:string,caseId:string)=>
+    api<FraudRiskEvidence>(token,`/v1/admin/operations/cases/${caseId}/risk`),
+
+  decide:(token:string,caseId:string,input:{
+    decision:"APPROVED"|"REJECTED"|"ESCALATED";
+    specialistNote:string;
+    reasonCode:string;
+  })=>
+    api<any>(token,`/v1/admin/operations/cases/${caseId}/risk/decision`,{
+      method:"POST",
+      body:JSON.stringify(input)
+    })
+};
+
+
+====================================================================================================
+FILE: clients/web/src/admin/hooks/useFraudRiskSpecialistPolling.ts
+====================================================================================================
+import { fraudRiskSpecialistApi } from "../api/fraud-risk-specialist-api";
+
+export function createFraudRiskSpecialistLoader(
+  accessToken:string,
+  caseId:string
+){
+  return ()=>fraudRiskSpecialistApi.get(accessToken,caseId);
+}
+
+/*
+Use with the repo's existing usePolling helper:
+const riskPoll = usePolling(
+  createFraudRiskSpecialistLoader(accessToken,caseId),
+  15000,
+  [accessToken,caseId]
+);
+*/
+
+
+====================================================================================================
+FILE: clients/web/src/admin/components/FraudRiskSpecialistPanel.tsx
+====================================================================================================
+import { useState } from "react";
+import type { FraudRiskEvidence } from "../api/fraud-risk-specialist-api";
+
+const card={border:"1px solid #1e293b",borderRadius:12,background:"rgba(15,23,42,.72)",padding:14};
+const muted={color:"#94a3b8",fontSize:12};
+
+function riskColor(level:string){
+  if(level==="CRITICAL") return "#fb7185";
+  if(level==="HIGH") return "#f97316";
+  if(level==="MEDIUM") return "#fbbf24";
+  return "#34d399";
+}
+
+export function FraudRiskSpecialistPanel({
+  data,canReview,canApprove,onDecision
+}:{
+  data:FraudRiskEvidence;
+  canReview:boolean;
+  canApprove:boolean;
+  onDecision:(input:{
+    decision:"APPROVED"|"REJECTED"|"ESCALATED";
+    specialistNote:string;
+    reasonCode:string;
+  })=>Promise<void>;
+}){
+  const [note,setNote]=useState(data.review?.specialistNote??"");
+  const [reason,setReason]=useState(data.review?.reasonCode??"RISK_REVIEW");
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+
+  async function decide(decision:"APPROVED"|"REJECTED"|"ESCALATED"){
+    if(decision==="APPROVED"&&!canApprove){setError("Approval scope required.");return;}
+    if(decision!=="APPROVED"&&!canReview){setError("Review scope required.");return;}
+    if(!note.trim()){setError("Specialist note is required.");return;}
+
+    setBusy(true);setError("");
+    try{
+      await onDecision({
+        decision,
+        specialistNote:note.trim(),
+        reasonCode:reason.trim()
+      });
+    }catch(e:any){
+      setError(e?.message??"Risk decision failed.");
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  const s=data.evidence.summary;
+
+  return <div style={{display:"grid",gap:12}}>
+    <div style={card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div>
+          <div style={{fontWeight:700}}>Fraud & Risk Review</div>
+          <div style={muted}>Evidence review only. No financial/account mutation.</div>
+        </div>
+        <div style={{color:riskColor(data.evidence.risk.level),fontWeight:700}}>
+          {data.evidence.risk.level}
+        </div>
+      </div>
+    </div>
+
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12}}>
+      <div style={card}><div style={muted}>Open Safety Reports</div><div style={{fontSize:24,fontWeight:700,marginTop:6}}>{s.openSafetyReportCount}</div></div>
+      <div style={card}><div style={muted}>High-Value Transfers</div><div style={{fontSize:24,fontWeight:700,marginTop:6}}>{s.highValueTransferCount}</div></div>
+      <div style={card}><div style={muted}>Unverified Payment Methods</div><div style={{fontSize:24,fontWeight:700,marginTop:6}}>{s.unverifiedPaymentMethodCount}</div></div>
+      <div style={card}><div style={muted}>User Status</div><div style={{marginTop:6,color:s.userSuspended?"#fb7185":"#34d399"}}>{data.evidence.user.status??"UNKNOWN"}</div></div>
+    </div>
+
+    <div style={card}>
+      <div style={{fontWeight:700,marginBottom:10}}>Safety Reports</div>
+      {data.evidence.safetyReports.length===0
+        ? <div style={muted}>No safety reports found.</div>
+        : data.evidence.safetyReports.map((item:any,index:number)=>
+          <div key={item.id??index} style={{padding:"8px 0",borderBottom:"1px solid #1e293b"}}>
+            <div>{item.category??"Safety report"}</div>
+            <div style={muted}>{item.severity??"UNKNOWN"} • {item.status??"UNKNOWN"}</div>
+          </div>
+        )
+      }
+    </div>
+
+    <div style={card}>
+      <div style={{fontWeight:700,marginBottom:10}}>LinqaSend Evidence</div>
+      <div style={muted}>
+        Payment methods: {data.evidence.paymentMethods.length} • Transfers: {data.evidence.transfers.length}
+      </div>
+    </div>
+
+    <div style={card}>
+      <div style={{fontWeight:700,marginBottom:10}}>Specialist Decision</div>
+      <textarea
+        value={note}
+        onChange={e=>setNote(e.target.value)}
+        disabled={busy}
+        placeholder="Document the evidence reviewed and rationale."
+        style={{width:"100%",minHeight:100,resize:"vertical",border:"1px solid #334155",borderRadius:8,background:"#020617",color:"#e2e8f0",padding:10}}
+      />
+      <input
+        value={reason}
+        onChange={e=>setReason(e.target.value)}
+        disabled={busy}
+        style={{width:"100%",marginTop:8,border:"1px solid #334155",borderRadius:8,background:"#020617",color:"#e2e8f0",padding:10}}
+      />
+
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:10}}>
+        <button disabled={!canApprove||busy} onClick={()=>decide("APPROVED")}
+          style={{border:0,borderRadius:8,background:"#059669",color:"white",padding:"9px 14px",opacity:!canApprove||busy?.5:1}}>
+          Approve
+        </button>
+        <button disabled={!canReview||busy} onClick={()=>decide("REJECTED")}
+          style={{border:"1px solid #7f1d1d",borderRadius:8,background:"#450a0a",color:"#fda4af",padding:"9px 14px",opacity:!canReview||busy?.5:1}}>
+          Reject
+        </button>
+        <button disabled={!canReview||busy} onClick={()=>decide("ESCALATED")}
+          style={{border:"1px solid #92400e",borderRadius:8,background:"#451a03",color:"#fbbf24",padding:"9px 14px",opacity:!canReview||busy?.5:1}}>
+          Escalate
+        </button>
+      </div>
+
+      {error&&<div style={{color:"#fb7185",fontSize:12,marginTop:8}}>{error}</div>}
+    </div>
+  </div>;
+}
+
+
+====================================================================================================
+FILE: INTEGRATION_NOTES.md
+====================================================================================================
+# Integration Notes
+
+Server:
+1. Apply migration `032_ops_fraud_risk_review.sql`.
+2. Add scopes:
+   - ops:risk:read
+   - ops:risk:review
+   - ops:risk:approve
+3. Add FRAUD_ANALYST role if not already present.
+4. Give FRAUD_ANALYST case read/assign/release/note if the current UI requires ownership before opening a case.
+5. Register:
+   - GET `/v1/admin/operations/cases/:caseId/risk`
+   - POST `/v1/admin/operations/cases/:caseId/risk/decision`
+6. Adapt examples to the repo-standard Database / OpsHttpError /
+   SupportOperationsService.addEvent() helpers.
+
+Evidence is read only:
+- safety_reports
+- linqasend_payment_methods
+- linqasend_transfers
+- users.status
+- support_cases_v2
+
+No financial or account mutation belongs in this pack.
+
+The sample 1000 high-value transfer threshold is display-only. Replace it with
+an existing compliance/product threshold if the repo already has one.
+
+APPROVED means only that the specialist approved the review decision. It does
+not release holds, reverse transfers, suspend users, or modify payment methods.
+
+Client:
+- fold FraudRiskSpecialistPanel into the current CaseWorkspacePanel
+- use existing polling at ~15s
+- canReview => principal.scopes.has("ops:risk:review")
+- canApprove => principal.scopes.has("ops:risk:approve")

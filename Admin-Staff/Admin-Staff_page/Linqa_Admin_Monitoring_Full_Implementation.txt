@@ -1,0 +1,1298 @@
+LINQA ADMIN MONITORING — FULL IMPLEMENTATION PACK
+==========================================================================================
+
+
+==========================================================================================
+FILE: README.md
+==========================================================================================
+# Linqa Admin Monitoring
+
+Production-oriented implementation of the Admin Monitoring screenshot.
+
+## Stack
+- Next.js / React
+- Tailwind CSS
+- shadcn-style UI primitives
+- SWR live refresh
+- Recharts
+- Express API
+- PostgreSQL
+- Zod validation
+- RBAC
+- Audit logging
+
+## Quick start
+
+1. Create PostgreSQL database.
+2. Copy `.env.example` to `.env`.
+3. Install packages:
+   npm install
+4. Run migration:
+   npm run db:migrate
+5. Start API:
+   npm run dev:api
+6. Start web:
+   npm run dev:web
+
+Mount `AdminMonitoringPage` as the Admin route, for example:
+`app/admin/monitoring/page.tsx`.
+
+## Recommended production hardening
+- Replace header-based sample principal resolution with your existing Linqa staff SSO/JWT middleware.
+- Enforce MFA for all staff.
+- Use HttpOnly Secure SameSite cookies or short-lived access tokens.
+- Add Redis for presence, queues, caching and WebSocket fanout.
+- Feed `ops_system_services` from real health checks.
+- Materialize daily metrics using a scheduled job.
+- Add row-level tenancy constraints if Linqa enterprise tenants share operations infrastructure.
+- Stream audit logs to immutable/WORM storage or SIEM.
+- Never expose E2EE message plaintext, Vault encryption keys, passwords, recovery secrets, CVVs or full PANs to this dashboard.
+
+
+==========================================================================================
+FILE: package.json
+==========================================================================================
+{
+  "name": "linqa-admin-monitoring",
+  "private": true,
+  "scripts": {
+    "dev:web": "next dev -p 3000",
+    "dev:api": "tsx watch server/index.ts",
+    "build:web": "next build",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "psql \"$DATABASE_URL\" -f db/001_admin_monitoring.sql"
+  },
+  "dependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "clsx": "^2.1.1",
+    "compression": "^1.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.0",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "lucide-react": "^0.468.0",
+    "next": "^15.5.0",
+    "pg": "^8.13.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "recharts": "^2.15.0",
+    "swr": "^2.3.0",
+    "tailwind-merge": "^3.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^3.4.0"
+  }
+}
+
+
+==========================================================================================
+FILE: .env.example
+==========================================================================================
+DATABASE_URL=postgresql://linqa:linqa@localhost:5432/linqa
+PORT=8080
+ADMIN_ORIGINS=http://localhost:3000
+PG_POOL_MAX=20
+NODE_ENV=development
+
+
+==========================================================================================
+FILE: tailwind.config.ts
+==========================================================================================
+import type { Config } from "tailwindcss";
+export default {
+  darkMode: ["class"],
+  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+  theme: { extend: {} },
+  plugins: []
+} satisfies Config;
+
+
+==========================================================================================
+FILE: shared/types.ts
+==========================================================================================
+export type StaffStatus = "ONLINE" | "AWAY" | "OFFLINE";
+export type Priority = "P1" | "P2" | "P3" | "P4";
+export type CaseCategory =
+  | "ACCOUNT_SUPPORT"
+  | "LINQASEND"
+  | "ACCOUNT_RECOVERY"
+  | "VAULT_SUPPORT"
+  | "TRUST_SAFETY"
+  | "FRAUD_RISK"
+  | "OTHER";
+
+export interface DashboardSummary {
+  openCases: number;
+  unassignedCases: number;
+  slaCompliancePct: number;
+  avgResponseSeconds: number;
+  resolvedToday: number;
+  deltas: {
+    openCasesPct: number;
+    unassignedPct: number;
+    slaPct: number;
+    avgResponseSeconds: number;
+    resolvedTodayPct: number;
+  };
+}
+
+export interface CaseTrendPoint {
+  date: string;
+  newCases: number;
+  resolvedCases: number;
+  backlog: number;
+}
+
+export interface CaseCategoryPoint {
+  category: CaseCategory;
+  label: string;
+  count: number;
+  percentage: number;
+}
+
+export interface LiveStaffRow {
+  id: string;
+  displayName: string;
+  roleName: string;
+  status: StaffStatus;
+  activeCases: number;
+  avatarUrl?: string | null;
+}
+
+export interface QueueRow {
+  id: string;
+  name: string;
+  openCases: number;
+  longestWaitSeconds: number;
+  slaCompliancePct: number;
+}
+
+export interface PriorityRow {
+  priority: Priority;
+  label: string;
+  count: number;
+  slaBreached: number;
+}
+
+export interface AlertRow {
+  id: string;
+  severity: "CRITICAL" | "WARNING" | "INFO";
+  title: string;
+  description: string;
+  createdAt: string;
+}
+
+export interface ActivityRow {
+  id: string;
+  type: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface SystemService {
+  id: string;
+  name: string;
+  status: "OPERATIONAL" | "DEGRADED" | "OUTAGE";
+}
+
+export interface AdminDashboardPayload {
+  summary: DashboardSummary;
+  trend: CaseTrendPoint[];
+  categories: CaseCategoryPoint[];
+  liveStaff: LiveStaffRow[];
+  queues: QueueRow[];
+  priorities: PriorityRow[];
+  alerts: AlertRow[];
+  activity: ActivityRow[];
+  systemServices: SystemService[];
+}
+
+
+==========================================================================================
+FILE: shared/permissions.ts
+==========================================================================================
+export type AdminPermission =
+  | "dashboard.read"
+  | "staff.read"
+  | "staff.manage"
+  | "cases.read"
+  | "cases.assign"
+  | "cases.escalate"
+  | "queues.read"
+  | "queues.manage"
+  | "incidents.read"
+  | "incidents.manage"
+  | "reports.read"
+  | "reports.create"
+  | "audit.read"
+  | "settings.manage";
+
+export const ROLE_PERMISSIONS: Record<string, AdminPermission[]> = {
+  SUPER_ADMIN: [
+    "dashboard.read","staff.read","staff.manage","cases.read","cases.assign","cases.escalate",
+    "queues.read","queues.manage","incidents.read","incidents.manage","reports.read","reports.create",
+    "audit.read","settings.manage"
+  ],
+  OPS_ADMIN: [
+    "dashboard.read","staff.read","staff.manage","cases.read","cases.assign","cases.escalate",
+    "queues.read","queues.manage","incidents.read","incidents.manage","reports.read","reports.create","audit.read"
+  ],
+  SUPERVISOR: [
+    "dashboard.read","staff.read","cases.read","cases.assign","cases.escalate",
+    "queues.read","queues.manage","incidents.read","reports.read","reports.create"
+  ],
+  AUDITOR: ["dashboard.read","staff.read","cases.read","queues.read","reports.read","audit.read"],
+  EXECUTIVE_READONLY: ["dashboard.read","staff.read","queues.read","incidents.read","reports.read"],
+};
+
+export function hasPermission(role: string, permission: AdminPermission) {
+  return ROLE_PERMISSIONS[role]?.includes(permission) ?? false;
+}
+
+
+==========================================================================================
+FILE: app/lib/utils.ts
+==========================================================================================
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+export function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
+
+
+==========================================================================================
+FILE: components/ui.tsx
+==========================================================================================
+import * as React from "react";
+import { cn } from "@/lib/utils";
+
+export function Card({className,...props}:React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("rounded-xl border border-slate-800 bg-slate-900/75 shadow-sm",className)} {...props}/>;
+}
+export function Badge({className,...props}:React.HTMLAttributes<HTMLSpanElement>) {
+  return <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium",className)} {...props}/>;
+}
+export function Button({className,...props}:React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return <button className={cn("inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-medium transition disabled:opacity-50",className)} {...props}/>;
+}
+
+
+==========================================================================================
+FILE: components/AdminSidebar.tsx
+==========================================================================================
+"use client";
+import {
+  LayoutDashboard, Users, UserRoundSearch, Headphones, Send, LockKeyhole,
+  ShieldCheck, TriangleAlert, GraduationCap, CalendarDays, Siren,
+  BarChart3, FileText, ScrollText, Settings, ChevronDown
+} from "lucide-react";
+
+const items = [
+  ["Overview", LayoutDashboard],
+  ["Staff Management", Users],
+  ["Client 360", UserRoundSearch],
+  ["Support", Headphones],
+  ["LinqaSend", Send],
+  ["Vault", LockKeyhole],
+  ["Account Recovery", ShieldCheck],
+  ["Trust & Safety", ShieldCheck],
+  ["Fraud & Risk", TriangleAlert],
+  ["QA & Coaching", GraduationCap],
+  ["Workforce", CalendarDays],
+  ["Incident Command", Siren],
+  ["Analytics", BarChart3],
+  ["Reports", FileText],
+  ["Audit Logs", ScrollText],
+  ["Settings", Settings],
+] as const;
+
+export function AdminSidebar() {
+  return (
+    <aside className="sticky top-0 hidden h-screen w-[210px] shrink-0 border-r border-slate-800 bg-[#07111d] lg:flex lg:flex-col">
+      <div className="flex h-16 items-center gap-3 border-b border-slate-800 px-5">
+        <div className="grid h-9 w-9 place-items-center rounded-lg bg-violet-600 font-black text-white">L</div>
+        <span className="text-2xl font-bold tracking-tight">linqa</span>
+      </div>
+
+      <div className="m-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-full bg-slate-700"/>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold">Daniel Admin</div>
+            <div className="text-xs text-slate-400">Super Admin</div>
+            <div className="mt-1 flex items-center gap-1 text-xs text-slate-300">
+              <span className="h-2 w-2 rounded-full bg-emerald-500"/> Online
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <nav className="flex-1 space-y-1 overflow-y-auto px-2 pb-5">
+        {items.map(([label, Icon], i) => (
+          <button
+            key={label}
+            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition
+              ${i===0 ? "bg-violet-600 text-white" : "text-slate-300 hover:bg-slate-800/70 hover:text-white"}`}
+          >
+            <Icon className="h-4 w-4"/>
+            <span className="flex-1">{label}</span>
+            {["Support","LinqaSend","Vault","Workforce","Analytics"].includes(label) &&
+              <ChevronDown className="h-3.5 w-3.5 opacity-70"/>}
+          </button>
+        ))}
+      </nav>
+
+      <div className="border-t border-slate-800 p-4">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="h-3 w-3 rounded-full bg-emerald-500 ring-4 ring-emerald-500/10"/>
+          <div>
+            <div className="font-medium text-slate-200">System Status</div>
+            <div className="text-slate-500">All Systems Operational</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+
+==========================================================================================
+FILE: components/MetricCard.tsx
+==========================================================================================
+"use client";
+import type { LucideIcon } from "lucide-react";
+import { Card } from "./ui";
+
+export function MetricCard({
+  title, value, delta, deltaGood, icon:Icon
+}:{
+  title:string; value:string; delta:string; deltaGood:boolean; icon:LucideIcon
+}) {
+  return (
+    <Card className="relative overflow-hidden p-4">
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="text-xs text-slate-400">{title}</div>
+          <div className="mt-1 text-2xl font-bold">{value}</div>
+          <div className="mt-1 text-xs text-slate-500">
+            <span className={deltaGood ? "text-emerald-400":"text-rose-400"}>{delta}</span> vs yesterday
+          </div>
+        </div>
+        <div className="grid h-12 w-12 place-items-center rounded-full bg-blue-500/10 text-blue-400">
+          <Icon className="h-6 w-6"/>
+        </div>
+      </div>
+      <div className="mt-4 h-8 rounded bg-gradient-to-r from-blue-500/10 via-violet-500/20 to-blue-500/10"/>
+    </Card>
+  );
+}
+
+
+==========================================================================================
+FILE: components/Charts.tsx
+==========================================================================================
+"use client";
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from "recharts";
+import type { CaseTrendPoint, CaseCategoryPoint } from "../shared/types";
+
+export function CaseTrendChart({data}:{data:CaseTrendPoint[]}) {
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      <LineChart data={data}>
+        <CartesianGrid stroke="#1e293b" vertical={false}/>
+        <XAxis dataKey="date" stroke="#64748b" tick={{fontSize:11}}/>
+        <YAxis stroke="#64748b" tick={{fontSize:11}}/>
+        <Tooltip contentStyle={{background:"#0f172a",border:"1px solid #334155",borderRadius:8}}/>
+        <Line type="monotone" dataKey="newCases" stroke="#4f7cff" strokeWidth={2}/>
+        <Line type="monotone" dataKey="resolvedCases" stroke="#22c55e" strokeWidth={2}/>
+        <Line type="monotone" dataKey="backlog" stroke="#f59e0b" strokeWidth={2}/>
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+const COLORS = ["#3b82f6","#60a5fa","#22c55e","#8b5cf6","#f97316","#94a3b8","#cbd5e1"];
+
+export function CategoryDonut({data}:{data:CaseCategoryPoint[]}) {
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      <PieChart>
+        <Pie data={data} dataKey="count" nameKey="label" innerRadius={58} outerRadius={88} paddingAngle={1}>
+          {data.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}
+        </Pie>
+        <Tooltip contentStyle={{background:"#0f172a",border:"1px solid #334155",borderRadius:8}}/>
+      </PieChart>
+    </ResponsiveContainer>
+  );
+}
+
+
+==========================================================================================
+FILE: app/AdminMonitoringPage.tsx
+==========================================================================================
+"use client";
+
+import useSWR from "swr";
+import {
+  Folder, UserRound, CircleCheckBig, Clock3, BadgeCheck, Settings2, FileChartColumn,
+  Bell, CalendarDays, AlertTriangle, Info, CheckCircle2
+} from "lucide-react";
+import type { AdminDashboardPayload } from "../shared/types";
+import { AdminSidebar } from "../components/AdminSidebar";
+import { MetricCard } from "../components/MetricCard";
+import { Card, Button, Badge } from "../components/ui";
+import { CaseTrendChart, CategoryDonut } from "../components/Charts";
+
+const fetcher = async (url:string) => {
+  const r = await fetch(url, {credentials:"include"});
+  if (!r.ok) throw new Error("Failed to load dashboard");
+  return r.json();
+};
+
+function formatDuration(seconds:number) {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds/60);
+  const s = seconds%60;
+  return `${m}m ${s}s`;
+}
+
+export default function AdminMonitoringPage() {
+  const {data, error, isLoading, mutate} = useSWR<AdminDashboardPayload>("/api/admin/dashboard", fetcher, {
+    refreshInterval: 30_000,
+    revalidateOnFocus: true
+  });
+
+  if (isLoading) return <div className="min-h-screen bg-[#050d16] text-white p-10">Loading operations…</div>;
+  if (error || !data) return (
+    <div className="min-h-screen bg-[#050d16] text-white p-10">
+      <div className="rounded-xl border border-rose-900 bg-rose-950/30 p-5">
+        Could not load the Admin Monitoring dashboard.
+        <button className="ml-3 underline" onClick={()=>mutate()}>Retry</button>
+      </div>
+    </div>
+  );
+
+  const s = data.summary;
+
+  return (
+    <div className="min-h-screen bg-[#050d16] text-slate-100">
+      <div className="mx-auto flex max-w-[1920px]">
+        <AdminSidebar/>
+
+        <main className="min-w-0 flex-1">
+          <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-800 bg-[#050d16]/95 px-5 backdrop-blur">
+            <div className="flex items-center gap-4">
+              <button className="text-slate-400 hover:text-white">☰</button>
+              <span className="text-sm text-slate-300">Admin Monitoring</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="hidden items-center gap-2 rounded-lg border border-slate-800 px-3 py-2 text-xs text-slate-300 md:flex">
+                <CalendarDays className="h-4 w-4"/> Live
+              </div>
+              <button className="relative rounded-lg p-2 hover:bg-slate-800">
+                <Bell className="h-5 w-5"/>
+                <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-rose-500 px-1 text-[10px] font-bold">12</span>
+              </button>
+              <div className="grid h-8 w-8 place-items-center rounded-full bg-slate-800 text-xs font-semibold">DA</div>
+            </div>
+          </header>
+
+          <div className="space-y-4 p-4 md:p-5">
+            <section className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h1 className="text-2xl font-bold">Operations Overview</h1>
+                <p className="mt-1 text-sm text-slate-400">Real-time overview of Linqa platform and support operations</p>
+              </div>
+              <div className="flex gap-2">
+                <Button className="border border-slate-700 bg-slate-800 hover:bg-slate-700"><Settings2 className="mr-2 h-4 w-4"/>Customize</Button>
+                <Button className="bg-violet-600 text-white hover:bg-violet-500"><FileChartColumn className="mr-2 h-4 w-4"/>Create Report</Button>
+              </div>
+            </section>
+
+            <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <MetricCard title="Open Cases" value={s.openCases.toLocaleString()} delta={`${s.deltas.openCasesPct>=0?"+":""}${s.deltas.openCasesPct}%`} deltaGood={s.deltas.openCasesPct<0} icon={Folder}/>
+              <MetricCard title="Unassigned Cases" value={s.unassignedCases.toLocaleString()} delta={`${s.deltas.unassignedPct>=0?"+":""}${s.deltas.unassignedPct}%`} deltaGood={s.deltas.unassignedPct<0} icon={UserRound}/>
+              <MetricCard title="SLA Compliance" value={`${s.slaCompliancePct.toFixed(1)}%`} delta={`${s.deltas.slaPct>=0?"+":""}${s.deltas.slaPct}%`} deltaGood={s.deltas.slaPct>=0} icon={CircleCheckBig}/>
+              <MetricCard title="Avg. Response Time" value={formatDuration(s.avgResponseSeconds)} delta={`${s.deltas.avgResponseSeconds}s`} deltaGood={s.deltas.avgResponseSeconds<0} icon={Clock3}/>
+              <MetricCard title="Resolved Today" value={s.resolvedToday.toLocaleString()} delta={`${s.deltas.resolvedTodayPct>=0?"+":""}${s.deltas.resolvedTodayPct}%`} deltaGood={s.deltas.resolvedTodayPct>=0} icon={BadgeCheck}/>
+            </section>
+
+            <section className="grid gap-4 xl:grid-cols-[1.45fr_0.95fr_0.8fr]">
+              <Card className="p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <h2 className="font-semibold">Case Volume Trend</h2>
+                  <select className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs"><option>Last 7 days</option></select>
+                </div>
+                <CaseTrendChart data={data.trend}/>
+              </Card>
+
+              <Card className="p-4">
+                <h2 className="font-semibold">Cases by Category</h2>
+                <div className="grid gap-1 md:grid-cols-[1fr_1fr] md:items-center">
+                  <CategoryDonut data={data.categories}/>
+                  <div className="space-y-2">
+                    {data.categories.map(c=>(
+                      <div key={c.category} className="flex items-center justify-between gap-3 text-xs">
+                        <span className="truncate text-slate-300">{c.label}</span>
+                        <span className="text-slate-400">{c.percentage}% ({c.count})</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                  <h2 className="font-semibold">Live Staff</h2><button className="text-xs text-indigo-400">View all</button>
+                </div>
+                <div className="divide-y divide-slate-800">
+                  {data.liveStaff.map(staff=>(
+                    <div key={staff.id} className="flex items-center gap-3 px-4 py-3">
+                      <div className="h-9 w-9 rounded-full bg-slate-700"/>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium">{staff.displayName}</div>
+                        <div className="truncate text-xs text-slate-500">{staff.roleName}</div>
+                      </div>
+                      <div className="text-xs text-emerald-400">● {staff.status==="ONLINE"?"Online":"Away"}</div>
+                      <Badge className="border border-indigo-700 bg-indigo-950/60 text-indigo-300">{staff.activeCases}</Badge>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </section>
+
+            <section className="grid gap-4 xl:grid-cols-[0.8fr_1fr_0.85fr_0.9fr]">
+              <Card className="p-4">
+                <h2 className="font-semibold">SLA Compliance</h2>
+                <div className="mt-5 grid place-items-center">
+                  <div className="grid h-40 w-40 place-items-center rounded-full border-[18px] border-emerald-500/80">
+                    <div className="text-center">
+                      <div className="text-3xl font-bold">{s.slaCompliancePct.toFixed(1)}%</div>
+                      <div className="text-xs text-slate-400">Overall</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-5 text-xs text-slate-400">Target: 90%</div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded bg-slate-800"><div className="h-full bg-emerald-500" style={{width:`${Math.min(100,s.slaCompliancePct)}%`}}/></div>
+              </Card>
+
+              <Card className="overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                  <h2 className="font-semibold">Queues</h2><button className="text-xs text-indigo-400">View All</button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-950/50 text-slate-400"><tr><th className="px-4 py-2">Queue</th><th>Open</th><th>Longest Wait</th><th>SLA</th></tr></thead>
+                    <tbody>
+                      {data.queues.map(q=>(
+                        <tr key={q.id} className="border-t border-slate-800">
+                          <td className="px-4 py-3">{q.name}</td>
+                          <td>{q.openCases}</td>
+                          <td>{formatDuration(q.longestWaitSeconds)}</td>
+                          <td className={q.slaCompliancePct<85?"text-rose-400":q.slaCompliancePct<92?"text-amber-400":"text-emerald-400"}>{q.slaCompliancePct.toFixed(0)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+
+              <Card className="overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                  <h2 className="font-semibold">Priority Cases</h2><button className="text-xs text-indigo-400">View All</button>
+                </div>
+                <div className="divide-y divide-slate-800">
+                  {data.priorities.map(p=>(
+                    <div key={p.priority} className="flex items-center px-4 py-3">
+                      <Badge className={`mr-3 ${p.priority==="P1"?"bg-rose-500/20 text-rose-300":p.priority==="P2"?"bg-orange-500/20 text-orange-300":p.priority==="P3"?"bg-amber-500/20 text-amber-300":"bg-emerald-500/20 text-emerald-300"}`}>{p.priority}</Badge>
+                      <div className="flex-1">
+                        <div className="text-sm font-medium">{p.label}</div>
+                        <div className="text-xs text-slate-500">SLA Breached: {p.slaBreached}</div>
+                      </div>
+                      <div className="font-semibold">{p.count}</div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+
+              <div className="space-y-4">
+                <Card className="overflow-hidden">
+                  <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                    <h2 className="font-semibold">Alerts</h2><button className="text-xs text-indigo-400">View all</button>
+                  </div>
+                  <div className="divide-y divide-slate-800">
+                    {data.alerts.slice(0,4).map(a=>(
+                      <div key={a.id} className="flex gap-3 px-4 py-3">
+                        {a.severity==="CRITICAL" ? <AlertTriangle className="mt-0.5 h-4 w-4 text-rose-400"/> : <Info className="mt-0.5 h-4 w-4 text-blue-400"/>}
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs font-semibold">{a.title}</div>
+                          <div className="truncate text-[11px] text-slate-500">{a.description}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+
+                <Card className="overflow-hidden">
+                  <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                    <h2 className="font-semibold">Recent Activity</h2><button className="text-xs text-indigo-400">View all</button>
+                  </div>
+                  <div className="divide-y divide-slate-800">
+                    {data.activity.slice(0,4).map(a=>(
+                      <div key={a.id} className="flex items-center gap-3 px-4 py-3 text-xs">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-400"/><span className="truncate">{a.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              </div>
+            </section>
+
+            <Card className="p-4">
+              <h2 className="font-semibold">System Status</h2>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                {data.systemServices.map(svc=>(
+                  <div key={svc.id} className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                    <div className="flex items-center gap-2 text-xs font-medium">
+                      <CheckCircle2 className={`h-4 w-4 ${svc.status==="OPERATIONAL"?"text-emerald-400":"text-amber-400"}`}/>
+                      {svc.name}
+                    </div>
+                    <div className={`mt-1 text-xs ${svc.status==="OPERATIONAL"?"text-emerald-400":"text-amber-400"}`}>{svc.status}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+
+==========================================================================================
+FILE: app/globals.css
+==========================================================================================
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+html, body { min-height: 100%; background: #050d16; }
+body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+* { box-sizing: border-box; }
+
+
+==========================================================================================
+FILE: server/db.ts
+==========================================================================================
+import { Pool, PoolClient, QueryResultRow } from "pg";
+
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: Number(process.env.PG_POOL_MAX ?? 20),
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  ssl: process.env.NODE_ENV === "production"
+    ? { rejectUnauthorized: true }
+    : false,
+});
+
+export async function query<T extends QueryResultRow = any>(text: string, params: unknown[] = []) {
+  return pool.query<T>(text, params);
+}
+
+export async function tx<T>(fn: (client: PoolClient) => Promise<T>) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const out = await fn(client);
+    await client.query("COMMIT");
+    return out;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+
+==========================================================================================
+FILE: server/auth.ts
+==========================================================================================
+import type { Request, Response, NextFunction } from "express";
+import { hasPermission, type AdminPermission } from "../shared/permissions";
+
+export interface StaffPrincipal {
+  userId: string;
+  staffId?: string;
+  role: string;
+  permissions?: string[];
+}
+
+declare global {
+  namespace Express {
+    interface Request {
+      principal?: StaffPrincipal;
+      requestId?: string;
+    }
+  }
+}
+
+export function requireStaff(req: Request, res: Response, next: NextFunction) {
+  const userId = String(req.headers["x-linqa-user-id"] ?? "");
+  const role = String(req.headers["x-linqa-role"] ?? "");
+  const staffId = String(req.headers["x-linqa-staff-id"] ?? "");
+
+  if (!userId || !role) return res.status(401).json({ error: "unauthorized" });
+
+  req.principal = { userId, role, staffId: staffId || undefined };
+  next();
+}
+
+export function requirePermission(permission: AdminPermission) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const p = req.principal;
+    if (!p) return res.status(401).json({ error: "unauthorized" });
+    if (!hasPermission(p.role, permission)) {
+      return res.status(403).json({ error: "forbidden", permission });
+    }
+    next();
+  };
+}
+
+
+==========================================================================================
+FILE: server/audit.ts
+==========================================================================================
+import type { Request } from "express";
+import { query } from "./db";
+import crypto from "node:crypto";
+
+export async function writeAudit(
+  req: Request,
+  input: {
+    action: string;
+    resourceType: string;
+    resourceId?: string;
+    reasonCode?: string;
+    before?: unknown;
+    after?: unknown;
+  }
+) {
+  const ip = req.ip ?? "";
+  const ipHash = ip ? crypto.createHash("sha256").update(ip).digest("hex") : null;
+
+  await query(
+    `INSERT INTO ops_audit_log
+      (actor_user_id, actor_role, action, resource_type, resource_id, reason_code, request_id, ip_hash, before_json, after_json)
+     VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb)`,
+    [
+      req.principal?.userId ?? null,
+      req.principal?.role ?? null,
+      input.action,
+      input.resourceType,
+      input.resourceId ?? null,
+      input.reasonCode ?? null,
+      req.requestId ?? null,
+      ipHash,
+      JSON.stringify(input.before ?? null),
+      JSON.stringify(input.after ?? null),
+    ]
+  );
+}
+
+
+==========================================================================================
+FILE: server/dashboard.service.ts
+==========================================================================================
+import { query } from "./db";
+import type {
+  AdminDashboardPayload,
+  CaseCategoryPoint,
+  PriorityRow,
+  QueueRow,
+  LiveStaffRow,
+} from "../shared/types";
+
+const categoryLabels: Record<string, string> = {
+  ACCOUNT_SUPPORT: "Account Support",
+  LINQASEND: "LinqaSend",
+  ACCOUNT_RECOVERY: "Account Recovery",
+  VAULT_SUPPORT: "Vault Support",
+  TRUST_SAFETY: "Trust & Safety",
+  FRAUD_RISK: "Fraud & Risk",
+  OTHER: "Other",
+};
+
+export async function getDashboard(): Promise<AdminDashboardPayload> {
+  const [
+    summaryR, trendR, categoriesR, staffR, queuesR, priorityR, alertsR, activityR, servicesR
+  ] = await Promise.all([
+    query(`
+      WITH current AS (
+        SELECT
+          count(*) FILTER (WHERE status IN ('OPEN','PENDING'))::int open_cases,
+          count(*) FILTER (WHERE status IN ('OPEN','PENDING') AND assigned_staff_id IS NULL)::int unassigned_cases,
+          count(*) FILTER (WHERE status='RESOLVED' AND resolved_at::date=current_date)::int resolved_today,
+          avg(extract(epoch from (first_response_at-created_at))) FILTER (WHERE first_response_at IS NOT NULL) avg_response
+        FROM ops_cases
+      ),
+      sla AS (
+        SELECT COALESCE(
+          100.0 * count(*) FILTER (
+            WHERE first_response_at IS NOT NULL
+              AND extract(epoch from (first_response_at-created_at)) <= q.sla_target_seconds
+          ) / NULLIF(count(*) FILTER (WHERE first_response_at IS NOT NULL),0),
+          100
+        ) sla_pct
+        FROM ops_cases c
+        LEFT JOIN ops_queues q ON q.id=c.queue_id
+        WHERE c.created_at >= now()-interval '7 days'
+      )
+      SELECT current.*, sla.sla_pct FROM current CROSS JOIN sla
+    `),
+    query(`
+      SELECT metric_date::text date,
+             opened_cases "newCases",
+             resolved_cases "resolvedCases",
+             backlog_end backlog
+      FROM ops_daily_metrics
+      WHERE metric_date >= current_date - 6
+      ORDER BY metric_date
+    `),
+    query(`
+      SELECT category::text category, count(*)::int count
+      FROM ops_cases
+      WHERE status IN ('OPEN','PENDING')
+      GROUP BY category ORDER BY count DESC
+    `),
+    query(`
+      SELECT id::text, display_name "displayName", role_name "roleName",
+             status::text, active_case_count "activeCases"
+      FROM ops_staff
+      WHERE status <> 'OFFLINE'
+      ORDER BY status='ONLINE' DESC, active_case_count DESC
+      LIMIT 8
+    `),
+    query(`
+      SELECT q.id::text, q.name,
+             count(c.id) FILTER (WHERE c.status IN ('OPEN','PENDING'))::int "openCases",
+             COALESCE(max(extract(epoch from (now()-c.created_at))) FILTER (WHERE c.status IN ('OPEN','PENDING')),0)::int "longestWaitSeconds",
+             COALESCE(
+               100.0 * count(c.id) FILTER (
+                 WHERE c.first_response_at IS NOT NULL
+                   AND extract(epoch from(c.first_response_at-c.created_at)) <= q.sla_target_seconds
+               )
+               / NULLIF(count(c.id) FILTER (WHERE c.first_response_at IS NOT NULL),0),
+               100
+             )::float8 "slaCompliancePct"
+      FROM ops_queues q
+      LEFT JOIN ops_cases c ON c.queue_id=q.id
+      WHERE q.is_active=true
+      GROUP BY q.id,q.name,q.sla_target_seconds
+      ORDER BY "openCases" DESC
+      LIMIT 8
+    `),
+    query(`
+      SELECT priority::text priority,
+             count(*)::int count,
+             count(*) FILTER (
+               WHERE first_response_at IS NULL
+                 AND now()-created_at > interval '30 minutes'
+             )::int "slaBreached"
+      FROM ops_cases
+      WHERE status IN ('OPEN','PENDING')
+      GROUP BY priority
+      ORDER BY priority
+    `),
+    query(`
+      SELECT id::text, severity, title, description, created_at "createdAt"
+      FROM ops_alerts WHERE resolved=false
+      ORDER BY created_at DESC LIMIT 6
+    `),
+    query(`
+      SELECT id::text, event_type type, summary text, created_at "createdAt"
+      FROM ops_activity ORDER BY created_at DESC LIMIT 8
+    `),
+    query(`
+      SELECT id::text, display_name name, status
+      FROM ops_system_services
+      ORDER BY display_name
+    `),
+  ]);
+
+  const s = summaryR.rows[0] ?? {};
+  const total = categoriesR.rows.reduce((n:number, r:any) => n + Number(r.count), 0);
+
+  const categories: CaseCategoryPoint[] = categoriesR.rows.map((r:any) => ({
+    category: r.category,
+    label: categoryLabels[r.category] ?? r.category,
+    count: Number(r.count),
+    percentage: total ? Math.round((Number(r.count)/total)*1000)/10 : 0
+  }));
+
+  const priorities: PriorityRow[] = priorityR.rows.map((r:any) => ({
+    priority: r.priority,
+    label: ({P1:"P1 Critical",P2:"P2 High",P3:"P3 Medium",P4:"P4 Low"} as any)[r.priority],
+    count: Number(r.count),
+    slaBreached: Number(r.slaBreached),
+  }));
+
+  return {
+    summary: {
+      openCases: Number(s.open_cases ?? 0),
+      unassignedCases: Number(s.unassigned_cases ?? 0),
+      slaCompliancePct: Number(s.sla_pct ?? 100),
+      avgResponseSeconds: Math.round(Number(s.avg_response ?? 0)),
+      resolvedToday: Number(s.resolved_today ?? 0),
+      deltas: {
+        openCasesPct: 0,
+        unassignedPct: 0,
+        slaPct: 0,
+        avgResponseSeconds: 0,
+        resolvedTodayPct: 0,
+      },
+    },
+    trend: trendR.rows as any,
+    categories,
+    liveStaff: staffR.rows as LiveStaffRow[],
+    queues: queuesR.rows as QueueRow[],
+    priorities,
+    alerts: alertsR.rows as any,
+    activity: activityR.rows as any,
+    systemServices: servicesR.rows as any,
+  };
+}
+
+
+==========================================================================================
+FILE: server/routes.ts
+==========================================================================================
+import { Router } from "express";
+import { z } from "zod";
+import { requirePermission, requireStaff } from "./auth";
+import { getDashboard } from "./dashboard.service";
+import { query, tx } from "./db";
+import { writeAudit } from "./audit";
+
+export const adminRouter = Router();
+adminRouter.use(requireStaff);
+
+adminRouter.get("/dashboard", requirePermission("dashboard.read"), async (_req, res, next) => {
+  try {
+    res.json(await getDashboard());
+  } catch (e) { next(e); }
+});
+
+adminRouter.get("/staff", requirePermission("staff.read"), async (_req, res, next) => {
+  try {
+    const r = await query(`
+      SELECT id::text, display_name "displayName", role_name "roleName", team_name "teamName",
+             status, active_case_count "activeCases", max_concurrent_cases "maxConcurrentCases",
+             last_seen_at "lastSeenAt"
+      FROM ops_staff ORDER BY display_name
+    `);
+    res.json(r.rows);
+  } catch (e) { next(e); }
+});
+
+adminRouter.patch("/staff/:id/status", requirePermission("staff.manage"), async (req, res, next) => {
+  const schema = z.object({
+    status: z.enum(["ONLINE","AWAY","OFFLINE"]),
+    reasonCode: z.string().min(3).max(100)
+  });
+  try {
+    const body = schema.parse(req.body);
+    const before = await query("SELECT * FROM ops_staff WHERE id=$1::uuid", [req.params.id]);
+    const r = await query(`
+      UPDATE ops_staff SET status=$2::staff_status, updated_at=now()
+      WHERE id=$1::uuid
+      RETURNING id::text, display_name "displayName", role_name "roleName", status
+    `, [req.params.id, body.status]);
+    if (!r.rowCount) return res.status(404).json({error:"staff_not_found"});
+    await writeAudit(req, {
+      action: "staff.status.update", resourceType: "staff", resourceId: req.params.id,
+      reasonCode: body.reasonCode, before: before.rows[0], after: r.rows[0]
+    });
+    res.json(r.rows[0]);
+  } catch (e) { next(e); }
+});
+
+adminRouter.post("/cases/:id/assign", requirePermission("cases.assign"), async (req, res, next) => {
+  const schema = z.object({
+    staffId: z.string().uuid(),
+    reasonCode: z.string().min(3).max(100)
+  });
+  try {
+    const body = schema.parse(req.body);
+    const result = await tx(async client => {
+      const staff = await client.query(`
+        SELECT * FROM ops_staff WHERE id=$1::uuid FOR UPDATE
+      `, [body.staffId]);
+      if (!staff.rowCount) throw Object.assign(new Error("staff_not_found"), {status:404});
+      const s = staff.rows[0];
+      if (s.status === "OFFLINE") throw Object.assign(new Error("staff_offline"), {status:409});
+      if (s.active_case_count >= s.max_concurrent_cases)
+        throw Object.assign(new Error("staff_capacity_reached"), {status:409});
+
+      const c = await client.query(`
+        UPDATE ops_cases SET assigned_staff_id=$2::uuid, updated_at=now()
+        WHERE id=$1::uuid AND status IN ('OPEN','PENDING')
+        RETURNING *
+      `, [req.params.id, body.staffId]);
+      if (!c.rowCount) throw Object.assign(new Error("case_not_assignable"), {status:409});
+      await client.query(`
+        UPDATE ops_staff SET active_case_count=active_case_count+1, updated_at=now()
+        WHERE id=$1::uuid
+      `, [body.staffId]);
+      return c.rows[0];
+    });
+    await writeAudit(req, {
+      action:"case.assign", resourceType:"case", resourceId:req.params.id,
+      reasonCode:body.reasonCode, after:result
+    });
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
+adminRouter.get("/queues", requirePermission("queues.read"), async (_req, res, next) => {
+  try {
+    const r = await query(`
+      SELECT id::text, name, category, sla_target_seconds "slaTargetSeconds", is_active "isActive"
+      FROM ops_queues ORDER BY name
+    `);
+    res.json(r.rows);
+  } catch (e) { next(e); }
+});
+
+adminRouter.get("/alerts", requirePermission("dashboard.read"), async (_req, res, next) => {
+  try {
+    const r = await query(`
+      SELECT id::text, severity, title, description, created_at "createdAt"
+      FROM ops_alerts WHERE resolved=false ORDER BY created_at DESC
+    `);
+    res.json(r.rows);
+  } catch (e) { next(e); }
+});
+
+adminRouter.post("/reports", requirePermission("reports.create"), async (req, res, next) => {
+  const schema = z.object({
+    reportType: z.enum(["DAILY_OPS","SLA","STAFFING","QUEUE","INCIDENT"]),
+    from: z.string(),
+    to: z.string()
+  });
+  try {
+    const body = schema.parse(req.body);
+    await writeAudit(req, {
+      action:"report.create", resourceType:"report",
+      reasonCode:"ADMIN_REPORT", after:body
+    });
+    res.status(202).json({status:"queued", reportType:body.reportType});
+  } catch (e) { next(e); }
+});
+
+
+==========================================================================================
+FILE: server/index.ts
+==========================================================================================
+import "dotenv/config";
+import express from "express";
+import helmet from "helmet";
+import cors from "cors";
+import compression from "compression";
+import crypto from "node:crypto";
+import { adminRouter } from "./routes";
+
+const app = express();
+
+app.disable("x-powered-by");
+app.use(helmet());
+app.use(cors({
+  origin: (process.env.ADMIN_ORIGINS ?? "http://localhost:3000").split(","),
+  credentials: true
+}));
+app.use(compression());
+app.use(express.json({ limit: "1mb" }));
+
+app.use((req, res, next) => {
+  req.requestId = String(req.headers["x-request-id"] ?? crypto.randomUUID());
+  res.setHeader("x-request-id", req.requestId);
+  next();
+});
+
+app.get("/health", (_req, res) => res.json({ ok: true }));
+app.use("/api/admin", adminRouter);
+
+app.use((err:any, _req:any, res:any, _next:any) => {
+  const status = err.status ?? (err.name === "ZodError" ? 400 : 500);
+  if (status >= 500) console.error(err);
+  res.status(status).json({
+    error: status === 500 ? "internal_server_error" : err.message,
+    details: err.name === "ZodError" ? err.issues : undefined
+  });
+});
+
+const port = Number(process.env.PORT ?? 8080);
+app.listen(port, () => console.log(`Linqa Admin API listening on :${port}`));
+
+
+==========================================================================================
+FILE: db/001_admin_monitoring.sql
+==========================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE staff_status AS ENUM ('ONLINE','AWAY','OFFLINE');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE case_priority AS ENUM ('P1','P2','P3','P4');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE case_status AS ENUM ('OPEN','PENDING','RESOLVED','CLOSED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE case_category AS ENUM (
+    'ACCOUNT_SUPPORT','LINQASEND','ACCOUNT_RECOVERY','VAULT_SUPPORT',
+    'TRUST_SAFETY','FRAUD_RISK','OTHER'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS ops_staff (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid UNIQUE NOT NULL,
+  display_name text NOT NULL,
+  role_name text NOT NULL,
+  team_name text,
+  status staff_status NOT NULL DEFAULT 'OFFLINE',
+  active_case_count integer NOT NULL DEFAULT 0,
+  max_concurrent_cases integer NOT NULL DEFAULT 8,
+  last_seen_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ops_queues (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text UNIQUE NOT NULL,
+  category case_category,
+  sla_target_seconds integer NOT NULL DEFAULT 1800,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ops_cases (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  public_id text UNIQUE NOT NULL,
+  client_id uuid NOT NULL,
+  queue_id uuid REFERENCES ops_queues(id),
+  category case_category NOT NULL,
+  priority case_priority NOT NULL DEFAULT 'P3',
+  status case_status NOT NULL DEFAULT 'OPEN',
+  assigned_staff_id uuid REFERENCES ops_staff(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  first_response_at timestamptz,
+  resolved_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_cases_status ON ops_cases(status);
+CREATE INDEX IF NOT EXISTS idx_ops_cases_queue ON ops_cases(queue_id);
+CREATE INDEX IF NOT EXISTS idx_ops_cases_created ON ops_cases(created_at);
+CREATE INDEX IF NOT EXISTS idx_ops_cases_priority ON ops_cases(priority);
+CREATE INDEX IF NOT EXISTS idx_ops_cases_assignee ON ops_cases(assigned_staff_id);
+
+CREATE TABLE IF NOT EXISTS ops_case_sla_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL REFERENCES ops_cases(id) ON DELETE CASCADE,
+  event_type text NOT NULL CHECK (event_type IN ('BREACHING','BREACHED','RECOVERED')),
+  threshold_seconds integer NOT NULL,
+  occurred_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ops_alerts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  severity text NOT NULL CHECK (severity IN ('CRITICAL','WARNING','INFO')),
+  title text NOT NULL,
+  description text NOT NULL,
+  source text NOT NULL DEFAULT 'OPS',
+  resolved boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  resolved_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS ops_system_services (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug text UNIQUE NOT NULL,
+  display_name text NOT NULL,
+  status text NOT NULL CHECK (status IN ('OPERATIONAL','DEGRADED','OUTAGE')),
+  last_check_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ops_activity (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_staff_id uuid REFERENCES ops_staff(id),
+  event_type text NOT NULL,
+  entity_type text,
+  entity_id text,
+  summary text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ops_audit_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_user_id uuid,
+  actor_role text,
+  action text NOT NULL,
+  resource_type text NOT NULL,
+  resource_id text,
+  reason_code text,
+  request_id text,
+  ip_hash text,
+  before_json jsonb,
+  after_json jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_audit_created ON ops_audit_log(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ops_incidents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  public_id text UNIQUE NOT NULL,
+  severity text NOT NULL CHECK (severity IN ('SEV1','SEV2','SEV3','SEV4')),
+  title text NOT NULL,
+  status text NOT NULL CHECK (status IN ('OPEN','MITIGATING','MONITORING','RESOLVED')),
+  commander_staff_id uuid REFERENCES ops_staff(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  resolved_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS ops_daily_metrics (
+  metric_date date PRIMARY KEY,
+  opened_cases integer NOT NULL DEFAULT 0,
+  resolved_cases integer NOT NULL DEFAULT 0,
+  backlog_end integer NOT NULL DEFAULT 0,
+  avg_first_response_seconds integer NOT NULL DEFAULT 0,
+  sla_compliance_pct numeric(5,2) NOT NULL DEFAULT 0
+);
+
+INSERT INTO ops_system_services (slug, display_name, status)
+VALUES
+ ('core-platform','Core Platform','OPERATIONAL'),
+ ('database','Database','OPERATIONAL'),
+ ('linqasend','LinqaSend','OPERATIONAL'),
+ ('vault','Vault Service','OPERATIONAL'),
+ ('chat','Chat Service','OPERATIONAL'),
+ ('notifications','Notifications','OPERATIONAL')
+ON CONFLICT (slug) DO NOTHING;

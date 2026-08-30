@@ -1,0 +1,859 @@
+LINQA REPO-NATIVE ADMIN/STAFF CONSOLIDATION PACK
+====================================================================================================
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Linqa Repo-Native Admin/Staff Consolidation Pack
+
+Targets the real architecture:
+Fastify + existing `jwt.ts` scopes + `support_cases_v2` + `support-operations.service.ts` + `clients/web`.
+
+This pack intentionally does not introduce Express, a second role-authority, `ops_cases`,
+or a second support case table.
+
+Flow:
+Admin/Supervisor -> `/api/ops/cases/:id/assign`
+-> existing JWT scope guard
+-> transaction/lock `support_cases_v2`
+-> update assignment
+-> `ops_case_assignments_v2`
+-> `support_case_events_v2`
+-> `ops_outbox`
+-> existing realtime transport
+-> Staff My Work + Admin refresh.
+
+
+====================================================================================================
+FILE: server/src/db/migrations/028_repo_native_operations.sql
+====================================================================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$ BEGIN
+  CREATE TYPE ops_staff_presence AS ENUM ('AVAILABLE','BUSY','AWAY','OFFLINE');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS ops_staff_profiles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid UNIQUE NOT NULL,
+  display_name text NOT NULL,
+  staff_role text NOT NULL,
+  team_name text,
+  presence ops_staff_presence NOT NULL DEFAULT 'OFFLINE',
+  active_case_count integer NOT NULL DEFAULT 0 CHECK (active_case_count >= 0),
+  max_concurrent_cases integer NOT NULL DEFAULT 8 CHECK (max_concurrent_cases > 0),
+  suspended boolean NOT NULL DEFAULT false,
+  last_seen_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ops_case_assignments_v2 (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL,
+  staff_id uuid NOT NULL REFERENCES ops_staff_profiles(id),
+  assigned_by_user_id uuid NOT NULL,
+  assignment_type text NOT NULL CHECK (assignment_type IN ('AUTO','MANUAL','REASSIGN','ESCALATION')),
+  reason_code text NOT NULL,
+  assigned_at timestamptz NOT NULL DEFAULT now(),
+  released_at timestamptz,
+  release_reason text
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ops_case_assignments_v2_active
+ON ops_case_assignments_v2(case_id) WHERE released_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS ops_case_sla_state_v2 (
+  case_id uuid PRIMARY KEY,
+  first_response_due_at timestamptz,
+  resolution_due_at timestamptz,
+  first_response_warned_at timestamptz,
+  first_response_breached_at timestamptz,
+  resolution_warned_at timestamptz,
+  resolution_breached_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ops_case_internal_notes_v2 (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_id uuid NOT NULL,
+  author_user_id uuid NOT NULL,
+  body text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ops_outbox (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  aggregate_type text NOT NULL,
+  aggregate_id text NOT NULL,
+  event_type text NOT NULL,
+  payload jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  published_at timestamptz,
+  publish_attempts integer NOT NULL DEFAULT 0,
+  last_error text
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_outbox_pending
+ON ops_outbox(created_at) WHERE published_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS ops_audit_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_user_id uuid,
+  actor_scope_snapshot jsonb NOT NULL DEFAULT '[]'::jsonb,
+  action text NOT NULL,
+  resource_type text NOT NULL,
+  resource_id text,
+  reason_code text,
+  request_id text,
+  before_json jsonb,
+  after_json jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Only add this if support_cases_v2 does not already contain it:
+-- ALTER TABLE support_cases_v2 ADD COLUMN assigned_staff_id uuid REFERENCES ops_staff_profiles(id);
+
+
+====================================================================================================
+FILE: server/src/auth/ops-scopes.ts
+====================================================================================================
+export const OPS_SCOPES = [
+  "ops:dashboard:read","ops:staff:read","ops:staff:manage",
+  "ops:case:read","ops:case:assign","ops:case:reassign","ops:case:release",
+  "ops:case:reply","ops:case:note","ops:case:resolve","ops:case:escalate",
+  "ops:case:priority","ops:client360:read","ops:client360:sensitive",
+  "ops:recovery:approve","ops:fraud:manage","ops:vault:manage",
+  "ops:trust-safety:manage","ops:audit:read"
+] as const;
+
+export type OpsScope = typeof OPS_SCOPES[number];
+export type StaffRole =
+  | "SUPER_ADMIN" | "OPS_ADMIN" | "SUPERVISOR" | "SUPPORT_AGENT"
+  | "RECOVERY_SPECIALIST" | "TRUST_SAFETY" | "FRAUD_ANALYST"
+  | "FINANCE_OPS" | "VAULT_OPS" | "AUDITOR" | "EXECUTIVE_READONLY";
+
+export const STAFF_ROLE_SCOPES: Record<StaffRole, OpsScope[]> = {
+  SUPER_ADMIN:[...OPS_SCOPES],
+  OPS_ADMIN:[
+    "ops:dashboard:read","ops:staff:read","ops:staff:manage","ops:case:read",
+    "ops:case:assign","ops:case:reassign","ops:case:release","ops:case:priority",
+    "ops:case:escalate","ops:client360:read","ops:client360:sensitive","ops:audit:read"
+  ],
+  SUPERVISOR:[
+    "ops:dashboard:read","ops:staff:read","ops:case:read","ops:case:assign",
+    "ops:case:reassign","ops:case:release","ops:case:priority","ops:case:escalate",
+    "ops:client360:read"
+  ],
+  SUPPORT_AGENT:[
+    "ops:case:read","ops:case:reply","ops:case:note","ops:case:escalate","ops:client360:read"
+  ],
+  RECOVERY_SPECIALIST:[
+    "ops:case:read","ops:case:reply","ops:case:note","ops:case:resolve",
+    "ops:case:escalate","ops:client360:read","ops:client360:sensitive","ops:recovery:approve"
+  ],
+  TRUST_SAFETY:[
+    "ops:case:read","ops:case:reply","ops:case:note","ops:case:resolve",
+    "ops:case:escalate","ops:client360:read","ops:trust-safety:manage"
+  ],
+  FRAUD_ANALYST:[
+    "ops:case:read","ops:case:note","ops:case:resolve","ops:case:escalate",
+    "ops:client360:read","ops:client360:sensitive","ops:fraud:manage"
+  ],
+  FINANCE_OPS:["ops:case:read","ops:case:reply","ops:case:note","ops:case:resolve","ops:case:escalate","ops:client360:read"],
+  VAULT_OPS:["ops:case:read","ops:case:reply","ops:case:note","ops:case:resolve","ops:case:escalate","ops:client360:read","ops:vault:manage"],
+  AUDITOR:["ops:dashboard:read","ops:staff:read","ops:case:read","ops:client360:read","ops:audit:read"],
+  EXECUTIVE_READONLY:["ops:dashboard:read","ops:staff:read"]
+};
+
+export function scopesForStaffRole(role: StaffRole): string[] {
+  return STAFF_ROLE_SCOPES[role] ?? [];
+}
+
+/*
+Merge into existing jwt.ts issue flow:
+payload.scope = [...new Set([...existingScopes, ...scopesForStaffRole(staffRole)])].join(" ");
+Existing enforcement remains:
+requireScope(principal, "ops:case:assign");
+*/
+
+
+====================================================================================================
+FILE: server/src/services/operations/db-types.ts
+====================================================================================================
+export interface TxLike {
+  query<T=any>(sql:string, params?:unknown[]): Promise<{rows:T[]; rowCount:number}>;
+}
+export interface DbLike extends TxLike {
+  tx<T>(fn:(tx:TxLike)=>Promise<T>): Promise<T>;
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/outbox.service.ts
+====================================================================================================
+import type { TxLike } from "./db-types";
+
+export async function enqueueOpsEvent(tx:TxLike,input:{
+  aggregateType:string; aggregateId:string; eventType:string; payload:unknown;
+}) {
+  await tx.query(
+    `INSERT INTO ops_outbox(aggregate_type,aggregate_id,event_type,payload)
+     VALUES($1,$2,$3,$4::jsonb)`,
+    [input.aggregateType,input.aggregateId,input.eventType,JSON.stringify(input.payload)]
+  );
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/audit.service.ts
+====================================================================================================
+import type { TxLike } from "./db-types";
+
+export async function writeOpsAudit(tx:TxLike,input:{
+  actorUserId?:string|null; actorScopes?:string[]; action:string;
+  resourceType:string; resourceId?:string|null; reasonCode?:string|null;
+  requestId?:string|null; before?:unknown; after?:unknown;
+}) {
+  await tx.query(
+    `INSERT INTO ops_audit_events(
+       actor_user_id,actor_scope_snapshot,action,resource_type,resource_id,
+       reason_code,request_id,before_json,after_json
+     ) VALUES($1::uuid,$2::jsonb,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb)`,
+    [
+      input.actorUserId??null,JSON.stringify(input.actorScopes??[]),input.action,
+      input.resourceType,input.resourceId??null,input.reasonCode??null,input.requestId??null,
+      JSON.stringify(input.before??null),JSON.stringify(input.after??null)
+    ]
+  );
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/case-assignment.service.ts
+====================================================================================================
+import type { DbLike, TxLike } from "./db-types";
+import { enqueueOpsEvent } from "./outbox.service";
+import { writeOpsAudit } from "./audit.service";
+
+const WORKABLE = new Set(["NEW","QUEUED","OPEN","ASSIGNED","IN_PROGRESS","PENDING","PENDING_CLIENT","ESCALATED"]);
+
+export class CaseAssignmentService {
+  constructor(private db:DbLike) {}
+
+  async assign(input:{
+    caseId:string; targetStaffId:string; actorUserId:string; actorScopes?:string[];
+    reasonCode:string; assignmentType:"AUTO"|"MANUAL"|"REASSIGN"|"ESCALATION";
+    requestId?:string|null;
+  }) {
+    return this.db.tx(async tx=>{
+      const c = await this.caseForUpdate(tx,input.caseId);
+      if(!WORKABLE.has(c.status)) throw Object.assign(new Error("CASE_NOT_ASSIGNABLE"),{statusCode:409});
+
+      const staff = await this.staffForUpdate(tx,input.targetStaffId);
+      if(staff.suspended) throw Object.assign(new Error("STAFF_SUSPENDED"),{statusCode:409});
+      if(staff.presence==="OFFLINE") throw Object.assign(new Error("STAFF_OFFLINE"),{statusCode:409});
+      if(Number(staff.active_case_count)>=Number(staff.max_concurrent_cases))
+        throw Object.assign(new Error("STAFF_CAPACITY_REACHED"),{statusCode:409});
+
+      const previousOwner = c.assigned_staff_id ?? null;
+
+      if(previousOwner && previousOwner!==input.targetStaffId) {
+        await tx.query(
+          `UPDATE ops_case_assignments_v2
+           SET released_at=now(),release_reason='REASSIGNED'
+           WHERE case_id=$1::uuid AND released_at IS NULL`,
+          [input.caseId]
+        );
+        await tx.query(
+          `UPDATE ops_staff_profiles
+           SET active_case_count=GREATEST(active_case_count-1,0),updated_at=now()
+           WHERE id=$1::uuid`,
+          [previousOwner]
+        );
+      }
+
+      if(previousOwner!==input.targetStaffId) {
+        await tx.query(
+          `INSERT INTO ops_case_assignments_v2(
+             case_id,staff_id,assigned_by_user_id,assignment_type,reason_code
+           ) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5)`,
+          [input.caseId,input.targetStaffId,input.actorUserId,input.assignmentType,input.reasonCode]
+        );
+        await tx.query(
+          `UPDATE ops_staff_profiles
+           SET active_case_count=active_case_count+1,updated_at=now()
+           WHERE id=$1::uuid`,
+          [input.targetStaffId]
+        );
+      }
+
+      const updated = await tx.query<any>(
+        `UPDATE support_cases_v2
+         SET assigned_staff_id=$2::uuid,
+             status=CASE WHEN status IN ('NEW','QUEUED','OPEN') THEN 'ASSIGNED' ELSE status END,
+             updated_at=now()
+         WHERE id=$1::uuid
+         RETURNING *`,
+        [input.caseId,input.targetStaffId]
+      );
+
+      await tx.query(
+        `INSERT INTO support_case_events_v2(case_id,event_type,actor_id,metadata,created_at)
+         VALUES($1::uuid,'ASSIGNED',$2::uuid,$3::jsonb,now())`,
+        [input.caseId,input.actorUserId,JSON.stringify({
+          previousOwner,targetStaffId:input.targetStaffId,
+          assignmentType:input.assignmentType,reasonCode:input.reasonCode
+        })]
+      );
+
+      await enqueueOpsEvent(tx,{
+        aggregateType:"support_case",
+        aggregateId:input.caseId,
+        eventType:"ops.case.assigned",
+        payload:{caseId:input.caseId,previousOwner,targetStaffId:input.targetStaffId}
+      });
+
+      await writeOpsAudit(tx,{
+        actorUserId:input.actorUserId,actorScopes:input.actorScopes,
+        action:"ops.case.assign",resourceType:"support_case_v2",resourceId:input.caseId,
+        reasonCode:input.reasonCode,requestId:input.requestId,before:c,after:updated.rows[0]
+      });
+
+      return updated.rows[0];
+    });
+  }
+
+  async release(input:{
+    caseId:string; actorUserId:string; actorScopes?:string[];
+    reasonCode:string; requestId?:string|null;
+  }) {
+    return this.db.tx(async tx=>{
+      const c=await this.caseForUpdate(tx,input.caseId);
+      const owner=c.assigned_staff_id??null;
+      if(!owner) return c;
+
+      await tx.query(
+        `UPDATE ops_case_assignments_v2
+         SET released_at=now(),release_reason=$2
+         WHERE case_id=$1::uuid AND released_at IS NULL`,
+        [input.caseId,input.reasonCode]
+      );
+      await tx.query(
+        `UPDATE ops_staff_profiles
+         SET active_case_count=GREATEST(active_case_count-1,0),updated_at=now()
+         WHERE id=$1::uuid`,
+        [owner]
+      );
+      const updated=await tx.query<any>(
+        `UPDATE support_cases_v2
+         SET assigned_staff_id=NULL,status='QUEUED',updated_at=now()
+         WHERE id=$1::uuid RETURNING *`,
+        [input.caseId]
+      );
+      await enqueueOpsEvent(tx,{
+        aggregateType:"support_case",aggregateId:input.caseId,eventType:"ops.case.released",
+        payload:{caseId:input.caseId,previousOwner:owner}
+      });
+      return updated.rows[0];
+    });
+  }
+
+  private async caseForUpdate(tx:TxLike,caseId:string){
+    const r=await tx.query<any>(`SELECT * FROM support_cases_v2 WHERE id=$1::uuid FOR UPDATE`,[caseId]);
+    if(!r.rowCount) throw Object.assign(new Error("CASE_NOT_FOUND"),{statusCode:404});
+    return r.rows[0];
+  }
+
+  private async staffForUpdate(tx:TxLike,staffId:string){
+    const r=await tx.query<any>(`SELECT * FROM ops_staff_profiles WHERE id=$1::uuid FOR UPDATE`,[staffId]);
+    if(!r.rowCount) throw Object.assign(new Error("STAFF_NOT_FOUND"),{statusCode:404});
+    return r.rows[0];
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/staff-operations.service.ts
+====================================================================================================
+import type { DbLike } from "./db-types";
+
+export class StaffOperationsService {
+  constructor(private db:DbLike){}
+
+  async listLiveStaff(){
+    const r=await this.db.query<any>(
+      `SELECT id::text,user_id::text "userId",display_name "displayName",
+              staff_role "staffRole",team_name "teamName",presence::text,
+              active_case_count "activeCases",max_concurrent_cases "maxConcurrentCases",
+              last_seen_at "lastSeenAt"
+       FROM ops_staff_profiles
+       WHERE suspended=false
+       ORDER BY CASE presence WHEN 'AVAILABLE' THEN 0 WHEN 'BUSY' THEN 1 WHEN 'AWAY' THEN 2 ELSE 3 END,
+                display_name`
+    );
+    return r.rows;
+  }
+
+  async getMyWorkByUserId(userId:string){
+    const p=await this.db.query<any>(`SELECT id::text FROM ops_staff_profiles WHERE user_id=$1::uuid`,[userId]);
+    if(!p.rowCount) throw Object.assign(new Error("STAFF_PROFILE_NOT_FOUND"),{statusCode:404});
+
+    const r=await this.db.query<any>(
+      `SELECT id::text,public_id "publicId",status,priority,category,updated_at "updatedAt"
+       FROM support_cases_v2
+       WHERE assigned_staff_id=$1::uuid AND status NOT IN ('RESOLVED','CLOSED')
+       ORDER BY CASE priority WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4 END,
+                updated_at DESC`,
+      [p.rows[0].id]
+    );
+    return r.rows;
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/dashboard.service.ts
+====================================================================================================
+import type { DbLike } from "./db-types";
+
+export class OperationsDashboardService {
+  constructor(private db:DbLike){}
+
+  async overview(){
+    const [cases,staff,sla]=await Promise.all([
+      this.db.query<any>(
+        `SELECT
+           count(*) FILTER(WHERE status NOT IN ('RESOLVED','CLOSED'))::int "openCases",
+           count(*) FILTER(WHERE status NOT IN ('RESOLVED','CLOSED') AND assigned_staff_id IS NULL)::int "unassignedCases",
+           count(*) FILTER(WHERE status='RESOLVED' AND updated_at::date=current_date)::int "resolvedToday"
+         FROM support_cases_v2`
+      ),
+      this.db.query<any>(
+        `SELECT
+           count(*) FILTER(WHERE presence='AVAILABLE')::int "availableStaff",
+           count(*) FILTER(WHERE presence='BUSY')::int "busyStaff"
+         FROM ops_staff_profiles WHERE suspended=false`
+      ),
+      this.db.query<any>(
+        `SELECT count(*) FILTER(WHERE first_response_breached_at IS NULL)::int good,
+                count(*)::int total
+         FROM ops_case_sla_state_v2`
+      )
+    ]);
+
+    const c=cases.rows[0]??{}, s=staff.rows[0]??{}, sl=sla.rows[0]??{};
+    return {
+      openCases:Number(c.openCases??0),
+      unassignedCases:Number(c.unassignedCases??0),
+      resolvedToday:Number(c.resolvedToday??0),
+      availableStaff:Number(s.availableStaff??0),
+      busyStaff:Number(s.busyStaff??0),
+      slaCompliancePct:Number(sl.total)>0
+        ? Math.round((Number(sl.good)/Number(sl.total))*1000)/10
+        : 100
+    };
+  }
+}
+
+
+====================================================================================================
+FILE: server/src/services/operations/support-operations.adapter.ts
+====================================================================================================
+/**
+ * Reuse the real support operations service instead of duplicating case-domain logic.
+ * Adjust the import/export name if the existing file exports differently.
+ */
+import { supportOperationsService } from "../support-operations.service";
+
+export const repoNativeSupportOps = {
+  async getCaseWorkspace(caseId:string){
+    if(typeof (supportOperationsService as any).getCaseWorkspace==="function")
+      return (supportOperationsService as any).getCaseWorkspace(caseId);
+    if(typeof (supportOperationsService as any).getCase==="function")
+      return (supportOperationsService as any).getCase(caseId);
+    throw new Error("ADAPT_SUPPORT_OPERATIONS_SERVICE_EXPORT");
+  }
+};
+
+
+====================================================================================================
+FILE: server/src/routes/operations/auth.ts
+====================================================================================================
+import { requireScope } from "../../auth/jwt";
+
+export function scopesOf(principal:any):string[]{
+  if(Array.isArray(principal?.scope)) return principal.scope;
+  if(typeof principal?.scope==="string") return principal.scope.split(/\s+/).filter(Boolean);
+  return [];
+}
+
+export function assertScope(principal:any,scope:string){
+  requireScope(principal,scope);
+}
+
+
+====================================================================================================
+FILE: server/src/routes/operations/index.ts
+====================================================================================================
+import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
+import { assertScope,scopesOf } from "./auth";
+import { CaseAssignmentService } from "../../services/operations/case-assignment.service";
+import { StaffOperationsService } from "../../services/operations/staff-operations.service";
+import { OperationsDashboardService } from "../../services/operations/dashboard.service";
+import { repoNativeSupportOps } from "../../services/operations/support-operations.adapter";
+
+const CaseParams=z.object({caseId:z.string().uuid()});
+const AssignBody=z.object({staffId:z.string().uuid(),reasonCode:z.string().min(3).max(100)});
+const ReleaseBody=z.object({reasonCode:z.string().min(3).max(100)});
+
+export const operationsRoutes:FastifyPluginAsync=async(app)=>{
+  const assignment=new CaseAssignmentService((app as any).db);
+  const staff=new StaffOperationsService((app as any).db);
+  const dashboard=new OperationsDashboardService((app as any).db);
+
+  app.get("/dashboard",async(request,reply)=>{
+    const p=await (app as any).authenticate(request,reply);
+    assertScope(p,"ops:dashboard:read");
+    return dashboard.overview();
+  });
+
+  app.get("/staff/live",async(request,reply)=>{
+    const p=await (app as any).authenticate(request,reply);
+    assertScope(p,"ops:staff:read");
+    return staff.listLiveStaff();
+  });
+
+  app.get("/staff/my-work",async(request,reply)=>{
+    const p=await (app as any).authenticate(request,reply);
+    assertScope(p,"ops:case:read");
+    return staff.getMyWorkByUserId(p.sub);
+  });
+
+  app.get("/cases/:caseId",async(request,reply)=>{
+    const p=await (app as any).authenticate(request,reply);
+    assertScope(p,"ops:case:read");
+    const {caseId}=CaseParams.parse(request.params);
+    const result=await repoNativeSupportOps.getCaseWorkspace(caseId);
+    if(!result) return reply.code(404).send({error:"CASE_NOT_FOUND"});
+    return result;
+  });
+
+  app.post("/cases/:caseId/assign",async(request,reply)=>{
+    const p=await (app as any).authenticate(request,reply);
+    assertScope(p,"ops:case:assign");
+    const {caseId}=CaseParams.parse(request.params);
+    const body=AssignBody.parse(request.body);
+    return assignment.assign({
+      caseId,targetStaffId:body.staffId,actorUserId:p.sub,actorScopes:scopesOf(p),
+      reasonCode:body.reasonCode,assignmentType:"MANUAL",requestId:request.id
+    });
+  });
+
+  app.post("/cases/:caseId/reassign",async(request,reply)=>{
+    const p=await (app as any).authenticate(request,reply);
+    assertScope(p,"ops:case:reassign");
+    const {caseId}=CaseParams.parse(request.params);
+    const body=AssignBody.parse(request.body);
+    return assignment.assign({
+      caseId,targetStaffId:body.staffId,actorUserId:p.sub,actorScopes:scopesOf(p),
+      reasonCode:body.reasonCode,assignmentType:"REASSIGN",requestId:request.id
+    });
+  });
+
+  app.post("/cases/:caseId/release",async(request,reply)=>{
+    const p=await (app as any).authenticate(request,reply);
+    assertScope(p,"ops:case:release");
+    const {caseId}=CaseParams.parse(request.params);
+    const body=ReleaseBody.parse(request.body);
+    return assignment.release({
+      caseId,actorUserId:p.sub,actorScopes:scopesOf(p),
+      reasonCode:body.reasonCode,requestId:request.id
+    });
+  });
+};
+
+
+====================================================================================================
+FILE: server/src/routes/operations/register.example.ts
+====================================================================================================
+import { operationsRoutes } from "./index";
+
+/* Merge into the existing Fastify bootstrap. */
+export async function registerOperations(app:any){
+  await app.register(operationsRoutes,{prefix:"/api/ops"});
+}
+
+
+====================================================================================================
+FILE: server/src/realtime/operations-outbox-publisher.ts
+====================================================================================================
+export interface OpsEventTransport {
+  publish(topic:string,payload:unknown):Promise<void>;
+}
+
+/**
+ * Inject the repository's existing websocket/event transport here.
+ * Do not create a second realtime framework.
+ */
+export async function publishPendingOpsOutbox(db:any,transport:OpsEventTransport,batchSize=100){
+  return db.tx(async(tx:any)=>{
+    const r=await tx.query(
+      `SELECT id::text,event_type,payload
+       FROM ops_outbox
+       WHERE published_at IS NULL
+       ORDER BY created_at
+       FOR UPDATE SKIP LOCKED
+       LIMIT $1`,
+      [batchSize]
+    );
+
+    for(const row of r.rows){
+      try{
+        await transport.publish(row.event_type,row.payload);
+        await tx.query(
+          `UPDATE ops_outbox
+           SET published_at=now(),publish_attempts=publish_attempts+1,last_error=NULL
+           WHERE id=$1::uuid`,
+          [row.id]
+        );
+      }catch(e:any){
+        await tx.query(
+          `UPDATE ops_outbox
+           SET publish_attempts=publish_attempts+1,last_error=$2
+           WHERE id=$1::uuid`,
+          [row.id,String(e?.message??e).slice(0,1000)]
+        );
+      }
+    }
+    return r.rowCount;
+  });
+}
+
+
+====================================================================================================
+FILE: server/tests/operations/acceptance.test.ts
+====================================================================================================
+import { describe,it } from "vitest";
+
+/**
+ * Bind these TODOs to the repo's existing Fastify test harness/database fixtures.
+ * These are the release-gate tests for replacing the orphan Admin-Staff folder.
+ */
+describe("repo-native admin/staff operations",()=>{
+  it.todo("admin assignment mutates real support_cases_v2");
+  it.todo("assignment writes support_case_events_v2, ops_case_assignments_v2 and ops_outbox atomically");
+  it.todo("assigned case appears in /api/ops/staff/my-work for target staff user");
+  it.todo("support agent without ops:case:assign receives 403");
+  it.todo("offline, suspended and full-capacity staff cannot receive assignment");
+  it.todo("reassignment decrements old staff load and increments new staff load");
+  it.todo("release returns case to queue and removes staff ownership");
+});
+
+
+====================================================================================================
+FILE: clients/web/src/admin/api/operations-api.ts
+====================================================================================================
+export type Overview={
+  openCases:number;unassignedCases:number;resolvedToday:number;
+  availableStaff:number;busyStaff:number;slaCompliancePct:number;
+};
+export type LiveStaff={
+  id:string;userId:string;displayName:string;staffRole:string;teamName?:string|null;
+  presence:"AVAILABLE"|"BUSY"|"AWAY"|"OFFLINE";
+  activeCases:number;maxConcurrentCases:number;lastSeenAt?:string|null;
+};
+
+async function api<T>(path:string,init?:RequestInit):Promise<T>{
+  const r=await fetch(path,{
+    credentials:"include",
+    ...init,
+    headers:{"content-type":"application/json",...(init?.headers??{})}
+  });
+  const body=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(body.error??`HTTP_${r.status}`);
+  return body as T;
+}
+
+export const operationsApi={
+  overview:()=>api<Overview>("/api/ops/dashboard"),
+  liveStaff:()=>api<LiveStaff[]>("/api/ops/staff/live"),
+  myWork:()=>api<any[]>("/api/ops/staff/my-work"),
+  case:(id:string)=>api<any>(`/api/ops/cases/${id}`),
+  assign:(id:string,staffId:string,reasonCode:string)=>api<any>(`/api/ops/cases/${id}/assign`,{
+    method:"POST",body:JSON.stringify({staffId,reasonCode})
+  }),
+  reassign:(id:string,staffId:string,reasonCode:string)=>api<any>(`/api/ops/cases/${id}/reassign`,{
+    method:"POST",body:JSON.stringify({staffId,reasonCode})
+  }),
+  release:(id:string,reasonCode:string)=>api<any>(`/api/ops/cases/${id}/release`,{
+    method:"POST",body:JSON.stringify({reasonCode})
+  })
+};
+
+
+====================================================================================================
+FILE: clients/web/src/admin/hooks/useOperations.ts
+====================================================================================================
+import useSWR,{mutate} from "swr";
+import { operationsApi } from "../api/operations-api";
+
+export const useOperationsOverview=()=>useSWR("ops:overview",operationsApi.overview,{refreshInterval:30000});
+export const useLiveStaff=()=>useSWR("ops:live-staff",operationsApi.liveStaff,{refreshInterval:15000});
+export const useMyWork=()=>useSWR("ops:my-work",operationsApi.myWork,{refreshInterval:15000});
+
+export function refreshOperations(){
+  mutate("ops:overview");
+  mutate("ops:live-staff");
+  mutate("ops:my-work");
+}
+
+
+====================================================================================================
+FILE: clients/web/src/admin/hooks/useOperationsRealtime.ts
+====================================================================================================
+import { useEffect } from "react";
+import { refreshOperations } from "./useOperations";
+
+/**
+ * Attach this to the existing Linqa realtime client.
+ * Do not create a second websocket connection if clients/web already has one.
+ */
+export function useOperationsRealtime(){
+  useEffect(()=>{
+    const rt=(window as any).linqaRealtime;
+    if(!rt?.subscribe) return;
+    return rt.subscribe("ops.*",(event:any)=>{
+      if(
+        event?.type==="ops.case.assigned" ||
+        event?.type==="ops.case.released" ||
+        String(event?.type??"").startsWith("ops.sla.")
+      ){
+        refreshOperations();
+      }
+    });
+  },[]);
+}
+
+
+====================================================================================================
+FILE: clients/web/src/admin/layout/OperationsShell.tsx
+====================================================================================================
+import type { ReactNode } from "react";
+import { LayoutDashboard,Users,BriefcaseBusiness,UserRoundSearch,ShieldCheck,Send,LockKeyhole,TriangleAlert,ScrollText } from "lucide-react";
+
+const nav=[
+  ["Overview","/operations",LayoutDashboard],
+  ["Staff","/operations/staff",Users],
+  ["My Work","/operations/my-work",BriefcaseBusiness],
+  ["Client 360","/operations/clients",UserRoundSearch],
+  ["Recovery","/operations/recovery",ShieldCheck],
+  ["LinqaSend","/operations/linqasend",Send],
+  ["Vault","/operations/vault",LockKeyhole],
+  ["Risk & Safety","/operations/risk",TriangleAlert],
+  ["Audit","/operations/audit",ScrollText]
+] as const;
+
+export function OperationsShell({children}:{children:ReactNode}){
+  return <div className="min-h-screen bg-[#050d16] text-slate-100">
+    <div className="flex">
+      <aside className="hidden min-h-screen w-60 border-r border-slate-800 bg-[#07111d] lg:block">
+        <div className="border-b border-slate-800 px-5 py-5 text-xl font-bold">Linqa Operations</div>
+        <nav className="space-y-1 p-3">
+          {nav.map(([label,href,Icon])=>
+            <a key={href} href={href} className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-800 hover:text-white">
+              <Icon className="h-4 w-4"/>{label}
+            </a>
+          )}
+        </nav>
+      </aside>
+      <main className="min-w-0 flex-1">{children}</main>
+    </div>
+  </div>;
+}
+
+
+====================================================================================================
+FILE: clients/web/src/admin/pages/OperationsOverviewPage.tsx
+====================================================================================================
+import { OperationsShell } from "../layout/OperationsShell";
+import { useLiveStaff,useOperationsOverview } from "../hooks/useOperations";
+import { useOperationsRealtime } from "../hooks/useOperationsRealtime";
+
+const Card=({label,value}:{label:string;value:any})=>
+  <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+    <div className="text-xs text-slate-500">{label}</div>
+    <div className="mt-2 text-2xl font-bold">{value}</div>
+  </div>;
+
+export default function OperationsOverviewPage(){
+  const o=useOperationsOverview();
+  const staff=useLiveStaff();
+  useOperationsRealtime();
+
+  return <OperationsShell>
+    <div className="space-y-5 p-5">
+      <div>
+        <h1 className="text-2xl font-bold">Operations Overview</h1>
+        <p className="mt-1 text-sm text-slate-500">Live data from the repo-native Fastify operations API.</p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <Card label="Open Cases" value={o.data?.openCases??"—"}/>
+        <Card label="Unassigned" value={o.data?.unassignedCases??"—"}/>
+        <Card label="Resolved Today" value={o.data?.resolvedToday??"—"}/>
+        <Card label="Available Staff" value={o.data?.availableStaff??"—"}/>
+        <Card label="Busy Staff" value={o.data?.busyStaff??"—"}/>
+        <Card label="SLA" value={o.data?`${o.data.slaCompliancePct}%`:"—"}/>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70">
+        <div className="border-b border-slate-800 px-4 py-3 font-semibold">Live Staff</div>
+        {(staff.data??[]).map(s=>
+          <div key={s.id} className="flex items-center gap-4 border-b border-slate-800 px-4 py-3">
+            <div className="h-9 w-9 rounded-full bg-slate-700"/>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">{s.displayName}</div>
+              <div className="text-xs text-slate-500">{s.staffRole} • {s.teamName??"No team"}</div>
+            </div>
+            <div className="text-xs text-emerald-400">{s.presence}</div>
+            <div className="text-xs text-slate-400">{s.activeCases}/{s.maxConcurrentCases} cases</div>
+          </div>
+        )}
+      </div>
+    </div>
+  </OperationsShell>;
+}
+
+
+====================================================================================================
+FILE: clients/web/src/admin/pages/MyWorkPage.tsx
+====================================================================================================
+import { OperationsShell } from "../layout/OperationsShell";
+import { useMyWork } from "../hooks/useOperations";
+import { useOperationsRealtime } from "../hooks/useOperationsRealtime";
+
+export default function MyWorkPage(){
+  const work=useMyWork();
+  useOperationsRealtime();
+
+  return <OperationsShell>
+    <div className="p-5">
+      <h1 className="text-2xl font-bold">My Work</h1>
+      <p className="mt-1 text-sm text-slate-500">Cases assigned through support_cases_v2.</p>
+
+      <div className="mt-5 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70">
+        {(work.data??[]).map((c:any)=>
+          <a key={c.id} href={`/operations/cases/${c.id}`} className="grid grid-cols-[1fr_150px_100px_180px] border-b border-slate-800 px-4 py-3 text-sm hover:bg-slate-800/50">
+            <div><div className="font-medium">{c.publicId}</div><div className="text-xs text-slate-500">{c.category}</div></div>
+            <div>{c.status}</div>
+            <div>{c.priority}</div>
+            <div className="text-xs text-slate-500">{new Date(c.updatedAt).toLocaleString()}</div>
+          </a>
+        )}
+      </div>
+    </div>
+  </OperationsShell>;
+}
