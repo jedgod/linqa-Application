@@ -32,12 +32,16 @@ export const GLOBAL_CREATE_ACTIONS: readonly CreateAction[] = [
 ];
 
 const CONTEXT_ACTIONS: Record<string, readonly CreateAction[]> = {
+  // Only the three call actions the API actually supports. "Group call" and
+  // "Create call link" were listed here but `POST /v1/calls` creates exactly
+  // one CALLER and one CALLEE (1:1), and there is no call-link feature on the
+  // server at all -- both routed to the generic module placeholder. The Calls
+  // screen handles these keys in place rather than navigating, so `route` is
+  // only a fallback for other surfaces.
   calls: [
     action("call", "Audio call", "call-outline", "/(tabs)/calls"),
     action("video", "Video call", "videocam-outline", "/(tabs)/calls"),
-    action("group", "Group call", "people-outline", "/modules/calls"),
-    action("schedule", "Schedule call", "calendar-outline", "/modules/calendar"),
-    action("call-link", "Create call link", "link-outline", "/modules/calls")
+    action("schedule", "Schedule call", "calendar-outline", "/(tabs)/calls")
   ],
   chats: [
     action("chat", "New chat", "chatbubble-outline", "/(tabs)/chats"),

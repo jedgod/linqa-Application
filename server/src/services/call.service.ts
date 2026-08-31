@@ -16,14 +16,27 @@ export class CallService {
     try {
       await client.query("BEGIN");
 
+      // Ownership, not just liveness: the previous check only asked whether
+      // both device ids were ACTIVE, so any active device id could be paired
+      // with any user id and written into call_participants as that user's
+      // device. Bind each device to the user it is claimed for.
       const activeDevices = await client.query(
-        `SELECT id
+        `SELECT id, user_id
          FROM devices
          WHERE id = ANY($1::uuid[])
            AND status = 'ACTIVE'`,
         [[input.initiatorDeviceId, input.recipientDeviceId]]
       );
-      if (activeDevices.rowCount !== 2) {
+      const ownerOf = new Map<string, string>(
+        (activeDevices.rows as Array<{ id: string; user_id: string }>).map((row) => [row.id, row.user_id])
+      );
+      if (ownerOf.get(input.initiatorDeviceId) !== input.initiatorUserId) {
+        throw new Error("inactive call participant");
+      }
+      if (ownerOf.get(input.recipientDeviceId) !== input.recipientUserId) {
+        throw new Error("inactive call participant");
+      }
+      if (input.initiatorDeviceId === input.recipientDeviceId) {
         throw new Error("inactive call participant");
       }
 
@@ -138,5 +151,74 @@ export class CallService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Picks the device a call to `userId` should ring.
+   *
+   * The client cannot supply `recipientDeviceId`: device ids are not exposed
+   * to peers (enumerating someone's devices is a privacy leak), so resolution
+   * happens here. Most-recently-seen active device wins, which is the one the
+   * user is most likely holding.
+   */
+  async resolveCallableDevice(userId: string): Promise<string | null> {
+    const result = await this.db.query(
+      `SELECT id FROM devices
+       WHERE user_id = $1 AND status = 'ACTIVE'
+       ORDER BY last_seen_at DESC NULLS LAST, registered_at DESC
+       LIMIT 1`,
+      [userId]
+    );
+    return (result.rows[0] as { id: string } | undefined)?.id ?? null;
+  }
+
+  /**
+   * Upcoming scheduled calls the user is party to, as organizer or invitee.
+   * Only future, still-SCHEDULED entries: this backs a "what's next" view, not
+   * an audit log.
+   */
+  async listScheduled(userId: string, limit = 50) {
+    const result = await this.db.query(
+      `SELECT
+         sc.id,
+         sc.call_type        AS "callType",
+         sc.privacy_mode     AS "privacyMode",
+         sc.scheduled_for    AS "scheduledFor",
+         sc.status,
+         sc.created_at       AS "createdAt",
+         (sc.organizer_user_id = $1) AS "isOrganizer",
+         COALESCE(organizer.display_name, 'Linqa user') AS "organizerName",
+         COALESCE(
+           (SELECT array_agg(COALESCE(p.display_name, 'Linqa user') ORDER BY p.display_name)
+            FROM user_profiles p
+            WHERE p.user_id = ANY(sc.participant_user_ids)),
+           '{}'
+         ) AS "participantNames",
+         cardinality(sc.participant_user_ids) AS "participantCount"
+       FROM scheduled_calls sc
+       LEFT JOIN user_profiles organizer ON organizer.user_id = sc.organizer_user_id
+       WHERE sc.status = 'SCHEDULED'
+         AND sc.scheduled_for > now()
+         AND (sc.organizer_user_id = $1 OR $1 = ANY(sc.participant_user_ids))
+       ORDER BY sc.scheduled_for ASC
+       LIMIT $2`,
+      [userId, Math.max(1, Math.min(limit, 200))]
+    );
+    return result.rows;
+  }
+
+  /**
+   * Cancels a scheduled call. Only the organizer may cancel, and only while it
+   * is still SCHEDULED -- returns false rather than throwing so the route can
+   * answer 404 without leaking whether the id exists.
+   */
+  async cancelScheduled(scheduledCallId: string, userId: string): Promise<boolean> {
+    const result = await this.db.query(
+      `UPDATE scheduled_calls
+       SET status = 'CANCELLED'
+       WHERE id = $1 AND organizer_user_id = $2 AND status = 'SCHEDULED'`,
+      [scheduledCallId, userId]
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 }

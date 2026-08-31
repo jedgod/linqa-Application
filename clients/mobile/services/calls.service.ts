@@ -1,13 +1,60 @@
+export type CallType = "AUDIO" | "VIDEO" | "SCREEN_SHARE";
+export type CallStatus = "MISSED" | "REJECTED" | "COMPLETED" | "FAILED" | "CANCELLED";
+export type PrivacyMode = "STANDARD" | "RELAY_ONLY";
+
 export type CallHistoryItem = {
   id: string;
   peerUserId: string;
   peerDisplayName: string;
   direction: "INCOMING" | "OUTGOING";
-  callType: "AUDIO" | "VIDEO" | "SCREEN_SHARE";
-  status: "MISSED" | "REJECTED" | "COMPLETED" | "FAILED" | "CANCELLED";
+  callType: CallType;
+  status: CallStatus;
   durationSeconds: number;
   createdAt: string;
 };
+
+export type ScheduledCall = {
+  id: string;
+  callType: "AUDIO" | "VIDEO";
+  privacyMode: PrivacyMode;
+  scheduledFor: string;
+  status: string;
+  isOrganizer: boolean;
+  organizerName: string;
+  participantNames: string[];
+  participantCount: number;
+};
+
+export type PlacedCall = {
+  callId: string;
+  createdAt: string;
+  mode: string;
+  privacyMode: PrivacyMode;
+};
+
+/**
+ * Raised when the callee has no device that can ring. Distinct from a generic
+ * failure so the UI can say "they have no active device" instead of a vague
+ * error — the difference matters to the person trying to call.
+ */
+export class NoActiveDeviceError extends Error {
+  constructor(peerName?: string) {
+    super(
+      peerName
+        ? `${peerName} has no active device to ring right now.`
+        : "That contact has no active device to ring right now."
+    );
+    this.name = "NoActiveDeviceError";
+  }
+}
+
+/** Raised when this device's session cannot place calls (not device-bound). */
+export class CallNotPermittedError extends Error {
+  constructor() {
+    super("This device is not enrolled for calling. Sign in again on this device.");
+    this.name = "CallNotPermittedError";
+  }
+}
 
 export class CallsService {
   constructor(
@@ -15,51 +62,202 @@ export class CallsService {
     private readonly getAccessToken: () => Promise<string>
   ) {}
 
-  async listHistory(limit = 100): Promise<CallHistoryItem[]> {
+  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const token = await this.getAccessToken();
-    const response = await fetch(
-      `${this.apiBaseUrl}/v1/calls/history?limit=${limit}`,
-      { headers: { authorization: `Bearer ${token}` } }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Unable to load calls (${response.status}).`);
-    }
-
-    const payload = await response.json();
-    return (payload.calls ?? []).map((item: any) => ({
-      id: item.id,
-      peerUserId: item.peer_user_id,
-      peerDisplayName: item.display_name ?? "Unknown contact",
-      direction: item.direction,
-      callType: item.call_type,
-      status: item.status,
-      durationSeconds: item.duration_seconds ?? 0,
-      createdAt: item.created_at
-    }));
-  }
-
-  async schedule(input: {
-    participantUserIds: string[];
-    callType: "AUDIO" | "VIDEO";
-    privacyMode: "STANDARD" | "RELAY_ONLY";
-    scheduledFor: string;
-    titleCiphertextBase64?: string;
-  }) {
-    const token = await this.getAccessToken();
-    const response = await fetch(`${this.apiBaseUrl}/v1/calls/scheduled`, {
-      method: "POST",
+    const response = await fetch(`${this.apiBaseUrl}${path}`, {
+      ...init,
       headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify(input)
+        authorization: `Bearer ${token}`,
+        ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+        ...(init.headers ?? {})
+      }
     });
 
+    if (response.status === 204) return undefined as T;
+
+    const text = await response.text();
+    const payload: unknown = text ? JSON.parse(text) : {};
+
     if (!response.ok) {
-      throw new Error(`Unable to schedule call (${response.status}).`);
+      const error = (payload as { error?: string }).error;
+      if (response.status === 409 && error === "recipient_has_no_active_device") {
+        throw new NoActiveDeviceError();
+      }
+      if (response.status === 401 && error === "device_bound_token_required") {
+        throw new CallNotPermittedError();
+      }
+      throw new Error(error ?? `Call request failed (${response.status}).`);
     }
 
-    return response.json();
+    return payload as T;
   }
+
+  async listHistory(limit = 100): Promise<CallHistoryItem[]> {
+    const payload = await this.request<{ calls?: unknown[] }>(`/v1/calls/history?limit=${limit}`);
+    return (payload.calls ?? []).map((raw) => {
+      const item = raw as Record<string, unknown>;
+      return {
+        id: String(item.id),
+        peerUserId: String(item.peer_user_id ?? ""),
+        peerDisplayName: String(item.display_name ?? "Unknown contact"),
+        direction: (item.direction === "INCOMING" ? "INCOMING" : "OUTGOING") as "INCOMING" | "OUTGOING",
+        callType: (item.call_type ?? "AUDIO") as CallType,
+        status: (item.status ?? "COMPLETED") as CallStatus,
+        durationSeconds: Number(item.duration_seconds ?? 0),
+        createdAt: String(item.created_at)
+      };
+    });
+  }
+
+  /**
+   * Places a call. `recipientDeviceId` is intentionally not sent: the server
+   * resolves the callee's most recently active device, because device ids are
+   * not exposed to peers.
+   */
+  placeCall(input: {
+    recipientUserId: string;
+    callType: CallType;
+    privacyMode?: PrivacyMode;
+  }): Promise<PlacedCall> {
+    return this.request<PlacedCall>("/v1/calls", {
+      method: "POST",
+      body: JSON.stringify({
+        recipientUserId: input.recipientUserId,
+        callType: input.callType,
+        mode: "LIVE",
+        privacyMode: input.privacyMode ?? "RELAY_ONLY"
+      })
+    });
+  }
+
+  endCall(callId: string): Promise<void> {
+    return this.request<void>(`/v1/calls/${callId}/end`, { method: "POST" });
+  }
+
+  async listScheduled(limit = 50): Promise<ScheduledCall[]> {
+    const payload = await this.request<{ scheduled?: unknown[] }>(`/v1/calls/scheduled?limit=${limit}`);
+    return (payload.scheduled ?? []).map((raw) => {
+      const item = raw as Record<string, unknown>;
+      return {
+        id: String(item.id),
+        callType: (item.callType ?? "AUDIO") as "AUDIO" | "VIDEO",
+        privacyMode: (item.privacyMode ?? "RELAY_ONLY") as PrivacyMode,
+        scheduledFor: String(item.scheduledFor),
+        status: String(item.status ?? "SCHEDULED"),
+        isOrganizer: Boolean(item.isOrganizer),
+        organizerName: String(item.organizerName ?? "Linqa user"),
+        participantNames: Array.isArray(item.participantNames)
+          ? (item.participantNames as unknown[]).map((name) => String(name))
+          : [],
+        participantCount: Number(item.participantCount ?? 0)
+      };
+    });
+  }
+
+  schedule(input: {
+    participantUserIds: string[];
+    callType: "AUDIO" | "VIDEO";
+    privacyMode: PrivacyMode;
+    scheduledFor: string;
+    titleCiphertextBase64?: string;
+  }): Promise<{ id: string; status: string; scheduled_for: string }> {
+    return this.request("/v1/calls/scheduled", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  cancelScheduled(scheduledCallId: string): Promise<void> {
+    return this.request<void>(`/v1/calls/scheduled/${scheduledCallId}/cancel`, { method: "POST" });
+  }
+
+  async turnCredentials(): Promise<{ username: string; credential: string; urls: string[]; ttlSeconds: number }> {
+    return this.request("/v1/calls/turn-credentials");
+  }
+}
+
+/** "4m 12s" / "48s" / "1h 03m" — compact enough for a list row. */
+export function formatCallDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    const remainder = Math.round(seconds % 60);
+    return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/** Total talk time across completed calls, as a human summary. */
+export function formatTalkTime(seconds: number): string {
+  if (seconds <= 0) return "0m";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/**
+ * Groups history into Today / Yesterday / weekday / date buckets. A flat list
+ * of timestamps is hard to scan; date sections are how every call log reads.
+ */
+export function callDateBucket(iso: string, now = new Date()): string {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return "Earlier";
+
+  const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDelta = Math.round((startOfDay(now) - startOfDay(when)) / 86_400_000);
+
+  if (dayDelta <= 0) return "Today";
+  if (dayDelta === 1) return "Yesterday";
+  if (dayDelta < 7) return when.toLocaleDateString(undefined, { weekday: "long" });
+  return when.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** Stable identity colour, so the same person keeps the same avatar tint. */
+export function avatarTint(name: string): string {
+  const palette = ["#6C4ADA", "#2F8FD6", "#D68A2F", "#12A594", "#C2478E", "#4D8BFF", "#E0663F"];
+  let hash = 0;
+  for (let index = 0; index < name.length; index += 1) {
+    hash = (hash * 31 + name.charCodeAt(index)) | 0;
+  }
+  return palette[Math.abs(hash) % palette.length]!;
+}
+
+/** Preset scheduling offsets — avoids pulling in a date-picker dependency. */
+export function schedulePresets(now = new Date()): Array<{ key: string; label: string; at: Date }> {
+  const round = (date: Date) => {
+    const rounded = new Date(date);
+    rounded.setSeconds(0, 0);
+    rounded.setMinutes(Math.ceil(rounded.getMinutes() / 15) * 15);
+    return rounded;
+  };
+  const inMinutes = (minutes: number) => round(new Date(now.getTime() + minutes * 60_000));
+  const tomorrowAt = (hour: number) => {
+    const date = new Date(now);
+    date.setDate(date.getDate() + 1);
+    date.setHours(hour, 0, 0, 0);
+    return date;
+  };
+
+  return [
+    { key: "30m", label: "In 30 min", at: inMinutes(30) },
+    { key: "1h", label: "In 1 hour", at: inMinutes(60) },
+    { key: "3h", label: "In 3 hours", at: inMinutes(180) },
+    { key: "tomorrow-9", label: "Tomorrow 9:00", at: tomorrowAt(9) },
+    { key: "tomorrow-14", label: "Tomorrow 14:00", at: tomorrowAt(14) }
+  ];
+}
+
+export function formatScheduledFor(iso: string, now = new Date()): string {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return "";
+  const time = when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const bucket = callDateBucket(iso, now);
+  const isPast = when.getTime() < now.getTime();
+  if (isPast) return `${time} (overdue)`;
+  const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDelta = Math.round((startOfDay(when) - startOfDay(now)) / 86_400_000);
+  if (dayDelta === 0) return `Today ${time}`;
+  if (dayDelta === 1) return `Tomorrow ${time}`;
+  if (dayDelta < 7) return `${when.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
+  return `${bucket} ${time}`;
 }
