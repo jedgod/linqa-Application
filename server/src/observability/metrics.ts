@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
+import { MetricsRegistry } from "./metrics-registry.js";
 
-export function registerMetrics(app: FastifyInstance) {
+/**
+ * Registers `/metrics` and returns the shared registry so feature modules
+ * (Home news routing, feed aggregation) can emit into the same scrape.
+ */
+export function registerMetrics(app: FastifyInstance): MetricsRegistry {
+  const registry = new MetricsRegistry();
   let requests = 0;
   let failures = 0;
 
@@ -19,7 +25,10 @@ export function registerMetrics(app: FastifyInstance) {
         "# HELP linqa_http_failures_total Total HTTP 5xx responses.",
         "# TYPE linqa_http_failures_total counter",
         `linqa_http_failures_total ${failures}`,
+        ...registry.render(),
         ""
       ].join("\n"));
   });
+
+  return registry;
 }

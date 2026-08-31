@@ -3,67 +3,214 @@ import { ActivityIndicator, Image, Linking, Pressable, RefreshControl, ScrollVie
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { MobileHubService, type HomeFeed, type HomeNewsStory } from "../../services/mobile-hub.service";
+import {
+  HomeFeedService,
+  JurisdictionRequiredError,
+  attributionFor,
+  relativeAge,
+  type HomeLiveUpdate
+} from "../../services/home-feed.service";
 import { accessTokenProvider } from "../../services/session";
 
 const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const PAGE_SIZE = 20;
 
+const CATEGORIES = [
+  "ALL",
+  "WORLD",
+  "POLITICS",
+  "TECHNOLOGY",
+  "HEALTH",
+  "CLIMATE",
+  "BUSINESS",
+  "SCIENCE",
+  "SPORTS"
+] as const;
+
+/**
+ * Linqa World News.
+ *
+ * Reads `GET /v1/mobile/home/news`, which is served from the durable store
+ * rather than from a live provider call. That is deliberate: articles already
+ * validated against the publisher allowlist stay readable while every upstream
+ * provider is down, and no story reaches this screen without its attribution.
+ */
 export default function GlobalNewsScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ category?: string }>();
-  const client = useMemo(() => new MobileHubService(API, () => accessTokenProvider.getAccessToken()), []);
-  const [feed, setFeed] = useState<HomeFeed | null>(null);
+  const client = useMemo(() => new HomeFeedService(API, () => accessTokenProvider.getAccessToken()), []);
+
+  const [category, setCategory] = useState<string>((params.category ?? "ALL").toUpperCase());
+  const [articles, setArticles] = useState<HomeLiveUpdate[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    client.loadHomeFeed().then(setFeed).catch((cause) => setError(cause instanceof Error ? cause.message : "Unable to load global news." )).finally(() => setLoading(false));
-  }, [client]);
-  useEffect(load, [load]);
+  const load = useCallback(
+    (selected: string) => {
+      setLoading(true);
+      setError(null);
+      client
+        .loadNews({ ...(selected === "ALL" ? {} : { category: selected }), limit: PAGE_SIZE, offset: 0 })
+        .then((page) => {
+          setArticles(page.articles);
+          setTotal(page.total);
+        })
+        .catch((cause: unknown) => {
+          if (cause instanceof JurisdictionRequiredError) {
+            router.push("/settings/countrylinqa");
+            return;
+          }
+          setError(cause instanceof Error ? cause.message : "Unable to load global news.");
+        })
+        .finally(() => setLoading(false));
+    },
+    [client, router]
+  );
 
-  const selectedCategory = params.category?.toUpperCase();
-  const stories = (feed?.news.stories ?? []).filter((story) => !selectedCategory || story.category === selectedCategory);
+  useEffect(() => load(category), [load, category]);
 
-  async function openStory(story: HomeNewsStory) {
-    try { await Linking.openURL(story.url); }
-    catch { setError("This publisher link could not be opened."); }
+  async function loadMore() {
+    if (loadingMore || articles.length >= total) return;
+    setLoadingMore(true);
+    try {
+      const page = await client.loadNews({
+        ...(category === "ALL" ? {} : { category }),
+        limit: PAGE_SIZE,
+        offset: articles.length
+      });
+      // Dedupe on canonical URL: the durable store can shift under a cursor
+      // when the refresh job inserts newer stories mid-scroll.
+      setArticles((current) => {
+        const seen = new Set(current.map((item) => item.canonicalUrl));
+        return [...current, ...page.articles.filter((item) => !seen.has(item.canonicalUrl))];
+      });
+      setTotal(page.total);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to load more stories.");
+    } finally {
+      setLoadingMore(false);
+    }
   }
+
+  async function openStory(story: HomeLiveUpdate) {
+    try {
+      await Linking.openURL(story.canonicalUrl);
+    } catch {
+      setError("This publisher link could not be opened.");
+    }
+  }
+
+  const hasMore = articles.length < total;
 
   return (
     <SafeAreaView style={s.screen}>
       <View style={s.header}>
-        <Pressable style={s.back} onPress={() => router.back()} accessibilityLabel="Back"><Ionicons name="chevron-back" size={24} color="#11152E" /></Pressable>
-        <View style={s.headerCopy}><Text style={s.eyebrow}>LINQA WORLD NEWS</Text><Text style={s.title}>{selectedCategory ? `${selectedCategory.charAt(0)}${selectedCategory.slice(1).toLowerCase()} stories` : "Breaking around the world"}</Text></View>
-        <View style={[s.status, feed?.news.status !== "LIVE" && s.statusMuted]}><View style={s.statusDot} /><Text style={s.statusText}>{feed?.news.status ?? "SYNC"}</Text></View>
+        <Pressable style={s.back} onPress={() => router.back()} accessibilityLabel="Back">
+          <Ionicons name="chevron-back" size={24} color="#11152E" />
+        </Pressable>
+        <View style={s.headerCopy}>
+          <Text style={s.eyebrow}>LINQA WORLD NEWS</Text>
+          <Text style={s.title}>
+            {category === "ALL"
+              ? "Breaking around the world"
+              : `${category.charAt(0)}${category.slice(1).toLowerCase()} stories`}
+          </Text>
+        </View>
+        <View style={[s.status, articles.length === 0 && s.statusMuted]}>
+          <View style={s.statusDot} />
+          <Text style={s.statusText}>{articles.length > 0 ? "LIVE" : "NONE"}</Text>
+        </View>
       </View>
-      <ScrollView contentContainerStyle={s.content} refreshControl={<RefreshControl refreshing={loading} onRefresh={load} colors={["#5B4CFF"]} />}>
-        <Text style={s.disclosure}>Headlines open on the original publisher’s website. Updated through Linqa’s global news service.</Text>
-        {error ? <Pressable style={s.error} onPress={load}><Text style={s.errorText}>{error} Tap to retry.</Text></Pressable> : null}
-        {loading && !feed ? <ActivityIndicator color="#5B4CFF" style={{ marginTop: 80 }} /> : null}
-        {!loading && stories.length === 0 ? <View style={s.empty}><Ionicons name="cloud-offline-outline" size={34} color="#667085" /><Text style={s.emptyTitle}>No live stories available</Text><Text style={s.emptyCopy}>Pull down to refresh the global feed.</Text></View> : null}
-        {stories.map((story) => (
-          <Pressable key={story.id} style={s.card} onPress={() => void openStory(story)}>
-            {story.imageUrl ? <Image source={{ uri: story.imageUrl }} style={s.image} /> : <View style={[s.image, s.imageFallback]}><Ionicons name="newspaper-outline" size={28} color="#6B5CFF" /></View>}
+
+      <ScrollView
+        contentContainerStyle={s.content}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={() => load(category)} colors={["#5B4CFF"]} />}
+      >
+        <Text style={s.disclosure}>
+          Headlines open on the original publisher&rsquo;s website and are always shown with their source. Only
+          publishers on Linqa&rsquo;s reviewed allowlist appear here.
+        </Text>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterRow}>
+          {CATEGORIES.map((option) => (
+            <Pressable
+              key={option}
+              style={[s.chip, category === option && s.chipActive]}
+              onPress={() => setCategory(option)}
+            >
+              <Text style={[s.chipText, category === option && s.chipTextActive]}>
+                {option === "ALL" ? "All" : `${option.charAt(0)}${option.slice(1).toLowerCase()}`}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        {error ? (
+          <Pressable style={s.error} onPress={() => load(category)}>
+            <Text style={s.errorText}>{error} Tap to retry.</Text>
+          </Pressable>
+        ) : null}
+
+        {loading && articles.length === 0 ? <ActivityIndicator color="#5B4CFF" style={{ marginTop: 80 }} /> : null}
+
+        {!loading && articles.length === 0 ? (
+          <View style={s.empty}>
+            <Ionicons name="cloud-offline-outline" size={34} color="#667085" />
+            <Text style={s.emptyTitle}>No verified stories available</Text>
+            <Text style={s.emptyCopy}>
+              Linqa does not show placeholder headlines. Pull down to check the news service again.
+            </Text>
+          </View>
+        ) : null}
+
+        {articles.map((story) => (
+          <Pressable key={story.canonicalUrl} style={s.card} onPress={() => void openStory(story)}>
+            {story.imageUrl ? (
+              <Image source={{ uri: story.imageUrl }} style={s.image} />
+            ) : (
+              <View style={[s.image, s.imageFallback]}>
+                <Ionicons name="newspaper-outline" size={28} color="#6B5CFF" />
+              </View>
+            )}
             <View style={s.body}>
-              <View style={s.metaRow}><Text style={s.category}>{story.category}</Text><Text style={s.age}>{relativeAge(story.publishedAt)}</Text></View>
+              <View style={s.metaRow}>
+                <Text style={s.category}>{story.category}</Text>
+                <Text style={s.age}>{relativeAge(story.publishedAt)}</Text>
+              </View>
               <Text style={s.storyTitle} numberOfLines={3}>{story.title}</Text>
-              <View style={s.sourceRow}><Text style={s.source} numberOfLines={1}>{story.source}{story.sourceCountry ? ` · ${story.sourceCountry}` : ""}</Text><Ionicons name="open-outline" size={16} color="#667085" /></View>
+              {story.breaking ? (
+                <View style={s.breakingTag}><Text style={s.breakingTagText}>BREAKING</Text></View>
+              ) : null}
+              <View style={s.sourceRow}>
+                {/* Publisher attribution is a licensing obligation, so it is
+                    rendered on every card rather than on hover or detail. */}
+                <Text style={s.source} numberOfLines={1}>{attributionFor(story)}</Text>
+                <Ionicons name="open-outline" size={16} color="#667085" />
+              </View>
             </View>
           </Pressable>
         ))}
+
+        {hasMore ? (
+          <Pressable style={s.loadMore} onPress={loadMore} disabled={loadingMore}>
+            {loadingMore ? (
+              <ActivityIndicator color="#4F46E5" />
+            ) : (
+              <Text style={s.loadMoreText}>Load more stories</Text>
+            )}
+          </Pressable>
+        ) : null}
+
+        {articles.length > 0 ? (
+          <Text style={s.total}>
+            Showing {articles.length} of {total} verified {total === 1 ? "story" : "stories"}
+          </Text>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
-}
-
-function relativeAge(value: string): string {
-  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
 }
 
 const s = StyleSheet.create({
@@ -79,6 +226,11 @@ const s = StyleSheet.create({
   statusText: { color: "#137A54", fontSize: 8, fontWeight: "900" },
   content: { padding: 18, paddingBottom: 40 },
   disclosure: { color: "#667085", fontSize: 11, lineHeight: 16, marginBottom: 12 },
+  filterRow: { flexDirection: "row", gap: 7, marginBottom: 12 },
+  chip: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E4E8F0" },
+  chipActive: { backgroundColor: "#4F46E5", borderColor: "#4F46E5" },
+  chipText: { color: "#475569", fontSize: 10.5, fontWeight: "800" },
+  chipTextActive: { color: "#FFFFFF" },
   error: { padding: 11, backgroundColor: "#FEF3F2", borderRadius: 10, marginBottom: 10 },
   errorText: { color: "#B42318", fontSize: 11 },
   card: { flexDirection: "row", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E4E8F0", borderRadius: 16, padding: 10, marginBottom: 10, shadowColor: "#101828", shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
@@ -89,9 +241,14 @@ const s = StyleSheet.create({
   category: { color: "#6B5CFF", fontSize: 8, fontWeight: "900", letterSpacing: 0.6 },
   age: { color: "#98A2B3", fontSize: 9 },
   storyTitle: { color: "#101828", fontSize: 13, lineHeight: 17, fontWeight: "800", marginTop: 6 },
+  breakingTag: { alignSelf: "flex-start", marginTop: 6, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 3, backgroundColor: "#FEF3F2" },
+  breakingTagText: { color: "#B42318", fontSize: 7.5, fontWeight: "900", letterSpacing: 0.5 },
   sourceRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: "auto" },
   source: { flex: 1, color: "#667085", fontSize: 9.5 },
+  loadMore: { marginTop: 6, alignItems: "center", paddingVertical: 12, borderRadius: 12, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E4E8F0" },
+  loadMoreText: { color: "#4F46E5", fontSize: 12, fontWeight: "800" },
+  total: { color: "#98A2B3", fontSize: 10, textAlign: "center", marginTop: 10 },
   empty: { alignItems: "center", paddingTop: 90 },
   emptyTitle: { color: "#101828", fontSize: 17, fontWeight: "900", marginTop: 12 },
-  emptyCopy: { color: "#667085", fontSize: 12, marginTop: 5 }
+  emptyCopy: { color: "#667085", fontSize: 12, marginTop: 5, textAlign: "center", paddingHorizontal: 24, lineHeight: 17 }
 });

@@ -1,0 +1,165 @@
+name: Linqa Home Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      require_device_evidence:
+        description: >-
+          Require exact-SHA physical-device evidence. Leave true for a
+          promotion run; false only for a pre-certification check.
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - "server/src/home/**"
+      - "server/src/jobs/home-*.ts"
+      - "server/src/config/home-production.config.ts"
+      - "server/src/db/migrations/04*_home_*.sql"
+      - "server/src/observability/**"
+      - "server/src/routes/mobile-hub.ts"
+      - "server/src/auth/ops-scopes.ts"
+      - "server/src/tests/home/**"
+      - "clients/mobile/app/(tabs)/home.tsx"
+      - "clients/mobile/app/news/**"
+      - "clients/mobile/services/home-feed.service.ts"
+      - "scripts/certify-home-device.mjs"
+      - "scripts/collect-home-release-evidence.mjs"
+      - "scripts/lib/home-release-policy.mjs"
+      - "scripts/verify-home-*.mjs"
+      - ".github/workflows/home-release-gate.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: home-release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  home-release-gate:
+    name: Home release gate
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: linqa_test
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      NODE_ENV: test
+      # Same shape as the `server` job in ci.yml; loadConfig() requires all of
+      # these regardless of which subsystem is under test.
+      DATABASE_URL: postgresql://linqa:test_password@127.0.0.1:5432/linqa_test
+      REDIS_URL: redis://127.0.0.1:6379
+      JWT_ISSUER: https://test.linqa.local
+      JWT_AUDIENCE: linqa-api
+      JWT_HS256_SECRET: test-secret-that-is-at-least-32-bytes-long
+      CONTACT_DISCOVERY_SECRET: test-secret-that-is-at-least-32-bytes-2
+      TOKEN_VAULT_KEY_BASE64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      TURN_SHARED_SECRET: test-turn-secret-that-is-at-least-32-bytes
+      TURN_URLS: turn:127.0.0.1:3478?transport=udp
+      CORS_ORIGINS: http://127.0.0.1:5173
+      # Home configuration. The secondary provider endpoint has to be set for
+      # the redundancy gate; in CI it is a placeholder that is never called,
+      # because the Home suite injects stub providers.
+      HOME_NEWS_GDELT_ENABLED: "true"
+      HOME_APPROVED_RSS_ENDPOINT: https://approved-rss.invalid/news
+      HOME_EVIDENCE_MAX_AGE_HOURS: "72"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            clients/mobile/package-lock.json
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Install mobile dependencies
+        working-directory: clients/mobile
+        run: npm ci
+
+      - name: Apply migrations
+        working-directory: server
+        run: npm run db:migrate
+
+      - name: Replay migrations (ledger + checksum must be stable)
+        working-directory: server
+        run: npm run db:migrate
+
+      - name: Verify Home publisher allowlist is seeded
+        # An empty allowlist means the validator rejects every article and Home
+        # reports UNAVAILABLE forever with no error anywhere, so this is a
+        # blocking check rather than a warning.
+        run: |
+          seeded=$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM home_news_publishers WHERE trust_status IN ('TRUSTED','LIMITED')")
+          echo "trusted/limited publishers: $seeded"
+          test "$seeded" -gt 0
+
+      - name: Server build
+        working-directory: server
+        run: npm run build
+
+      - name: Mobile typecheck
+        working-directory: clients/mobile
+        run: npx tsc --noEmit
+
+      - name: Home targeted tests
+        working-directory: server
+        run: npx vitest run src/tests/home
+
+      - name: Full server test suite
+        working-directory: server
+        run: npm test
+
+      - name: Verify news provider redundancy
+        run: node scripts/verify-home-provider-redundancy.mjs
+
+      # Physical-device evidence cannot be produced by GitHub-hosted Linux CI.
+      # It is committed by the approved device-certification lane
+      # (scripts/certify-home-device.mjs on an attached Galaxy device); CI only
+      # verifies that it exists, passed, and is bound to this exact Git SHA.
+      - name: Verify exact-SHA physical-device evidence
+        env:
+          HOME_REQUIRE_DEVICE_EVIDENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.require_device_evidence || 'false' }}
+        run: node scripts/verify-home-evidence-freshness.mjs
+
+      - name: Home release gate
+        env:
+          # A pull request is never a promotion, so the device-evidence gates
+          # report SKIP there. A workflow_dispatch promotion run requires them.
+          HOME_REQUIRE_DEVICE_EVIDENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.require_device_evidence || 'false' }}
+        run: node scripts/verify-home-release-gate.mjs
+
+      - name: Upload Home evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: home-release-evidence-${{ github.sha }}
+          path: evidence/home
+          if-no-files-found: ignore

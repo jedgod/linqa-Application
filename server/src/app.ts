@@ -71,7 +71,7 @@ export async function buildApp(config: AppConfig, db: Database) {
   });
   await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
 
-  registerMetrics(app);
+  const metrics = registerMetrics(app);
   const services = createServiceContainer(config, db);
   await enforceProductionBoot(config.NODE_ENV, services.runtimeCapabilities);
 
@@ -97,7 +97,7 @@ export async function buildApp(config: AppConfig, db: Database) {
     }
   });
 
-  await registerAll(app, config, db, services);
+  await registerAll(app, config, db, services, metrics);
 
   return app;
 }

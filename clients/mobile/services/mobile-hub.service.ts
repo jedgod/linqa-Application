@@ -24,32 +24,6 @@ export type HubCall = { id: string; peerName: string; direction: string; callTyp
 export type HubCommunity = { id: string; name: string; role: string; visibility: string };
 export type HubMedia = { id: string; mediaType: string; conversationTitle: string; starred: boolean; createdAt: number };
 
-export type HomeNewsStory = {
-  id: string;
-  title: string;
-  url: string;
-  imageUrl: string | null;
-  source: string;
-  sourceCountry: string | null;
-  category: "WORLD" | "POLITICS" | "TECHNOLOGY" | "HEALTH" | "CLIMATE" | "BUSINESS" | "SCIENCE" | "SPORTS";
-  publishedAt: string;
-};
-
-export type HomeFeed = {
-  generatedAt: string;
-  news: { status: "LIVE" | "STALE" | "UNAVAILABLE"; refreshedAt: string; stories: HomeNewsStory[] };
-  country: { code: string | null; name: string };
-  trends: Array<{ rank: number; title: string; storyCount: number }>;
-  upcomingEvents: Array<{
-    id: string;
-    title: string;
-    startsAt: string;
-    countryCode: string | null;
-    regionCode: string | null;
-    city: string | null;
-  }>;
-};
-
 export type HubSnapshot = {
   profile: { id: string; displayName: string };
   contacts: HubContact[];
@@ -82,7 +56,14 @@ function instantMillis(value: string | null | undefined): number {
 }
 
 /**
- * Real client for `server/src/routes/mobile-hub.ts`'s `/v1/dev/mobile-hub`
+ * Real client for `server/src/routes/mobile-hub.ts`'s hub surface.
+ *
+ * The Home feed is NOT served from here any more: it moved to the
+ * aggregated production Home API and `services/home-feed.service.ts`.
+ * What remains is hub data (contacts, conversations, statuses, calls) and
+ * the hub write actions.
+ *
+ * Previously documented as: real client for `/v1/dev/mobile-hub`
  * family — the same genuine, Postgres-backed (but single fixed demo
  * persona, disabled in production) "local preview" surface the Android
  * client's `CoreBridge.loadHub()`/`ConversationListScreen` already use.
@@ -163,10 +144,6 @@ export class MobileHubService {
         createdAt: instantMillis(item.created_at)
       }))
     };
-  }
-
-  loadHomeFeed(): Promise<HomeFeed> {
-    return this.request<HomeFeed>("/v1/mobile/home");
   }
 
   publishStatus(body: string) {

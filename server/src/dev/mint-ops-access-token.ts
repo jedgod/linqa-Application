@@ -21,6 +21,7 @@ import { normalizeIdentifier } from "../auth/normalize.js";
 import { SessionService } from "../services/session.service.js";
 import { scopesForStaffRole, OPS_SCOPES, STAFF_ROLE_SCOPES, type StaffRole } from "../auth/ops-scopes.js";
 import { ENROLLED_DEVICE_SCOPES } from "../routes/enrollment.js";
+import { PRE_ENROLLMENT_SCOPES } from "../routes/auth.js";
 
 function readArg(name: string): string | undefined {
   const prefix = `--${name}=`;
@@ -110,7 +111,14 @@ try {
   );
 
   const opsScopes = scopesForStaffRole(role);
-  const scopes = Array.from(new Set([...ENROLLED_DEVICE_SCOPES, ...opsScopes]));
+  // Real enrollment (routes/enrollment.ts) merges ENROLLED_DEVICE_SCOPES into
+  // the *existing* pre-enrollment principal, so a genuine enrolled token also
+  // carries PRE_ENROLLMENT_SCOPES -- including profile:read, which
+  // /v1/mobile-hub and /v1/mobile/home both require. Minting from
+  // ENROLLED_DEVICE_SCOPES alone produced a token that could not read Home.
+  const scopes = Array.from(
+    new Set([...PRE_ENROLLMENT_SCOPES, ...ENROLLED_DEVICE_SCOPES, ...opsScopes])
+  );
 
   const sessions = new SessionService(db, config);
   const session = await sessions.create({ userId, subject: externalSubject, scopes });

@@ -216,9 +216,13 @@ export async function registerMobileHubRoutes(
     }
   };
 
-  // `/v1/mobile/home` is the canonical production contract. Keep the older
-  // mobile-hub path during client rollout so installed builds remain usable.
-  app.get("/v1/mobile/home", loadHomeFeed);
+  // `/v1/mobile/home` now belongs to the aggregated production Home module
+  // (server/src/home/home.routes.ts), which adds publisher trust, durable
+  // caching, personalization and honest LIVE/STALE/UNAVAILABLE reporting.
+  // Fastify rejects duplicate route registration, so it is deliberately no
+  // longer served from here. This legacy alias stays for already-installed
+  // builds that predate the new payload shape and is expected to retire once
+  // those clients are gone.
   app.get("/v1/mobile-hub/home-feed", loadHomeFeed);
 
   app.post("/v1/mobile-hub/statuses", async (request, reply) => {

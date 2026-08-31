@@ -23,7 +23,12 @@ export const OPS_SCOPES = [
   "ops:risk:approve",
   "ops:linqasend:read",
   "ops:linqasend:review",
-  "ops:linqasend:approve"
+  "ops:linqasend:approve",
+  // Home publisher-trust governance (Home Implementation Completion
+  // Pack v1.1 §17). Read is the allowlist view; write changes whether a
+  // publisher can reach users at all, so it is separated.
+  "ops:home:publisher:read",
+  "ops:home:publisher:write"
 ] as const;
 
 export type OpsScope = (typeof OPS_SCOPES)[number];
@@ -40,13 +45,19 @@ export type OpsScope = (typeof OPS_SCOPES)[number];
 // again: a fraud analyst rules on safety/abuse evidence, a finance ops
 // reviewer rules on transaction evidence. Neither is a superset of the other
 // and neither is general casework.
+// HOME_OBSERVER and HOME_OPERATIONS come from the Home Implementation
+// Completion Pack v1.1. Home content governance is its own job function:
+// deciding which publishers may reach users is an editorial call, not
+// casework, so neither role gets any ops:case:* scope.
 export type StaffRole =
   | "OPS_ADMIN"
   | "SUPERVISOR"
   | "SUPPORT_AGENT"
   | "RECOVERY_SPECIALIST"
   | "FRAUD_ANALYST"
-  | "FINANCE_OPS";
+  | "FINANCE_OPS"
+  | "HOME_OBSERVER"
+  | "HOME_OPERATIONS";
 
 export const STAFF_ROLE_SCOPES: Record<StaffRole, OpsScope[]> = {
   OPS_ADMIN: [...OPS_SCOPES],
@@ -76,7 +87,10 @@ export const STAFF_ROLE_SCOPES: Record<StaffRole, OpsScope[]> = {
     "ops:risk:read",
     "ops:risk:review",
     "ops:linqasend:read",
-    "ops:linqasend:review"
+    "ops:linqasend:review",
+    // Read-only for Home too: same read/review-but-not-mutate shape as
+    // the specialist workflows above.
+    "ops:home:publisher:read"
   ],
   // Agents can move their own cases through state (OPEN -> WAITING_USER ->
   // RESOLVED, etc.), reply to the client, and pull the read-only Client 360
@@ -148,7 +162,11 @@ export const STAFF_ROLE_SCOPES: Record<StaffRole, OpsScope[]> = {
     "ops:linqasend:read",
     "ops:linqasend:review",
     "ops:linqasend:approve"
-  ]
+  ],
+  // Can see the allowlist and provider health to answer "why is this
+  // story showing / missing", but cannot change a trust decision.
+  HOME_OBSERVER: ["ops:home:publisher:read"],
+  HOME_OPERATIONS: ["ops:home:publisher:read", "ops:home:publisher:write"]
 };
 
 export function scopesForStaffRole(role: StaffRole): OpsScope[] {

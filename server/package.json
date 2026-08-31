@@ -12,10 +12,17 @@
     "dev:mint-ops-token": "tsx src/dev/mint-ops-access-token.ts",
     "db:cleanup": "tsx src/jobs/cleanup.ts",
     "linqasend:workers": "tsx src/jobs/linqasend-workers.ts",
+    "home:workers": "tsx src/jobs/home-workers.ts",
     "g5:materialize": "tsx src/ga/materialize-cli.ts",
     "g5:verify": "tsx src/ga/verify-ga-cli.ts",
     "final:verify": "tsx src/release-closure/verify-final-cli.ts",
-    "release:unified-onboarding": "node ../scripts/unified-onboarding-release-gate.mjs"
+    "release:unified-onboarding": "node ../scripts/unified-onboarding-release-gate.mjs",
+    "home:test": "vitest run src/tests/home",
+    "home:device:certify": "node ../scripts/certify-home-device.mjs",
+    "home:evidence:collect": "node ../scripts/collect-home-release-evidence.mjs",
+    "home:evidence:verify": "node ../scripts/verify-home-evidence-freshness.mjs",
+    "home:providers:verify": "node ../scripts/verify-home-provider-redundancy.mjs",
+    "home:release:gate": "node ../scripts/verify-home-release-gate.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1105.0",

@@ -22,6 +22,9 @@ import { registerFeatureFlagRoutes } from "../routes/feature-flags.js";
 import { registerFileVaultRoutes } from "../routes/file-vault.js";
 import { registerFinalUnwiredRoutes } from "../routes/final-unwired.js";
 import { registerGaHardeningRoutes } from "../routes/ga-hardening.routes.js";
+import { createHomeModule } from "../home/home.module.js";
+import { registerHomeRoutes } from "../home/home.routes.js";
+import { registerHomeAdminRoutes } from "../home/home-admin.routes.js";
 import { registerGapClosureRoutes } from "../routes/gap-closure.js";
 import { registerKeyPackageRoutes } from "../routes/key-packages.js";
 import { registerLinqaSendRoutes } from "../routes/linqasend/routes.js";
@@ -44,13 +47,15 @@ import { registerSafetyRoutes } from "../routes/safety.js";
 import { registerSyncRoutes } from "../routes/sync.js";
 import { registerUsernameRoutes } from "../routes/usernames.js";
 import { registerVertical2Routes } from "../routes/vertical-2.routes.js";
+import type { MetricsRegistry } from "../observability/metrics-registry.js";
 import type { ServiceContainer } from "./service-container.js";
 
 export async function registerAll(
   app: FastifyInstance,
   config: AppConfig,
   db: Database,
-  services: ServiceContainer
+  services: ServiceContainer,
+  metrics?: MetricsRegistry
 ) {
   const hub = new RealtimeHub();
 
@@ -161,6 +166,25 @@ export async function registerAll(
   await registerCountryLinqaSecurityRoutes(app, config, db, services.countryReverification);
   await registerLinqaSendRoutes(app, config, db);
   await registerOperationsRoutes(app, config, db, hub);
+
+  // Home (Production Closure Pack v1.0 + Implementation Completion Pack
+  // v1.1). Registered before mobile-hub because `/v1/mobile/home` moved here
+  // from `routes/mobile-hub.ts`: Fastify rejects a duplicate route, so the
+  // aggregated production feed is now the single owner of that path and
+  // mobile-hub keeps only its legacy `/v1/mobile-hub/home-feed` alias.
+  const home = createHomeModule({
+    db,
+    redisUrl: config.REDIS_URL,
+    metrics,
+    onRedisError: (error) => {
+      app.log.warn({ err: error }, "Home Redis unavailable; PostgreSQL cache tier active");
+    }
+  });
+  app.addHook("onClose", async () => {
+    await home.close();
+  });
+  await registerHomeRoutes(app, config, db, home);
+  await registerHomeAdminRoutes(app, config, db, home);
 
   await registerRealtime(app, config, db, hub);
   await registerSignaling(app, config, db, services.signaling, hub);

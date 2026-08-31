@@ -299,9 +299,19 @@ export class CountryLinqaService {
       }
 
       await client.query(
+        // Both uses of $3 are cast explicitly. Without the casts PostgreSQL
+        // deduces the enum from `country_verification_state = $3` but `text`
+        // from `CASE WHEN $3 = 'VERIFIED'` (an untyped literal), and rejects
+        // the whole statement with 42P08 "inconsistent types deduced for
+        // parameter $3" -- which failed every country confirmation, surfacing
+        // as a bare "42P08" on the onboarding screen.
         `UPDATE users
-         SET verified_country_code = $2, country_verification_state = $3,
-             country_verified_at = CASE WHEN $3 = 'VERIFIED' THEN now() ELSE country_verified_at END
+         SET verified_country_code = $2,
+             country_verification_state = $3::country_verification_state,
+             country_verified_at = CASE
+               WHEN $3::country_verification_state = 'VERIFIED' THEN now()
+               ELSE country_verified_at
+             END
          WHERE id = $1`,
         [userId, trusted.phoneCountryCode, risk.state]
       );
