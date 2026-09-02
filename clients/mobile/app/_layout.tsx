@@ -8,14 +8,23 @@ import "react-native-get-random-values";
 import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import {
+  useFonts,
+  PlusJakartaSans_400Regular,
+  PlusJakartaSans_500Medium,
+  PlusJakartaSans_600SemiBold,
+  PlusJakartaSans_700Bold,
+  PlusJakartaSans_800ExtraBold
+} from "@expo-google-fonts/plus-jakarta-sans";
 import { AccountProvider, useAccounts } from "../account/AccountContext";
 import { AccountSecureStorage } from "../account/AccountSecureStorage";
 import { AccountSessionStore } from "../account/AccountSessionStore";
 import { setActiveAccountSessionResolver } from "../services/session";
 
 const sessionStore = new AccountSessionStore(new AccountSecureStorage());
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
 const refreshes = new Map<string, Promise<Awaited<ReturnType<typeof sessionStore.load>>>>();
 
 async function loadFreshSession(userId: string) {
@@ -76,6 +85,19 @@ function AccountSessionBridge() {
 }
 
 export default function RootLayout() {
+  const [fontsReady] = useFonts({
+    PlusJakartaSans_400Regular,
+    PlusJakartaSans_500Medium,
+    PlusJakartaSans_600SemiBold,
+    PlusJakartaSans_700Bold,
+    PlusJakartaSans_800ExtraBold
+  });
+
+  // Holding the first paint avoids the flash where every screen renders in the
+  // system face and then reflows once the real one arrives -- on Home that
+  // shifts the whole layout, because the type is what sizes the cards.
+  if (!fontsReady) return <View style={{ flex: 1, backgroundColor: "#FFFFFF" }} />;
+
   return (
     <SafeAreaProvider>
       <AccountProvider>

@@ -33,7 +33,7 @@ import { accessTokenProvider } from "../../services/session";
 import { QuickCreateSheet } from "../../components/QuickCreateSheet";
 import { createActionsForPath, type CreateActionKey } from "../../navigation/information-architecture";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
 
 const FILTERS = ["All", "Missed", "Audio", "Video"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -202,6 +202,24 @@ export default function CallsScreen() {
       setScheduleSheetOpen(true);
     } catch (cause) {
       reportFailure(cause, "Unable to schedule that call.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function joinScheduled(item: ScheduledCall) {
+    setBusy("Joining call…");
+    setError(null);
+    setNotice(null);
+    try {
+      const joined = await service.joinScheduledCall(item.id);
+      setScheduleSheetOpen(false);
+      setNotice(
+        `${joined.callType === "VIDEO" ? "Video" : "Audio"} call ready — join window is active until ${new Date(joined.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`
+      );
+      router.push("/(tabs)/calls" as never);
+    } catch (cause) {
+      reportFailure(cause, "Unable to join that scheduled call.");
     } finally {
       setBusy(null);
     }
@@ -712,16 +730,19 @@ export default function CallsScreen() {
                         {item.privacyMode === "RELAY_ONLY" ? " · Relay-only" : " · Standard"}
                       </Text>
                     </View>
-                    {item.isOrganizer ? (
-                      <Pressable
-                        style={styles.cancelButton}
-                        onPress={() => void cancelScheduled(item)}
-                        accessibilityRole="button"
-                        accessibilityLabel="Cancel scheduled call"
-                      >
-                        <Text style={styles.cancelButtonText}>Cancel</Text>
-                      </Pressable>
-                    ) : null}
+                    <Pressable
+                      style={[
+                        styles.cancelButton,
+                        !item.isOrganizer && { backgroundColor: "#0B2E32", borderColor: "#0B8175" }
+                      ]}
+                      onPress={() => void (item.isOrganizer ? cancelScheduled(item) : joinScheduled(item))}
+                      accessibilityRole="button"
+                      accessibilityLabel={item.isOrganizer ? "Cancel scheduled call" : "Join scheduled call"}
+                    >
+                      <Text style={[styles.cancelButtonText, !item.isOrganizer && { color: "#8AE9D8" }]}>
+                        {item.isOrganizer ? "Cancel" : "Join"}
+                      </Text>
+                    </Pressable>
                   </View>
                 ))
               )}

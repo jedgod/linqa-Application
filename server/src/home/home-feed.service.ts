@@ -12,6 +12,8 @@ export interface HomeFeedDependencies {
   getCountryLinqa(userId: string, country: string): Promise<unknown>;
   getUpcoming(userId: string): Promise<unknown[]>;
   getContinueYourDay(userId: string): Promise<unknown[]>;
+  getVaultRecent(userId: string): Promise<unknown[]>;
+  getPendingTransfers(userId: string): Promise<unknown[]>;
   getLiveUpdates(userId: string, country: string): Promise<unknown[]>;
   getSpotlight(userId: string, country: string): Promise<unknown>;
 }
@@ -22,6 +24,8 @@ type SectionName =
   | "countryLinqa"
   | "upcoming"
   | "continueYourDay"
+  | "vault"
+  | "transfers"
   | "liveUpdates"
   | "spotlight"
   | "news"
@@ -63,7 +67,18 @@ export class HomeFeedService {
       const preferences = await this.personalization.getPreferences(userId);
       const hidden = (section: string) => preferences.hiddenSections.includes(section);
 
-      const [profile, notifications, countryLinqa, upcoming, continuing, liveUpdates, spotlight, news] =
+      const [
+        profile,
+        notifications,
+        countryLinqa,
+        upcoming,
+        continuing,
+        vaultRecent,
+        pendingTransfers,
+        liveUpdates,
+        spotlight,
+        news
+      ] =
         await Promise.all([
           settle<unknown>("profile", this.dependencies.getProfile(userId), null),
           settle<unknown>("notifications", this.dependencies.getNotifications(userId), null),
@@ -76,6 +91,15 @@ export class HomeFeedService {
           hidden("continueYourDay")
             ? Promise.resolve([])
             : settle<unknown[]>("continueYourDay", this.dependencies.getContinueYourDay(userId), []),
+          // Vault and in-flight money are the other two lanes of the same
+          // "Continue your day" section, so they follow its visibility flag,
+          // but they degrade independently of the conversation list.
+          hidden("continueYourDay")
+            ? Promise.resolve([])
+            : settle<unknown[]>("vault", this.dependencies.getVaultRecent(userId), []),
+          hidden("continueYourDay")
+            ? Promise.resolve([])
+            : settle<unknown[]>("transfers", this.dependencies.getPendingTransfers(userId), []),
           hidden("liveUpdates")
             ? Promise.resolve([])
             : settle<unknown[]>("liveUpdates", this.dependencies.getLiveUpdates(userId, country), []),
@@ -100,6 +124,8 @@ export class HomeFeedService {
         liveUpdates: liveUpdates.slice(0, homeProductionConfig.feed.maxLiveUpdateItems),
         upcoming: upcoming.slice(0, homeProductionConfig.feed.maxUpcomingItems),
         continueYourDay: continuing.slice(0, homeProductionConfig.feed.maxContinueItems),
+        vaultRecent: vaultRecent.slice(0, homeProductionConfig.feed.maxVaultItems),
+        pendingTransfers: pendingTransfers.slice(0, homeProductionConfig.feed.maxPendingTransfers),
         countryLinqa,
         breakingAroundWorld: hidden("breakingAroundWorld")
           ? []

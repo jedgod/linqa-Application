@@ -31,6 +31,38 @@ const Context = createContext<AccountContextValue | null>(null);
 // and which is active, so the switcher survives a relaunch.
 const REGISTRY_KEY = "linqa.accounts.registry";
 const ACTIVE_KEY = "linqa.accounts.active";
+const MAX_ACCOUNTS = 3;
+
+function normalizeAccounts(input: unknown): LocalAccount[] {
+  if (!Array.isArray(input)) return [];
+
+  const deduped: LocalAccount[] = [];
+  const seen = new Set<string>();
+
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const candidate = item as Partial<LocalAccount>;
+    if (typeof candidate.userId !== "string" || !candidate.userId.trim()) continue;
+    if (typeof candidate.slot !== "number" || (candidate.slot !== 1 && candidate.slot !== 2 && candidate.slot !== 3)) continue;
+    if (typeof candidate.displayName !== "string" || !candidate.displayName.trim()) continue;
+
+    if (seen.has(candidate.userId)) continue;
+    seen.add(candidate.userId);
+    deduped.push({
+      userId: candidate.userId,
+      slot: candidate.slot,
+      displayName: candidate.displayName,
+      label: candidate.label,
+      phoneSuffix: candidate.phoneSuffix,
+      countryIso2: candidate.countryIso2,
+      avatarUri: candidate.avatarUri
+    } as LocalAccount);
+
+    if (deduped.length >= MAX_ACCOUNTS) break;
+  }
+
+  return deduped;
+}
 
 /**
  * 2026-08-07 crash fix: every SecureStore call here used to be unguarded
@@ -90,12 +122,27 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
 
       if (rawAccounts) {
         try {
-          setAccountsState(JSON.parse(rawAccounts) as LocalAccount[]);
+          const parsed = JSON.parse(rawAccounts) as unknown;
+          const normalized = normalizeAccounts(parsed);
+          setAccountsState(normalized);
+          if (rawActive && normalized.some((account) => account.userId === rawActive)) {
+            setActiveUserId(rawActive);
+          } else if (normalized[0]) {
+            setActiveUserId(normalized[0].userId);
+            void safeSetItem(ACTIVE_KEY, normalized[0].userId);
+          } else {
+            setActiveUserId(null);
+            void safeDeleteItem(ACTIVE_KEY);
+          }
         } catch {
           // Corrupt registry — start empty rather than crash the app.
+          setAccountsState([]);
+          setActiveUserId(null);
+          void safeDeleteItem(ACTIVE_KEY);
         }
+      } else if (rawActive) {
+        setActiveUserId(rawActive);
       }
-      if (rawActive) setActiveUserId(rawActive);
       setLoaded(true);
     })();
 
@@ -112,13 +159,12 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
       accounts,
       loaded,
       setAccounts: (next) => {
-        if (next.length > 3) {
-          throw new Error("Linqa supports at most 3 active accounts.");
-        }
-        setAccountsState(next);
-        void safeSetItem(REGISTRY_KEY, JSON.stringify(next));
-        if (activeUserId && !next.some((a) => a.userId === activeUserId)) {
-          const fallback = next[0]?.userId ?? null;
+        const normalized = normalizeAccounts(next);
+        setAccountsState(normalized);
+        void safeSetItem(REGISTRY_KEY, JSON.stringify(normalized));
+
+        if (activeUserId && !normalized.some((a) => a.userId === activeUserId)) {
+          const fallback = normalized[0]?.userId ?? null;
           setActiveUserId(fallback);
           if (fallback) void safeSetItem(ACTIVE_KEY, fallback);
           else void safeDeleteItem(ACTIVE_KEY);
@@ -145,13 +191,12 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
           const existingIndex = prev.findIndex((a) => a.userId === account.userId);
           if (existingIndex >= 0) {
             const next = prev.map((item, index) => index === existingIndex ? { ...item, ...account } : item);
-            void safeSetItem(REGISTRY_KEY, JSON.stringify(next));
-            return next;
+            const normalized = normalizeAccounts(next);
+            void safeSetItem(REGISTRY_KEY, JSON.stringify(normalized));
+            return normalized;
           }
-          if (prev.length >= 3) {
-            throw new Error("Linqa supports at most 3 active accounts.");
-          }
-          const next = [...prev, account];
+
+          const next = normalizeAccounts([...prev, account]);
           void safeSetItem(REGISTRY_KEY, JSON.stringify(next));
           return next;
         });

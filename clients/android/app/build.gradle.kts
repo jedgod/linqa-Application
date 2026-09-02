@@ -56,9 +56,10 @@ android {
             // conversation list silently fail closed ("Live service
             // unavailable") whenever only one of the two ports was forwarded
             // via `adb reverse`.
-            buildConfigField("String", "HUB_BASE_URL", "\"http://127.0.0.1:8088\"")
             // Reached via `adb reverse tcp:8080 tcp:8080` on a physical device.
-            buildConfigField("String", "API_BASE_URL", "\"http://127.0.0.1:8088\"")
+            // The device-side loopback must stay on 127.0.0.1, not 10.0.2.2.
+            buildConfigField("String", "HUB_BASE_URL", "\"http://127.0.0.1:8080\"")
+            buildConfigField("String", "API_BASE_URL", "\"http://127.0.0.1:8080\"")
         }
         release {
             isMinifyEnabled = false

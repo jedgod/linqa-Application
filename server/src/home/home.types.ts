@@ -77,6 +77,8 @@ export interface HomeFeedPayload {
   spotlight?: unknown;
   upcoming: unknown[];
   continueYourDay: unknown[];
+  vaultRecent: unknown[];
+  pendingTransfers: unknown[];
   countryLinqa: unknown;
   breakingAroundWorld: HomeNewsItem[];
   serviceState: {

@@ -25,6 +25,14 @@ export const homeProductionConfig = {
     maxUpcomingItems: 10,
     maxContinueItems: 12,
     maxLiveUpdateItems: positiveNumber(process.env.HOME_FEED_MAX_LIVE_UPDATES, 6),
+    // "Continue your day" is three lanes on the client: conversations, the
+    // most recently touched Vault items, and money that is still in flight.
+    maxVaultItems: positiveNumber(process.env.HOME_FEED_MAX_VAULT_ITEMS, 4),
+    maxPendingTransfers: positiveNumber(process.env.HOME_FEED_MAX_PENDING_TRANSFERS, 4),
+    // The Calls tab badge counts recent missed calls. `call_history` has no
+    // per-row "seen" flag, so the badge is a rolling window rather than an
+    // unread count, and the window is stated here instead of hard-coded.
+    missedCallWindowHours: positiveNumber(process.env.HOME_MISSED_CALL_WINDOW_HOURS, 168),
     // Snapshots are kept for post-incident forensics ("what did this user
     // actually see?"), not as a cache. Pruned by the Home worker.
     snapshotRetentionDays: positiveNumber(process.env.HOME_FEED_SNAPSHOT_RETENTION_DAYS, 7)

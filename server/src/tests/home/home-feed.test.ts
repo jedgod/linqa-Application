@@ -74,6 +74,8 @@ function buildHarness(options: {
     getCountryLinqa: vi.fn(async () => ({ countryCode: "US", countryName: "United States" })),
     getUpcoming: vi.fn(async () => Array.from({ length: 30 }, (_u, i) => ({ id: `event-${i}` }))),
     getContinueYourDay: vi.fn(async () => Array.from({ length: 30 }, (_u, i) => ({ id: `conversation-${i}` }))),
+    getVaultRecent: vi.fn(async () => Array.from({ length: 30 }, (_u, i) => ({ id: `vault-${i}` }))),
+    getPendingTransfers: vi.fn(async () => Array.from({ length: 30 }, (_u, i) => ({ id: `transfer-${i}` }))),
     getLiveUpdates: vi.fn(async () => Array.from({ length: 30 }, (_u, i) => ({ id: `live-${i}` }))),
     getSpotlight: vi.fn(async () => ({ id: "spotlight-1" })),
     ...options.dependencies
@@ -125,6 +127,8 @@ describe("home feed: payload contract", () => {
 
     expect(feed.upcoming.length).toBeLessThanOrEqual(10);
     expect(feed.continueYourDay.length).toBeLessThanOrEqual(12);
+    expect(feed.vaultRecent.length).toBeLessThanOrEqual(4);
+    expect(feed.pendingTransfers.length).toBeLessThanOrEqual(4);
     expect(feed.liveUpdates.length).toBeLessThanOrEqual(6);
   });
 
@@ -158,6 +162,10 @@ describe("home feed: hidden sections", () => {
     expect(feed.upcoming).toEqual([]);
     expect(feed.liveUpdates).toEqual([]);
     expect(feed.continueYourDay).toEqual([]);
+    // Vault and in-flight money live inside "Continue your day", so hiding
+    // that section has to silence all three lanes, not just conversations.
+    expect(feed.vaultRecent).toEqual([]);
+    expect(feed.pendingTransfers).toEqual([]);
     expect(feed.countryLinqa).toBeNull();
 
     // Hiding a section should also stop the work behind it, not just filter
@@ -166,6 +174,8 @@ describe("home feed: hidden sections", () => {
     expect(h.dependencies.getUpcoming).not.toHaveBeenCalled();
     expect(h.dependencies.getLiveUpdates).not.toHaveBeenCalled();
     expect(h.dependencies.getCountryLinqa).not.toHaveBeenCalled();
+    expect(h.dependencies.getVaultRecent).not.toHaveBeenCalled();
+    expect(h.dependencies.getPendingTransfers).not.toHaveBeenCalled();
   });
 
   it("does not call the news router when world news is hidden", async () => {
@@ -228,6 +238,28 @@ describe("home feed: degradation", () => {
     // The rest of Home is intact.
     expect(feed.profile).toBeTruthy();
     expect(feed.breakingAroundWorld).toHaveLength(1);
+  });
+
+  it("keeps the conversation lane when Vault and transfers both fail", async () => {
+    const h = buildHarness({
+      dependencies: {
+        getVaultRecent: vi.fn(async () => {
+          throw new Error("VAULT_INDEX_UNAVAILABLE");
+        }),
+        getPendingTransfers: vi.fn(async () => {
+          throw new Error("LEDGER_UNAVAILABLE");
+        })
+      }
+    });
+
+    const feed = await h.service.build("u1", "US");
+
+    expect(feed.serviceState.degraded).toContain("vault");
+    expect(feed.serviceState.degraded).toContain("transfers");
+    expect(feed.vaultRecent).toEqual([]);
+    expect(feed.pendingTransfers).toEqual([]);
+    // A money-service outage must not take the user's conversations with it.
+    expect(feed.continueYourDay.length).toBeGreaterThan(0);
   });
 
   it("reports UNAVAILABLE news when the router itself throws", async () => {

@@ -32,6 +32,14 @@ export type PlacedCall = {
   privacyMode: PrivacyMode;
 };
 
+export type JoinedScheduledCall = {
+  callId: string;
+  joinToken: string;
+  expiresAt: string;
+  callType: "AUDIO" | "VIDEO";
+  privacyMode: PrivacyMode;
+};
+
 /**
  * Raised when the callee has no device that can ring. Distinct from a generic
  * failure so the UI can say "they have no active device" instead of a vague
@@ -93,18 +101,18 @@ export class CallsService {
   }
 
   async listHistory(limit = 100): Promise<CallHistoryItem[]> {
-    const payload = await this.request<{ calls?: unknown[] }>(`/v1/calls/history?limit=${limit}`);
-    return (payload.calls ?? []).map((raw) => {
+    const payload = await this.request<{ items?: unknown[] }>(`/v1/calls/history?limit=${limit}`);
+    return (payload.items ?? []).map((raw) => {
       const item = raw as Record<string, unknown>;
       return {
-        id: String(item.id),
-        peerUserId: String(item.peer_user_id ?? ""),
-        peerDisplayName: String(item.display_name ?? "Unknown contact"),
-        direction: (item.direction === "INCOMING" ? "INCOMING" : "OUTGOING") as "INCOMING" | "OUTGOING",
-        callType: (item.call_type ?? "AUDIO") as CallType,
-        status: (item.status ?? "COMPLETED") as CallStatus,
-        durationSeconds: Number(item.duration_seconds ?? 0),
-        createdAt: String(item.created_at)
+        id: String(item.id ?? ""),
+        peerUserId: String(item.peerUserId ?? item.peer_user_id ?? ""),
+        peerDisplayName: String(item.peerName ?? item.display_name ?? "Unknown contact"),
+        direction: (String(item.direction ?? "OUTGOING").toUpperCase() === "INCOMING" ? "INCOMING" : "OUTGOING") as "INCOMING" | "OUTGOING",
+        callType: (String(item.callType ?? item.call_type ?? "AUDIO").toUpperCase() as CallType),
+        status: (String(item.status ?? "COMPLETED").toUpperCase() as CallStatus),
+        durationSeconds: Number(item.durationSeconds ?? item.duration_seconds ?? 0),
+        createdAt: String(item.createdAt ?? item.created_at ?? new Date().toISOString())
       };
     });
   }
@@ -119,12 +127,11 @@ export class CallsService {
     callType: CallType;
     privacyMode?: PrivacyMode;
   }): Promise<PlacedCall> {
-    return this.request<PlacedCall>("/v1/calls", {
+    return this.request<PlacedCall>("/v1/calls/place", {
       method: "POST",
       body: JSON.stringify({
-        recipientUserId: input.recipientUserId,
-        callType: input.callType,
-        mode: "LIVE",
+        peerUserId: input.recipientUserId,
+        media: input.callType,
         privacyMode: input.privacyMode ?? "RELAY_ONLY"
       })
     });
@@ -162,6 +169,12 @@ export class CallsService {
     titleCiphertextBase64?: string;
   }): Promise<{ id: string; status: string; scheduled_for: string }> {
     return this.request("/v1/calls/scheduled", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  joinScheduledCall(scheduledCallId: string): Promise<JoinedScheduledCall> {
+    return this.request<JoinedScheduledCall>(`/v1/calls/scheduled/${encodeURIComponent(scheduledCallId)}/join-token`, {
+      method: "POST"
+    });
   }
 
   cancelScheduled(scheduledCallId: string): Promise<void> {

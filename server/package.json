@@ -22,7 +22,9 @@
     "home:evidence:collect": "node ../scripts/collect-home-release-evidence.mjs",
     "home:evidence:verify": "node ../scripts/verify-home-evidence-freshness.mjs",
     "home:providers:verify": "node ../scripts/verify-home-provider-redundancy.mjs",
-    "home:release:gate": "node ../scripts/verify-home-release-gate.mjs"
+    "home:release:gate": "node ../scripts/verify-home-release-gate.mjs",
+    "chat:workers": "tsx src/jobs/chat-workers.ts",
+    "chat:test": "vitest run src/tests/chat"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1105.0",
@@ -33,6 +35,7 @@
     "@fastify/rate-limit": "^10.0.0",
     "@fastify/websocket": "^11.0.0",
     "@simplewebauthn/server": "^13.3.2",
+    "fast-xml-parser": "^5.11.1",
     "fastify": "^5.0.0",
     "fastify-raw-body": "^6.0.1",
     "jose": "^6.0.0",

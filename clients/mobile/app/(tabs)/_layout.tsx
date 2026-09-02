@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tabs, usePathname, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, View } from "react-native";
@@ -8,10 +8,64 @@ import { useAccounts } from "../../account/AccountContext";
 import { createActionsForPath } from "../../navigation/information-architecture";
 import { ActivityIndicator } from "react-native";
 import { OnboardingApiService } from "../../services/onboarding.service";
+import { HomeFeedService, type HomeBadges } from "../../services/home-feed.service";
 import { accessTokenProvider } from "../../services/session";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+
+/**
+ * Floor between badge refreshes. The tab bar re-renders on every navigation,
+ * and unread counts do not change fast enough to be worth a request each time.
+ */
+const BADGE_REFRESH_MS = 10_000;
+
+/**
+ * Unread chats and missed calls for the tab bar.
+ *
+ * Deliberately not the Home feed: this mounts on every authenticated screen,
+ * and `GET /v1/mobile/home/badges` is three indexed counts rather than a news
+ * fetch. A failure leaves the badges absent, which is the honest state — an
+ * unknown count must not be drawn as zero *or* as a stale number.
+ */
+function useTabBadges(accountId: string | undefined, pathname: string): HomeBadges | null {
+  const client = useMemo(
+    () => new HomeFeedService(API, () => accessTokenProvider.getAccessToken()),
+    []
+  );
+  const [badges, setBadges] = useState<HomeBadges | null>(null);
+  const lastFetch = useRef(0);
+
+  const refresh = useCallback(
+    (force: boolean) => {
+      const now = Date.now();
+      if (!force && now - lastFetch.current < BADGE_REFRESH_MS) return;
+      lastFetch.current = now;
+      client
+        .loadBadges()
+        .then(setBadges)
+        .catch(() => setBadges(null));
+    },
+    [client]
+  );
+
+  useEffect(() => {
+    setBadges(null);
+    lastFetch.current = 0;
+    refresh(true);
+  }, [accountId, refresh]);
+
+  useEffect(() => {
+    refresh(false);
+  }, [pathname, refresh]);
+
+  return badges;
+}
+
+/** `tabBarBadge` wants the count omitted, not zeroed, when there is nothing. */
+function badgeValue(count: number | undefined): number | undefined {
+  return count && count > 0 ? count : undefined;
+}
 
 function AccountHeader() {
   const router = useRouter();
@@ -57,6 +111,7 @@ export default function TabsLayout() {
   const insets = useSafeAreaInsets();
   const actions = createActionsForPath(pathname);
   const { active } = useAccounts();
+  const badges = useTabBadges(active?.userId, pathname);
   const onboarding = useMemo(() => new OnboardingApiService(API, accessTokenProvider), []);
   const [allowed, setAllowed] = useState(false);
   useEffect(() => {
@@ -80,6 +135,7 @@ export default function TabsLayout() {
           header: () => <AccountHeader />,
           tabBarStyle: [s.tabBar, { height: 64 + Math.max(insets.bottom, 8), paddingBottom: Math.max(insets.bottom, 8) }],
           tabBarLabelStyle: s.tabLabel,
+          tabBarBadgeStyle: s.tabBadge,
           tabBarActiveTintColor: "#5B4CFF",
           tabBarInactiveTintColor: "#596078"
         }}
@@ -98,6 +154,10 @@ export default function TabsLayout() {
         name="calls"
         options={{
           title: "Calls",
+          tabBarBadge: badgeValue(badges?.calls),
+          tabBarAccessibilityLabel: badges?.calls
+            ? `Calls, ${badges.calls} missed`
+            : "Calls",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="call-outline" size={size} color={color} />
           )
@@ -124,6 +184,13 @@ export default function TabsLayout() {
         name="chats"
         options={{
           title: "Chats",
+          // Chats draws its own dark header; the shared account header would
+          // sit above it as a light band.
+          headerShown: false,
+          tabBarBadge: badgeValue(badges?.chats),
+          tabBarAccessibilityLabel: badges?.chats
+            ? `Chats, ${badges.chats} unread`
+            : "Chats",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="chatbubbles-outline" size={size} color={color} />
           )
@@ -186,6 +253,7 @@ const s = StyleSheet.create({
     shadowOffset: { width: 0, height: -4 }
   },
   tabLabel: { fontSize: 11, fontWeight: "700" },
+  tabBadge: { backgroundColor: "#FF3B4E", color: "#FFFFFF", fontSize: 10, fontWeight: "900", minWidth: 18, lineHeight: 15 },
   createButton: {
     alignSelf: "center",
     top: -17,

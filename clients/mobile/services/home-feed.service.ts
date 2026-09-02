@@ -46,6 +46,7 @@ export type HomeNewsItem = {
 export type HomeLiveUpdate = {
   id: string;
   title: string;
+  summary: string | null;
   canonicalUrl: string;
   imageUrl: string | null;
   publisherName: string;
@@ -74,6 +75,8 @@ export type HomeNotifications = {
   pendingMessageRequests: number;
   unacknowledgedSecurityAlerts: number;
   pendingCountryLinqaNotifications: number;
+  /** Incoming calls missed inside the server's rolling window. */
+  missedCalls: number;
   total: number;
 };
 
@@ -84,6 +87,7 @@ export type HomeCountryLinqaPanel = {
   verificationState: string;
   trends: Array<{ rank: number; category: string; storyCount: number }>;
   publishedEvents: number;
+  communityMembers: number;
 };
 
 export type HomeUpcomingEvent = {
@@ -106,6 +110,37 @@ export type HomeContinueItem = {
   lastMessageAt: string | null;
 };
 
+/**
+ * A Vault entry as Home can honestly describe it.
+ *
+ * There is no `name`: filenames are encrypted with a key the server never
+ * holds, so the card is labelled from the item type and its recency instead of
+ * from a name nobody on the server side can read.
+ */
+export type HomeVaultItem = {
+  id: string;
+  itemType: "DOCUMENT" | "IDENTITY" | "PHOTO" | "RECOVERY" | "OTHER";
+  sizeBytes: number;
+  version: number;
+  updatedAt: string;
+};
+
+export type HomePendingTransfer = {
+  id: string;
+  publicId: string;
+  recipientName: string;
+  status: string;
+  sendAmountMinor: string;
+  sendCurrency: string;
+  /** True when the user is the blocker, so the card can offer to resume it. */
+  resumable: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** Counts behind the tab-bar badges. */
+export type HomeBadges = { chats: number; calls: number; notifications: number };
+
 export type HomeQuickAction = { key?: string; label?: string; route?: string };
 
 export type HomeFeedPayload = {
@@ -118,6 +153,8 @@ export type HomeFeedPayload = {
   spotlight?: HomeLiveUpdate | null;
   upcoming: HomeUpcomingEvent[];
   continueYourDay: HomeContinueItem[];
+  vaultRecent: HomeVaultItem[];
+  pendingTransfers: HomePendingTransfer[];
   countryLinqa: HomeCountryLinqaPanel | null;
   breakingAroundWorld: HomeNewsItem[];
   serviceState: {
@@ -185,6 +222,14 @@ export class HomeFeedService {
 
   loadFeed(): Promise<HomeFeedPayload> {
     return this.request<HomeFeedPayload>("/v1/mobile/home");
+  }
+
+  /**
+   * Badge counts only. The tab bar is mounted on every screen, so it must not
+   * pay for the full Home build to know whether to draw a dot.
+   */
+  loadBadges(): Promise<HomeBadges> {
+    return this.request<HomeBadges>("/v1/mobile/home/badges");
   }
 
   loadPreferences(): Promise<{

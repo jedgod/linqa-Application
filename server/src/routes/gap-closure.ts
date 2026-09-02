@@ -16,17 +16,6 @@ import type { GapClosureService } from "../services/gap-closure.service.js";
 export async function registerGapClosureRoutes(app:FastifyInstance,config:AppConfig,db:Database,services:{gap:GapClosureService}) {
   const authenticate=createAuthenticator(config);
 
-  app.get("/v1/calls/history",async (request,reply)=>{
-    try {
-      const p=await authenticate(request); requireScope(p,"calls:read");
-      const q=z.object({limit:z.coerce.number().int().min(1).max(500).default(100)}).parse(request.query);
-      return {calls:await services.gap.listCalls(p.userId,q.limit)};
-    } catch (error) {
-      request.log.warn({ err: error }, "call history request rejected");
-      return reply.code(400).send({ error: "invalid_request" });
-    }
-  });
-
   app.get("/v1/media",async (request,reply)=>{
     try {
       const p=await authenticate(request); requireScope(p,"media:read");

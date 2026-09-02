@@ -30,6 +30,12 @@ export interface HomeNotifications {
   pendingMessageRequests: number;
   unacknowledgedSecurityAlerts: number;
   pendingCountryLinqaNotifications: number;
+  /**
+   * Incoming calls missed inside `feed.missedCallWindowHours`. Separate from
+   * `total` on purpose: `total` is what the notification bell shows, and a
+   * missed call is surfaced on the Calls tab instead.
+   */
+  missedCalls: number;
   total: number;
 }
 
@@ -51,11 +57,14 @@ export interface HomeCountryLinqaPanel {
   verificationState: string;
   trends: Array<{ rank: number; category: string; storyCount: number }>;
   publishedEvents: number;
+  /** Active members of this country's community. A count, never identities. */
+  communityMembers: number;
 }
 
 export interface HomeLiveUpdate {
   id: string;
   title: string;
+  summary: string | null;
   canonicalUrl: string;
   imageUrl: string | null;
   publisherName: string;
@@ -67,10 +76,71 @@ export interface HomeLiveUpdate {
   attributionRequired: boolean;
 }
 
+/**
+ * A Vault entry as Home is allowed to describe it.
+ *
+ * `vault_items.name_ciphertext` is client-side encrypted, so the server has no
+ * filename to send and Home must not pretend otherwise. What travels is the
+ * unencrypted envelope the storage layer needs anyway — type, size, version,
+ * recency — and the client labels the card from that.
+ */
+export interface HomeVaultItem {
+  id: string;
+  itemType: "DOCUMENT" | "IDENTITY" | "PHOTO" | "RECOVERY" | "OTHER";
+  sizeBytes: number;
+  version: number;
+  updatedAt: string;
+}
+
+export interface HomePendingTransfer {
+  id: string;
+  publicId: string;
+  recipientName: string;
+  status: string;
+  sendAmountMinor: string;
+  sendCurrency: string;
+  /** True when the *user* is the blocker, so the card can offer to resume. */
+  resumable: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Transfers that have left neither the user's hands nor the provider's.
+ * Terminal states (COMPLETED, FAILED, REFUNDED, ...) belong in history, not on
+ * Home.
+ */
+const IN_FLIGHT_TRANSFER_STATUSES = [
+  "CREATED",
+  "QUOTE_CREATED",
+  "AWAITING_CONFIRMATION",
+  "AUTHENTICATING",
+  "COMPLIANCE_SCREENING",
+  "RISK_REVIEW",
+  "FUNDING_AUTHORIZATION",
+  "FUNDS_AUTHORIZED",
+  "TRANSFER_SUBMITTED",
+  "PROCESSING",
+  "PAYOUT_SUBMITTED",
+  "PAYOUT_PROCESSING",
+  "REQUIRES_ACTION",
+  "MANUAL_REVIEW",
+  "ON_HOLD"
+] as const;
+
+/** The subset the user can actually act on from Home. */
+const RESUMABLE_TRANSFER_STATUSES = new Set([
+  "CREATED",
+  "QUOTE_CREATED",
+  "AWAITING_CONFIRMATION",
+  "REQUIRES_ACTION"
+]);
+
 function toLiveUpdate(row: StoredNewsRow): HomeLiveUpdate {
   return {
     id: row.id,
     title: row.title,
+    summary: row.summary,
     canonicalUrl: row.canonicalUrl,
     imageUrl: row.imageUrl,
     publisherName: row.publisherName,
@@ -96,6 +166,51 @@ export async function resolveJurisdictionCountry(db: Database, userId: string): 
   );
   const code = (result.rows[0] as { verified_country_code: string | null } | undefined)?.verified_country_code;
   return code ? code.trim().toUpperCase() : null;
+}
+
+/**
+ * Counts behind the tab-bar badges.
+ *
+ * Deliberately not `GET /v1/mobile/home`: the tab bar mounts on every screen
+ * and must not pull news, Spotlight and CountryLinqa with it. These are the
+ * same indexed counts `getNotifications` runs, minus everything else.
+ */
+export async function loadHomeBadges(
+  db: Database,
+  userId: string
+): Promise<{ chats: number; calls: number; notifications: number }> {
+  // `chats` is unread *messages* (what the Chats tab counts), while the Chat
+  // quick action on Home counts unread *conversations*. Two different
+  // questions, so two different numbers -- neither is a rounding of the other.
+  const result = await db.query(
+    `SELECT
+       COALESCE((SELECT sum(cm.unread_count)::int FROM conversation_members cm
+         JOIN conversations c ON c.id=cm.conversation_id
+         WHERE cm.user_id=$1 AND cm.removed_at IS NULL AND c.archived_at IS NULL), 0) AS "unreadMessages",
+       COALESCE((SELECT count(*)::int FROM call_history
+         WHERE user_id=$1 AND direction='INCOMING' AND status='MISSED'
+           AND created_at > now() - make_interval(hours => $2::int)), 0) AS "missedCalls",
+       COALESCE((SELECT count(*)::int FROM message_requests
+         WHERE recipient_user_id=$1 AND status='PENDING'), 0) AS "pendingMessageRequests",
+       COALESCE((SELECT count(*)::int FROM device_security_alerts
+         WHERE user_id=$1 AND acknowledged_at IS NULL), 0) AS "securityAlerts"`,
+    [userId, homeProductionConfig.feed.missedCallWindowHours]
+  );
+  const row = (result.rows[0] ?? {}) as {
+    unreadMessages?: number;
+    missedCalls?: number;
+    pendingMessageRequests?: number;
+    securityAlerts?: number;
+  };
+  const unreadMessages = Number(row.unreadMessages ?? 0);
+  return {
+    chats: unreadMessages,
+    calls: Number(row.missedCalls ?? 0),
+    // Same arithmetic as `getNotifications().total`, so the bell here and the
+    // bell on Home can never disagree.
+    notifications:
+      unreadMessages + Number(row.pendingMessageRequests ?? 0) + Number(row.securityAlerts ?? 0)
+  };
 }
 
 export function createHomeDependencies(db: Database, repository: HomeRepository): HomeFeedDependencies {
@@ -144,8 +259,11 @@ export function createHomeDependencies(db: Database, repository: HomeRepository)
            COALESCE((SELECT count(*)::int FROM device_security_alerts
              WHERE user_id=$1 AND acknowledged_at IS NULL), 0) AS "unacknowledgedSecurityAlerts",
            COALESCE((SELECT count(*)::int FROM countrylinqa_notification_outbox
-             WHERE user_id=$1 AND status='PENDING'), 0) AS "pendingCountryLinqaNotifications"`,
-        [userId]
+             WHERE user_id=$1 AND status='PENDING'), 0) AS "pendingCountryLinqaNotifications",
+           COALESCE((SELECT count(*)::int FROM call_history
+             WHERE user_id=$1 AND direction='INCOMING' AND status='MISSED'
+               AND created_at > now() - make_interval(hours => $2::int)), 0) AS "missedCalls"`,
+        [userId, homeProductionConfig.feed.missedCallWindowHours]
       );
       const row = (result.rows[0] ?? {}) as Omit<HomeNotifications, "total">;
       return {
@@ -154,6 +272,7 @@ export function createHomeDependencies(db: Database, repository: HomeRepository)
         pendingMessageRequests: Number(row.pendingMessageRequests ?? 0),
         unacknowledgedSecurityAlerts: Number(row.unacknowledgedSecurityAlerts ?? 0),
         pendingCountryLinqaNotifications: Number(row.pendingCountryLinqaNotifications ?? 0),
+        missedCalls: Number(row.missedCalls ?? 0),
         total:
           Number(row.unreadMessages ?? 0) +
           Number(row.pendingMessageRequests ?? 0) +
@@ -162,7 +281,7 @@ export function createHomeDependencies(db: Database, repository: HomeRepository)
     },
 
     async getCountryLinqa(userId: string, country: string): Promise<HomeCountryLinqaPanel> {
-      const [identity, trends, events] = await Promise.all([
+      const [identity, trends, events, members] = await Promise.all([
         db.query(
           `SELECT u.verified_country_code AS "countryCode",
                   c.name AS "countryName",
@@ -176,6 +295,11 @@ export function createHomeDependencies(db: Database, repository: HomeRepository)
         db.query(
           `SELECT count(*)::int AS total FROM events
            WHERE status='PUBLISHED' AND starts_at>now() AND country_code=$1`,
+          [country]
+        ),
+        db.query(
+          `SELECT count(*)::int AS total FROM country_community_memberships
+           WHERE country_code=$1 AND status='ACTIVE'`,
           [country]
         )
       ]);
@@ -197,7 +321,8 @@ export function createHomeDependencies(db: Database, repository: HomeRepository)
           category: trend.category,
           storyCount: trend.storyCount
         })),
-        publishedEvents: Number((events.rows[0] as { total?: number } | undefined)?.total ?? 0)
+        publishedEvents: Number((events.rows[0] as { total?: number } | undefined)?.total ?? 0),
+        communityMembers: Number((members.rows[0] as { total?: number } | undefined)?.total ?? 0)
       };
     },
 
@@ -243,6 +368,55 @@ export function createHomeDependencies(db: Database, repository: HomeRepository)
         if (!combined.some((existing) => existing.id === row.id)) combined.push(row);
       }
       return combined.map(toLiveUpdate);
+    },
+
+    async getVaultRecent(userId: string): Promise<HomeVaultItem[]> {
+      const result = await db.query(
+        `SELECT id,
+                item_type AS "itemType",
+                encrypted_size AS "sizeBytes",
+                version,
+                updated_at AS "updatedAt"
+         FROM vault_items
+         WHERE user_id=$1 AND deleted_at IS NULL
+         ORDER BY updated_at DESC
+         LIMIT $2`,
+        [userId, homeProductionConfig.feed.maxVaultItems]
+      );
+      return (result.rows as HomeVaultItem[]).map((row) => ({
+        id: row.id,
+        itemType: row.itemType,
+        // encrypted_size is BIGINT, so the driver hands it back as a string.
+        sizeBytes: Number(row.sizeBytes ?? 0),
+        version: Number(row.version ?? 1),
+        updatedAt: new Date(row.updatedAt).toISOString()
+      }));
+    },
+
+    async getPendingTransfers(userId: string): Promise<HomePendingTransfer[]> {
+      const statuses = IN_FLIGHT_TRANSFER_STATUSES.map((status) => `'${status}'`).join(",");
+      const result = await db.query(
+        `SELECT t.id,
+                t.public_id AS "publicId",
+                r.display_name AS "recipientName",
+                t.status::text AS status,
+                t.send_amount_minor::text AS "sendAmountMinor",
+                t.send_currency AS "sendCurrency",
+                t.created_at AS "createdAt",
+                t.updated_at AS "updatedAt"
+         FROM linqasend_transfers t
+         JOIN linqasend_recipients r ON r.id = t.recipient_id
+         WHERE t.user_id=$1 AND t.status IN (${statuses})
+         ORDER BY t.updated_at DESC
+         LIMIT $2`,
+        [userId, homeProductionConfig.feed.maxPendingTransfers]
+      );
+      return (result.rows as HomePendingTransfer[]).map((row) => ({
+        ...row,
+        resumable: RESUMABLE_TRANSFER_STATUSES.has(row.status),
+        createdAt: new Date(row.createdAt).toISOString(),
+        updatedAt: new Date(row.updatedAt).toISOString()
+      }));
     },
 
     async getSpotlight(_userId: string, country: string): Promise<HomeLiveUpdate | null> {

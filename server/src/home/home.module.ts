@@ -14,6 +14,7 @@ import { PublisherTrustRepository } from "./publisher-trust.repository.js";
 import { PublisherTrustService } from "./publisher-trust.service.js";
 import type { NewsProvider } from "./news-provider.js";
 import { GdeltNewsProvider } from "./providers/gdelt.provider.js";
+import { PublisherRssProvider } from "./providers/publisher-rss.provider.js";
 import { ApprovedSecondaryProvider } from "./providers/secondary.provider.js";
 
 export interface HomeModule {
@@ -64,7 +65,15 @@ export function createHomeModule(input: HomeModuleInput): HomeModule {
   const trust = new PublisherTrustService(publisherRepository);
   const cache = new DurableHomeCache(input.db, redis);
   const telemetry = new HomeTelemetryService(input.metrics);
-  const providers = input.providers ?? [new GdeltNewsProvider(), new ApprovedSecondaryProvider()];
+  // Three independent lanes, highest priority first: the publishers' own RSS,
+  // the GDELT index, then any contracted aggregation. Redundancy here is what
+  // the release gate's provider check is asking about -- losing one upstream
+  // must degrade the feed, not empty it.
+  const providers = input.providers ?? [
+    new PublisherRssProvider(),
+    new GdeltNewsProvider(),
+    new ApprovedSecondaryProvider()
+  ];
   const router = new NewsRouterService(
     input.db,
     providers,

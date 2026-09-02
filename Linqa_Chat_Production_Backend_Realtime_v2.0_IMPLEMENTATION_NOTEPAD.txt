@@ -1,0 +1,760 @@
+LINQA CHAT — PRODUCTION BACKEND + REALTIME v2.0
+Implementation notepad for Node.js / TypeScript / PostgreSQL / Redis
+====================================================================
+
+CONTINUATION CONTRACT
+---------------------
+This pack continues Linqa Chat Dynamic Additions v1.0. It implements the
+authenticated services required by that mobile UI: inbox, direct/group chats,
+messages, read state, presence, typing, scheduled calls, broadcasts, QR contact
+exchange, and reliable delivery workers.
+
+Reference stack (adapt names to an existing monorepo):
+- Node.js 22, TypeScript 5, Fastify 5
+- PostgreSQL 16+, node-postgres
+- Redis 7+ for presence, rate limits, pub/sub, and queues
+- jose for JWT verification; Argon2id for opaque secret hashes
+- BullMQ for scheduled/retryable work
+- Vitest + Testcontainers for integration tests
+
+NON-NEGOTIABLE PRODUCTION RULES
+-------------------------------
+1. Authenticate HTTP and WebSocket connections before reading chat data.
+2. Authorize every conversation operation with an active membership row.
+3. Keep tenant/workspace scope in every query; never trust a client tenant ID.
+4. Use client-generated UUID idempotency keys for message and broadcast writes.
+5. Commit database state before publishing realtime events.
+6. Persist durable events in chat_outbox; WebSocket delivery is an optimization.
+7. Never claim E2EE unless the conversation capability and device session prove it.
+8. Store timestamps as timestamptz in UTC; render in the user's timezone.
+9. QR payloads contain short-lived opaque tokens, never raw private contact data.
+10. Workers claim jobs with SKIP LOCKED and are safe to retry.
+
+====================================================================
+FILE 1: services/chat/migrations/001_chat_v2.sql
+====================================================================
+
+BEGIN;
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TYPE conversation_kind AS ENUM ('direct', 'group', 'broadcast');
+CREATE TYPE member_role AS ENUM ('owner', 'admin', 'member');
+CREATE TYPE message_kind AS ENUM ('text', 'voice', 'photos', 'call', 'system');
+CREATE TYPE delivery_state AS ENUM ('queued', 'sent', 'delivered', 'read', 'failed');
+CREATE TYPE call_kind AS ENUM ('audio', 'video');
+CREATE TYPE schedule_state AS ENUM ('scheduled', 'cancelled', 'started', 'completed');
+CREATE TYPE broadcast_state AS ENUM ('draft', 'scheduled', 'processing', 'completed', 'cancelled', 'failed');
+CREATE TYPE job_state AS ENUM ('pending', 'leased', 'completed', 'dead');
+
+CREATE TABLE app_user (
+  id uuid PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  display_name text NOT NULL CHECK (length(display_name) BETWEEN 1 AND 120),
+  avatar_url text,
+  timezone text NOT NULL DEFAULT 'UTC',
+  disabled_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, id)
+);
+
+CREATE TABLE user_device (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  push_provider text NOT NULL CHECK (push_provider IN ('apns', 'fcm', 'none')),
+  push_token_ciphertext bytea,
+  e2ee_identity_key bytea,
+  revoked_at timestamptz,
+  last_seen_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  FOREIGN KEY (tenant_id, user_id) REFERENCES app_user(tenant_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE conversation (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL,
+  kind conversation_kind NOT NULL,
+  title text CHECK (title IS NULL OR length(title) BETWEEN 1 AND 160),
+  created_by uuid NOT NULL,
+  e2ee_capable boolean NOT NULL DEFAULT false,
+  last_message_id uuid,
+  last_activity_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz,
+  FOREIGN KEY (tenant_id, created_by) REFERENCES app_user(tenant_id, id)
+);
+CREATE INDEX conversation_tenant_activity_idx
+  ON conversation (tenant_id, last_activity_at DESC) WHERE deleted_at IS NULL;
+
+CREATE TABLE direct_conversation_key (
+  tenant_id uuid NOT NULL,
+  user_low uuid NOT NULL,
+  user_high uuid NOT NULL,
+  conversation_id uuid NOT NULL UNIQUE REFERENCES conversation(id) ON DELETE CASCADE,
+  CHECK (user_low < user_high),
+  PRIMARY KEY (tenant_id, user_low, user_high)
+);
+
+CREATE TABLE conversation_member (
+  conversation_id uuid NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+  tenant_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  role member_role NOT NULL DEFAULT 'member',
+  joined_at timestamptz NOT NULL DEFAULT now(),
+  left_at timestamptz,
+  last_read_message_id uuid,
+  last_read_at timestamptz,
+  muted_until timestamptz,
+  pinned_at timestamptz,
+  FOREIGN KEY (tenant_id, user_id) REFERENCES app_user(tenant_id, id),
+  PRIMARY KEY (conversation_id, user_id)
+);
+CREATE INDEX member_user_active_idx
+  ON conversation_member (tenant_id, user_id, conversation_id) WHERE left_at IS NULL;
+
+CREATE TABLE chat_message (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL,
+  conversation_id uuid NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+  sender_id uuid NOT NULL,
+  client_message_id uuid NOT NULL,
+  kind message_kind NOT NULL,
+  body_ciphertext bytea,
+  body_text text,
+  media jsonb NOT NULL DEFAULT '[]'::jsonb,
+  reply_to_id uuid REFERENCES chat_message(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  edited_at timestamptz,
+  deleted_at timestamptz,
+  CHECK ((body_ciphertext IS NULL) <> (body_text IS NULL) OR kind IN ('photos','call','system')),
+  UNIQUE (tenant_id, sender_id, client_message_id),
+  FOREIGN KEY (tenant_id, sender_id) REFERENCES app_user(tenant_id, id)
+);
+CREATE INDEX message_conversation_page_idx
+  ON chat_message (conversation_id, created_at DESC, id DESC) WHERE deleted_at IS NULL;
+ALTER TABLE conversation ADD CONSTRAINT conversation_last_message_fk
+  FOREIGN KEY (last_message_id) REFERENCES chat_message(id) DEFERRABLE INITIALLY DEFERRED;
+
+CREATE TABLE message_receipt (
+  message_id uuid NOT NULL REFERENCES chat_message(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL,
+  state delivery_state NOT NULL,
+  occurred_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (message_id, user_id)
+);
+
+CREATE TABLE scheduled_call (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL,
+  conversation_id uuid NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+  created_by uuid NOT NULL,
+  title text NOT NULL CHECK (length(title) BETWEEN 1 AND 160),
+  kind call_kind NOT NULL,
+  starts_at timestamptz NOT NULL,
+  ends_at timestamptz,
+  state schedule_state NOT NULL DEFAULT 'scheduled',
+  call_provider_ref text,
+  reminder_sent_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  FOREIGN KEY (tenant_id, created_by) REFERENCES app_user(tenant_id, id)
+);
+CREATE INDEX scheduled_call_due_idx ON scheduled_call (starts_at)
+  WHERE state = 'scheduled';
+
+CREATE TABLE broadcast_campaign (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL,
+  created_by uuid NOT NULL,
+  title text NOT NULL,
+  message_body text NOT NULL CHECK (length(message_body) BETWEEN 1 AND 4000),
+  scheduled_at timestamptz,
+  state broadcast_state NOT NULL DEFAULT 'draft',
+  client_request_id uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, created_by, client_request_id),
+  FOREIGN KEY (tenant_id, created_by) REFERENCES app_user(tenant_id, id)
+);
+
+CREATE TABLE broadcast_recipient (
+  campaign_id uuid NOT NULL REFERENCES broadcast_campaign(id) ON DELETE CASCADE,
+  recipient_id uuid NOT NULL,
+  state delivery_state NOT NULL DEFAULT 'queued',
+  message_id uuid REFERENCES chat_message(id),
+  attempts integer NOT NULL DEFAULT 0,
+  last_error_code text,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (campaign_id, recipient_id)
+);
+
+CREATE TABLE contact_qr_token (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL,
+  owner_user_id uuid NOT NULL,
+  token_hash bytea NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  max_uses integer NOT NULL DEFAULT 1 CHECK (max_uses BETWEEN 1 AND 20),
+  use_count integer NOT NULL DEFAULT 0,
+  revoked_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  FOREIGN KEY (tenant_id, owner_user_id) REFERENCES app_user(tenant_id, id)
+);
+CREATE INDEX qr_expiry_idx ON contact_qr_token (expires_at) WHERE revoked_at IS NULL;
+
+CREATE TABLE contact (
+  tenant_id uuid NOT NULL,
+  owner_user_id uuid NOT NULL,
+  contact_user_id uuid NOT NULL,
+  created_via text NOT NULL CHECK (created_via IN ('qr','search','invite')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (owner_user_id <> contact_user_id),
+  PRIMARY KEY (tenant_id, owner_user_id, contact_user_id)
+);
+
+CREATE TABLE chat_outbox (
+  id bigserial PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  topic text NOT NULL,
+  aggregate_id uuid NOT NULL,
+  payload jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  published_at timestamptz,
+  attempts integer NOT NULL DEFAULT 0,
+  last_error text
+);
+CREATE INDEX outbox_pending_idx ON chat_outbox (id) WHERE published_at IS NULL;
+
+CREATE TABLE delivery_job (
+  id bigserial PRIMARY KEY,
+  tenant_id uuid NOT NULL,
+  job_type text NOT NULL,
+  dedupe_key text NOT NULL UNIQUE,
+  payload jsonb NOT NULL,
+  run_at timestamptz NOT NULL DEFAULT now(),
+  state job_state NOT NULL DEFAULT 'pending',
+  attempts integer NOT NULL DEFAULT 0,
+  leased_until timestamptz,
+  last_error_code text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX delivery_due_idx ON delivery_job (run_at, id)
+  WHERE state IN ('pending','leased');
+
+CREATE TABLE security_audit_log (
+  id bigserial PRIMARY KEY,
+  tenant_id uuid,
+  actor_user_id uuid,
+  action text NOT NULL,
+  resource_type text NOT NULL,
+  resource_id text,
+  request_id text NOT NULL,
+  ip_hash bytea,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMIT;
+
+====================================================================
+FILE 2: services/chat/src/auth.ts
+====================================================================
+
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+import type { FastifyRequest } from 'fastify';
+
+export type Principal = {
+  userId: string; tenantId: string; deviceId: string; scopes: Set<string>;
+};
+
+const jwks = createRemoteJWKSet(new URL(process.env.AUTH_JWKS_URL!));
+
+export async function authenticate(request: FastifyRequest): Promise<Principal> {
+  const header = request.headers.authorization;
+  if (!header?.startsWith('Bearer ')) throw request.server.httpErrors.unauthorized();
+  const { payload } = await jwtVerify(header.slice(7), jwks, {
+    issuer: process.env.AUTH_ISSUER,
+    audience: 'linqa-chat-api',
+    algorithms: ['RS256', 'ES256'],
+  });
+  if (!payload.sub || typeof payload.tid !== 'string' || typeof payload.did !== 'string')
+    throw request.server.httpErrors.unauthorized('Invalid identity claims');
+  return {
+    userId: payload.sub,
+    tenantId: payload.tid,
+    deviceId: payload.did,
+    scopes: new Set(typeof payload.scope === 'string' ? payload.scope.split(' ') : []),
+  };
+}
+
+export function requireScope(p: Principal, scope: string) {
+  if (!p.scopes.has(scope)) throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
+}
+
+====================================================================
+FILE 3: services/chat/src/db.ts
+====================================================================
+
+import { Pool, PoolClient } from 'pg';
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 20 });
+
+export async function tx<T>(fn: (db: PoolClient) => Promise<T>): Promise<T> {
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+    await db.query(`SET LOCAL statement_timeout = '5s'`);
+    const value = await fn(db);
+    await db.query('COMMIT');
+    return value;
+  } catch (error) {
+    await db.query('ROLLBACK');
+    throw error;
+  } finally { db.release(); }
+}
+
+export async function assertMember(db: PoolClient, tenantId: string, userId: string, conversationId: string) {
+  const result = await db.query(
+    `SELECT role FROM conversation_member m JOIN conversation c ON c.id=m.conversation_id
+     WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.conversation_id=$3
+       AND m.left_at IS NULL AND c.deleted_at IS NULL`,
+    [tenantId, userId, conversationId],
+  );
+  if (!result.rowCount) throw Object.assign(new Error('Conversation not found'), { statusCode: 404 });
+  return result.rows[0] as { role: 'owner'|'admin'|'member' };
+}
+
+====================================================================
+FILE 4: services/chat/src/routes/inbox.ts
+====================================================================
+
+import type { FastifyInstance } from 'fastify';
+import { pool } from '../db.js';
+
+export async function inboxRoutes(app: FastifyInstance) {
+  app.get('/v1/chats/inbox', { preHandler: app.authenticate }, async (req) => {
+    const p = req.principal;
+    const filter = ['all','unread','groups','pinned'].includes(String(req.query.filter))
+      ? String(req.query.filter) : 'all';
+    const result = await pool.query(`
+      WITH visible AS (
+        SELECT c.*, m.pinned_at, m.muted_until, m.last_read_at
+        FROM conversation c JOIN conversation_member m ON m.conversation_id=c.id
+        WHERE c.tenant_id=$1 AND m.user_id=$2 AND m.left_at IS NULL AND c.deleted_at IS NULL
+      ), summaries AS (
+        SELECT v.id, v.kind, v.title, v.last_activity_at, v.pinned_at, v.muted_until,
+          lm.kind preview_kind, COALESCE(lm.body_text, '') preview,
+          (SELECT count(*)::int FROM chat_message x
+           WHERE x.conversation_id=v.id AND x.deleted_at IS NULL
+             AND x.sender_id<>$2 AND x.created_at>COALESCE(v.last_read_at,'epoch')) unread_count
+        FROM visible v LEFT JOIN chat_message lm ON lm.id=v.last_message_id
+      ) SELECT * FROM summaries
+      WHERE ($3='all' OR ($3='unread' AND unread_count>0)
+        OR ($3='groups' AND kind='group') OR ($3='pinned' AND pinned_at IS NOT NULL))
+      ORDER BY (pinned_at IS NOT NULL) DESC, pinned_at DESC NULLS LAST, last_activity_at DESC
+      LIMIT 100`, [p.tenantId, p.userId, filter]);
+    const scheduled = await pool.query(`
+      SELECT s.id, s.title, s.starts_at, s.call_provider_ref
+      FROM scheduled_call s JOIN conversation_member m ON m.conversation_id=s.conversation_id
+      WHERE s.tenant_id=$1 AND m.user_id=$2 AND m.left_at IS NULL
+        AND s.state='scheduled' AND s.starts_at > now()-interval '10 minutes'
+      ORDER BY s.starts_at LIMIT 1`, [p.tenantId, p.userId]);
+    return {
+      unreadTotal: result.rows.reduce((n, r) => n + r.unread_count, 0),
+      scheduledCall: scheduled.rows[0] ? {
+        eventId: scheduled.rows[0].id, title: scheduled.rows[0].title,
+        startsAt: scheduled.rows[0].starts_at,
+        joinable: scheduled.rows[0].starts_at <= new Date(Date.now()+10*60_000),
+        callId: scheduled.rows[0].call_provider_ref ?? undefined,
+      } : null,
+      presence: await app.presence.forContacts(p.tenantId, p.userId),
+      conversations: result.rows.map(app.presentChatSummary),
+    };
+  });
+}
+
+====================================================================
+FILE 5: services/chat/src/routes/conversations.ts
+====================================================================
+
+import type { FastifyInstance } from 'fastify';
+import { tx, assertMember } from '../db.js';
+
+export async function conversationRoutes(app: FastifyInstance) {
+  app.post('/v1/chats/direct', { preHandler: app.authenticate }, async (req, reply) => {
+    const p=req.principal; const { userId }=app.schemas.direct.parse(req.body);
+    if (userId===p.userId) return reply.code(422).send({ code:'SELF_CHAT_NOT_ALLOWED' });
+    const id=await tx(async db => {
+      const target=await db.query(`SELECT 1 FROM app_user WHERE tenant_id=$1 AND id=$2 AND disabled_at IS NULL`,[p.tenantId,userId]);
+      if(!target.rowCount) throw Object.assign(new Error('User not found'),{statusCode:404});
+      const [low,high]=[p.userId,userId].sort();
+      await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,[`${p.tenantId}:${low}:${high}`]);
+      const existing=await db.query(`SELECT conversation_id FROM direct_conversation_key WHERE tenant_id=$1 AND user_low=$2 AND user_high=$3`,[p.tenantId,low,high]);
+      if(existing.rowCount) return existing.rows[0].conversation_id;
+      const c=await db.query(`INSERT INTO conversation(tenant_id,kind,created_by) VALUES($1,'direct',$2) RETURNING id`,[p.tenantId,p.userId]);
+      await db.query(`INSERT INTO direct_conversation_key VALUES($1,$2,$3,$4)`,[p.tenantId,low,high,c.rows[0].id]);
+      await db.query(`INSERT INTO conversation_member(conversation_id,tenant_id,user_id,role) VALUES($1,$2,$3,'owner'),($1,$2,$4,'member')`,[c.rows[0].id,p.tenantId,p.userId,userId]);
+      return c.rows[0].id;
+    });
+    return reply.code(201).send({conversationId:id});
+  });
+
+  app.post('/v1/chats/:conversationId/messages', { preHandler: app.authenticate }, async (req,reply) => {
+    const p=req.principal, cid=String(req.params.conversationId);
+    const input=app.schemas.message.parse(req.body);
+    const message=await tx(async db => {
+      await assertMember(db,p.tenantId,p.userId,cid);
+      const c=await db.query(`SELECT e2ee_capable FROM conversation WHERE id=$1 AND tenant_id=$2 FOR UPDATE`,[cid,p.tenantId]);
+      if(input.encrypted && !c.rows[0].e2ee_capable) throw Object.assign(new Error('E2EE unavailable'),{statusCode:409});
+      const inserted=await db.query(`INSERT INTO chat_message
+        (tenant_id,conversation_id,sender_id,client_message_id,kind,body_text,body_ciphertext,media)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+        ON CONFLICT(tenant_id,sender_id,client_message_id) DO UPDATE SET client_message_id=EXCLUDED.client_message_id
+        RETURNING id,conversation_id,sender_id,kind,created_at`,
+        [p.tenantId,cid,p.userId,input.clientMessageId,input.kind,input.encrypted?null:input.text,
+         input.encrypted?Buffer.from(input.ciphertext,'base64'):null,JSON.stringify(input.media??[])]);
+      const m=inserted.rows[0];
+      await db.query(`UPDATE conversation SET last_message_id=$1,last_activity_at=$2 WHERE id=$3`,[m.id,m.created_at,cid]);
+      await db.query(`INSERT INTO chat_outbox(tenant_id,topic,aggregate_id,payload) VALUES($1,'message.created',$2,$3)`,[p.tenantId,cid,JSON.stringify(m)]);
+      return m;
+    });
+    return reply.code(201).send(message);
+  });
+
+  app.post('/v1/chats/:conversationId/read', { preHandler: app.authenticate }, async req => {
+    const p=req.principal,cid=String(req.params.conversationId);
+    await tx(async db=>{
+      await assertMember(db,p.tenantId,p.userId,cid);
+      const last=await db.query(`SELECT id,created_at FROM chat_message WHERE conversation_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1`,[cid]);
+      await db.query(`UPDATE conversation_member SET last_read_message_id=$1,last_read_at=COALESCE($2,last_read_at) WHERE conversation_id=$3 AND user_id=$4`,[last.rows[0]?.id,last.rows[0]?.created_at,cid,p.userId]);
+      await db.query(`INSERT INTO chat_outbox(tenant_id,topic,aggregate_id,payload) VALUES($1,'conversation.read',$2,$3)`,[p.tenantId,cid,JSON.stringify({conversationId:cid,userId:p.userId,messageId:last.rows[0]?.id})]);
+    });
+    return {ok:true};
+  });
+}
+
+====================================================================
+FILE 6: services/chat/src/realtime/gateway.ts
+====================================================================
+
+import type { FastifyInstance } from 'fastify';
+import { WebSocket } from 'ws';
+
+type ClientEvent =
+ | {type:'subscribe';conversationIds:string[]}
+ | {type:'typing.start'|'typing.stop';conversationId:string}
+ | {type:'presence.heartbeat'};
+
+export async function realtimeGateway(app: FastifyInstance) {
+  app.get('/v1/realtime', {websocket:true}, async (socket,req) => {
+    let principal;
+    try { principal=await app.authenticateWebSocket(req); }
+    catch { socket.close(4401,'Unauthorized'); return; }
+    const connectionId=crypto.randomUUID();
+    await app.presence.connect(principal,connectionId);
+    const unsubscribe=await app.realtime.attach(principal,connectionId,socket);
+    socket.on('message',async raw=>{
+      if(raw.byteLength>16_384) return socket.close(4400,'Frame too large');
+      let event:ClientEvent;
+      try { event=app.schemas.clientEvent.parse(JSON.parse(raw.toString())); }
+      catch { return socket.send(JSON.stringify({type:'error',code:'INVALID_EVENT'})); }
+      try {
+        if(event.type==='subscribe') {
+          if(event.conversationIds.length>100) throw Object.assign(new Error(),{statusCode:422});
+          const allowed=await app.memberships.filterAllowed(principal,event.conversationIds);
+          await app.realtime.subscribe(connectionId,allowed);
+        } else if(event.type==='presence.heartbeat') await app.presence.heartbeat(principal,connectionId);
+        else {
+          await app.rateLimit.consume(`typing:${principal.userId}`,20,10);
+          await app.memberships.assert(principal,event.conversationId);
+          await app.realtime.ephemeral(event.type,{conversationId:event.conversationId,userId:principal.userId},5);
+        }
+      } catch { socket.send(JSON.stringify({type:'error',code:'EVENT_REJECTED'})); }
+    });
+    const ping=setInterval(()=>{if(socket.readyState===WebSocket.OPEN) socket.ping();},25_000);
+    socket.once('close',async()=>{clearInterval(ping);await unsubscribe();await app.presence.disconnect(principal,connectionId);});
+  });
+}
+
+SERVER EVENT ENVELOPE
+---------------------
+All durable events use:
+{ "type": "message.created", "eventId": 8812, "occurredAt": "...",
+  "conversationId": "...", "payload": { ... } }
+Clients store the greatest eventId, ignore duplicates, and reconnect with
+`?afterEventId=8812`. If retention has expired, server sends `sync.required`
+and the client refreshes `/v1/chats/inbox` plus open-message pages.
+
+====================================================================
+FILE 7: services/chat/src/routes/scheduling.ts
+====================================================================
+
+export async function schedulingRoutes(app) {
+  app.post('/v1/calls/scheduled',{preHandler:app.authenticate},async(req,reply)=>{
+    const p=req.principal,input=app.schemas.scheduleCall.parse(req.body);
+    if(new Date(input.startsAt).getTime()<Date.now()+60_000) return reply.code(422).send({code:'START_TOO_SOON'});
+    const row=await tx(async db=>{
+      await assertMember(db,p.tenantId,p.userId,input.conversationId);
+      const r=await db.query(`INSERT INTO scheduled_call(tenant_id,conversation_id,created_by,title,kind,starts_at,ends_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,[p.tenantId,input.conversationId,p.userId,input.title,input.kind,input.startsAt,input.endsAt]);
+      await db.query(`INSERT INTO delivery_job(tenant_id,job_type,dedupe_key,payload,run_at)
+        VALUES($1,'call.reminder',$2,$3,$4) ON CONFLICT(dedupe_key) DO NOTHING`,[p.tenantId,`call:${r.rows[0].id}:reminder`,JSON.stringify({callId:r.rows[0].id}),new Date(new Date(input.startsAt).getTime()-10*60_000)]);
+      return r.rows[0];
+    });
+    return reply.code(201).send(row);
+  });
+
+  app.post('/v1/calls/scheduled/:eventId/join',{preHandler:app.authenticate},async(req,reply)=>{
+    const p=req.principal,id=String(req.params.eventId);
+    const row=await pool.query(`SELECT s.* FROM scheduled_call s JOIN conversation_member m ON m.conversation_id=s.conversation_id
+      WHERE s.id=$1 AND s.tenant_id=$2 AND m.user_id=$3 AND m.left_at IS NULL`,[id,p.tenantId,p.userId]);
+    const event=row.rows[0];
+    if(!event) return reply.code(404).send({code:'EVENT_NOT_FOUND'});
+    if(event.state!=='scheduled'||Date.now()<new Date(event.starts_at).getTime()-10*60_000) return reply.code(409).send({code:'NOT_JOINABLE'});
+    const call=await app.calls.getOrCreate(event);
+    return {callId:call.id,joinToken:await app.calls.issueJoinToken(call,p,300)};
+  });
+}
+
+====================================================================
+FILE 8: services/chat/src/routes/broadcasts.ts
+====================================================================
+
+export async function broadcastRoutes(app) {
+  app.post('/v1/broadcasts',{preHandler:app.authenticate},async(req,reply)=>{
+    const p=req.principal; requireScope(p,'chat:broadcast');
+    const input=app.schemas.broadcast.parse(req.body);
+    if(input.recipientIds.length>5000) return reply.code(422).send({code:'RECIPIENT_LIMIT'});
+    const campaign=await tx(async db=>{
+      const allowed=await db.query(`SELECT contact_user_id FROM contact WHERE tenant_id=$1 AND owner_user_id=$2 AND contact_user_id=ANY($3::uuid[])`,[p.tenantId,p.userId,input.recipientIds]);
+      if(allowed.rowCount!==new Set(input.recipientIds).size) throw Object.assign(new Error('Invalid recipient'),{statusCode:422});
+      const c=await db.query(`INSERT INTO broadcast_campaign(tenant_id,created_by,title,message_body,scheduled_at,state,client_request_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,created_by,client_request_id)
+        DO UPDATE SET client_request_id=EXCLUDED.client_request_id RETURNING *`,[p.tenantId,p.userId,input.title,input.messageBody,input.scheduledAt,input.scheduledAt?'scheduled':'processing',input.clientRequestId]);
+      for(const r of allowed.rows) await db.query(`INSERT INTO broadcast_recipient(campaign_id,recipient_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[c.rows[0].id,r.contact_user_id]);
+      await db.query(`INSERT INTO delivery_job(tenant_id,job_type,dedupe_key,payload,run_at) VALUES($1,'broadcast.deliver',$2,$3,COALESCE($4,now())) ON CONFLICT DO NOTHING`,[p.tenantId,`broadcast:${c.rows[0].id}`,JSON.stringify({campaignId:c.rows[0].id}),input.scheduledAt]);
+      return c.rows[0];
+    });
+    return reply.code(202).send({campaignId:campaign.id,state:campaign.state});
+  });
+}
+
+====================================================================
+FILE 9: services/chat/src/routes/qrContacts.ts
+====================================================================
+
+import { randomBytes,createHash } from 'node:crypto';
+const hash=(token:string)=>createHash('sha256').update(token).digest();
+
+export async function qrContactRoutes(app) {
+  app.post('/v1/contacts/qr',{preHandler:app.authenticate},async(req,reply)=>{
+    const p=req.principal,token=randomBytes(32).toString('base64url');
+    const row=await pool.query(`INSERT INTO contact_qr_token(tenant_id,owner_user_id,token_hash,expires_at)
+      VALUES($1,$2,$3,now()+interval '5 minutes') RETURNING id,expires_at`,[p.tenantId,p.userId,hash(token)]);
+    return reply.code(201).send({qrPayload:`linqa://contact?v=1&t=${token}`,expiresAt:row.rows[0].expires_at});
+  });
+
+  app.post('/v1/contacts/qr/redeem',{preHandler:app.authenticate},async(req,reply)=>{
+    const p=req.principal,{token}=app.schemas.redeemQr.parse(req.body);
+    const owner=await tx(async db=>{
+      const found=await db.query(`SELECT * FROM contact_qr_token WHERE token_hash=$1 FOR UPDATE`,[hash(token)]);
+      const q=found.rows[0];
+      if(!q||q.tenant_id!==p.tenantId||q.revoked_at||q.use_count>=q.max_uses||new Date(q.expires_at)<=new Date())
+        throw Object.assign(new Error('QR invalid or expired'),{statusCode:410});
+      if(q.owner_user_id===p.userId) throw Object.assign(new Error('Own QR'),{statusCode:422});
+      await db.query(`UPDATE contact_qr_token SET use_count=use_count+1 WHERE id=$1`,[q.id]);
+      await db.query(`INSERT INTO contact(tenant_id,owner_user_id,contact_user_id,created_via)
+        VALUES($1,$2,$3,'qr'),($1,$3,$2,'qr') ON CONFLICT DO NOTHING`,[p.tenantId,p.userId,q.owner_user_id]);
+      return q.owner_user_id;
+    });
+    return reply.code(201).send({contactUserId:owner});
+  });
+}
+
+====================================================================
+FILE 10: services/chat/src/workers/deliveryWorker.ts
+====================================================================
+
+const MAX_ATTEMPTS=8;
+export async function claimJobs(db,limit=50) {
+  return (await db.query(`WITH due AS (
+    SELECT id FROM delivery_job WHERE (state='pending' OR (state='leased' AND leased_until<now())) AND run_at<=now()
+    ORDER BY run_at,id FOR UPDATE SKIP LOCKED LIMIT $1)
+    UPDATE delivery_job j SET state='leased',leased_until=now()+interval '60 seconds',attempts=attempts+1
+    FROM due WHERE j.id=due.id RETURNING j.*`,[limit])).rows;
+}
+
+export async function runDeliveryBatch(app) {
+  const jobs=await tx(db=>claimJobs(db));
+  for(const job of jobs) {
+    try {
+      if(job.job_type==='broadcast.deliver') await app.broadcasts.deliver(job.payload.campaignId);
+      else if(job.job_type==='call.reminder') await app.calls.sendReminder(job.payload.callId);
+      else if(job.job_type==='push.message') await app.push.deliver(job.payload);
+      await pool.query(`UPDATE delivery_job SET state='completed',leased_until=NULL WHERE id=$1`,[job.id]);
+    } catch(error) {
+      const retry=job.attempts<MAX_ATTEMPTS && app.errors.isRetryable(error);
+      const delay=Math.min(3600,Math.pow(2,job.attempts)*5)+Math.random()*5;
+      await pool.query(`UPDATE delivery_job SET state=$2,run_at=now()+($3||' seconds')::interval,leased_until=NULL,last_error_code=$4 WHERE id=$1`,
+        [job.id,retry?'pending':'dead',delay,app.errors.safeCode(error)]);
+    }
+  }
+}
+
+OUTBOX RELAY
+------------
+Claim unpublished chat_outbox rows with `FOR UPDATE SKIP LOCKED`, publish each
+event to Redis topic `tenant:{tenantId}:chat`, then set published_at. Consumers
+deduplicate by outbox id. A periodic reconciliation republishes rows whose
+published_at is null; no database transaction is held during network I/O.
+
+====================================================================
+FILE 11: services/chat/src/securityControls.ts
+====================================================================
+
+SECURITY CHECKLIST (enforced in code and infrastructure)
+--------------------------------------------------------
+- JWT: exact issuer/audience, algorithm allowlist, <=15 minute access tokens.
+- WebSocket: bearer token in Sec-WebSocket-Protocol or one-time ticket; never URL logs.
+- Authorization: tenant + active membership predicates on every resource query.
+- Validation: strict Zod schemas; reject unknown keys; 4 KB text and 16 KB WS limits.
+- Rate limits: user+device+IP buckets: inbox 120/min, messages 60/min,
+  QR create 10/hour, QR redeem 30/hour, broadcasts 10/day.
+- CSRF: bearer-only mobile API; if cookies are added, SameSite plus CSRF token.
+- Secrets: managed secret store, quarterly rotation, no secrets in app bundles.
+- Encryption: TLS 1.3; encrypted volumes/backups; push tokens field-encrypted.
+- E2EE: server stores ciphertext only; keys remain on devices; safety-number changes
+  invalidate `e2eeVerified` until users re-verify.
+- Media: signed uploads, MIME sniffing, malware scan, byte/pixel/duration limits.
+- Logging: redact authorization, QR token, join token, message body, and push token.
+- Audit: append security-relevant actions; restrict readers; retain per policy.
+- Abuse: block/report controls, recipient caps, broadcast permission, moderation queue.
+- Database: least-privilege runtime role; migration role separate; PITR backups tested.
+- Supply chain: lockfiles, signature/provenance checks, SCA and container scanning.
+- Availability: request deadlines, bounded pools, circuit breakers, graceful shutdown.
+
+Recommended PostgreSQL defense-in-depth: enable RLS on tenant tables and set
+`SET LOCAL app.tenant_id` and `app.user_id` inside every transaction. Application
+predicates remain mandatory; RLS is a second barrier, not a replacement.
+
+====================================================================
+FILE 12: services/chat/test/chat.integration.test.ts
+====================================================================
+
+import {describe,it,expect,beforeEach} from 'vitest';
+
+describe('chat authorization and idempotency',()=>{
+  it('rejects unauthenticated inbox access',async()=>{
+    expect((await app.inject({method:'GET',url:'/v1/chats/inbox'})).statusCode).toBe(401);
+  });
+  it('does not reveal a conversation across tenants',async()=>{
+    const r=await apiAs(userB).post(`/v1/chats/${tenantAConversation}/messages`,message());
+    expect(r.statusCode).toBe(404);
+  });
+  it('deduplicates simultaneous direct-chat creation',async()=>{
+    const results=await Promise.all(Array.from({length:10},()=>apiAs(alice).post('/v1/chats/direct',{userId:bob.id})));
+    expect(new Set(results.map(x=>x.json().conversationId)).size).toBe(1);
+  });
+  it('deduplicates retried message writes',async()=>{
+    const body=message({clientMessageId:crypto.randomUUID()});
+    const [a,b]=await Promise.all([send(alice,cid,body),send(alice,cid,body)]);
+    expect(a.id).toBe(b.id);
+    expect(await countMessages(body.clientMessageId)).toBe(1);
+  });
+  it('refuses plaintext marked as encrypted when E2EE is unavailable',async()=>{
+    expect((await sendRaw(alice,plainCid,{...message(),encrypted:true,ciphertext:'AA=='})).statusCode).toBe(409);
+  });
+});
+
+describe('scheduling, QR and broadcast safety',()=>{
+  it('allows join only for members in the join window',async()=>{
+    expect((await join(stranger,event.id)).statusCode).toBe(404);
+    expect((await join(member,futureEvent.id)).statusCode).toBe(409);
+  });
+  it('redeems a single-use QR once under concurrency',async()=>{
+    const token=await createQr(alice);
+    const rs=await Promise.all([redeem(bob,token),redeem(carol,token)]);
+    expect(rs.filter(x=>x.statusCode===201)).toHaveLength(1);
+    expect(rs.filter(x=>x.statusCode===410)).toHaveLength(1);
+  });
+  it('requires broadcast scope and contacts-only recipients',async()=>{
+    expect((await broadcast(ordinaryUser,[bob.id])).statusCode).toBe(403);
+    expect((await broadcast(broadcaster,[unknown.id])).statusCode).toBe(422);
+  });
+});
+
+describe('workers and realtime',()=>{
+  it('only one worker claims a due job',async()=>{
+    await seedJob('unique');
+    const claims=(await Promise.all([claimInTx(),claimInTx(),claimInTx()])).flat();
+    expect(claims.filter(x=>x.dedupe_key==='unique')).toHaveLength(1);
+  });
+  it('retries transient failure and dead-letters permanent failure',async()=>{
+    await failJobTimes(8);
+    expect((await getJob()).state).toBe('dead');
+  });
+  it('rejects unauthorized subscriptions and replays durable events',async()=>{
+    const ws=await connectAs(alice);
+    ws.send({type:'subscribe',conversationIds:[cid,foreignCid]});
+    expect(await serverSubscriptions(ws)).toEqual([cid]);
+    const event=await send(bob,cid,message());
+    await reconnectWithCursor(ws,event.eventId-1);
+    expect(await nextEvent(ws)).toMatchObject({type:'message.created',eventId:event.eventId});
+  });
+});
+
+REQUIRED TEST MATRIX
+--------------------
+- Unit: schemas, cursor encoding, presentation, retry classification, token hashes.
+- Integration: all routes against real PostgreSQL and Redis containers.
+- Concurrency: direct create, QR redeem, message idempotency, worker job claims.
+- Authorization: cross-user, cross-conversation, cross-tenant, inactive membership.
+- Realtime: auth expiry, reconnect, duplicate suppression, ordering, backpressure.
+- Contract: assert v1.0 ChatInboxPayload field names and DeliveryState mapping.
+- Security: fuzz invalid JSON, oversized frames, SQL injection strings, rate limits.
+- Recovery: Redis outage, provider timeout, worker crash after side effect, DB failover.
+- Load: 10k sockets/node, reconnect storm, hot group, broadcast fan-out.
+
+====================================================================
+FILE 13: services/chat/src/server.ts
+====================================================================
+
+Register in this order:
+1. request ID, redaction-aware logging, secure headers, CORS allowlist
+2. database/Redis health and graceful shutdown
+3. authentication and rate-limit decorators
+4. strict validation schemas and error mapper
+5. inbox, conversations, scheduling, broadcasts, QR contacts
+6. WebSocket gateway
+
+Expose only:
+- GET  /health/live (process alive; no dependency details)
+- GET  /health/ready (200/503; no credentials or version strings)
+- GET  /metrics on a private listener protected by network policy
+
+API ERROR ENVELOPE
+------------------
+{ "error": { "code": "NOT_JOINABLE", "message": "Call is not joinable yet",
+  "requestId": "01..." } }
+Never return stack traces, SQL, hostnames, provider responses, or secret values.
+
+DEPLOYMENT AND ROLLOUT
+----------------------
+1. Run migration with the dedicated migration identity; take a verified backup.
+2. Deploy API with workers disabled; verify readiness and synthetic auth checks.
+3. Enable outbox relay, then delivery workers at low concurrency.
+4. Enable WebSockets behind sticky-free routing (Redis fan-out supplies coordination).
+5. Release mobile v1.0 screen behind a remote feature flag to internal users.
+6. Observe auth failures, p95 latency, DB saturation, reconnect rate, job age,
+   outbox lag, dead jobs, push error class, and broadcast completion ratio.
+7. Expand gradually. Rollback application code without dropping new schema objects.
+
+ACCEPTANCE CRITERIA
+-------------------
+- Every v1.0 UI action has a real authenticated endpoint or realtime event.
+- Direct chats and message retries cannot create duplicates under concurrency.
+- No user can infer or mutate another tenant's resources.
+- Inbox ordering, unread state, presence, and scheduled-call joinability are authoritative.
+- Durable messages survive disconnects; clients can replay or perform full sync.
+- Broadcast and notification jobs are bounded, observable, retryable, and idempotent.
+- QR contact tokens expire, are single-use by default, and never expose private data.
+- The complete required test matrix passes in CI against PostgreSQL and Redis.
+
+END OF LINQA CHAT PRODUCTION BACKEND + REALTIME v2.0

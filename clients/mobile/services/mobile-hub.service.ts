@@ -158,9 +158,16 @@ export class MobileHubService {
   }
 
   createCall(peerUserId: string, video = false) {
-    return this.request<{ id: string; created_at: string }>("/v1/mobile-hub/calls", {
-      method: "POST",
-      body: JSON.stringify({ peerUserId, callType: video ? "VIDEO" : "AUDIO" })
-    });
+    return this.request<{ callId: string; joinToken: string; expiresAt: string; callType: string; privacyMode: string }>(
+      '/v1/calls/place',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          peerUserId,
+          media: video ? 'VIDEO' : 'AUDIO',
+          privacyMode: 'RELAY_ONLY'
+        })
+      }
+    );
   }
 }

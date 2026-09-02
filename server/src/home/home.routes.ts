@@ -5,7 +5,7 @@ import type { Database } from "../db/pool.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
 import { HIDEABLE_HOME_SECTIONS } from "./home.types.js";
 import { HOME_NEWS_CATEGORIES } from "./news-normalization.js";
-import { resolveJurisdictionCountry } from "./home-dependencies.js";
+import { loadHomeBadges, resolveJurisdictionCountry } from "./home-dependencies.js";
 import type { HomeModule } from "./home.module.js";
 
 // The packs are written against Express (`Router()`, `req.session.userId`).
@@ -78,6 +78,29 @@ export async function registerHomeRoutes(
     } catch (error) {
       request.log.error({ err: error, userId: principal.userId }, "home feed build failed");
       return reply.code(503).send({ code: "HOME_FEED_UNAVAILABLE" });
+    }
+  });
+
+  /**
+   * Tab-bar badge counts.
+   *
+   * The tab bar is mounted on every authenticated screen, so it cannot afford
+   * the full Home build (news providers, Spotlight, CountryLinqa). This is
+   * three indexed counts and nothing else. Unlike Home it does not require a
+   * verified jurisdiction: unread chats and missed calls are real regardless
+   * of whether CountryLinqa has been confirmed.
+   */
+  app.get("/v1/mobile/home/badges", async (request, reply) => {
+    const principal = await withPrincipal(request, reply);
+    if (!principal) return reply;
+
+    try {
+      const badges = await loadHomeBadges(db, principal.userId);
+      void reply.header("Cache-Control", "private, no-store");
+      return reply.code(200).send(badges);
+    } catch (error) {
+      request.log.error({ err: error, userId: principal.userId }, "home badge counts failed");
+      return reply.code(503).send({ code: "HOME_BADGES_UNAVAILABLE" });
     }
   });
 

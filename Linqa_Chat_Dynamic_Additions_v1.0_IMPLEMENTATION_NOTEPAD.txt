@@ -1,0 +1,530 @@
+LINQA CHAT — DYNAMIC ADDITIONS v1.0
+Implementation pack for React Native / Expo
+============================================================
+
+PURPOSE
+-------
+Implements the approved dark Linqa Chats design additions:
+
+1. Header calendar, call, search, and + controls.
+2. Expandable + action hub: New chat, New group, Schedule,
+   Start call, Broadcast, and Scan QR.
+3. Upcoming scheduled-call card with Join.
+4. Dynamic presence/status carousel.
+5. All / Unread / Groups / Pinned filters.
+6. Deduplicated chat list with typing, voice note, missed call,
+   mute, pin, encryption, read receipt, and unread indicators.
+7. Persistent bottom navigation.
+
+IMPORTANT PRODUCTION RULES
+--------------------------
+- Never render PostgreSQL, server version, environment, host, or other
+  developer diagnostics in this consumer screen.
+- The client must not claim "End-to-end encrypted" unless the conversation
+  has a server-authoritative E2EE capability and a valid local session.
+- Call joining, scheduling, unread counts, presence, and typing state must
+  come from authenticated services. Do not generate fake success states.
+- Deduplicate conversations by conversationId, never by display name.
+- Route every mutation through the existing authenticated API client.
+
+DEPENDENCIES
+------------
+npx expo install expo-linear-gradient expo-camera
+npm install lucide-react-native
+
+============================================================
+FILE 1: clients/mobile/src/features/chats/types.ts
+============================================================
+
+export type ChatFilter = 'all' | 'unread' | 'groups' | 'pinned';
+export type DeliveryState = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type PreviewKind = 'text' | 'voice' | 'photos' | 'call' | 'draft';
+
+export interface ChatSummary {
+  conversationId: string;
+  title: string;
+  avatarUrl?: string;
+  initials?: string;
+  isGroup: boolean;
+  participantAvatarUrls?: string[];
+  preview: string;
+  previewKind: PreviewKind;
+  previewDurationSeconds?: number;
+  updatedAt: string;
+  unreadCount: number;
+  pinned: boolean;
+  muted: boolean;
+  online?: boolean;
+  typingLabel?: string;
+  deliveryState?: DeliveryState;
+  e2eeVerified: boolean;
+  scheduledEvent?: boolean;
+  missedCall?: 'audio' | 'video';
+}
+
+export interface PresenceContact {
+  userId: string;
+  displayName: string;
+  initials: string;
+  avatarUrl?: string;
+  online: boolean;
+  activity?: 'idle' | 'typing' | 'speaking';
+}
+
+export interface ScheduledCall {
+  eventId: string;
+  title: string;
+  startsAt: string;
+  joinable: boolean;
+  callId?: string;
+}
+
+export interface ChatInboxPayload {
+  unreadTotal: number;
+  scheduledCall: ScheduledCall | null;
+  presence: PresenceContact[];
+  conversations: ChatSummary[];
+}
+
+============================================================
+FILE 2: clients/mobile/src/features/chats/chatApi.ts
+============================================================
+
+import type { ChatInboxPayload, ChatFilter } from './types';
+
+export interface AuthenticatedHttpClient {
+  get<T>(path: string, options?: { signal?: AbortSignal }): Promise<T>;
+  post<T>(path: string, body?: unknown): Promise<T>;
+}
+
+export class ChatApi {
+  constructor(private readonly http: AuthenticatedHttpClient) {}
+
+  inbox(filter: ChatFilter, signal?: AbortSignal): Promise<ChatInboxPayload> {
+    return this.http.get<ChatInboxPayload>(
+      `/v1/chats/inbox?filter=${encodeURIComponent(filter)}`,
+      { signal },
+    );
+  }
+
+  createDirect(userId: string): Promise<{ conversationId: string }> {
+    return this.http.post('/v1/chats/direct', { userId });
+  }
+
+  joinScheduledCall(eventId: string): Promise<{ callId: string; joinToken: string }> {
+    return this.http.post(`/v1/calls/scheduled/${encodeURIComponent(eventId)}/join`);
+  }
+
+  markRead(conversationId: string): Promise<void> {
+    return this.http.post(`/v1/chats/${encodeURIComponent(conversationId)}/read`);
+  }
+}
+
+============================================================
+FILE 3: clients/mobile/src/features/chats/useChatInbox.ts
+============================================================
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ChatApi } from './chatApi';
+import type { ChatFilter, ChatInboxPayload, ChatSummary } from './types';
+
+const EMPTY: ChatInboxPayload = {
+  unreadTotal: 0,
+  scheduledCall: null,
+  presence: [],
+  conversations: [],
+};
+
+function deduplicate(items: ChatSummary[]): ChatSummary[] {
+  const byId = new Map<string, ChatSummary>();
+  for (const item of items) {
+    const current = byId.get(item.conversationId);
+    if (!current || Date.parse(item.updatedAt) > Date.parse(current.updatedAt)) {
+      byId.set(item.conversationId, item);
+    }
+  }
+  return [...byId.values()].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+  });
+}
+
+export function useChatInbox(api: ChatApi, filter: ChatFilter) {
+  const [data, setData] = useState(EMPTY);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+
+  const refresh = useCallback(async (signal?: AbortSignal) => {
+    setError(null);
+    try {
+      const result = await api.inbox(filter, signal);
+      if (!mounted.current) return;
+      setData({ ...result, conversations: deduplicate(result.conversations) });
+    } catch (cause) {
+      if (signal?.aborted || !mounted.current) return;
+      setError(cause instanceof Error ? cause.message : 'Unable to load chats');
+    } finally {
+      if (mounted.current && !signal?.aborted) setLoading(false);
+    }
+  }, [api, filter]);
+
+  useEffect(() => {
+    mounted.current = true;
+    const controller = new AbortController();
+    setLoading(true);
+    void refresh(controller.signal);
+    return () => {
+      mounted.current = false;
+      controller.abort();
+    };
+  }, [refresh]);
+
+  const counts = useMemo(() => ({
+    all: data.conversations.length,
+    unread: data.conversations.filter(x => x.unreadCount > 0).length,
+    groups: data.conversations.filter(x => x.isGroup).length,
+    pinned: data.conversations.filter(x => x.pinned).length,
+  }), [data.conversations]);
+
+  return { data, counts, loading, error, refresh };
+}
+
+============================================================
+FILE 4: clients/mobile/src/features/chats/ChatInboxScreen.tsx
+============================================================
+
+import React, { useMemo, useState } from 'react';
+import {
+  ActivityIndicator, FlatList, Image, Pressable, RefreshControl,
+  SafeAreaView, ScrollView, StyleSheet, Text, View,
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import {
+  BellOff, CalendarDays, Camera, CheckCheck, LockKeyhole, Menu,
+  MessageCircle, Mic, Phone, PhoneIncoming, Pin, Plus, QrCode,
+  Radio, Search, Users, Video,
+} from 'lucide-react-native';
+import type { ChatApi } from './chatApi';
+import type { ChatFilter, ChatSummary, PresenceContact } from './types';
+import { useChatInbox } from './useChatInbox';
+
+const C = {
+  bg: '#031824', card: '#082335', card2: '#0A2940', border: '#14536A',
+  teal: '#13D7B0', cyan: '#47C9E8', white: '#F7FAFC', muted: '#91A7B8',
+  blue: '#4586FF', purple: '#BB54EA', red: '#FF5D67', green: '#20C997',
+};
+
+type IconType = React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>;
+
+export interface ChatInboxNavigation {
+  openDrawer(): void;
+  openCalendar(): void;
+  openCalls(): void;
+  openSearch(): void;
+  openConversation(conversationId: string): void;
+  openNewChat(): void;
+  openNewGroup(): void;
+  openSchedule(): void;
+  openStartCall(): void;
+  openBroadcast(): void;
+  openQrScanner(): void;
+  openStatusComposer(): void;
+  openProfile(userId: string): void;
+  joinCall(callId: string, joinToken: string): void;
+}
+
+interface Props {
+  api: ChatApi;
+  navigation: ChatInboxNavigation;
+  currentUser: { displayName: string; initials: string; avatarUrl?: string };
+}
+
+function SquareAction({ label, Icon, onPress, primary = false, dot = false }: {
+  label: string; Icon: IconType; onPress(): void; primary?: boolean; dot?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={({ pressed }) => [styles.squareAction, primary && styles.primaryAction, pressed && styles.pressed]}
+    >
+      <Icon size={25} color={primary ? C.bg : C.white} />
+      {dot ? <View style={styles.notificationDot} /> : null}
+    </Pressable>
+  );
+}
+
+function ActionHub({ visible, navigation }: { visible: boolean; navigation: ChatInboxNavigation }) {
+  if (!visible) return null;
+  const actions: Array<[string, IconType, () => void, string]> = [
+    ['New chat', MessageCircle, navigation.openNewChat, C.teal],
+    ['New group', Users, navigation.openNewGroup, C.blue],
+    ['Schedule', CalendarDays, navigation.openSchedule, C.purple],
+    ['Start call', Phone, navigation.openStartCall, C.teal],
+    ['Broadcast', Radio, navigation.openBroadcast, C.red],
+    ['Scan QR', QrCode, navigation.openQrScanner, C.blue],
+  ];
+  return (
+    <View style={styles.actionHub} accessibilityViewIsModal>
+      {actions.map(([label, Icon, onPress, color]) => (
+        <Pressable key={label} onPress={onPress} accessibilityRole="button"
+          accessibilityLabel={label} style={({ pressed }) => [styles.hubItem, pressed && styles.pressed]}>
+          <Icon size={27} color={color} />
+          <Text style={styles.hubLabel}>{label}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function Avatar({ title, initials, uri, online, size = 54 }: {
+  title: string; initials?: string; uri?: string; online?: boolean; size?: number;
+}) {
+  return (
+    <View accessibilityLabel={`${title}${online ? ', online' : ''}`}>
+      {uri ? <Image source={{ uri }} style={[styles.avatar, { width: size, height: size, borderRadius: size / 2 }]} /> :
+        <LinearGradient colors={['#F47A54', '#C83DD4']} style={[styles.avatar, styles.avatarFallback, { width: size, height: size, borderRadius: size / 2 }]}>
+          <Text style={[styles.avatarText, { fontSize: size * 0.34 }]}>{initials ?? '?'}</Text>
+        </LinearGradient>}
+      {online ? <View style={styles.onlineDot} /> : null}
+    </View>
+  );
+}
+
+function PresenceStrip({ contacts, onStatus, onContact }: {
+  contacts: PresenceContact[]; onStatus(): void; onContact(id: string): void;
+}) {
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presenceContent}>
+      <Pressable onPress={onStatus} style={styles.presenceItem} accessibilityLabel="Add my status">
+        <View style={styles.statusCircle}><Plus color={C.teal} size={30} /></View>
+        <Text style={styles.presenceName}>My status</Text>
+      </Pressable>
+      {contacts.map(contact => (
+        <Pressable key={contact.userId} onPress={() => onContact(contact.userId)} style={styles.presenceItem}>
+          <View style={contact.activity === 'speaking' ? styles.speakingRing : undefined}>
+            <Avatar title={contact.displayName} initials={contact.initials} uri={contact.avatarUrl} online={contact.online} size={61} />
+          </View>
+          <Text numberOfLines={1} style={styles.presenceName}>{contact.displayName.split(' ')[0]}</Text>
+        </Pressable>
+      ))}
+    </ScrollView>
+  );
+}
+
+function FilterBar({ value, counts, onChange }: {
+  value: ChatFilter; counts: Record<ChatFilter, number>; onChange(x: ChatFilter): void;
+}) {
+  const labels: Array<[ChatFilter, string]> = [['all', 'All'], ['unread', 'Unread'], ['groups', 'Groups'], ['pinned', 'Pinned']];
+  return (
+    <View style={styles.filters} accessibilityRole="tablist">
+      {labels.map(([key, label]) => (
+        <Pressable key={key} accessibilityRole="tab" accessibilityState={{ selected: value === key }}
+          onPress={() => onChange(key)} style={[styles.filter, value === key && styles.filterActive]}>
+          <Text style={[styles.filterText, value === key && styles.filterTextActive]}>{label}</Text>
+          <View style={[styles.count, value === key && styles.countActive]}><Text style={styles.countText}>{counts[key]}</Text></View>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function timeLabel(value: string): string {
+  const date = new Date(value);
+  const diff = Date.now() - date.getTime();
+  if (diff < 60_000) return 'now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
+  return date.toLocaleDateString(undefined, { weekday: 'short' });
+}
+
+function ConversationRow({ item, onOpen }: { item: ChatSummary; onOpen(): void }) {
+  const PreviewIcon = item.previewKind === 'voice' ? Mic : item.previewKind === 'call' ? PhoneIncoming : null;
+  return (
+    <Pressable onPress={onOpen} accessibilityRole="button"
+      accessibilityLabel={`${item.title}, ${item.unreadCount} unread messages`}
+      style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+      <Avatar title={item.title} initials={item.initials} uri={item.avatarUrl} online={item.online} />
+      <View style={styles.rowBody}>
+        <View style={styles.rowTitleLine}>
+          <Text numberOfLines={1} style={styles.rowTitle}>{item.title}</Text>
+          {item.pinned ? <Pin size={16} color={C.blue} fill={C.blue} /> : null}
+          {item.scheduledEvent ? <CalendarDays size={17} color={C.purple} /> : null}
+          {item.muted ? <BellOff size={17} color={C.muted} /> : null}
+          {item.missedCall ? <PhoneIncoming size={18} color={C.red} /> : null}
+          <Text style={styles.time}>{timeLabel(item.updatedAt)}</Text>
+        </View>
+        <View style={styles.previewLine}>
+          {PreviewIcon ? <PreviewIcon size={16} color={item.missedCall ? C.red : C.muted} /> : null}
+          <Text numberOfLines={1} style={[styles.preview, item.typingLabel && styles.typing]}>
+            {item.typingLabel ?? item.preview}
+          </Text>
+          {item.previewKind === 'voice' ? <View style={styles.waveform}><View style={styles.wave1} /><View style={styles.wave2} /><View style={styles.wave1} /></View> : null}
+        </View>
+        <View style={styles.metaLine}>
+          {item.e2eeVerified ? <><LockKeyhole size={13} color={C.muted} /><Text style={styles.meta}>End-to-end encrypted</Text></> : null}
+          {item.deliveryState === 'read' ? <CheckCheck size={16} color={C.cyan} /> : null}
+        </View>
+      </View>
+      {item.unreadCount > 0 ? <View style={styles.unread}><Text style={styles.unreadText}>{Math.min(item.unreadCount, 99)}</Text></View> : null}
+    </Pressable>
+  );
+}
+
+export function ChatInboxScreen({ api, navigation, currentUser }: Props) {
+  const [filter, setFilter] = useState<ChatFilter>('all');
+  const [hubOpen, setHubOpen] = useState(false);
+  const { data, counts, loading, error, refresh } = useChatInbox(api, filter);
+  const greeting = useMemo(() => new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 18 ? 'Good afternoon' : 'Good evening', []);
+
+  const joinScheduled = async () => {
+    if (!data.scheduledCall?.joinable) return;
+    const session = await api.joinScheduledCall(data.scheduledCall.eventId);
+    navigation.joinCall(session.callId, session.joinToken);
+  };
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.header}>
+        <SquareAction label="Open menu" Icon={Menu} onPress={navigation.openDrawer} />
+        <Text style={styles.brand}>Linqa</Text>
+        <View style={styles.headerSpacer} />
+        <SquareAction label="Calendar" Icon={CalendarDays} onPress={navigation.openCalendar} dot={Boolean(data.scheduledCall)} />
+        <SquareAction label="Calls" Icon={Phone} onPress={navigation.openCalls} />
+        <SquareAction label="Search" Icon={Search} onPress={navigation.openSearch} />
+        <SquareAction label={hubOpen ? 'Close action menu' : 'Create'} Icon={Plus} primary onPress={() => setHubOpen(x => !x)} />
+      </View>
+      <ActionHub visible={hubOpen} navigation={navigation} />
+
+      <View style={styles.summary}>
+        <Avatar title={currentUser.displayName} initials={currentUser.initials} uri={currentUser.avatarUrl} online size={66} />
+        <View style={styles.summaryBody}>
+          <Text style={styles.greeting}>{greeting}</Text>
+          <Text style={styles.welcome}>Welcome back</Text>
+          <Text style={styles.summaryMeta}>{data.unreadTotal} unread · {data.scheduledCall ? '1 call scheduled' : 'No calls scheduled'}</Text>
+        </View>
+        {data.scheduledCall ? <Pressable onPress={joinScheduled} disabled={!data.scheduledCall.joinable} style={styles.joinButton}><Text style={styles.joinText}>Join</Text></Pressable> : null}
+      </View>
+
+      <PresenceStrip contacts={data.presence} onStatus={navigation.openStatusComposer} onContact={navigation.openProfile} />
+      <FilterBar value={filter} counts={counts} onChange={setFilter} />
+
+      {loading ? <ActivityIndicator style={styles.loader} color={C.teal} /> :
+        <FlatList
+          data={data.conversations}
+          keyExtractor={item => item.conversationId}
+          renderItem={({ item }) => <ConversationRow item={item} onOpen={() => navigation.openConversation(item.conversationId)} />}
+          contentContainerStyle={styles.list}
+          refreshControl={<RefreshControl refreshing={false} onRefresh={() => void refresh()} tintColor={C.teal} />}
+          ListEmptyComponent={<Text style={styles.empty}>{error ?? 'No conversations found'}</Text>}
+        />}
+      <View style={styles.bottomNav}>
+        {['Home', 'Calls', 'Chats', 'Community', 'Profile'].map(label => (
+          <View key={label} style={[styles.navItem, label === 'Chats' && styles.navActive]}>
+            {label === 'Calls' ? <Phone size={20} color={C.muted} /> : label === 'Chats' ? <MessageCircle size={21} color={C.bg} /> : label === 'Community' ? <Users size={21} color={C.muted} /> : label === 'Home' ? <Menu size={20} color={C.muted} /> : <Users size={20} color={C.muted} />}
+            <Text style={[styles.navText, label === 'Chats' && styles.navTextActive]}>{label}</Text>
+            {label === 'Chats' && data.unreadTotal > 0 ? <View style={styles.navBadge}><Text style={styles.navBadgeText}>{Math.min(data.unreadTotal, 99)}</Text></View> : null}
+          </View>
+        ))}
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: C.bg },
+  header: { minHeight: 66, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  brand: { color: C.white, fontWeight: '800', fontSize: 30 }, headerSpacer: { flex: 1 },
+  squareAction: { width: 45, height: 45, borderRadius: 9, borderWidth: 1, borderColor: C.border, backgroundColor: C.card, alignItems: 'center', justifyContent: 'center' },
+  primaryAction: { backgroundColor: C.teal, borderColor: C.teal }, pressed: { opacity: .72, transform: [{ scale: .98 }] },
+  notificationDot: { position: 'absolute', right: -3, top: -3, width: 12, height: 12, borderRadius: 6, backgroundColor: C.teal },
+  actionHub: { position: 'absolute', zIndex: 20, top: 68, right: 14, width: 310, padding: 12, borderRadius: 16, borderWidth: 1, borderColor: C.border, backgroundColor: C.card2, flexDirection: 'row', flexWrap: 'wrap', shadowColor: '#000', shadowOpacity: .4, shadowRadius: 16, elevation: 12 },
+  hubItem: { width: '33.333%', minHeight: 82, alignItems: 'center', justifyContent: 'center', gap: 7, borderColor: C.border },
+  hubLabel: { color: C.white, fontSize: 13, fontWeight: '600' },
+  summary: { marginHorizontal: 14, marginTop: 6, minHeight: 108, padding: 14, borderRadius: 13, borderWidth: 1, borderColor: C.border, backgroundColor: C.card, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  summaryBody: { flex: 1 }, greeting: { color: C.muted, fontSize: 13 }, welcome: { color: C.white, fontSize: 22, fontWeight: '800' }, summaryMeta: { color: C.teal, marginTop: 4, fontSize: 13 },
+  joinButton: { paddingHorizontal: 18, paddingVertical: 11, borderRadius: 9, backgroundColor: C.teal }, joinText: { color: C.bg, fontWeight: '800' },
+  avatar: { borderWidth: 2, borderColor: C.border }, avatarFallback: { alignItems: 'center', justifyContent: 'center' }, avatarText: { color: C.white, fontWeight: '800' }, onlineDot: { position: 'absolute', right: 0, bottom: 1, width: 15, height: 15, borderRadius: 8, backgroundColor: C.teal, borderWidth: 2, borderColor: C.bg },
+  presenceContent: { paddingHorizontal: 14, paddingVertical: 13, gap: 18 }, presenceItem: { width: 64, alignItems: 'center', gap: 6 }, presenceName: { color: C.white, width: 70, textAlign: 'center', fontWeight: '600', fontSize: 12 },
+  statusCircle: { width: 61, height: 61, borderRadius: 31, borderWidth: 2, borderStyle: 'dashed', borderColor: C.teal, alignItems: 'center', justifyContent: 'center' },
+  speakingRing: { padding: 3, borderRadius: 38, borderWidth: 2, borderColor: C.teal },
+  filters: { marginHorizontal: 14, padding: 4, flexDirection: 'row', backgroundColor: C.card, borderRadius: 11, borderWidth: 1, borderColor: C.border },
+  filter: { flex: 1, minHeight: 42, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 5 }, filterActive: { backgroundColor: '#075B55' },
+  filterText: { color: C.muted, fontWeight: '700', fontSize: 12 }, filterTextActive: { color: C.teal }, count: { minWidth: 24, height: 24, borderRadius: 12, backgroundColor: '#173D52', alignItems: 'center', justifyContent: 'center' }, countActive: { backgroundColor: C.teal }, countText: { color: C.white, fontWeight: '800', fontSize: 12 },
+  list: { padding: 14, gap: 9, paddingBottom: 100 }, row: { minHeight: 98, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: C.border, backgroundColor: C.card, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  rowBody: { flex: 1, gap: 4 }, rowTitleLine: { flexDirection: 'row', alignItems: 'center', gap: 7 }, rowTitle: { flex: 1, color: C.white, fontWeight: '800', fontSize: 17 }, time: { color: C.muted, fontSize: 12 }, previewLine: { flexDirection: 'row', alignItems: 'center', gap: 5 }, preview: { flex: 1, color: C.muted, fontSize: 14 }, typing: { color: C.teal, fontWeight: '700' },
+  metaLine: { flexDirection: 'row', alignItems: 'center', gap: 4 }, meta: { color: C.muted, fontSize: 11 }, unread: { width: 27, height: 27, borderRadius: 14, backgroundColor: C.teal, alignItems: 'center', justifyContent: 'center' }, unreadText: { color: C.bg, fontWeight: '900' },
+  waveform: { height: 18, flexDirection: 'row', alignItems: 'center', gap: 2 }, wave1: { width: 2, height: 8, backgroundColor: C.teal }, wave2: { width: 2, height: 17, backgroundColor: C.teal },
+  loader: { marginTop: 40 }, empty: { color: C.muted, textAlign: 'center', padding: 40 },
+  bottomNav: { position: 'absolute', left: 0, right: 0, bottom: 0, minHeight: 76, paddingHorizontal: 10, paddingBottom: 7, borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.card, flexDirection: 'row', alignItems: 'center' },
+  navItem: { flex: 1, height: 58, borderRadius: 13, alignItems: 'center', justifyContent: 'center', gap: 3 }, navActive: { backgroundColor: C.teal }, navText: { color: C.muted, fontSize: 11 }, navTextActive: { color: C.bg, fontWeight: '800' }, navBadge: { position: 'absolute', top: 2, right: 17, minWidth: 18, height: 18, paddingHorizontal: 4, borderRadius: 9, backgroundColor: C.red, alignItems: 'center', justifyContent: 'center' }, navBadgeText: { color: C.white, fontWeight: '800', fontSize: 10 },
+});
+
+============================================================
+FILE 5: SERVER CONTRACTS / ROUTES TO CONNECT
+============================================================
+
+GET /v1/chats/inbox?filter=all|unread|groups|pinned
+Response: ChatInboxPayload. The server must:
+- authenticate the installation/session;
+- authorize every returned conversation membership;
+- aggregate unread counts server-side;
+- return only verified E2EE status;
+- paginate in production (cursor + limit);
+- redact blocked users and deleted messages;
+- never return plaintext message bodies unavailable to this device.
+
+POST /v1/chats/direct { userId }
+- resolve or atomically create one direct conversation;
+- enforce blocks, privacy/discovery rules, and abuse limits;
+- return the stable conversationId.
+
+POST /v1/calls/scheduled/:eventId/join
+- verify invitation, time window, device trust, and call permissions;
+- mint a short-lived, audience-bound join token;
+- never expose provider credentials to the client.
+
+WebSocket topics:
+- chat.inbox.updated
+- chat.typing.updated
+- presence.updated
+- call.schedule.updated
+
+Apply received events by conversationId/userId and trigger a throttled refresh.
+Presence and typing events must expire; do not persist them as permanent state.
+
+============================================================
+INTEGRATION CHECKLIST
+============================================================
+
+[ ] Instantiate ChatApi with Linqa's existing authenticated HTTP client.
+[ ] Replace ChatInboxNavigation callbacks with the existing navigator routes.
+[ ] Connect the existing WebSocket client and refresh/incrementally patch data.
+[ ] Add cursor pagination to FlatList.onEndReached for large inboxes.
+[ ] Connect calendar permission only when the user explicitly exports an event.
+[ ] QR scanner requests camera permission only after "Scan QR" is selected.
+[ ] Broadcast requires recipient preview, rate limits, and confirmation.
+[ ] Scheduled messages/calls use server time, user timezone, and idempotency keys.
+[ ] Calls pass through Linqa call authorization, TURN, and E2EE capability checks.
+[ ] Test screen reader labels, 44px touch targets, reduced motion, and font scaling.
+[ ] Test offline, expired session, revoked device, blocked user, empty inbox,
+    99+ unread, malformed timestamps, and call token expiry.
+[ ] Remove all mock arrays before release; CI should fail if fixtures are imported
+    into the production ChatInboxScreen bundle.
+
+RECOMMENDED TESTS
+-----------------
+1. Deduplication retains the newest row for the same conversationId.
+2. Pinned rows sort first without changing server timestamps.
+3. E2EE label is absent when e2eeVerified=false.
+4. Join is disabled outside the server-authorized call window.
+5. A failed join request never navigates to the call screen.
+6. Filter changes abort the previous inbox request.
+7. Blocked/removed conversations cannot be opened from stale push data.
+8. Action hub is accessible and closes after navigation or outside press.
+9. Unread total and per-row badge update after markRead.
+10. No developer/environment diagnostics appear in release snapshots.
+
+END OF LINQA CHAT — DYNAMIC ADDITIONS v1.0

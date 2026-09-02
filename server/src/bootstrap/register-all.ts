@@ -9,6 +9,7 @@ import { registerAccountIdentifierRoutes } from "../routes/account-identifiers.j
 import { registerAttachmentRoutes } from "../routes/attachments.js";
 import { registerAuthRoutes } from "../routes/auth.js";
 import { registerCallRoutes } from "../routes/calls.js";
+import { registerCallsV2Routes } from "../calls/calls-v2.routes.js";
 import { registerContactDiscoveryRoutes } from "../routes/contact-discovery.js";
 import { registerCountryLinqaRoutes } from "../routes/countrylinqa/routes.js";
 import { registerCountryLinqaGoLiveRoutes } from "../routes/countrylinqa/golive-routes.js";
@@ -23,6 +24,8 @@ import { registerFileVaultRoutes } from "../routes/file-vault.js";
 import { registerFinalUnwiredRoutes } from "../routes/final-unwired.js";
 import { registerGaHardeningRoutes } from "../routes/ga-hardening.routes.js";
 import { createHomeModule } from "../home/home.module.js";
+import { registerChatRoutes } from "../routes/chats.js";
+import { registerChatV2Routes } from "../chat/chat-v2.routes.js";
 import { registerHomeRoutes } from "../home/home.routes.js";
 import { registerHomeAdminRoutes } from "../home/home-admin.routes.js";
 import { registerGapClosureRoutes } from "../routes/gap-closure.js";
@@ -87,6 +90,7 @@ export async function registerAll(
   await registerSyncRoutes(app, config, db, services.sync);
   await registerAccountDeletionRoutes(app, config, services.accountDeletion, services.stepUp);
   await registerCallRoutes(app, config, services.calls, services.location);
+  await registerCallsV2Routes(app, config, db, services.calls);
   await registerRecordedVideoRoutes(app, config, services.recordedVideos);
   await registerPushRoutes(app, config, services.push);
   await registerContactDiscoveryRoutes(app, config, services.contactDiscovery);
@@ -189,4 +193,6 @@ export async function registerAll(
   await registerRealtime(app, config, db, hub);
   await registerSignaling(app, config, db, services.signaling, hub);
   await registerMobileHubRoutes(app, config, db, hub);
+  await registerChatRoutes(app, config, db);
+  await registerChatV2Routes(app, config, db, hub);
 }
