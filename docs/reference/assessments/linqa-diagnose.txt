@@ -1,0 +1,154 @@
+LINQA APPLICATION DIAGNOSIS
+Date: 2026-08-06
+Workspace: Linqa repository root
+
+EXECUTIVE VERDICT
+
+Linqa is a design-stage prototype, not a functional secure messenger. The web
+client is buildable and its mock UI works, but it has no real cryptographic
+core, persistence, network transport, server, authentication, or cross-device
+communication. Desktop, Android, and iOS are incomplete scaffolds and cannot
+currently be built as their intended applications.
+
+The most important risk is not a compiler failure: several security-sensitive
+core APIs return successful but empty/no-op results. If these APIs are wired to
+a client before implementation, they could create false success states and
+data loss. The web UI also presents "End-to-end encrypted" and
+"Post-quantum encryption active" while it is backed entirely by mutable,
+in-memory mock data.
+
+VALIDATION PERFORMED
+
+1. Web production build: PASS
+   Command: cd clients/web; npm run build
+   Result: TypeScript and Vite completed successfully in 3.54 seconds.
+   Output: 38 modules; JS 153.75 kB (49.62 kB gzip); CSS 6.26 kB.
+
+2. Web production dependency audit: PASS
+   Command: cd clients/web; npm audit --omit=dev
+   Result: 0 known vulnerabilities.
+
+3. Browser smoke test at http://127.0.0.1:5173/: PARTIAL PASS
+   - Mock conversations loaded after the simulated delay.
+   - Sending a mock message updated the conversation and message list.
+   - Settings opened and displayed mock profile/device information.
+   - No browser console errors occurred during tested interactions.
+   - At a 390 x 844 viewport, document width was 562 px: horizontal overflow.
+
+4. VS Code diagnostics: ONE LOW-SEVERITY WARNING
+   clients/web/index.html reports that meta[name=theme-color] is unsupported by
+   Firefox, Firefox for Android, and Opera. This does not block the build.
+
+5. Rust validation: BLOCKED BY ENVIRONMENT
+   cargo and rustc are not installed, so core and CLI compilation/tests could
+   not be executed. No core Cargo.lock is present.
+
+6. Mobile validation: BLOCKED/INCOMPLETE
+   Java is installed, but Gradle is not. Android has no complete root Gradle
+   project or wrapper. The iOS Xcode project directory is empty and cannot be
+   built on this Windows environment.
+
+PRIORITIZED FINDINGS
+
+CRITICAL - The application does not provide secure messaging functionality.
+
+- clients/web/src/services/CoreBridge.ts always reports that the native core is
+  not loaded and reads/writes clients/web/src/mock/data.ts.
+- Messages exist only in process memory and disappear on reload.
+- There is no relay, API, storage service, key directory, or network transport;
+  the corresponding server implementation directories are empty.
+- No client can communicate with another client or user.
+- The UI's encryption and linked-device labels describe intended behavior, not
+  verified runtime security. The prototype should be clearly marked as a demo
+  until those claims are backed by the core.
+
+CRITICAL - Security-sensitive Rust placeholders do not consistently fail closed.
+
+- core/src/crypto/identity.rs: validate_key_package accepts every package by
+  returning Ok(()) without signature, expiry, or structural validation.
+- core/src/crypto/sealed_sender/mod.rs: seal returns success with an empty
+  ciphertext, regardless of sender, message, key, or credential.
+- core/src/sync/history.rs: export_history returns an empty ciphertext and
+  import_history returns empty data, silently discarding all input.
+- core/src/sync/linking.rs: linking uses an all-zero transfer secret, a fixed QR
+  payload, expiry 0, accepts any join payload, and creates an empty response.
+- core/src/storage/mod.rs: MemoryStore ignores writes and always returns no data.
+- core/src/crypto/hybrid.rs defines interfaces only; no ML-KEM implementation is
+  present despite the default pqc-hybrid feature name.
+
+These functions should return explicit NotImplemented/InvalidState errors until
+real, tested implementations exist. Successful no-op behavior is dangerous at
+integration boundaries.
+
+HIGH - Desktop is not a Tauri application yet.
+
+- clients/desktop/src/index.html is a static placeholder page.
+- clients/desktop/src-tauri/Cargo.toml comments out Tauri and linqa-core.
+- No tauri.conf.json, frontend package manifest, Tauri command registration, or
+  actual CoreBridge integration exists.
+- The current Rust binary only prints scaffold status to the console.
+
+HIGH - Android and iOS projects are incomplete.
+
+- Android plugin declarations and SDK configuration are commented out; the
+  Gradle wrapper directory is empty; native core loading is a TODO.
+- The iOS Xcode project directory is empty; Swift files are placeholders and do
+  not have generated UniFFI bindings or a linked Rust library.
+
+HIGH - There is no automated test safety net.
+
+- No test/spec source files were found in the repository.
+- core/tests and the top-level test directories contain no executable tests.
+- Security properties, serialization compatibility, UI behavior, and protocol
+  failure paths are therefore unverified.
+
+MEDIUM - The web UI is not responsive at mobile width.
+
+- clients/web/src/styles/app.css fixes .app-shell to
+  grid-template-columns: 320px 1fr and defines no responsive media query.
+- At 390 px viewport width the page expands to 562 px. The sidebar and chat
+  should switch to a one-pane navigation model or otherwise fit the viewport.
+
+MEDIUM - Repository status documentation is stale in places.
+
+- The top-level and web README files say the project/web client is not buildable
+  in the present environment, but the web production build succeeds.
+- Buildability should be reported per component: web works as a mock demo;
+  desktop/mobile/server/core integration does not.
+
+LOW - Browser metadata compatibility warning.
+
+- theme-color is harmlessly ignored by unsupported browsers. Keep it for
+  supporting browsers or document the compatibility limitation.
+
+RECOMMENDED IMPLEMENTATION ORDER
+
+1. Make every security placeholder fail closed and add tests proving that
+   unimplemented paths cannot report success or discard input silently.
+2. Add an unmistakable "demo / mock data / not encrypted" state to the web UI;
+   remove active encryption claims until the real core confirms them.
+3. Install/pin the Rust toolchain, generate Cargo.lock, and establish CI for
+   cargo fmt, cargo clippy, cargo test, TypeScript build, and web UI tests.
+4. Implement and independently review the real crypto provider, KeyPackage
+   validation, authenticated sealed sender, encrypted storage/history, and
+   device-linking protocol. Use audited libraries and protocol test vectors.
+5. Implement a minimal relay/key-directory/server path and end-to-end tests
+   before connecting platform clients.
+6. Replace the web mock bridge with WASM bindings and explicit runtime states
+   for loading, unavailable core, and cryptographic failure.
+7. Fix web responsiveness with a mobile single-pane conversation flow and test
+   at common phone, tablet, and desktop viewport sizes.
+8. Wire desktop through Tauri to linqa-core, then generate/version UniFFI
+   bindings for Android and iOS after the core API stabilizes.
+
+CURRENT READINESS SUMMARY
+
+Web UI demo:             Buildable; mock interactions work; mobile overflow.
+Rust core:               Design interfaces with unsafe-success placeholders;
+                         not compiled in this environment.
+Desktop:                 Static/Rust scaffold, not Tauri-integrated.
+Android:                 Incomplete Gradle/Kotlin scaffold.
+iOS:                     Incomplete Swift scaffold; empty Xcode project.
+Server/transport:         Not implemented.
+Automated tests:          Not present.
+Production readiness:     NOT READY.

@@ -1,0 +1,29 @@
+LINQA LIVE-SOURCE COMPATIBILITY MANIFEST
+Compatibility path: Linqa_Milestone_3_Production_Federation_Scale_Code_Notepad.txt
+
+STATUS
+This notebook is reference-only. It does not contain executable source and must
+not be copied over the repository. The running implementation and its tests are
+the sole source of truth. This unique manifest supersedes the former duplicated
+auth-only pointer that appeared under unrelated pack names.
+
+CANONICAL LIVE SOURCES
+- server/src/auth/normalize.ts
+- server/src/routes/auth.ts
+- server/src/services/auth-challenge.service.ts
+- server/src/services/session.service.ts
+- clients/mobile/services/bootstrap-auth.service.ts
+- clients/android/app/src/main/java/com/linqa/app/network/AuthApi.kt
+- clients/web/src/auth/validation.ts
+
+AUTHENTICATION CONTRACT
+- Server normalization, challenge purpose enforcement, session rotation, scopes,
+  device enrollment, and production Ed25519 verification remain authoritative.
+- UI modules obtain the current access token from the shared account/session stack;
+  they do not implement parallel login, token, user, or database models.
+
+DUPLICATE POLICY
+- Do not create another backend, auth stack, model tree, migration history, or
+  generated UniFFI/JNA binding. Extend the canonical live sources additively.
+- Reference images describe layout and workflow; live capability/readiness APIs
+  determine whether provider-dependent controls are enabled.

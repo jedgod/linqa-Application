@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import type { AppConfig } from "../config.js";
 
@@ -102,11 +103,7 @@ export class CallTokenService {
  * replay it.
  */
 export function redactJoinToken(token: string): string {
-  let hash = 0;
-  for (let index = 0; index < token.length; index += 1) {
-    hash = (Math.imul(hash, 31) + token.charCodeAt(index)) | 0;
-  }
-  return `jt_${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  return `jt_${createHash("sha256").update(token, "utf8").digest("hex").slice(0, 16)}`;
 }
 
 export const CALL_TOKEN_CONSTANTS = { CALL_TOKEN_AUDIENCE, DEFAULT_TTL_SECONDS };

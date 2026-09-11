@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { useEffect, useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { BootstrapAuthService } from "../../services/bootstrap-auth.service";
@@ -18,7 +18,7 @@ import { ErrorBanner } from "../../components/ErrorBanner";
 import { validateOtpInput } from "../../auth/validation";
 import { colors } from "../../theme/tokens";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
 const auth = new BootstrapAuthService(API);
 const secure = new AccountSecureStorage();
 const sessions = new AccountSessionStore(secure);
@@ -30,8 +30,33 @@ export default function SignUpVerifyScreen() {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [challengeId, setChallengeId] = useState(params.challengeId);
+  const [resendAt, setResendAt] = useState(Date.now() + 30_000);
+  const [now, setNow] = useState(Date.now());
+  const [notice, setNotice] = useState<string | null>(null);
+  const resendSeconds = Math.max(0, Math.ceil((resendAt - now) / 1000));
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  async function resend() {
+    if (busy || resendSeconds > 0 || !params.phone) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const next = await auth.requestChallenge(params.phone, params.purpose === "LOGIN" ? "LOGIN" : "REGISTRATION");
+      setChallengeId(next.challengeId);
+      router.setParams({ challengeId: next.challengeId });
+      setCode("");
+      setResendAt(new Date(next.resendAfter).getTime());
+      setNotice("A new code was requested. Use the latest code; previous codes no longer work.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to request another code.");
+    } finally { setBusy(false); }
+  }
 
   async function complete() {
+    if (busy) return;
     const validation = validateOtpInput(code);
     if (!validation.ok) {
       setError(validation.error);
@@ -40,12 +65,12 @@ export default function SignUpVerifyScreen() {
 
     setBusy(true); setError(null);
     try {
-      const verified = await auth.verifyChallenge(params.challengeId, validation.normalized);
+      const verified = await auth.verifyChallenge(challengeId, validation.normalized);
       const isRegistration = params.purpose !== "LOGIN";
       if (isRegistration && verified.accountExists) throw new Error("This number already has an account. Choose Sign In.");
       if (!isRegistration && !verified.accountExists) throw new Error("No Linqa account uses this number. Choose Create Account.");
       const bootstrap = isRegistration
-        ? (await auth.register(params.challengeId)).temporarySession
+        ? (await auth.register(challengeId)).temporarySession
         : verified.temporarySession;
       if (!bootstrap) throw new Error("verified account session was not issued");
 
@@ -84,7 +109,7 @@ export default function SignUpVerifyScreen() {
           accessToken: enrolled.session.accessToken,
           refreshToken: enrolled.session.refreshToken,
           sessionId: enrolled.session.sessionId,
-          expiresAt: enrolled.session.refreshTokenExpiresAt
+          expiresAt: new Date(Date.now() + enrolled.session.accessTokenExpiresIn * 1000).toISOString()
         }),
         secure.put(challenge.userId, "device.signingPrivateKey", bytesToBase64(keys.signingPrivateKey)),
         secure.put(challenge.userId, "device.encryptionPrivateKey", bytesToBase64(keys.encryptionPrivateKey)),
@@ -110,7 +135,10 @@ export default function SignUpVerifyScreen() {
       });
       router.replace("/onboarding/resolve");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Verification failed.");
+      const message = cause instanceof Error ? cause.message : "Verification failed.";
+      setError(message === "invalid_or_expired_code"
+        ? "This code is incorrect, expired, or was replaced. Request a new code and use the latest one."
+        : message);
     } finally { setBusy(false); }
   }
 
@@ -127,6 +155,10 @@ export default function SignUpVerifyScreen() {
         </View>
         <PrimaryButton label="Verify and secure device" onPress={complete} disabled={code.length !== 6} busy={busy} />
         <ErrorBanner message={error} />
+        {notice && <Text style={s.notice} accessibilityLiveRegion="polite">{notice}</Text>}
+        {params.phone && <Pressable accessibilityRole="button" disabled={busy || resendSeconds > 0} onPress={resend} style={s.resend}>
+          <Text style={s.resendText}>{resendSeconds > 0 ? "Send a new code in " + resendSeconds + "s" : "Send a new code"}</Text>
+        </Pressable>}
       </View>
     </SafeAreaView>
   );
@@ -135,5 +167,8 @@ export default function SignUpVerifyScreen() {
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#FFFFFF" },
   content: { padding: 22, paddingTop: 48 },
-  field: { marginVertical: 20 }
+  field: { marginVertical: 20 },
+  notice: { color: colors.textMuted, marginTop: 16 },
+  resend: { paddingVertical: 16, alignItems: "center" },
+  resendText: { color: "#6558DC", fontWeight: "600" }
 });

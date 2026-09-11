@@ -23,6 +23,12 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- Reminder workers update this atomically after a scheduled call is handled.
+-- Older deployments already have scheduled_calls, so this belongs in the
+-- additive chat migration rather than in the original table definition.
+ALTER TABLE scheduled_calls
+  ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ;
+
 DO $$ BEGIN
   CREATE TYPE chat_message_kind AS ENUM ('TEXT','VOICE','PHOTOS','CALL','SYSTEM');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;

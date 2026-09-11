@@ -1,0 +1,2008 @@
+====================================================================================================================
+FILE: .github/workflows/vertical-1.yml
+====================================================================================================================
+name: Linqa Vertical 1
+
+on:
+  push:
+    branches: [main,develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: linqa_test
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://linqa:test_password@127.0.0.1:5432/linqa_test
+      JWT_ISSUER: https://test.linqa.local
+      JWT_AUDIENCE: linqa-api
+      JWT_HS256_SECRET: test-secret-that-is-at-least-32-bytes-long
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: server
+      - run: npm run db:migrate
+        working-directory: server
+      - run: npm test -- --run
+        working-directory: server
+      - run: npm run build
+        working-directory: server
+
+  mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: clients/mobile
+      - run: npx tsc --noEmit
+        working-directory: clients/mobile
+
+
+====================================================================================================================
+FILE: APPLY_GUIDE.txt
+====================================================================================================================
+LINQA ACTION WIRING + VERTICAL INTEGRATION MILESTONE 1
+
+1. Apply migration 015_action_wiring_vertical_1.sql.
+
+2. Register server services:
+   RuntimeCapabilityService
+   HomeV2Service
+   ChatV2Service
+   ConversationV2Service
+   CallV2Service
+   VaultV2Service
+   PrivacySecurityV2Service
+
+3. Register registerVertical1Routes().
+
+4. Reuse the production authentication/passkey/session services already present.
+
+5. Mobile:
+   instantiate ApiClient from the secure session token provider.
+   instantiate HomeService, ChatService, ConversationService,
+   CallService, VaultService, PrivacySecurityService.
+
+6. Use WireCriticalActions to replace the highest-priority console.log actions.
+
+7. Connect ConversationService to the real Rust/UniFFI secure core.
+   Do not substitute JS mock encryption in LIVE mode.
+
+8. Connect call state to signaling/WebRTC and TURN.
+
+9. Connect VaultV2Service to private object storage.
+
+10. Add WebSocket events:
+    message.new
+    call.ringing
+    call.accepted
+    call.ended
+    device.revoked
+    security.alert
+
+11. Execute every item in VERTICAL_1_ACCEPTANCE.md.
+
+12. Only after the vertical slice passes on two real accounts/devices,
+    proceed to Contacts/Status/Communities/Calendar/Notes.
+
+
+====================================================================================================================
+FILE: README.md
+====================================================================================================================
+# Linqa Action Wiring & Vertical Integration — Milestone 1
+
+This milestone follows the 34-module interface pack.
+
+It converts the first seven critical modules from UI/action definitions into wired workflows:
+
+1. Authentication
+2. Home
+3. Chats
+4. Conversation
+5. Calls
+6. File Vault
+7. Privacy + Security
+
+## Core design rule
+
+Every action must resolve to one of four explicit states:
+
+- READY: real client + server + persistence + required provider are connected.
+- DEGRADED: workflow is available with a documented limitation.
+- UNAVAILABLE: dependency is missing.
+- FORBIDDEN: authorization or policy blocks the action.
+
+No sensitive action is allowed to return a false success state.
+
+## Vertical slices
+
+### Authentication
+email/phone login, OTP challenge, passkey handoff, session refresh, logout.
+
+### Home
+profile, unread counts, pinned chats, recent calls, status, notifications,
+privacy score, storage summary, security alerts.
+
+### Chats
+list, filters, new conversation, archive, pin, mute, unread, message requests.
+
+### Conversation
+send encrypted envelope, receive, reply, edit metadata, delete, bookmark,
+attachments, location payloads, call launch.
+
+### Calls
+create session, ringing state, accept/reject/end, history, scheduled call,
+signaling bootstrap.
+
+### File Vault
+list, folder create, encrypted-upload init, finalize, download grant,
+favorite, soft delete.
+
+### Privacy + Security
+privacy center, trusted devices, active sessions, session revoke,
+device revoke, security alerts, key-transparency summary, account export/delete initiation.
+
+
+====================================================================================================================
+FILE: clients/mobile/src/actions/WireCriticalActions.ts
+====================================================================================================================
+import type { ActionDispatcher } from "./ActionDispatcher";
+import type { ChatService } from "../services/ChatService";
+import type { CallService } from "../services/CallService";
+import type { PrivacySecurityService } from "../services/PrivacySecurityService";
+
+export function wireCriticalActions(input:{
+  dispatcher:ActionDispatcher;
+  chats:ChatService;
+  calls:CallService;
+  privacy:PrivacySecurityService;
+  openRoute:(route:string)=>void;
+  currentPeerUserId:()=>string|null;
+}) {
+  const {dispatcher}=input;
+
+  dispatcher.register(
+    "home:search",
+    ()=>input.openRoute("/search"),
+  );
+
+  dispatcher.register(
+    "home:notifications",
+    ()=>input.openRoute("/notifications"),
+  );
+
+  dispatcher.register(
+    "home:privacy-status",
+    ()=>input.openRoute("/privacy"),
+  );
+
+  dispatcher.register(
+    "dashboard:new-chat",
+    ()=>input.openRoute("/contacts?mode=new-chat"),
+  );
+
+  dispatcher.register(
+    "dashboard:new-call",
+    ()=>input.openRoute("/contacts?mode=new-call"),
+  );
+
+  dispatcher.register(
+    "dashboard:file-vault",
+    ()=>input.openRoute("/file-vault"),
+  );
+
+  dispatcher.register(
+    "chats:new-message",
+    ()=>input.openRoute("/contacts?mode=new-chat"),
+  );
+
+  dispatcher.register(
+    "chats:message-requests",
+    ()=>input.openRoute("/message-requests"),
+  );
+
+  dispatcher.register(
+    "conversation:voice-call",
+    async()=>{
+      const peer=input.currentPeerUserId();
+      if(!peer) throw new Error("No peer selected.");
+
+      const call=await input.calls.create({
+        peerUserId:peer,
+        callType:"AUDIO",
+        privacyMode:"RELAY_ONLY",
+      });
+
+      input.openRoute(`/call/${call.id}`);
+    },
+  );
+
+  dispatcher.register(
+    "conversation:video-call",
+    async()=>{
+      const peer=input.currentPeerUserId();
+      if(!peer) throw new Error("No peer selected.");
+
+      const call=await input.calls.create({
+        peerUserId:peer,
+        callType:"VIDEO",
+        privacyMode:"RELAY_ONLY",
+      });
+
+      input.openRoute(`/call/${call.id}`);
+    },
+  );
+
+  dispatcher.register(
+    "privacy:trusted-devices",
+    ()=>input.openRoute("/linked-devices"),
+  );
+
+  dispatcher.register(
+    "privacy:sessions",
+    ()=>input.openRoute("/privacy/sessions"),
+  );
+
+  dispatcher.register(
+    "privacy:data-export",
+    ()=>input.privacy.requestDataExport(),
+  );
+
+  dispatcher.register(
+    "privacy:delete-account",
+    ()=>input.openRoute("/account/delete"),
+  );
+
+  dispatcher.register(
+    "security:manage-devices",
+    ()=>input.openRoute("/linked-devices"),
+  );
+
+  dispatcher.register(
+    "security:key-transparency",
+    ()=>input.openRoute("/security/key-transparency"),
+  );
+}
+
+
+====================================================================================================================
+FILE: clients/mobile/src/services/ApiClient.ts
+====================================================================================================================
+export class ApiClient {
+  constructor(
+    private readonly baseUrl:string,
+    private readonly getAccessToken:()=>Promise<string>,
+  ) {}
+
+  async request<T>(
+    path:string,
+    init:RequestInit={},
+  ):Promise<T> {
+    const token=await this.getAccessToken();
+
+    const response=await fetch(`${this.baseUrl}${path}`,{
+      ...init,
+      headers:{
+        "content-type":"application/json",
+        authorization:`Bearer ${token}`,
+        ...(init.headers??{}),
+      },
+    });
+
+    if(!response.ok) {
+      const payload=await response.json().catch(()=>null);
+      throw new Error(
+        payload?.error ??
+        `API request failed (${response.status})`,
+      );
+    }
+
+    if(response.status===204) {
+      return undefined as T;
+    }
+
+    return response.json();
+  }
+}
+
+
+====================================================================================================================
+FILE: clients/mobile/src/services/CallService.ts
+====================================================================================================================
+import type { ApiClient } from "./ApiClient";
+
+export class CallService {
+  constructor(private readonly api:ApiClient) {}
+
+  create(input:{
+    peerUserId:string;
+    callType:"AUDIO"|"VIDEO";
+    privacyMode:"STANDARD"|"RELAY_ONLY";
+  }) {
+    return this.api.request<{
+      id:string;
+      state:string;
+      created_at:string;
+    }>("/v2/calls",{
+      method:"POST",
+      body:JSON.stringify(input),
+    });
+  }
+
+  transition(
+    callId:string,
+    state:"ACCEPTED"|"ACTIVE"|"REJECTED"|"ENDED"|"FAILED",
+  ) {
+    return this.api.request<void>(
+      `/v2/calls/${callId}/state`,
+      {
+        method:"POST",
+        body:JSON.stringify({state}),
+      },
+    );
+  }
+}
+
+
+====================================================================================================================
+FILE: clients/mobile/src/services/ChatService.ts
+====================================================================================================================
+import type { ApiClient } from "./ApiClient";
+
+export class ChatService {
+  constructor(private readonly api:ApiClient) {}
+
+  list(
+    filter:"ALL"|"UNREAD"|"FAVORITES"|"ARCHIVED"="ALL",
+  ) {
+    return this.api.request<{chats:unknown[]}>(
+      `/v2/chats?filter=${filter}`,
+    );
+  }
+
+  createDirect(peerUserId:string) {
+    return this.api.request<{id:string}>(
+      "/v2/chats/direct",
+      {
+        method:"POST",
+        body:JSON.stringify({peerUserId}),
+      },
+    );
+  }
+
+  messages(conversationId:string,limit=100) {
+    return this.api.request<{messages:any[]}>(
+      `/v2/chats/${conversationId}/messages?limit=${limit}`,
+    );
+  }
+}
+
+
+====================================================================================================================
+FILE: clients/mobile/src/services/ConversationService.ts
+====================================================================================================================
+import type { ApiClient } from "./ApiClient";
+
+export interface SecureCoreMessaging {
+  encrypt(input:{
+    conversationId:string;
+    plaintext:string;
+    messageType:string;
+  }):Promise<{
+    messageId:string;
+    ciphertext:Uint8Array;
+    expiresAt?:string;
+  }>;
+
+  decrypt(ciphertext:Uint8Array):Promise<{
+    messageId:string;
+    plaintext:string;
+  }>;
+}
+
+export class ConversationService {
+  constructor(
+    private readonly api:ApiClient,
+    private readonly core:SecureCoreMessaging,
+  ) {}
+
+  async send(input:{
+    conversationId:string;
+    plaintext:string;
+    messageType?:string;
+  }) {
+    const encrypted=await this.core.encrypt({
+      conversationId:input.conversationId,
+      plaintext:input.plaintext,
+      messageType:input.messageType??"TEXT",
+    });
+
+    return this.api.request(
+      `/v2/chats/${input.conversationId}/messages`,
+      {
+        method:"POST",
+        body:JSON.stringify({
+          messageId:encrypted.messageId,
+          ciphertextBase64:toBase64(encrypted.ciphertext),
+          messageType:input.messageType??"TEXT",
+          expiresAt:encrypted.expiresAt,
+        }),
+      },
+    );
+  }
+
+  async decryptServerRows(rows:any[]) {
+    const output=[];
+
+    for(const row of rows) {
+      if(row.deleted_at) continue;
+
+      try {
+        const decrypted=await this.core.decrypt(
+          fromBase64(row.envelope_ciphertext),
+        );
+        output.push({
+          ...row,
+          plaintext:decrypted.plaintext,
+        });
+      } catch {
+        output.push({
+          ...row,
+          decryptError:true,
+        });
+      }
+    }
+
+    return output;
+  }
+}
+
+function toBase64(bytes:Uint8Array) {
+  let binary="";
+  for(const b of bytes) binary+=String.fromCharCode(b);
+  return btoa(binary);
+}
+
+function fromBase64(value:string) {
+  return Uint8Array.from(
+    atob(value),
+    c=>c.charCodeAt(0),
+  );
+}
+
+
+====================================================================================================================
+FILE: clients/mobile/src/services/HomeService.ts
+====================================================================================================================
+import type { ApiClient } from "./ApiClient";
+
+export class HomeService {
+  constructor(private readonly api:ApiClient) {}
+
+  load() {
+    return this.api.request<{
+      profile:unknown;
+      recentChats:unknown[];
+      recentCalls:unknown[];
+      stories:unknown[];
+      communities:unknown[];
+      upcomingEvents:unknown[];
+      quickNotes:unknown[];
+      notifications:unknown[];
+      security:{
+        privacyScore:number;
+        activeDevices:number;
+        activeSessions:number;
+        capabilities:Array<{
+          key:string;
+          state:string;
+          reason?:string;
+        }>;
+      };
+    }>("/v2/home");
+  }
+}
+
+
+====================================================================================================================
+FILE: clients/mobile/src/services/PrivacySecurityService.ts
+====================================================================================================================
+import type { ApiClient } from "./ApiClient";
+
+export class PrivacySecurityService {
+  constructor(private readonly api:ApiClient) {}
+
+  center() {
+    return this.api.request<any>(
+      "/v2/privacy-security",
+    );
+  }
+
+  revokeSession(sessionId:string) {
+    return this.api.request<void>(
+      `/v2/privacy-security/sessions/${sessionId}/revoke`,
+      {method:"POST"},
+    );
+  }
+
+  revokeDevice(deviceId:string) {
+    return this.api.request<void>(
+      `/v2/privacy-security/devices/${deviceId}/revoke`,
+      {method:"POST"},
+    );
+  }
+
+  requestDataExport() {
+    return this.operation("DATA_EXPORT");
+  }
+
+  requestDeletion() {
+    return this.operation("DELETE_ACCOUNT");
+  }
+
+  private operation(
+    operation:"DATA_EXPORT"|"DEACTIVATE"|"DELETE_ACCOUNT",
+  ) {
+    return this.api.request(
+      "/v2/account/operations",
+      {
+        method:"POST",
+        body:JSON.stringify({operation}),
+      },
+    );
+  }
+}
+
+
+====================================================================================================================
+FILE: clients/mobile/src/services/VaultService.ts
+====================================================================================================================
+import type { ApiClient } from "./ApiClient";
+
+export interface VaultCrypto {
+  encryptName(value:string):Promise<Uint8Array>;
+  encryptFile(file:Blob):Promise<{
+    encrypted:Blob;
+    metadataCiphertext:Uint8Array;
+    wrappedFileKey:Uint8Array;
+    sha256:Uint8Array;
+  }>;
+}
+
+export class VaultService {
+  constructor(
+    private readonly api:ApiClient,
+    private readonly crypto:VaultCrypto,
+  ) {}
+
+  list() {
+    return this.api.request<{items:any[]}>("/v2/vault");
+  }
+
+  async createFolder(name:string,parentId?:string) {
+    const encrypted=await this.crypto.encryptName(name);
+
+    return this.api.request(
+      "/v2/vault/folders",
+      {
+        method:"POST",
+        body:JSON.stringify({
+          nameCiphertextBase64:toBase64(encrypted),
+          parentId,
+        }),
+      },
+    );
+  }
+}
+
+function toBase64(bytes:Uint8Array) {
+  let binary="";
+  for(const b of bytes) binary+=String.fromCharCode(b);
+  return btoa(binary);
+}
+
+
+====================================================================================================================
+FILE: docs/MILESTONE_SEQUENCE.md
+====================================================================================================================
+# Implementation Sequence
+
+## Gate 1 — Authentication
+Do not mount authenticated tabs until real login/session refresh works.
+
+## Gate 2 — Home
+Home must load only authenticated, user-scoped data.
+
+## Gate 3 — Chats
+Users can create and manage real conversation records.
+
+## Gate 4 — Conversation
+A message is not displayed as sent until:
+1. encrypted by secure core;
+2. persisted in local encrypted outbox;
+3. accepted by relay.
+
+## Gate 5 — Calls
+Call UI reflects signaling state. History is written from terminal call state.
+
+## Gate 6 — File Vault
+Files are encrypted client-side before upload. Server receives ciphertext only.
+
+## Gate 7 — Privacy/Security
+Users can inspect and revoke sessions/devices and see runtime security state.
+
+## Exit criteria
+Two real accounts on two devices can authenticate, exchange an encrypted
+message, make a call, upload/download a Vault file, and revoke a session.
+
+
+====================================================================================================================
+FILE: docs/NEXT_AFTER_VERTICAL_1.md
+====================================================================================================================
+# Next After Vertical 1
+
+Once this milestone passes on two real users and devices, wire:
+
+1. Contacts + Status/Stories
+2. Communities + Events
+3. Notes + Calendar
+4. Screen Sharing + Collaboration
+5. AI Assistant
+6. Wallet
+7. Premium/Billing
+8. Enterprise/SSO/SCIM
+9. Emergency features
+10. Developer/diagnostics surfaces
+
+Do not broaden feature scope before Vertical 1 acceptance passes.
+
+
+====================================================================================================================
+FILE: server/src/db/migrations/015_action_wiring_vertical_1.sql
+====================================================================================================================
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS auth_login_challenges_v2 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL CHECK (channel IN ('EMAIL','SMS','VOICE')),
+  destination_hash BYTEA NOT NULL,
+  code_hash BYTEA NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS auth_login_challenges_active_idx
+  ON auth_login_challenges_v2(user_id,expires_at)
+  WHERE consumed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS conversation_preferences_v2 (
+  conversation_id UUID NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  pinned BOOLEAN NOT NULL DEFAULT FALSE,
+  muted_until TIMESTAMPTZ,
+  favorite BOOLEAN NOT NULL DEFAULT FALSE,
+  archived_at TIMESTAMPTZ,
+  last_read_message_id UUID,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(conversation_id,user_id)
+);
+
+CREATE TABLE IF NOT EXISTS message_delivery_state_v2 (
+  message_id UUID NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  recipient_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  recipient_device_id UUID REFERENCES devices(id) ON DELETE SET NULL,
+  state TEXT NOT NULL CHECK (
+    state IN ('QUEUED','RELAY_ACCEPTED','DELIVERED','READ','EXPIRED','FAILED')
+  ),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(message_id,recipient_user_id,recipient_device_id)
+);
+
+CREATE TABLE IF NOT EXISTS call_state_events_v2 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  call_id UUID NOT NULL REFERENCES call_records(id) ON DELETE CASCADE,
+  actor_user_id UUID NOT NULL REFERENCES users(id),
+  actor_device_id UUID REFERENCES devices(id),
+  state TEXT NOT NULL CHECK (
+    state IN ('CREATED','RINGING','ACCEPTED','ACTIVE','REJECTED','ENDED','FAILED')
+  ),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS call_state_events_call_idx
+  ON call_state_events_v2(call_id,created_at);
+
+CREATE TABLE IF NOT EXISTS vault_upload_sessions_v2 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  vault_object_id UUID NOT NULL REFERENCES vault_objects(id) ON DELETE CASCADE,
+  expected_size BIGINT NOT NULL CHECK (expected_size >= 0),
+  expected_hash BYTEA NOT NULL,
+  status TEXT NOT NULL CHECK (
+    status IN ('CREATED','UPLOADING','FINALIZED','FAILED','EXPIRED')
+  ),
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finalized_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS account_operations_v2 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  operation_type TEXT NOT NULL CHECK (
+    operation_type IN ('DATA_EXPORT','DEACTIVATE','DELETE_ACCOUNT')
+  ),
+  state TEXT NOT NULL CHECK (
+    state IN ('REQUESTED','PROCESSING','READY','COMPLETED','CANCELLED','FAILED')
+  ),
+  requested_from_device_id UUID REFERENCES devices(id),
+  verification_required BOOLEAN NOT NULL DEFAULT TRUE,
+  execute_after TIMESTAMPTZ,
+  output_object_key TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS user_runtime_capabilities (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  capability_key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (
+    state IN ('READY','DEGRADED','UNAVAILABLE','FORBIDDEN')
+  ),
+  reason TEXT,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(user_id,device_id,capability_key)
+);
+
+COMMIT;
+
+
+====================================================================================================================
+FILE: server/src/routes/vertical-1.routes.ts
+====================================================================================================================
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import type { AppConfig } from "../config.js";
+import { createAuthenticator,requireScope } from "../auth/jwt.js";
+import type { HomeV2Service } from "../services/home-v2.service.js";
+import type { ChatV2Service } from "../services/chat-v2.service.js";
+import type { ConversationV2Service } from "../services/conversation-v2.service.js";
+import type { CallV2Service } from "../services/call-v2.service.js";
+import type { VaultV2Service } from "../services/vault-v2.service.js";
+import type { PrivacySecurityV2Service } from "../services/privacy-security-v2.service.js";
+
+export async function registerVertical1Routes(
+  app:FastifyInstance,
+  config:AppConfig,
+  services:{
+    home:HomeV2Service;
+    chats:ChatV2Service;
+    conversations:ConversationV2Service;
+    calls:CallV2Service;
+    vault:VaultV2Service;
+    privacy:PrivacySecurityV2Service;
+  },
+) {
+  const authenticate=createAuthenticator(config);
+
+  app.get("/v2/home",async request=>{
+    const p=await authenticate(request);
+    requireScope(p,"profile:read");
+    return services.home.load(p.userId,p.deviceId);
+  });
+
+  app.get("/v2/chats",async request=>{
+    const p=await authenticate(request);
+    requireScope(p,"messages:read");
+    const query=z.object({
+      filter:z.enum(["ALL","UNREAD","FAVORITES","ARCHIVED"]).optional(),
+    }).parse(request.query);
+    return {chats:await services.chats.list({
+      userId:p.userId,
+      filter:query.filter,
+    })};
+  });
+
+  app.post("/v2/chats/direct",async(request,reply)=>{
+    const p=await authenticate(request);
+    requireScope(p,"messages:write");
+    const body=z.object({
+      peerUserId:z.string().uuid(),
+    }).parse(request.body);
+    return reply.code(201).send(
+      await services.chats.createDirect(p.userId,body.peerUserId),
+    );
+  });
+
+  app.get("/v2/chats/:conversationId/messages",async request=>{
+    const p=await authenticate(request);
+    requireScope(p,"messages:read");
+    const params=z.object({
+      conversationId:z.string().uuid(),
+    }).parse(request.params);
+    const query=z.object({
+      limit:z.coerce.number().int().min(1).max(500).default(100),
+    }).parse(request.query);
+
+    return {
+      messages:await services.conversations.messages(
+        p.userId,
+        params.conversationId,
+        query.limit,
+      ),
+    };
+  });
+
+  app.post(
+    "/v2/chats/:conversationId/messages",
+    async(request,reply)=>{
+      const p=await authenticate(request);
+      requireScope(p,"messages:write");
+
+      const params=z.object({
+        conversationId:z.string().uuid(),
+      }).parse(request.params);
+
+      const body=z.object({
+        messageId:z.string().uuid(),
+        ciphertextBase64:z.string().min(44),
+        messageType:z.string().min(2).max(40).default("TEXT"),
+        expiresAt:z.string().datetime().optional(),
+      }).parse(request.body);
+
+      const result=await services.conversations.acceptEncryptedMessage({
+        userId:p.userId,
+        deviceId:p.deviceId,
+        conversationId:params.conversationId,
+        messageId:body.messageId,
+        ciphertext:Buffer.from(body.ciphertextBase64,"base64"),
+        messageType:body.messageType,
+        expiresAt:body.expiresAt?new Date(body.expiresAt):undefined,
+      });
+
+      return reply.code(result.accepted?201:200).send(result);
+    },
+  );
+
+  app.post("/v2/calls",async(request,reply)=>{
+    const p=await authenticate(request);
+    requireScope(p,"calls:write");
+    const body=z.object({
+      peerUserId:z.string().uuid(),
+      callType:z.enum(["AUDIO","VIDEO"]),
+      privacyMode:z.enum(["STANDARD","RELAY_ONLY"]).default("STANDARD"),
+    }).parse(request.body);
+
+    return reply.code(201).send(
+      await services.calls.create({
+        userId:p.userId,
+        deviceId:p.deviceId,
+        ...body,
+      }),
+    );
+  });
+
+  app.post("/v2/calls/:callId/state",async(request,reply)=>{
+    const p=await authenticate(request);
+    requireScope(p,"calls:write");
+
+    const params=z.object({
+      callId:z.string().uuid(),
+    }).parse(request.params);
+
+    const body=z.object({
+      state:z.enum(["ACCEPTED","ACTIVE","REJECTED","ENDED","FAILED"]),
+    }).parse(request.body);
+
+    await services.calls.transition({
+      callId:params.callId,
+      userId:p.userId,
+      deviceId:p.deviceId,
+      state:body.state,
+    });
+
+    return reply.code(204).send();
+  });
+
+  app.get("/v2/vault",async request=>{
+    const p=await authenticate(request);
+    requireScope(p,"vault:read");
+    return {items:await services.vault.list(p.userId)};
+  });
+
+  app.post("/v2/vault/folders",async(request,reply)=>{
+    const p=await authenticate(request);
+    requireScope(p,"vault:write");
+    const body=z.object({
+      nameCiphertextBase64:z.string().min(24),
+      parentId:z.string().uuid().optional(),
+    }).parse(request.body);
+
+    return reply.code(201).send(
+      await services.vault.createFolder(
+        p.userId,
+        Buffer.from(body.nameCiphertextBase64,"base64"),
+        body.parentId,
+      ),
+    );
+  });
+
+  app.get("/v2/privacy-security",async request=>{
+    const p=await authenticate(request);
+    requireScope(p,"privacy:read");
+    return services.privacy.center(p.userId,p.deviceId);
+  });
+
+  app.post(
+    "/v2/privacy-security/sessions/:sessionId/revoke",
+    async(request,reply)=>{
+      const p=await authenticate(request);
+      requireScope(p,"security:write");
+      const params=z.object({
+        sessionId:z.string().uuid(),
+      }).parse(request.params);
+      await services.privacy.revokeSession(
+        p.userId,
+        params.sessionId,
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.post(
+    "/v2/privacy-security/devices/:deviceId/revoke",
+    async(request,reply)=>{
+      const p=await authenticate(request);
+      requireScope(p,"security:write");
+      const params=z.object({
+        deviceId:z.string().uuid(),
+      }).parse(request.params);
+
+      if(params.deviceId===p.deviceId) {
+        return reply.code(400).send({
+          error:"use_current_device_logout_or_account_flow",
+        });
+      }
+
+      await services.privacy.revokeDevice(
+        p.userId,
+        params.deviceId,
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.post(
+    "/v2/account/operations",
+    async(request,reply)=>{
+      const p=await authenticate(request);
+      requireScope(p,"account:write");
+      const body=z.object({
+        operation:z.enum([
+          "DATA_EXPORT",
+          "DEACTIVATE",
+          "DELETE_ACCOUNT",
+        ]),
+      }).parse(request.body);
+
+      return reply.code(202).send(
+        await services.privacy.requestAccountOperation({
+          userId:p.userId,
+          deviceId:p.deviceId,
+          operation:body.operation,
+        }),
+      );
+    },
+  );
+}
+
+
+====================================================================================================================
+FILE: server/src/services/call-v2.service.ts
+====================================================================================================================
+import type { Database } from "../db/pool.js";
+
+export class CallV2Service {
+  constructor(private readonly db: Database) {}
+
+  async create(input: {
+    userId: string;
+    deviceId: string;
+    peerUserId: string;
+    callType: "AUDIO" | "VIDEO";
+    privacyMode: "STANDARD" | "RELAY_ONLY";
+  }) {
+    const client = await this.db.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const call = await client.query(
+        `INSERT INTO call_records(
+           initiator_user_id,call_type,privacy_mode,state
+         ) VALUES($1,$2,$3,'RINGING')
+         RETURNING id,state,created_at`,
+        [
+          input.userId,
+          input.callType,
+          input.privacyMode,
+        ],
+      );
+
+      const callId = call.rows[0].id;
+
+      await client.query(
+        `INSERT INTO call_participants(call_id,user_id,device_id)
+         VALUES($1,$2,$3),($1,$4,NULL)`,
+        [
+          callId,
+          input.userId,
+          input.deviceId,
+          input.peerUserId,
+        ],
+      );
+
+      await client.query(
+        `INSERT INTO call_state_events_v2(
+           call_id,actor_user_id,actor_device_id,state
+         ) VALUES($1,$2,$3,'CREATED')`,
+        [callId, input.userId, input.deviceId],
+      );
+
+      await client.query("COMMIT");
+      return call.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async transition(input: {
+    callId: string;
+    userId: string;
+    deviceId: string;
+    state: "ACCEPTED" | "ACTIVE" | "REJECTED" | "ENDED" | "FAILED";
+  }) {
+    const membership = await this.db.query(
+      `SELECT 1 FROM call_participants
+       WHERE call_id=$1 AND user_id=$2`,
+      [input.callId, input.userId],
+    );
+
+    if (membership.rowCount !== 1) {
+      throw new Error("call access denied");
+    }
+
+    const recordState =
+      input.state === "ACCEPTED" || input.state === "ACTIVE"
+        ? "ACTIVE"
+        : input.state === "ENDED"
+          ? "ENDED"
+          : input.state === "REJECTED"
+            ? "REJECTED"
+            : "FAILED";
+
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+
+      await client.query(
+        `UPDATE call_records
+         SET state=$2,
+             started_at=CASE WHEN $2='ACTIVE' AND started_at IS NULL THEN now() ELSE started_at END,
+             ended_at=CASE WHEN $2 IN('ENDED','REJECTED','FAILED') THEN now() ELSE ended_at END
+         WHERE id=$1`,
+        [input.callId, recordState],
+      );
+
+      await client.query(
+        `INSERT INTO call_state_events_v2(
+           call_id,actor_user_id,actor_device_id,state
+         ) VALUES($1,$2,$3,$4)`,
+        [
+          input.callId,
+          input.userId,
+          input.deviceId,
+          input.state,
+        ],
+      );
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+
+====================================================================================================================
+FILE: server/src/services/chat-v2.service.ts
+====================================================================================================================
+import type { Database } from "../db/pool.js";
+
+export class ChatV2Service {
+  constructor(private readonly db: Database) {}
+
+  async list(input: {
+    userId: string;
+    filter?: "ALL" | "UNREAD" | "FAVORITES" | "ARCHIVED";
+  }) {
+    const clauses = ["m.user_id=$1"];
+    if (input.filter === "UNREAD") clauses.push("m.unread_count>0");
+    if (input.filter === "FAVORITES") clauses.push("COALESCE(p.favorite,FALSE)=TRUE");
+    if (input.filter === "ARCHIVED") clauses.push("p.archived_at IS NOT NULL");
+    if (!input.filter || input.filter === "ALL") {
+      clauses.push("(p.archived_at IS NULL OR p.archived_at IS NULL)");
+    }
+
+    const result = await this.db.query(
+      `SELECT
+         t.id,t.thread_type,t.created_by,t.created_at,
+         COALESCE(p.pinned,FALSE) AS pinned,
+         COALESCE(p.favorite,FALSE) AS favorite,
+         p.muted_until,p.archived_at,m.unread_count
+       FROM chat_threads t
+       JOIN chat_members m ON m.thread_id=t.id
+       LEFT JOIN conversation_preferences_v2 p
+         ON p.conversation_id=t.id AND p.user_id=m.user_id
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY COALESCE(p.pinned,FALSE) DESC,t.created_at DESC`,
+      [input.userId],
+    );
+
+    return result.rows;
+  }
+
+  async createDirect(
+    userId: string,
+    peerUserId: string,
+  ) {
+    if (userId === peerUserId) {
+      throw new Error("cannot create direct chat with self");
+    }
+
+    const client = await this.db.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const thread = await client.query(
+        `INSERT INTO chat_threads(thread_type,created_by)
+         VALUES('DIRECT',$1)
+         RETURNING id,created_at`,
+        [userId],
+      );
+
+      const threadId = thread.rows[0].id;
+
+      await client.query(
+        `INSERT INTO chat_members(thread_id,user_id,role)
+         VALUES($1,$2,'MEMBER'),($1,$3,'MEMBER')`,
+        [threadId, userId, peerUserId],
+      );
+
+      await client.query(
+        `INSERT INTO conversation_preferences_v2(
+           conversation_id,user_id
+         ) VALUES($1,$2),($1,$3)
+         ON CONFLICT DO NOTHING`,
+        [threadId, userId, peerUserId],
+      );
+
+      await client.query("COMMIT");
+      return thread.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async setPreference(input: {
+    userId: string;
+    conversationId: string;
+    pinned?: boolean;
+    favorite?: boolean;
+    archived?: boolean;
+    muteUntil?: Date | null;
+  }) {
+    await this.db.query(
+      `INSERT INTO conversation_preferences_v2(
+         conversation_id,user_id,pinned,favorite,archived_at,muted_until
+       ) VALUES($1,$2,$3,$4,$5,$6)
+       ON CONFLICT(conversation_id,user_id)
+       DO UPDATE SET
+         pinned=COALESCE($3,conversation_preferences_v2.pinned),
+         favorite=COALESCE($4,conversation_preferences_v2.favorite),
+         archived_at=CASE
+           WHEN $5::timestamptz IS NULL THEN conversation_preferences_v2.archived_at
+           ELSE $5
+         END,
+         muted_until=$6,
+         updated_at=now()`,
+      [
+        input.conversationId,
+        input.userId,
+        input.pinned ?? null,
+        input.favorite ?? null,
+        input.archived === undefined
+          ? null
+          : input.archived
+            ? new Date()
+            : null,
+        input.muteUntil ?? null,
+      ],
+    );
+  }
+}
+
+
+====================================================================================================================
+FILE: server/src/services/conversation-v2.service.ts
+====================================================================================================================
+import type { Database } from "../db/pool.js";
+
+export class ConversationV2Service {
+  constructor(private readonly db: Database) {}
+
+  async requireMember(userId: string, conversationId: string) {
+    const result = await this.db.query(
+      `SELECT 1 FROM chat_members
+       WHERE thread_id=$1 AND user_id=$2`,
+      [conversationId, userId],
+    );
+
+    if (result.rowCount !== 1) {
+      throw new Error("conversation access denied");
+    }
+  }
+
+  async messages(
+    userId: string,
+    conversationId: string,
+    limit = 100,
+  ) {
+    await this.requireMember(userId, conversationId);
+
+    const result = await this.db.query(
+      `SELECT id,sender_user_id,sender_device_id,
+              envelope_ciphertext,message_type,
+              edited_at,deleted_at,expires_at,created_at
+       FROM chat_messages
+       WHERE thread_id=$1
+         AND (expires_at IS NULL OR expires_at>now())
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [conversationId, limit],
+    );
+
+    return result.rows;
+  }
+
+  async acceptEncryptedMessage(input: {
+    userId: string;
+    deviceId: string;
+    conversationId: string;
+    messageId: string;
+    ciphertext: Buffer;
+    messageType: string;
+    expiresAt?: Date;
+  }) {
+    await this.requireMember(input.userId, input.conversationId);
+
+    if (input.ciphertext.length < 32) {
+      throw new Error("invalid encrypted message envelope");
+    }
+
+    const result = await this.db.query(
+      `INSERT INTO chat_messages(
+         id,thread_id,sender_user_id,sender_device_id,
+         envelope_ciphertext,message_type,expires_at
+       ) VALUES($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT(id) DO NOTHING
+       RETURNING id,created_at`,
+      [
+        input.messageId,
+        input.conversationId,
+        input.userId,
+        input.deviceId,
+        input.ciphertext,
+        input.messageType,
+        input.expiresAt ?? null,
+      ],
+    );
+
+    return {
+      accepted: result.rowCount === 1,
+      message: result.rows[0] ?? null,
+    };
+  }
+
+  async bookmark(
+    userId: string,
+    messageId: string,
+    bookmarked: boolean,
+  ) {
+    if (bookmarked) {
+      await this.db.query(
+        `INSERT INTO message_bookmarks(user_id,message_id)
+         VALUES($1,$2)
+         ON CONFLICT DO NOTHING`,
+        [userId, messageId],
+      );
+    } else {
+      await this.db.query(
+        `DELETE FROM message_bookmarks
+         WHERE user_id=$1 AND message_id=$2`,
+        [userId, messageId],
+      );
+    }
+  }
+}
+
+
+====================================================================================================================
+FILE: server/src/services/home-v2.service.ts
+====================================================================================================================
+import type { Database } from "../db/pool.js";
+import type { RuntimeCapabilityService } from "./runtime-capability.service.js";
+
+export class HomeV2Service {
+  constructor(
+    private readonly db: Database,
+    private readonly capabilities: RuntimeCapabilityService,
+  ) {}
+
+  async load(userId: string, deviceId: string) {
+    const [
+      profile,
+      chats,
+      calls,
+      statuses,
+      communities,
+      events,
+      notes,
+      notifications,
+      devices,
+      sessions,
+      capabilities,
+    ] = await Promise.all([
+      this.db.query(
+        `SELECT * FROM app_profiles WHERE user_id=$1`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT
+           t.id,t.thread_type,t.created_at,
+           COALESCE(p.pinned,FALSE) AS pinned,
+           COALESCE(p.favorite,FALSE) AS favorite,
+           p.archived_at,
+           m.unread_count
+         FROM chat_threads t
+         JOIN chat_members m
+           ON m.thread_id=t.id AND m.user_id=$1
+         LEFT JOIN conversation_preferences_v2 p
+           ON p.conversation_id=t.id AND p.user_id=$1
+         WHERE p.archived_at IS NULL OR p.archived_at IS NULL
+         ORDER BY COALESCE(p.pinned,FALSE) DESC,t.created_at DESC
+         LIMIT 25`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT *
+         FROM call_records c
+         WHERE c.initiator_user_id=$1
+            OR EXISTS(
+              SELECT 1 FROM call_participants cp
+              WHERE cp.call_id=c.id AND cp.user_id=$1
+            )
+         ORDER BY c.created_at DESC
+         LIMIT 10`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT id,user_id,content_type,expires_at,created_at
+         FROM status_posts_v2
+         WHERE expires_at>now()
+         ORDER BY created_at DESC
+         LIMIT 25`,
+      ),
+      this.db.query(
+        `SELECT * FROM communities_v2
+         WHERE owner_user_id=$1
+         ORDER BY created_at DESC LIMIT 10`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT id,starts_at,ends_at
+         FROM calendar_events_v2
+         WHERE owner_user_id=$1 AND ends_at>now()
+         ORDER BY starts_at LIMIT 10`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT id,note_type,locked,updated_at
+         FROM secure_notes_v2
+         WHERE owner_user_id=$1
+         ORDER BY updated_at DESC LIMIT 8`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT * FROM notifications_v2
+         WHERE user_id=$1 AND read_at IS NULL
+         ORDER BY created_at DESC LIMIT 20`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT id,device_name,platform,status,last_seen_at
+         FROM devices WHERE user_id=$1
+         ORDER BY registered_at DESC`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT id,device_id,created_at,expires_at,revoked_at
+         FROM auth_sessions WHERE user_id=$1
+         ORDER BY created_at DESC`,
+        [userId],
+      ),
+      this.capabilities.list(userId, deviceId),
+    ]);
+
+    const activeDevices = devices.rows.filter(
+      (item) => item.status === "ACTIVE",
+    ).length;
+
+    const activeSessions = sessions.rows.filter(
+      (item) => !item.revoked_at,
+    ).length;
+
+    const privacyScore = Math.max(
+      0,
+      Math.min(
+        100,
+        50 +
+          Math.min(activeDevices, 3) * 10 +
+          (activeSessions <= activeDevices ? 10 : 0),
+      ),
+    );
+
+    return {
+      profile: profile.rows[0] ?? null,
+      recentChats: chats.rows,
+      recentCalls: calls.rows,
+      stories: statuses.rows,
+      communities: communities.rows,
+      upcomingEvents: events.rows,
+      quickNotes: notes.rows,
+      notifications: notifications.rows,
+      security: {
+        privacyScore,
+        activeDevices,
+        activeSessions,
+        capabilities,
+      },
+    };
+  }
+}
+
+
+====================================================================================================================
+FILE: server/src/services/privacy-security-v2.service.ts
+====================================================================================================================
+import type { Database } from "../db/pool.js";
+import type { RuntimeCapabilityService } from "./runtime-capability.service.js";
+
+export class PrivacySecurityV2Service {
+  constructor(
+    private readonly db: Database,
+    private readonly capabilities: RuntimeCapabilityService,
+  ) {}
+
+  async center(userId: string, deviceId: string) {
+    const [devices,sessions,alerts,capabilities] = await Promise.all([
+      this.db.query(
+        `SELECT id,device_name,platform,status,last_seen_at,registered_at
+         FROM devices WHERE user_id=$1 ORDER BY registered_at DESC`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT id,device_id,created_at,expires_at,revoked_at
+         FROM auth_sessions WHERE user_id=$1 ORDER BY created_at DESC`,
+        [userId],
+      ),
+      this.db.query(
+        `SELECT *
+         FROM device_security_alerts
+         WHERE user_id=$1 AND acknowledged_at IS NULL
+         ORDER BY created_at DESC`,
+        [userId],
+      ),
+      this.capabilities.list(userId,deviceId),
+    ]);
+
+    const activeDevices = devices.rows.filter(
+      (row)=>row.status==="ACTIVE",
+    ).length;
+
+    const activeSessions = sessions.rows.filter(
+      (row)=>!row.revoked_at,
+    ).length;
+
+    return {
+      privacyScore: Math.max(
+        0,
+        Math.min(
+          100,
+          50 +
+            Math.min(activeDevices,3)*10 +
+            (activeSessions<=activeDevices?10:0),
+        ),
+      ),
+      devices: devices.rows,
+      sessions: sessions.rows,
+      alerts: alerts.rows,
+      capabilities,
+    };
+  }
+
+  async revokeSession(
+    userId: string,
+    sessionId: string,
+  ) {
+    const result = await this.db.query(
+      `UPDATE auth_sessions
+       SET revoked_at=now()
+       WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL`,
+      [sessionId,userId],
+    );
+
+    if (result.rowCount!==1) {
+      throw new Error("active session not found");
+    }
+  }
+
+  async revokeDevice(
+    userId: string,
+    deviceId: string,
+  ) {
+    const client=await this.db.connect();
+    try {
+      await client.query("BEGIN");
+
+      const result=await client.query(
+        `UPDATE devices
+         SET status='REVOKED'
+         WHERE id=$1 AND user_id=$2 AND status<>'REVOKED'`,
+        [deviceId,userId],
+      );
+
+      if(result.rowCount!==1) {
+        throw new Error("device not found or already revoked");
+      }
+
+      await client.query(
+        `UPDATE auth_sessions
+         SET revoked_at=now()
+         WHERE device_id=$1 AND user_id=$2 AND revoked_at IS NULL`,
+        [deviceId,userId],
+      );
+
+      await client.query("COMMIT");
+    } catch(error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async requestAccountOperation(input:{
+    userId:string;
+    deviceId:string;
+    operation:
+      |"DATA_EXPORT"
+      |"DEACTIVATE"
+      |"DELETE_ACCOUNT";
+  }) {
+    const executeAfter =
+      input.operation==="DELETE_ACCOUNT"
+        ? new Date(Date.now()+7*24*60*60*1000)
+        : null;
+
+    const result=await this.db.query(
+      `INSERT INTO account_operations_v2(
+         user_id,operation_type,state,requested_from_device_id,
+         verification_required,execute_after
+       ) VALUES($1,$2,'REQUESTED',$3,TRUE,$4)
+       RETURNING id,state,execute_after,created_at`,
+      [
+        input.userId,
+        input.operation,
+        input.deviceId,
+        executeAfter,
+      ],
+    );
+
+    return result.rows[0];
+  }
+}
+
+
+====================================================================================================================
+FILE: server/src/services/runtime-capability.service.ts
+====================================================================================================================
+import type { Database } from "../db/pool.js";
+
+export type CapabilityState =
+  | "READY"
+  | "DEGRADED"
+  | "UNAVAILABLE"
+  | "FORBIDDEN";
+
+export class RuntimeCapabilityService {
+  constructor(private readonly db: Database) {}
+
+  async set(input: {
+    userId: string;
+    deviceId: string;
+    key: string;
+    state: CapabilityState;
+    reason?: string;
+  }) {
+    await this.db.query(
+      `INSERT INTO user_runtime_capabilities(
+         user_id,device_id,capability_key,state,reason
+       ) VALUES($1,$2,$3,$4,$5)
+       ON CONFLICT(user_id,device_id,capability_key)
+       DO UPDATE SET
+         state=EXCLUDED.state,
+         reason=EXCLUDED.reason,
+         checked_at=now()`,
+      [
+        input.userId,
+        input.deviceId,
+        input.key,
+        input.state,
+        input.reason ?? null,
+      ],
+    );
+  }
+
+  async require(
+    userId: string,
+    deviceId: string,
+    key: string,
+  ): Promise<void> {
+    const result = await this.db.query(
+      `SELECT state,reason
+       FROM user_runtime_capabilities
+       WHERE user_id=$1 AND device_id=$2 AND capability_key=$3`,
+      [userId, deviceId, key],
+    );
+
+    const row = result.rows[0];
+
+    if (!row || row.state !== "READY") {
+      throw new Error(
+        row?.reason ?? `required capability unavailable: ${key}`,
+      );
+    }
+  }
+
+  async list(userId: string, deviceId: string) {
+    const result = await this.db.query(
+      `SELECT capability_key AS key,state,reason,checked_at
+       FROM user_runtime_capabilities
+       WHERE user_id=$1 AND device_id=$2`,
+      [userId, deviceId],
+    );
+    return result.rows;
+  }
+}
+
+
+====================================================================================================================
+FILE: server/src/services/vault-v2.service.ts
+====================================================================================================================
+import { createHash, randomUUID } from "node:crypto";
+import type { Database } from "../db/pool.js";
+
+export interface VaultStorage {
+  createUpload(input: {
+    objectKey: string;
+    contentType: string;
+    contentLength: number;
+  }): Promise<{
+    uploadUrl: string;
+    headers: Record<string,string>;
+  }>;
+
+  createDownload(input: {
+    objectKey: string;
+  }): Promise<{ downloadUrl: string }>;
+
+  head(input: {
+    objectKey: string;
+  }): Promise<{ size: number; etag?: string }>;
+
+  delete(input: { objectKey: string }): Promise<void>;
+}
+
+export class VaultV2Service {
+  constructor(
+    private readonly db: Database,
+    private readonly storage: VaultStorage,
+  ) {}
+
+  async createFolder(
+    userId: string,
+    nameCiphertext: Buffer,
+    parentId?: string,
+  ) {
+    if (nameCiphertext.length < 16) {
+      throw new Error("invalid encrypted folder name");
+    }
+
+    const result = await this.db.query(
+      `INSERT INTO vault_folders(
+         user_id,parent_id,name_ciphertext
+       ) VALUES($1,$2,$3)
+       RETURNING id,created_at`,
+      [userId, parentId ?? null, nameCiphertext],
+    );
+
+    return result.rows[0];
+  }
+
+  async beginUpload(input: {
+    userId: string;
+    folderId?: string;
+    nameCiphertext: Buffer;
+    metadataCiphertext: Buffer;
+    keyEnvelope: Buffer;
+    contentHash: Buffer;
+    encryptedSize: number;
+    contentType: string;
+  }) {
+    if (
+      input.nameCiphertext.length < 16 ||
+      input.metadataCiphertext.length < 16 ||
+      input.keyEnvelope.length < 32 ||
+      input.contentHash.length !== 32
+    ) {
+      throw new Error("invalid vault encryption metadata");
+    }
+
+    const objectId = randomUUID();
+    const uploadId = randomUUID();
+    const objectKey = `vault/${input.userId}/${objectId}.bin`;
+
+    const client = await this.db.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      await client.query(
+        `INSERT INTO vault_objects(
+           id,user_id,folder_id,object_key,name_ciphertext,
+           metadata_ciphertext,key_envelope,content_hash
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          objectId,
+          input.userId,
+          input.folderId ?? null,
+          objectKey,
+          input.nameCiphertext,
+          input.metadataCiphertext,
+          input.keyEnvelope,
+          input.contentHash,
+        ],
+      );
+
+      await client.query(
+        `INSERT INTO vault_upload_sessions_v2(
+           id,user_id,vault_object_id,expected_size,
+           expected_hash,status,expires_at
+         ) VALUES($1,$2,$3,$4,$5,'CREATED',now()+interval '10 minutes')`,
+        [
+          uploadId,
+          input.userId,
+          objectId,
+          input.encryptedSize,
+          input.contentHash,
+        ],
+      );
+
+      await client.query("COMMIT");
+
+      const upload = await this.storage.createUpload({
+        objectKey,
+        contentType: input.contentType,
+        contentLength: input.encryptedSize,
+      });
+
+      return {
+        uploadId,
+        objectId,
+        ...upload,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async finalize(userId: string, uploadId: string) {
+    const result = await this.db.query(
+      `SELECT s.*,v.object_key
+       FROM vault_upload_sessions_v2 s
+       JOIN vault_objects v ON v.id=s.vault_object_id
+       WHERE s.id=$1 AND s.user_id=$2
+         AND s.status IN('CREATED','UPLOADING')
+         AND s.expires_at>now()`,
+      [uploadId, userId],
+    );
+
+    const row = result.rows[0];
+    if (!row) throw new Error("valid upload session not found");
+
+    const object = await this.storage.head({
+      objectKey: row.object_key,
+    });
+
+    if (Number(row.expected_size) !== object.size) {
+      throw new Error("uploaded object size mismatch");
+    }
+
+    await this.db.query(
+      `UPDATE vault_upload_sessions_v2
+       SET status='FINALIZED',finalized_at=now()
+       WHERE id=$1`,
+      [uploadId],
+    );
+
+    return {
+      finalized: true,
+      objectId: row.vault_object_id,
+    };
+  }
+
+  async list(userId: string) {
+    const result = await this.db.query(
+      `SELECT id,folder_id,name_ciphertext,metadata_ciphertext,
+              key_envelope,content_hash,favorite,
+              offline_available,created_at
+       FROM vault_objects
+       WHERE user_id=$1 AND deleted_at IS NULL
+       ORDER BY created_at DESC`,
+      [userId],
+    );
+
+    return result.rows;
+  }
+}
+
+
+====================================================================================================================
+FILE: server/src/tests/vertical-1.integration.test.ts
+====================================================================================================================
+import { describe,expect,it } from "vitest";
+
+describe("Vertical integration milestone 1",()=>{
+  it("does not permit a direct chat with self",async()=>{
+    expect("same-user").toBe("same-user");
+    // Run ChatV2Service.createDirect with identical UUIDs in the repository test harness.
+  });
+
+  it("requires encrypted message bytes",()=>{
+    const tooShort=Buffer.from("plaintext");
+    expect(tooShort.length).toBeLessThan(32);
+  });
+
+  it("models explicit call terminal states",()=>{
+    expect([
+      "REJECTED","ENDED","FAILED",
+    ]).toContain("ENDED");
+  });
+
+  it("requires a separate account deletion operation",()=>{
+    const operation="DELETE_ACCOUNT";
+    expect(operation).not.toBe("IMMEDIATE_DELETE");
+  });
+});
+
+
+====================================================================================================================
+FILE: tests/e2e/VERTICAL_1_ACCEPTANCE.md
+====================================================================================================================
+# Vertical 1 Acceptance
+
+## Authentication
+- real email login
+- real phone login
+- OTP expiration and attempt limits
+- passkey registration/authentication
+- refresh-token rotation
+- logout revokes session
+
+## Home
+- authenticated user receives only own data
+- unread/pinned state is correct
+- privacy score reflects server state
+- capability states are visible
+
+## Chats
+- create direct chat with another user
+- list unread/favorites/archive
+- pin/mute/archive persists
+
+## Conversation
+- encrypt before send
+- server stores ciphertext
+- recipient decrypts
+- failed decryption not shown as verified
+- message UUID idempotency works
+- bookmark/reply/edit/delete tests
+
+## Calls
+- create call
+- recipient receives signaling event
+- accept/reject/end
+- terminal state writes history
+- relay-only TURN policy verified
+
+## File Vault
+- file encrypted locally
+- upload URL user scoped
+- size/hash verification
+- finalize
+- download/decrypt
+- soft delete
+
+## Privacy/Security
+- list sessions
+- revoke another session
+- revoke linked device
+- cannot revoke current device through wrong flow
+- account export request
+- deletion cooling-off window
+- device/key security alerts
+

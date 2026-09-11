@@ -16,7 +16,7 @@ export default function PrivacyCenterScreen() {
   const service = useMemo(
     () =>
       new PrivacyCenterService(
-        process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080",
+        process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080",
         () => accessTokenProvider.getAccessToken(),
       ),
     [],

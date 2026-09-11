@@ -22,44 +22,11 @@ import { AccountProvider, useAccounts } from "../account/AccountContext";
 import { AccountSecureStorage } from "../account/AccountSecureStorage";
 import { AccountSessionStore } from "../account/AccountSessionStore";
 import { setActiveAccountSessionResolver } from "../services/session";
+import { createSessionRefresher } from "../services/session-refresh";
 
 const sessionStore = new AccountSessionStore(new AccountSecureStorage());
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
-const refreshes = new Map<string, Promise<Awaited<ReturnType<typeof sessionStore.load>>>>();
-
-async function loadFreshSession(userId: string) {
-  const stored = await sessionStore.load(userId);
-  if (!stored || new Date(stored.expiresAt).getTime() > Date.now() + 30_000) return stored;
-
-  const existing = refreshes.get(userId);
-  if (existing) return existing;
-  const refresh = (async () => {
-    const response = await fetch(`${API_BASE_URL}/v1/auth/sessions/refresh`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ refreshToken: stored.refreshToken })
-    });
-    if (!response.ok) {
-      await sessionStore.remove(userId);
-      return null;
-    }
-    const next = await response.json() as {
-      accessToken: string;
-      accessTokenExpiresIn: number;
-      refreshToken: string;
-    };
-    const session = {
-      ...stored,
-      accessToken: next.accessToken,
-      refreshToken: next.refreshToken,
-      expiresAt: new Date(Date.now() + next.accessTokenExpiresIn * 1000).toISOString()
-    };
-    await sessionStore.save(session);
-    return session;
-  })().finally(() => refreshes.delete(userId));
-  refreshes.set(userId, refresh);
-  return refresh;
-}
+const loadFreshSession = createSessionRefresher(sessionStore, API_BASE_URL);
 
 /**
  * Bridges the AccountProvider React context to the module-level
@@ -85,7 +52,7 @@ function AccountSessionBridge() {
 }
 
 export default function RootLayout() {
-  const [fontsReady] = useFonts({
+  const [fontsReady, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
     PlusJakartaSans_600SemiBold,
@@ -96,7 +63,7 @@ export default function RootLayout() {
   // Holding the first paint avoids the flash where every screen renders in the
   // system face and then reflows once the real one arrives -- on Home that
   // shifts the whole layout, because the type is what sizes the cards.
-  if (!fontsReady) return <View style={{ flex: 1, backgroundColor: "#FFFFFF" }} />;
+  if (!fontsReady && !fontError) return <View style={{ flex: 1, backgroundColor: "#FFFFFF" }} />;
 
   return (
     <SafeAreaProvider>

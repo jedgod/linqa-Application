@@ -12,7 +12,7 @@ const defaults: UserSettings = {
 
 export default function StorageSettingsScreen() {
   const service = useMemo(() => new SettingsService(
-    process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080", accessTokenProvider
+    process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080", accessTokenProvider
   ), []);
   const [settings, setSettings] = useState(defaults);
   const [error, setError] = useState("");

@@ -35,6 +35,11 @@ secrets/
 !server/src/security/secrets/**
 
 # Logs & temporary
+.runtime/
+.runtime-*
+*.tsbuildinfo
+.kotlin/
+.cxx/
 *.log
 tmp/
 temp/

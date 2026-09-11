@@ -1,0 +1,1563 @@
+﻿[
+    {
+        "Action":  "Delete",
+        "Source":  ".runtime-linqa-current.png",
+        "Destination":  "",
+        "Bytes":  101965,
+        "SHA256":  "2F09D48F199B510C5AEC3AC5FFCF708548B9D382556B4DE0C2F0FE5CD1259EB6"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  ".runtime-linqa-home-launched-2.png",
+        "Destination":  "",
+        "Bytes":  101295,
+        "SHA256":  "BC0B65C4B8714282527CAD09B65E77A498486620F361D4466DB92C5E90A5A433"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  ".runtime-linqa-home-launched.png",
+        "Destination":  "",
+        "Bytes":  101642,
+        "SHA256":  "8DA85BCF0F6B6AFA98199579B950949E1680D24F38381CAC3B1F9A13E8620EE3"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  ".runtime-linqa-live-home-auth.png",
+        "Destination":  "",
+        "Bytes":  507896,
+        "SHA256":  "932823D1DC43693D21777E404EF5B54FD520717C1A4CB2228D96FD5D6BC6C650"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  ".runtime-linqa-live-home-auth.xml",
+        "Destination":  "",
+        "Bytes":  37507,
+        "SHA256":  "DC1FDDA7A6115FC440D739EAD133E04B568101B76EF111B2BB2CCB4078D99F8C"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  ".runtime-linqa-live-home.png",
+        "Destination":  "",
+        "Bytes":  101921,
+        "SHA256":  "73E4620747B4764C4CF44FC38A06FE48840096F4B81A6553F72F3F3F4D3D21A8"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  ".runtime-linqa-live-home.xml",
+        "Destination":  "",
+        "Bytes":  239973,
+        "SHA256":  "54B754F5A898F80C1C3372A2CAF631A2E8BBC0EFDA1BCA57522EE910E03F3414"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "claudeassess.txt",
+        "Destination":  "docs/reference/assessments/claudeassess.txt",
+        "Bytes":  70348,
+        "SHA256":  "56AC04A78BB1DA12630F72ADD117B1385A4C71B3AD6C200FB6EE037484E808C4"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "codex-assess.txt",
+        "Destination":  "docs/reference/assessments/codex-assess.txt",
+        "Bytes":  17921,
+        "SHA256":  "C3EFEDFD46E6FD85AE4A7E7DDCFA5A0131CDA3C802302B0EDF787676530F2BBD"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "codex-production-remediation.txt",
+        "Destination":  "docs/reference/assessments/codex-production-remediation.txt",
+        "Bytes":  3673,
+        "SHA256":  "3367CD9D4161507CB5BC89F0A1D106A723FCFCDAFE064A13E75F5FBED783FDE9"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "codex-ultra-30-pack-assessment.txt",
+        "Destination":  "docs/reference/assessments/codex-ultra-30-pack-assessment.txt",
+        "Bytes":  21914,
+        "SHA256":  "C7F3F440E0022141C79FECFD770A4A0238E7C51B11637E8F85227D7C7CAFF926"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "codex.assess_08-08-2026.txt",
+        "Destination":  "docs/reference/assessments/codex.assess_08-08-2026.txt",
+        "Bytes":  39360,
+        "SHA256":  "8988D27D6A755F56912A43AE8D92A690C48155C01A3D6F20B8D2B5A1BB867DEF"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "CountryLinqa_DISCOVERY_SETTINGS_1_TO_6_FULL_CODE.txt",
+        "Destination":  "docs/reference/implementation-notes/CountryLinqa_DISCOVERY_SETTINGS_1_TO_6_FULL_CODE.txt",
+        "Bytes":  22744,
+        "SHA256":  "BCF8C8F023966202DA76B4300F828D49974D4630F1F6194CFD4675834FCC4D52"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_active.xml",
+        "Destination":  "",
+        "Bytes":  5976,
+        "SHA256":  "422178E7FE78AC734CD6D636CF95175BCFE37A65605BC6576142328AAD976D23"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_after_continue.xml",
+        "Destination":  "",
+        "Bytes":  6329,
+        "SHA256":  "05917C3631302D3C1813A245855F2CB26F1FF23A04A5932AE18F50187D88F913"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_after_fix.xml",
+        "Destination":  "",
+        "Bytes":  5976,
+        "SHA256":  "422178E7FE78AC734CD6D636CF95175BCFE37A65605BC6576142328AAD976D23"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_after_reverse.xml",
+        "Destination":  "",
+        "Bytes":  5380,
+        "SHA256":  "C0EF524F706355E8E23C1B368C0806047EDD0FFBD11A2FB5A08CD221849A1F3F"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_after_send_02.xml",
+        "Destination":  "",
+        "Bytes":  4696,
+        "SHA256":  "9E4DD4F0BCF7A47E43CFC334300B51A161102448D430E08F69C5CFE709433F14"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_countrylinqa_check.xml",
+        "Destination":  "",
+        "Bytes":  6328,
+        "SHA256":  "D69727237297639B2FF61EFD872F2FF52373B852D6BB78B147EBCDB190AAF1D5"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_galaxy_main.xml",
+        "Destination":  "",
+        "Bytes":  6323,
+        "SHA256":  "FE540600BD801C06221015595BD6E472EEEACF239FF36A57855F3EF0EF8AC880"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_home_latest.xml",
+        "Destination":  "",
+        "Bytes":  5976,
+        "SHA256":  "422178E7FE78AC734CD6D636CF95175BCFE37A65605BC6576142328AAD976D23"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_login_01.xml",
+        "Destination":  "",
+        "Bytes":  4698,
+        "SHA256":  "7541A01493EE7278600FC32293658593C08B7FA2ED59D9DD411122999A7FA1E5"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_login_02.xml",
+        "Destination":  "",
+        "Bytes":  4698,
+        "SHA256":  "7541A01493EE7278600FC32293658593C08B7FA2ED59D9DD411122999A7FA1E5"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_signin_smoke.xml",
+        "Destination":  "",
+        "Bytes":  5976,
+        "SHA256":  "422178E7FE78AC734CD6D636CF95175BCFE37A65605BC6576142328AAD976D23"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_ui_1.xml",
+        "Destination":  "",
+        "Bytes":  5749,
+        "SHA256":  "22ECF42A9446603FE0669352778A9C4949164458F7EDA49B3BBE05076E1F9848"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_ui_2.xml",
+        "Destination":  "",
+        "Bytes":  2439,
+        "SHA256":  "B065646433593790E39B6BE8AFE3CB8791389EFF925DD450756375AD34DD37D5"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_ui_4.xml",
+        "Destination":  "",
+        "Bytes":  5713,
+        "SHA256":  "77D1BA379C1BCDE810053415EA0725D50EBC151D48AA1135AAF5EC40C6F2477A"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_ui_final.xml",
+        "Destination":  "",
+        "Bytes":  5749,
+        "SHA256":  "22ECF42A9446603FE0669352778A9C4949164458F7EDA49B3BBE05076E1F9848"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_ui_proof.xml",
+        "Destination":  "",
+        "Bytes":  5713,
+        "SHA256":  "77D1BA379C1BCDE810053415EA0725D50EBC151D48AA1135AAF5EC40C6F2477A"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "device_ui_second.xml",
+        "Destination":  "",
+        "Bytes":  2439,
+        "SHA256":  "B065646433593790E39B6BE8AFE3CB8791389EFF925DD450756375AD34DD37D5"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxy-linqa-check.xml",
+        "Destination":  "",
+        "Bytes":  4141,
+        "SHA256":  "9C6FBAE325176A507C3EC48F4CC802C482A6B0976BF978C4EB53E25F8C8935A7"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxy-linqa-launch.png",
+        "Destination":  "",
+        "Bytes":  110294,
+        "SHA256":  "EE4026E1E41D4039A69F9366888CFBD805D096452309C7B85DA83D30D17B6F21"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxyA037-linqa-current.png",
+        "Destination":  "",
+        "Bytes":  40365,
+        "SHA256":  "06490F5D4F587003851776B3797677BF7784C32668DC3CB4095C63BE6ACB216F"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxyA037-linqa-final-otp.png",
+        "Destination":  "",
+        "Bytes":  40009,
+        "SHA256":  "63C9D23D3B68CA09394EF5BE7399569C34355A53D95B36F43FB14458E16CDB7A"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxyA037-linqa-native-core-loaded.png",
+        "Destination":  "",
+        "Bytes":  178819,
+        "SHA256":  "AAB769C17309B4C215B0B14E1A54EB69753C2180B438F2AF852CED1D96070F88"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxyA037-linqa-otp.png",
+        "Destination":  "",
+        "Bytes":  41611,
+        "SHA256":  "6D81D9E0EB0A02BB206EA928EB0AA2FE68445F6905FDAA98EEAE01AD64181256"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxyA037-linqa-ui.xml",
+        "Destination":  "",
+        "Bytes":  5027,
+        "SHA256":  "6826479DA82E7FDD86DC2DCBF7BD2C16291FB12BA09C8A1A521E555ECE23287C"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxyA037-linqa.png",
+        "Destination":  "",
+        "Bytes":  95970,
+        "SHA256":  "C4069174C74D73478EEBD625BCAE745777A53F9C3103242D30692F8B98B50723"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxy_after_tap_dump.xml",
+        "Destination":  "",
+        "Bytes":  26508,
+        "SHA256":  "110499C88B3E85B4619CB31B9D0D30CFF99C1AB9D68A0863632DC5D46E1AA9D6"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxy_launch.png",
+        "Destination":  "",
+        "Bytes":  230992,
+        "SHA256":  "51E62B34BC8F2EF6212FA267B18ED96A1CC488E96263FCD31B012455DE48515E"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxy_validation.xml",
+        "Destination":  "",
+        "Bytes":  6323,
+        "SHA256":  "FE540600BD801C06221015595BD6E472EEEACF239FF36A57855F3EF0EF8AC880"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "galaxy_window_dump.xml",
+        "Destination":  "",
+        "Bytes":  26508,
+        "SHA256":  "110499C88B3E85B4619CB31B9D0D30CFF99C1AB9D68A0863632DC5D46E1AA9D6"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "linqa-device-screen.png",
+        "Destination":  "",
+        "Bytes":  0,
+        "SHA256":  "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "linqa-diagnose.txt",
+        "Destination":  "docs/reference/assessments/linqa-diagnose.txt",
+        "Bytes":  7838,
+        "SHA256":  "42E969D8D36E875958A5B3F02324E8EFFFB1897D1DD9412303A6A8099F07ECC0"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "linqa-ui.xml",
+        "Destination":  "",
+        "Bytes":  4980,
+        "SHA256":  "BF1E1F73BB97F69E6C9620D5EC2FD9167E779BEF306FF4F748B0039E934B75D3"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "linqaAndroid.png",
+        "Destination":  "",
+        "Bytes":  1594015,
+        "SHA256":  "8150CCBA7178BAEE6AEE2BD99EDB2D05342C009C5FFD63D0A87DFCA34A9E241A"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "LinqaFeatures.txt",
+        "Destination":  "docs/reference/implementation-notes/LinqaFeatures.txt",
+        "Bytes":  18520,
+        "SHA256":  "4914ACCCB769FC82A85985B84A7F4309BEDB87FB85161B6DD4725DBDEE02B130"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "linqa_account_created.xml",
+        "Destination":  "",
+        "Bytes":  6324,
+        "SHA256":  "573CDB3AF8507681C75E5D933AA366B71D0A8A576B1E6FD311C0910311B5E3BD"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Action_Wiring_Vertical_Integration_Milestone_1_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Action_Wiring_Vertical_Integration_Milestone_1_Code_Notepad.txt",
+        "Bytes":  56288,
+        "SHA256":  "372F6745B5B39B509C410D31773AA97E4C375A9228C0BC8411BA8E89552701C4"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Additive_Closure_Implementation_No_Duplicates_v1.0.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Additive_Closure_Implementation_No_Duplicates_v1.0.txt",
+        "Bytes":  464,
+        "SHA256":  "73F2E4530A83BA4A5B2B6DA8CB5B4509FB1C7AAB31EBBF4F0991A3D7BEBCA16A"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Advanced_Phone_Email_Authentication_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Advanced_Phone_Email_Authentication_Code_Notepad.txt",
+        "Bytes":  747,
+        "SHA256":  "4D1FA8B605C83F512F77FB4CF64C0F69AEA7D9F35E29C397DC9D33C93DD8A6A9"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Calls_Home_Screen(1).tsx",
+        "Destination":  "docs/reference/designs/Linqa_Calls_Home_Screen(1).tsx",
+        "Bytes":  22882,
+        "SHA256":  "60B608B40DEB47CCFBC2D5A0ACA95529006A6C2F07BD5A4314D0805D3AA553A3"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Calls_Home_Screen.tsx",
+        "Destination":  "docs/reference/designs/Linqa_Calls_Home_Screen.tsx",
+        "Bytes":  22222,
+        "SHA256":  "D9B467F511C989F1254F1EF2CE17936E3F6AC9453F9B4EB12692E8DEDACE7FBF"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Calls_Production_Integration_v2.tsx",
+        "Destination":  "docs/reference/designs/Linqa_Calls_Production_Integration_v2.tsx",
+        "Bytes":  15319,
+        "SHA256":  "EDD3F74B977A3794496B8ACDEAA407DE94927082805262C075AD743D07698521"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Chat_Dynamic_Additions_v1.0_IMPLEMENTATION_NOTEPAD.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Chat_Dynamic_Additions_v1.0_IMPLEMENTATION_NOTEPAD.txt",
+        "Bytes":  26706,
+        "SHA256":  "AE2B1D4663C66BD82474C98E58B3794688BF5A6DB352B7DEE9A9EA4B5C3F04EE"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Chat_Production_Backend_Realtime_v2.0_IMPLEMENTATION_NOTEPAD.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Chat_Production_Backend_Realtime_v2.0_IMPLEMENTATION_NOTEPAD.txt",
+        "Bytes":  37845,
+        "SHA256":  "DFC927F555DF6B5F250F513397DFE7AAC8EEF132AB454FC7677C24D29750E2C5"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Comprehensive_Gap_Remediation_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Comprehensive_Gap_Remediation_Code_Notepad.txt",
+        "Bytes":  741,
+        "SHA256":  "8A2F8FA97A74ECE4B7219CEA8153C1F83E7C034DA7C494B0B4D7365EFD0DB524"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "linqa_device_confirm.xml",
+        "Destination":  "",
+        "Bytes":  6323,
+        "SHA256":  "FE540600BD801C06221015595BD6E472EEEACF239FF36A57855F3EF0EF8AC880"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "linqa_device_enrollment.xml",
+        "Destination":  "",
+        "Bytes":  6324,
+        "SHA256":  "573CDB3AF8507681C75E5D933AA366B71D0A8A576B1E6FD311C0910311B5E3BD"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "LINQA_Dynamic_Mobile_Information_Architecture.txt",
+        "Destination":  "docs/reference/implementation-notes/LINQA_Dynamic_Mobile_Information_Architecture.txt",
+        "Bytes":  14333,
+        "SHA256":  "A183A9F583B129C99BC3B1FDD0D86D5CF9024B2EF8A400A06354A77E9F93A7EB"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Final_Application_Closure_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Final_Application_Closure_Code_Notepad.txt",
+        "Bytes":  737,
+        "SHA256":  "401E1D1C7D1D379E6BCBD2F9C068D83A982921CFAC98A74340F767C5D6A3A800"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Final_Release_Closure_Full_Code_NOTEPAD.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Final_Release_Closure_Full_Code_NOTEPAD.txt",
+        "Bytes":  47764,
+        "SHA256":  "F70E92C21B7A471381F34698393EB6152C7E88B43C26B0F6718594E27684DC1A"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Full_34_Module_Interface_API_Server_DB_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Full_34_Module_Interface_API_Server_DB_Code_Notepad.txt",
+        "Bytes":  750,
+        "SHA256":  "E747B6724B4BC4257EB952D33C8BF04D747E63F5ADFEC28B411F4D0702F0C685"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Full_Gap_Closure_Implementation_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Full_Gap_Closure_Implementation_Code_Notepad.txt",
+        "Bytes":  743,
+        "SHA256":  "B5BBE0050BE29DC687E42A80F30CFED0579B360A91381CB9279C50D0667C0A9C"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_G0_to_G4_Green_Gate_Full_Code_NOTEPAD.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_G0_to_G4_Green_Gate_Full_Code_NOTEPAD.txt",
+        "Bytes":  52552,
+        "SHA256":  "C005A7AA17BDB79A93627CB607995727117D733AA66E25DCA8AFCAB738F1D1FC"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_G5_Production_GA_Assurance_Full_Code_NOTEPAD.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_G5_Production_GA_Assurance_Full_Code_NOTEPAD.txt",
+        "Bytes":  35549,
+        "SHA256":  "0F289FBF719F7E0E187052233D4B0E9E4B85325F442FC1AE415CDED8960E2F8F"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_High_Sophistication_Production_Hardening_Code.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_High_Sophistication_Production_Hardening_Code.txt",
+        "Bytes":  1413,
+        "SHA256":  "F25E7C4560377B51B8EA57621B7874B8F4C60E3C6F7DE9BE546999507DAE9D87"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Home_Implementation_Completion_Pack_v1.1.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Home_Implementation_Completion_Pack_v1.1.txt",
+        "Bytes":  37795,
+        "SHA256":  "FFE80DFFD06B24C70E0F3005A3E6B1D3C4F61C97987A5F6D137A67B89BB33EB2"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Home_Production_Closure_Pack_v1.0.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Home_Production_Closure_Pack_v1.0.txt",
+        "Bytes":  56432,
+        "SHA256":  "A5E88A4C0C4EA2B983418BF3B9E721E7200132BA7D906B959A319DE577495947"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Industrial_Standard_Completion_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Industrial_Standard_Completion_Code_Notepad.txt",
+        "Bytes":  1411,
+        "SHA256":  "CB5E5F593CCDC35A0005A24A6CBE11B77A37EB25E5C933EDADE6CC9CB527B86B"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Milestone_3_Production_Federation_Scale_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Milestone_3_Production_Federation_Scale_Code_Notepad.txt",
+        "Bytes":  1420,
+        "SHA256":  "16B409EE4E7FD0F731BC0091DE4C6905CD7750DD7FEBBC40CC9F4EB58C3E7BE6"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Milestone_4_GA_Hardening_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Milestone_4_GA_Hardening_Code_Notepad.txt",
+        "Bytes":  1405,
+        "SHA256":  "6B1E1561CF032772BAE09BA20D3D861071A30C05402DC151D0FA7DC73A41140E"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Milestone_Execution_and_Launch_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Milestone_Execution_and_Launch_Code_Notepad.txt",
+        "Bytes":  1411,
+        "SHA256":  "628D288B3F2D0202B1F65F4AF278FBC1DFBC2FAA5F2EF28C79CF443C4ED4233A"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Multi_Account_Genuine_Mobile_Verification_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Multi_Account_Genuine_Mobile_Verification_Code_Notepad.txt",
+        "Bytes":  1422,
+        "SHA256":  "CAB7AA86865247645B5904C09F37E8DA55104C1F70EC79A3DC8B780D997A8F42"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_New_Mobile_Features_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_New_Mobile_Features_Code_Notepad.txt",
+        "Bytes":  467,
+        "SHA256":  "55CCB805F5A68EFEF111EB6035A02F00343097E2F77FFE5BD46FE3891E83F20D"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Next_Advanced_Addition_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Next_Advanced_Addition_Code_Notepad.txt",
+        "Bytes":  1403,
+        "SHA256":  "931DB378E0D7F9A127AAA3B1695DFBE71E2B3CC38102A6BD22559FD666B8BE86"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Next_Mobile_Features_Addition_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Next_Mobile_Features_Addition_Code_Notepad.txt",
+        "Bytes":  1410,
+        "SHA256":  "7A8D50BCA7AF0E5D1D38B4E87CD854E26FFBAA6C023B1BE1E63A1E889EF63575"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "linqa_otp_screen.xml",
+        "Destination":  "",
+        "Bytes":  6324,
+        "SHA256":  "573CDB3AF8507681C75E5D933AA366B71D0A8A576B1E6FD311C0910311B5E3BD"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_PhoneFirst_RecoveryEmail_MultiAccount_Full_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_PhoneFirst_RecoveryEmail_MultiAccount_Full_Code_Notepad.txt",
+        "Bytes":  1423,
+        "SHA256":  "AAE0A94629FDF8F4BF6E7DDD2AE4D18F0B21C4524E84BDE388DC6DDA5469FBD5"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Private_Key_Boundary_Hardening_Two_Device_Certification_Closure_Pack_v1.0.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Private_Key_Boundary_Hardening_Two_Device_Certification_Closure_Pack_v1.0.txt",
+        "Bytes":  48185,
+        "SHA256":  "CDC85DD01A42A610FCD1CF86E509CA0A0C3ECB8B0911D70E27402EC3C091F150"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Production_Gap_Closure_v1.0_NOTEPAD.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Production_Gap_Closure_v1.0_NOTEPAD.txt",
+        "Bytes":  58308,
+        "SHA256":  "84A5C27B09CC893F8327569A387E72ABB1F876601AE535986286BD0815804E48"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Real_Vertical_Slice_Backend_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Real_Vertical_Slice_Backend_Code_Notepad.txt",
+        "Bytes":  1408,
+        "SHA256":  "C441B93611A1B312676B6CECD9597C1A19879D67B077CF3C7F43B7E2D2C7EC66"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "linqa_refined_login.xml",
+        "Destination":  "",
+        "Bytes":  6324,
+        "SHA256":  "573CDB3AF8507681C75E5D933AA366B71D0A8A576B1E6FD311C0910311B5E3BD"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_REMAINING_FEATURE_CORRECTIONS_COMPLETE_CODE.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_REMAINING_FEATURE_CORRECTIONS_COMPLETE_CODE.txt",
+        "Bytes":  22233,
+        "SHA256":  "9B39CF8B5520658A9273E6073EEF7C5377CFA161BE3FF774602C13043C4CE97E"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "linqa_retry.xml",
+        "Destination":  "",
+        "Bytes":  6323,
+        "SHA256":  "FE540600BD801C06221015595BD6E472EEEACF239FF36A57855F3EF0EF8AC880"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Stages_11_to_15_Comprehensive_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Stages_11_to_15_Comprehensive_Code_Notepad.txt",
+        "Bytes":  1410,
+        "SHA256":  "A69F49B123EEC714596C91C1EAF73B9579A5DC534F5B0C0FC2BF3ACA15465C2F"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Stages_16_to_20_Comprehensive_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Stages_16_to_20_Comprehensive_Code_Notepad.txt",
+        "Bytes":  1410,
+        "SHA256":  "12CC1B3F15670A48F53F1BCA0EA53ECCC182AB16F7A851B7E47B657A8582B0C8"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Stages_1_to_30_Live_UI_Wiring_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Stages_1_to_30_Live_UI_Wiring_Code_Notepad.txt",
+        "Bytes":  1410,
+        "SHA256":  "952CA66FED42B4663C8CF1571BBED60E23FD557D00D988EA880DF4DFE8A4DDB6"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Stages_1_to_5_Comprehensive_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Stages_1_to_5_Comprehensive_Code_Notepad.txt",
+        "Bytes":  1408,
+        "SHA256":  "6CE79CCE7E870390C2A42FABF237267C6CAD515467077FA7118EE9C1396CEB15"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Stages_21_to_30_Comprehensive_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Stages_21_to_30_Comprehensive_Code_Notepad.txt",
+        "Bytes":  1410,
+        "SHA256":  "11C293950EAC87E9E39BF222DC5FB7C6D876EA385002F8FB8409CFB5D71BED02"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Stages_31_to_40_Comprehensive_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Stages_31_to_40_Comprehensive_Code_Notepad.txt",
+        "Bytes":  1410,
+        "SHA256":  "CDB701600DBBA5C5033C5B19416A29BC4142CD30A0DC3F35B0AD4BBC2813FBF1"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Stages_6_to_10_Comprehensive_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Stages_6_to_10_Comprehensive_Code_Notepad.txt",
+        "Bytes":  740,
+        "SHA256":  "E4F7A775C10F1EDCC75F4F974B26686426637FEE3BF26BC25E95D5DC5A7F8819"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Three_Production_Milestones_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Three_Production_Milestones_Code_Notepad.txt",
+        "Bytes":  739,
+        "SHA256":  "E88A4D7CCD7DF864050D1C28678C0666739B95D65C4B6C85C73C010D4012EDA0"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_UniFFI_JNA_Private_Key_Boundary_Tests_CI_Guards_v1.0.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_UniFFI_JNA_Private_Key_Boundary_Tests_CI_Guards_v1.0.txt",
+        "Bytes":  474,
+        "SHA256":  "A287DDDBED52E31539B4AB8A4A5EAD368A8233BF130CDC66B7F2070D62494751"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_Vertical_Integration_Milestone_2_Three_Device_Code_Notepad.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_Vertical_Integration_Milestone_2_Three_Device_Code_Notepad.txt",
+        "Bytes":  757,
+        "SHA256":  "A2A1FC517EA7A69469061CC9C4B5F67D722D165338F25548F9F1BE817E98B838"
+    },
+    {
+        "Action":  "Move",
+        "Source":  "Linqa_World_Welcome_Tailwind_Shadcn_COMPLETE_CODE.txt",
+        "Destination":  "docs/reference/implementation-notes/Linqa_World_Welcome_Tailwind_Shadcn_COMPLETE_CODE.txt",
+        "Bytes":  13485,
+        "SHA256":  "BB2B93B69210B04685A97BF0E0E25E69B3B34A9D56AEA50755AFE07B82E57D28"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "michael-account-server-direct.stderr.log",
+        "Destination":  "",
+        "Bytes":  0,
+        "SHA256":  "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "michael-account-server-direct.stdout.log",
+        "Destination":  "",
+        "Bytes":  29680,
+        "SHA256":  "132EEEEB54AB3179A4A89B86DFCB7BE7DFEF4B9AAF997EA65CB145AA64C78271"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "michael-account-server.stderr.log",
+        "Destination":  "",
+        "Bytes":  0,
+        "SHA256":  "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "michael-account-server.stdout.log",
+        "Destination":  "",
+        "Bytes":  150,
+        "SHA256":  "12E9745DC20017AC3CBB4FA5F371A2B96C61A8C29BB04193472E57A15FEB1836"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/e2ee-after-verify.png",
+        "Destination":  "",
+        "Bytes":  184027,
+        "SHA256":  "BC167530423157BE1082A0C776AF081C3FF3DB2C45FA784841E3EA2748BD4ECF"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/e2ee-chat-opened.png",
+        "Destination":  "",
+        "Bytes":  34767,
+        "SHA256":  "31AC3B84576EFE92F92F4602CE923F7A7947E026FB30F6364C8AFE7FAC371467"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/e2ee-fresh-launch.png",
+        "Destination":  "",
+        "Bytes":  40820,
+        "SHA256":  "0C6CA2F8EA6702B4B2A0BE60CB184C47B23FA2DB104C1B3EBECBA0CC3F3DC99B"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/e2ee-login-typed.png",
+        "Destination":  "",
+        "Bytes":  93457,
+        "SHA256":  "2F1EA745F94A9F33B60FD068FF718053E452FD18D93D48C65ED8DD9E76D32D2B"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/e2ee-message-sent.png",
+        "Destination":  "",
+        "Bytes":  35109,
+        "SHA256":  "DAE5C0BED3600ABC22450757F0282720DB1941A09E932BFFFE849A244D2AC212"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/e2ee-message-sent2.png",
+        "Destination":  "",
+        "Bytes":  41531,
+        "SHA256":  "43723B8ACB48D6190E3D14C878C624467F7359E0C77FD43B8D99F991E607C9D2"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/e2ee-otp-typed.png",
+        "Destination":  "",
+        "Bytes":  95247,
+        "SHA256":  "6827DE53B5F23D05ADA2B960100F82DF9551A324C7DF5C3AD630BD68FE4A7604"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/mobile-chats.png",
+        "Destination":  "",
+        "Bytes":  36480,
+        "SHA256":  "452B9DB5C8AA5EDEF1288C2CBA1E23DCE5A3F44BC9F2CDE4B2504A46396848E6"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/mobile-home.png",
+        "Destination":  "",
+        "Bytes":  30472,
+        "SHA256":  "DB1CA6419B2F0824DB576951169C07EFFC241B78086F572AF6F2C9233B0EE6B2"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/mobile-settings.png",
+        "Destination":  "",
+        "Bytes":  35901,
+        "SHA256":  "341220E066D7FC8694506B1956F2E01834A6BE2DC5274E6C6FB3DB6ED1654F94"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/pk-hardening-final.png",
+        "Destination":  "",
+        "Bytes":  183688,
+        "SHA256":  "30D2453760540217B85A6CE01AA56CE98DE09247C18C4541E2FFEB40702B1E37"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/pk-hardening-login.png",
+        "Destination":  "",
+        "Bytes":  94196,
+        "SHA256":  "D20524B7C2E39F1C28B32AE15E7E4E19A097D076C19A441D2FDCCA6444A44EC7"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/pk-hardening-otp.png",
+        "Destination":  "",
+        "Bytes":  95941,
+        "SHA256":  "4C2CACC0FB719F1A51222192BAEC46F51111E59E5CCD6DD189B2AFC5B601C26E"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "screenshots-now/pk-hardening-typed.png",
+        "Destination":  "",
+        "Bytes":  93144,
+        "SHA256":  "7F5E3DCC038AFA97D25FC336E1FD3F039C7F9CBC740723D34631F9225B63F6F8"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/androidbuild.log",
+        "Destination":  "",
+        "Bytes":  31798,
+        "SHA256":  "53210E049BABF136A1C9F99B62076C6ABBD4F34362B3644F3E104F01EABE4F37"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/backend.log",
+        "Destination":  "",
+        "Bytes":  6457,
+        "SHA256":  "1F9613D2F79B46BA0208FEBD81025DFA07ED83E54C9A584F3D6D92241633397D"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy-linqa-live.png",
+        "Destination":  "",
+        "Bytes":  25778,
+        "SHA256":  "36BF9A88FA3C60479496D8F4559BB463446B2DC806EF3E1616A94400BCD80DBD"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy-linqa-now.png",
+        "Destination":  "",
+        "Bytes":  26275,
+        "SHA256":  "94B76C95F524E037F970B4DAB51BDAA752FE797B4D9C5F492BD421527661FAC0"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/linqa_after_login.xml",
+        "Destination":  "",
+        "Bytes":  12371,
+        "SHA256":  "A18481F26A480AB42ADE569B338501C93599F4E8022A731F4096E95E54684FD9"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/linqa_after_otp.xml",
+        "Destination":  "",
+        "Bytes":  13008,
+        "SHA256":  "000909EA77227E3505DE15DEC12B29A839C06B41B2AABEE1C44DA0ADA0DAF6EE"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/linqa_after_verify.xml",
+        "Destination":  "",
+        "Bytes":  13008,
+        "SHA256":  "000909EA77227E3505DE15DEC12B29A839C06B41B2AABEE1C44DA0ADA0DAF6EE"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/linqa_live.xml",
+        "Destination":  "",
+        "Bytes":  6324,
+        "SHA256":  "573CDB3AF8507681C75E5D933AA366B71D0A8A576B1E6FD311C0910311B5E3BD"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/linqa_login.xml",
+        "Destination":  "",
+        "Bytes":  6324,
+        "SHA256":  "573CDB3AF8507681C75E5D933AA366B71D0A8A576B1E6FD311C0910311B5E3BD"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/linqa_ui.xml",
+        "Destination":  "",
+        "Bytes":  6324,
+        "SHA256":  "573CDB3AF8507681C75E5D933AA366B71D0A8A576B1E6FD311C0910311B5E3BD"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/after-enroll.png",
+        "Destination":  "",
+        "Bytes":  48425,
+        "SHA256":  "88A8DA8FA558E4C284A886C96C910CC761E92BBAE256C4E677141DB71F4D7DD2"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-boot.png",
+        "Destination":  "",
+        "Bytes":  15140,
+        "SHA256":  "1DFE9F61C0293C6FF02CA697EB062C28706F0935BF82025C8796787EE6123D61"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-calendar.png",
+        "Destination":  "",
+        "Bytes":  107449,
+        "SHA256":  "D655816C4157683C245C94180D0E02A3863C4BF5F11121A9A2626C014AA7244F"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-cancelled.png",
+        "Destination":  "",
+        "Bytes":  105827,
+        "SHA256":  "1A860A995BE45F46A37C9A236AF8A7EC8B4A5EAB8E16D6C9E84A6E981534B945"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-final.png",
+        "Destination":  "",
+        "Bytes":  127632,
+        "SHA256":  "0F01B8CD0335F6C7E5E8304242CD533E06F22B9F71D5C20CF3F2FC1BE54DC460"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-history.png",
+        "Destination":  "",
+        "Bytes":  176152,
+        "SHA256":  "5242ED38B6FE2D0DB3D9CBF3F7B81E68983CE53F95A1DBA870F648A453EA29A6"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-list-final.png",
+        "Destination":  "",
+        "Bytes":  85468,
+        "SHA256":  "ADF181C5CFE47BB94940FD6411F9581F133E83BDFB778C89A3B91B04C0EF28DC"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-list.png",
+        "Destination":  "",
+        "Bytes":  112748,
+        "SHA256":  "CDF05698D68E11022209B352DB2B8265F7F0AE17574831F9858A6174EE637E0C"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-list2.png",
+        "Destination":  "",
+        "Bytes":  247221,
+        "SHA256":  "C9FDE7EA4697F874AFF13B731EB1EBEDB99BB5327A6A2FE3ACE6A24E8E7F53E4"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-list3.png",
+        "Destination":  "",
+        "Bytes":  85942,
+        "SHA256":  "29692E0646EDD55938419EEF6572675931230FD4FD411AA01E52D4318F93FA31"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-new.png",
+        "Destination":  "",
+        "Bytes":  100380,
+        "SHA256":  "D36EA825219BDA836ABC6708F5BD8F32EE373B20C69026D9B6637EE8FB2EAE29"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-picker.png",
+        "Destination":  "",
+        "Bytes":  112532,
+        "SHA256":  "F327798B6166C30FA81ABBB6E4E4604C873629C5571E2228889C3978FDDE7D65"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-placed.png",
+        "Destination":  "",
+        "Bytes":  126645,
+        "SHA256":  "59A7041150451B68FB101C6D64040695B014A9FC69E799EF6B4EA6D5586DCB07"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-plus.png",
+        "Destination":  "",
+        "Bytes":  105457,
+        "SHA256":  "7D84571D97A6E28EB49AD28F2B89AC747CF50F0573CFCB23871FE869F7096A9C"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-presets.png",
+        "Destination":  "",
+        "Bytes":  110894,
+        "SHA256":  "68FF7952FAE79100F458B8E53A359DC48511B544FD2DEE6DEE54CD7A48F1382E"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-redesigned.png",
+        "Destination":  "",
+        "Bytes":  468012,
+        "SHA256":  "F3BAA31B47E10F4AF2DEA0DB0B63383D47EBE9932E0189780267872F774687DC"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-scheduled.png",
+        "Destination":  "",
+        "Bytes":  123799,
+        "SHA256":  "735484E594F85264AC70C7D98047190C66FF45B32911244F518428D358C2F8AC"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/calls-v2.png",
+        "Destination":  "",
+        "Bytes":  120761,
+        "SHA256":  "B64B1E749A8643A7B895199DE964FA61877BC5CC1AF55E5437DDEF5E0640BA27"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/customize.png",
+        "Destination":  "",
+        "Bytes":  147804,
+        "SHA256":  "340734E12BD89C7C812AE2CFE6A90DC9993D4642F73E8740E898621D419B0A68"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/home-1.png",
+        "Destination":  "",
+        "Bytes":  14742,
+        "SHA256":  "3DE38A96041FCC5EC8808DD1C2D528AFF7B87C38639049990DDFF57ED361E46E"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/home-2.png",
+        "Destination":  "",
+        "Bytes":  11429,
+        "SHA256":  "EACE213A0F069488552234D9B47BC6D44C132595C28D458BCD49166F459FFC1D"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/home-LIVE-scrolled.png",
+        "Destination":  "",
+        "Bytes":  160171,
+        "SHA256":  "9222C4BD49938E307E3CF48C7EF726F12090D48F6921356922AA2B211C35A253"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/home-live.png",
+        "Destination":  "",
+        "Bytes":  175982,
+        "SHA256":  "FC368050DAC018472306E6794020493A79E8E6AB0574E5EC9D587FFD28B807FA"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/home-scrolled.png",
+        "Destination":  "",
+        "Bytes":  138019,
+        "SHA256":  "E20756EF796CE4D1D29549ABC02F22B630BA39216D5E82B7E3E225DB5F22A4EC"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/news-screen.png",
+        "Destination":  "",
+        "Bytes":  170056,
+        "SHA256":  "715D88D614F9535199D51CD40A300771F468F59AE4064C7E0A01F252B2EA8D0E"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/otp-entered.png",
+        "Destination":  "",
+        "Bytes":  85320,
+        "SHA256":  "42EECB51EA3C5C26D62D3FC44F16AD8BB16C19CF355EF9E63E930A020DD3DC61"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/phone-entered.png",
+        "Destination":  "",
+        "Bytes":  89670,
+        "SHA256":  "A4F6750AA8C57087D49125D009153FDF5C2902862B6FD33D25EC9E19838B0339"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/spotlight-hidden.png",
+        "Destination":  "",
+        "Bytes":  155393,
+        "SHA256":  "EA7F62C3FD5F626004CFB287C51C7E2C6E50C4B709F009770D5287FE00978FE9"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-1.xml",
+        "Destination":  "",
+        "Bytes":  18060,
+        "SHA256":  "5569FE14064D5B8A3EC14DBEAD9FB2F6213548AED4DF7FA3CB48CCC7C8560788"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-2.xml",
+        "Destination":  "",
+        "Bytes":  7422,
+        "SHA256":  "D2C87F7389A239854E3802B274A7453D17D825DB66F60B644EB0BA6FFE3CD654"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-3.xml",
+        "Destination":  "",
+        "Bytes":  9143,
+        "SHA256":  "FF9E7FCC21C885EA7773C9E73636EA7B8F62146E1438F0E27EC6760E4F8D5014"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-4.xml",
+        "Destination":  "",
+        "Bytes":  7429,
+        "SHA256":  "4402E4D4CF9E0E78E3D31ACC6678BD9936D50B89DEC311DE56A60E1131E0B277"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-5.xml",
+        "Destination":  "",
+        "Bytes":  8648,
+        "SHA256":  "3D61A516309F96655278C566CFD2E7A47DC973222918404CEF2B69707E35ACCA"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-6.xml",
+        "Destination":  "",
+        "Bytes":  9412,
+        "SHA256":  "D6A126CA45C856F48D0810CB4C2C2F5A8669A6FC373844BBA09AF406E821315C"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-7.xml",
+        "Destination":  "",
+        "Bytes":  9739,
+        "SHA256":  "2A4F8AC8B1A31242A7B35578C19AA7A4F8A01A65538053EBF919D1FD3B94274F"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-8.xml",
+        "Destination":  "",
+        "Bytes":  15359,
+        "SHA256":  "F1CFEA3B524AC57E5FBFAB8C094B0D6DAB14D131B1B2CA47FF8FC9FF566CD11F"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-9.xml",
+        "Destination":  "",
+        "Bytes":  14176,
+        "SHA256":  "DA4FF5CCEED8DA08616F5E721433107C88B28C8366F10B5AB15540C06C7E0923"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-back.xml",
+        "Destination":  "",
+        "Bytes":  7367,
+        "SHA256":  "48959D274744C0AF379AC0C419DDD06192F3E52CB2BFEF06AD31872C416595FF"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-calls-0.xml",
+        "Destination":  "",
+        "Bytes":  18060,
+        "SHA256":  "5569FE14064D5B8A3EC14DBEAD9FB2F6213548AED4DF7FA3CB48CCC7C8560788"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-check.xml",
+        "Destination":  "",
+        "Bytes":  2439,
+        "SHA256":  "B065646433593790E39B6BE8AFE3CB8791389EFF925DD450756375AD34DD37D5"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-check2.xml",
+        "Destination":  "",
+        "Bytes":  39505,
+        "SHA256":  "6C9C51A7350679A3EE078E527431114CA7F7C7642F8F701EC36C8AFE0959D6BA"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-hidden.xml",
+        "Destination":  "",
+        "Bytes":  37731,
+        "SHA256":  "206E42D398FB5B69D6A7D49547C61DF9FE86FF5FADA46F9626F8494166D062F6"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-login.xml",
+        "Destination":  "",
+        "Bytes":  7370,
+        "SHA256":  "875BD3FB5306D532DAA54D1B703F46C6D67DFBB8A0357F5864F94638F18828F6"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-otp2.xml",
+        "Destination":  "",
+        "Bytes":  9081,
+        "SHA256":  "912C55D025618EDB8889CDA18D2565D5E5A5A2EA68AD6D5FEE5614C36F541BEB"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-otp3.xml",
+        "Destination":  "",
+        "Bytes":  9092,
+        "SHA256":  "37FADAA8D2B7ADCA4A7F67A68B59093A564B4F0BD5D6291C6655478F4440355B"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-otp4.xml",
+        "Destination":  "",
+        "Bytes":  9081,
+        "SHA256":  "B573F6A9DB15B5D8148FA9E4920F2A194EFFFB9D39506EA9C37A47B0E3439799"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-otp5.xml",
+        "Destination":  "",
+        "Bytes":  9092,
+        "SHA256":  "37FADAA8D2B7ADCA4A7F67A68B59093A564B4F0BD5D6291C6655478F4440355B"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-otp6.xml",
+        "Destination":  "",
+        "Bytes":  9092,
+        "SHA256":  "CF1411F44CBC4A09CA1785C1C8422291978478DB826BD836415D72FB3814E69D"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-politics.xml",
+        "Destination":  "",
+        "Bytes":  17448,
+        "SHA256":  "F14AE12E196D83FCB10B5B20035D290173454A78880710F3B18A727DD37015EA"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-post-login.xml",
+        "Destination":  "",
+        "Bytes":  39836,
+        "SHA256":  "890236AB600D764E46E47FCC3443715CC9D4D5F1FBFEEC0106E4722E54817841"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-sched1.xml",
+        "Destination":  "",
+        "Bytes":  12606,
+        "SHA256":  "19224B75A49DE50CE52F07C6DA2F9AC2EBA664F4EB836D2151EAB6AEA83D58CF"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/ui-video.xml",
+        "Destination":  "",
+        "Bytes":  12612,
+        "SHA256":  "CC8730317D9FDD107EE067E648BA8943613196E52CC05540058F7A5B9E4DE760"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "tmp/galaxy/welcome.png",
+        "Destination":  "",
+        "Bytes":  246950,
+        "SHA256":  "2040B77693BC810179D6E1E2981FD07A8568D0FA824FFDDD13FB8E631E2EC959"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/web/tsconfig.tsbuildinfo",
+        "Destination":  "",
+        "Bytes":  3762,
+        "SHA256":  "403CAF22394F0BAEA408792C7DFA28526627D86591A3257ADD7DDED7C064B72C"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/device_ui_3.xml",
+        "Destination":  "",
+        "Bytes":  2439,
+        "SHA256":  "B065646433593790E39B6BE8AFE3CB8791389EFF925DD450756375AD34DD37D5"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/metadata.json",
+        "Destination":  "",
+        "Bytes":  2965,
+        "SHA256":  "C291D07618C6DF08CB59A0787C152B89BA6CCDB42220AB4B986AC415CD4ABA2B"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/02bc1fa7c0313217bde2d65ccbff40c9",
+        "Destination":  "",
+        "Bytes":  167,
+        "SHA256":  "FFA7EE45B76405BA73921495008F7D68C9DE6395F4B6941DB063465F6E382320"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/069d99eb1fa6712c0b9034a58c6b57dd",
+        "Destination":  "",
+        "Bytes":  483,
+        "SHA256":  "5300F50BE3659D17D8CEE868EC4E6C0D3F4E89944FD5899D3C20F6A767A045F5"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/0747a1317bbe9c6fc340b889ef8ab3ae",
+        "Destination":  "",
+        "Bytes":  332,
+        "SHA256":  "2325C53A73E54C438CBBC60DFFDD8B513D471BA42E2F56713EF404B95E0CA1FC"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/0a328cd9c1afd0afe8e3b1ec5165b1b4",
+        "Destination":  "",
+        "Bytes":  653,
+        "SHA256":  "9ADB8C5EFCA932E2B732B293DA813BD2E31952263056BCE9E2517FEC0F0B6A76"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/1190ab078c57159f4245a328118fcd9a",
+        "Destination":  "",
+        "Bytes":  201,
+        "SHA256":  "CBDF9213E55F65C48D076ACD8423B7C9AEE4F1B81101FF6C95A38C4CD8A86461"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/140c53a7643ea949007aa9a282153849",
+        "Destination":  "",
+        "Bytes":  13456,
+        "SHA256":  "A5CAEB4D395C5E32F1D5A30ACB382AEBC664F1BADFD149319907F2215E4E3E26"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/1681f34aaca71b8dfb70756bca331eb2",
+        "Destination":  "",
+        "Bytes":  25788,
+        "SHA256":  "DD8EE403BBCBF5E58B77DCA4AC03EBAFA13A284A3D87D8EA9CA490435A86FA48"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/19eeb73b9593a38f8e9f418337fc7d10",
+        "Destination":  "",
+        "Bytes":  138,
+        "SHA256":  "A69A2EDB5B6C60B8433D5B6D23C69F520CCD8A602F3F60E7996E489718BC175C"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/1f77739ca9ff2188b539c36f30ffa2be",
+        "Destination":  "",
+        "Bytes":  33736,
+        "SHA256":  "C651B8A67D3193206F622C3C3B0FBCA4A2F2727108C4212B52C1E2A2E84C9B31"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/20e71bdf79e3a97bf55fd9e164041578",
+        "Destination":  "",
+        "Bytes":  4752,
+        "SHA256":  "EFC79DA3C4C97DFB1571BFF6202958AB0529C5AA31E8392600578B3E359D1447"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/286d67d3f74808a60a78d3ebf1a5fb57",
+        "Destination":  "",
+        "Bytes":  928,
+        "SHA256":  "5D075E0C287C4F4441B5B5C8FC7EA5CD27C11BB617ECEA09755955BCB1889083"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/31b5ffea3daddc69dd01a1f3d6cf63c5",
+        "Destination":  "",
+        "Bytes":  66200,
+        "SHA256":  "16F92298587BAB2B469BC13C0DFC6D5D171BCA10BAD0C9053AD16BC023BF717D"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/35ba0eaec5a4f5ed12ca16fabeae451d",
+        "Destination":  "",
+        "Bytes":  207,
+        "SHA256":  "84CF5EB3B20250F69E0E4733BEB4DA5F417F0682892A5AD1B5E62570753C21B1"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/370dd5af19f8364907b6e2c41f45dbbf",
+        "Destination":  "",
+        "Bytes":  67976,
+        "SHA256":  "64F9FB623681F112261E9A2F97826782439F3925DEA8F44A57D1E4DB95BA6CFD"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/3a2ba31570920eeb9b1d217cabe58315",
+        "Destination":  "",
+        "Bytes":  70344,
+        "SHA256":  "7955CA14127B30412C114EB13CFD702B5DAB265FEB1880D1695D73CAA824CDE1"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/3b89dd103490708d19a95adcae52210e",
+        "Destination":  "",
+        "Bytes":  134040,
+        "SHA256":  "06F4D00923EA24697DF5DF0B92984175991D8BD25776A02D531BB401E393EC42"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/3cd68ccdb8938e3711da2e8831b85493",
+        "Destination":  "",
+        "Bytes":  645,
+        "SHA256":  "C86BB485EEE687E06C500FC4234F51A6784B4530C2AE11D0C76481110BCE3105"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/412dd9275b6b48ad28f5e3d81bb1f626",
+        "Destination":  "",
+        "Bytes":  465,
+        "SHA256":  "ACF691957A3BCCE7D195856DCE98A5CF14DCE10BEA28AA5C10B3550C078E23B5"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/4403c6117ec30c859bc95d70ce4a71d3",
+        "Destination":  "",
+        "Bytes":  258,
+        "SHA256":  "BA722FB24BFF0A4C52E656CDF205DEAC5C5DF85E5BAE2BF6D30713BD50C6D5F7"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/4e85bc9ebe07e0340c9c4fc2f6c38908",
+        "Destination":  "",
+        "Bytes":  356840,
+        "SHA256":  "EF149F08BDD2FF09A4E2C8573476B7B0F3FBB15B623954ADE59899E7175BEDDA"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/56c8d80832e37783f12c05db7c8849e2",
+        "Destination":  "",
+        "Bytes":  209376,
+        "SHA256":  "BC844B5B02D3F3ADABB514DE4E0C0208252D3123413BD03F6287FA446ACEE859"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/605ed7926cf39a2ad5ec2d1f9d391d3d",
+        "Destination":  "",
+        "Bytes":  202744,
+        "SHA256":  "3D06AF1F31CD83ACE7A265A014B8FB5DEE15770ECAC8F7A55555190E627E03C2"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/6148e7019854f3bde85b633cb88f3c25",
+        "Destination":  "",
+        "Bytes":  442604,
+        "SHA256":  "9C7FB9071A6C28582C6B84468CBFF2C7A71E02B17E3A3B4548A159938D22916B"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/61ca7e64b7d605716c57706cef640b9a",
+        "Destination":  "",
+        "Bytes":  220,
+        "SHA256":  "D03A5CD7A66EF10C5147916F9D5878B2D0A0A5AD46F405A31CD9967EFAA55AFD"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/778ffc9fe8773a878e9c30a6304784de",
+        "Destination":  "",
+        "Bytes":  100,
+        "SHA256":  "8B61A4C7EF70DC92753F0494976482F66FD4150EC23DFC772AB65E10373AFA55"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/78c625386b4d0690b421eb0fc78f7b9c",
+        "Destination":  "",
+        "Bytes":  266,
+        "SHA256":  "D05C9D30D79F45A78E5585A2E7EC67C6A06A883DD9137E1D5059E8C87B33CE76"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/a76d309774d33d9856f650bed4292a23",
+        "Destination":  "",
+        "Bytes":  56228,
+        "SHA256":  "57599360FC9B80BCE473B364F7F255B552019EC47462428018CB0E0F838462B4"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/ab19f4cbc543357183a20571f68380a3",
+        "Destination":  "",
+        "Bytes":  364,
+        "SHA256":  "27F4D229D440925BF7212D5DFFFA45D596B2C7B3BB2905C96B839B2081A1DBEB"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/adec7d6f310bc577f05e8fe06a5daccf",
+        "Destination":  "",
+        "Bytes":  423676,
+        "SHA256":  "31F099C13F6E4BA05F1B471BF170CB5493249474222917372DE3CA5CF29E6A1A"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/aff2c65b39a296d4f7e96d0f58169170",
+        "Destination":  "",
+        "Bytes":  334,
+        "SHA256":  "AB5613D2CE70FA67C5926E831353664945199FC195FA6FE76C5FE3CEC452E31A"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/b06871f281fee6b241d60582ae9369b9",
+        "Destination":  "",
+        "Bytes":  165548,
+        "SHA256":  "AA58F33F239A0FB02F5C7A6C45C043D7A9AC9A093335806694ECD6D4EDC0D6A8"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/b49ae8ab2dbccb02c4d11caaacf09eab",
+        "Destination":  "",
+        "Bytes":  313528,
+        "SHA256":  "94DAB9F1D5B13EA0769D124A2DA0D02433F3B99D6DEA5A07C0446A77158100C0"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/b62641afc9ab487008e996a5c5865e56",
+        "Destination":  "",
+        "Bytes":  1147844,
+        "SHA256":  "9E94D4DBE2E87EA495F0D42D879146BC74C4C4E910776A49154A15EEFA37EF59"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/c3273c9e5321f20d1e42c2efae2578c4",
+        "Destination":  "",
+        "Bytes":  728,
+        "SHA256":  "6C8F11BFD1C7E22769DC135C16ECD0E053BB55554DA88B9611D9CF71D12136F1"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/c79c3606a1cf168006ad3979763c7e0c",
+        "Destination":  "",
+        "Bytes":  134,
+        "SHA256":  "906666DD689346ADA232CE3689ADEF907B4257FA1B593F03638D2B9497F64884"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/d1ea1496f9057eb392d5bbf3732a61b7",
+        "Destination":  "",
+        "Bytes":  469,
+        "SHA256":  "C15EC72A74D13957211808313D5C35DEB7F7606C6D22DBDDCEB0000D4E0547AD"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/d2285965fe34b05465047401b8595dd0",
+        "Destination":  "",
+        "Bytes":  54056,
+        "SHA256":  "3F501DDB05C70829BBB51CFE9CA9FFF57F39E060457C257B3CCF25DF767F0870"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/d84e297c3b3e49a614248143d53e40ca",
+        "Destination":  "",
+        "Bytes":  141,
+        "SHA256":  "B1BC1810CA23E2C38CD76971C43591D726161061240D8B792B05757196DDB528"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/d8b800c443b8972542883e0b9de2bdc6",
+        "Destination":  "",
+        "Bytes":  188,
+        "SHA256":  "708A79CF561B8A2A4850CE0254584D3A5231046BE08FB7FADF4B6EDFDB31178B"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/d8e7601e3df962f83c62371ac14964d8",
+        "Destination":  "",
+        "Bytes":  502,
+        "SHA256":  "C4E54E6A0A7DE636AA153378FBC62EA4A41695BFEDF807F90DF7B18FFD733F67"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/e20945d7c929279ef7a6f1db184a4470",
+        "Destination":  "",
+        "Bytes":  56976,
+        "SHA256":  "7E1DD03DD4CE90B658052554CD7459DF16716717389A552FA4C6D56A5F8933E6"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/assets/f7c53c47a66934504fcbc7cc164895a7",
+        "Destination":  "",
+        "Bytes":  49404,
+        "SHA256":  "16DB348053EA112599E2A6356F6C1FA0735D00E2CA2472ACFADFFCDA90E2227C"
+    },
+    {
+        "Action":  "Delete",
+        "Source":  "clients/mobile/dist-android-check/_expo/static/js/android/entry-80810477224a8405d397ece5be4daceb.hbc",
+        "Destination":  "",
+        "Bytes":  2973406,
+        "SHA256":  "86A0077E6016206840B5AC44770ED8E631EFF5BDBE0FDBA73BFE5648AADCEB16"
+    }
+]

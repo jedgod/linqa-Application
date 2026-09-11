@@ -2,6 +2,8 @@ import type { Database } from "../db/pool.js";
 import type { AppConfig } from "../config.js";
 import { hashToken, issueAccessToken, randomToken } from "../auth/tokens.js";
 
+export class InvalidRefreshTokenError extends Error {}
+
 export class SessionService {
   constructor(
     private readonly db: Database,
@@ -84,7 +86,7 @@ export class SessionService {
       const row = result.rows[0];
 
       if (!row || row.revoked_at || new Date(row.expires_at).getTime() <= Date.now()) {
-        throw new Error("invalid refresh token");
+        throw new InvalidRefreshTokenError("invalid refresh token");
       }
 
       if (
@@ -98,11 +100,21 @@ export class SessionService {
           [row.token_family_id]
         );
         await client.query("COMMIT");
-        throw new Error("refresh token reuse detected");
+        throw new InvalidRefreshTokenError("refresh token reuse detected");
       }
 
       const nextRefreshToken = randomToken(48);
       const nextHash = hashToken(nextRefreshToken);
+
+      // Sign before committing rotation so a signing outage does not invalidate
+      // the only refresh token the device still has.
+      const accessToken = await issueAccessToken(this.config, {
+        userId: row.user_id,
+        subject: row.external_subject,
+        deviceId: row.device_id ?? undefined,
+        scopes: row.access_scope,
+        sessionId: row.id
+      });
 
       await client.query(
         `UPDATE auth_sessions
@@ -114,14 +126,6 @@ export class SessionService {
       );
 
       await client.query("COMMIT");
-
-      const accessToken = await issueAccessToken(this.config, {
-        userId: row.user_id,
-        subject: row.external_subject,
-        deviceId: row.device_id ?? undefined,
-        scopes: row.access_scope,
-        sessionId: row.id
-      });
 
       return {
         accessToken,

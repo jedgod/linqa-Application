@@ -17,6 +17,7 @@ import {
 import { publishOutboxBatch } from "../../chat/chat-outbox.service.js";
 import { claimJobs } from "../../chat/chat-delivery.worker.js";
 import { RealtimeHub } from "../../realtime/hub.js";
+import { ensureTestDatabase, type TestDatabase } from "../support/test-database.js";
 
 /**
  * Integration tests against a real PostgreSQL.
@@ -27,14 +28,18 @@ import { RealtimeHub } from "../../realtime/hub.js";
  * driver would assert that the code *calls* those statements, not that they
  * hold, so these run against the database or they do not run at all.
  *
- * Skipped when DATABASE_URL is absent, which keeps CI green without a
- * container while still failing loudly for anyone who has one.
+ * The database comes from `DATABASE_URL` if one is set, otherwise from a
+ * Testcontainers PostgreSQL started and migrated on demand. When neither is
+ * available the suite skips rather than fails: a red build on a laptop without
+ * Docker teaches people to ignore red builds.
  */
-const DATABASE_URL = process.env.DATABASE_URL;
-const suite = DATABASE_URL ? describe : describe.skip;
-
 let db: Database;
+let testDatabase: TestDatabase | null = null;
 const createdUsers: string[] = [];
+
+// Resolved before the suites are collected so `skipIf` sees a real answer.
+testDatabase = await ensureTestDatabase();
+const suite = testDatabase ? describe : describe.skip;
 
 async function makeUser(name: string): Promise<string> {
   const id = randomUUID();
@@ -63,12 +68,13 @@ function message(conversationId: string, senderUserId: string, clientMessageId =
 }
 
 beforeAll(async () => {
-  if (!DATABASE_URL) return;
-  db = new pg.Pool({ connectionString: DATABASE_URL, max: 12 }) as unknown as Database;
-});
+  if (!testDatabase) return;
+  db = new pg.Pool({ connectionString: testDatabase.connectionString, max: 12 }) as unknown as Database;
+  // Container startup plus migrations comfortably exceeds the default timeout.
+}, 180_000);
 
 afterAll(async () => {
-  if (!DATABASE_URL) return;
+  if (!testDatabase) return;
   if (createdUsers.length) {
     // `conversations.created_by_user_id` has no ON DELETE CASCADE, so the
     // conversations go first; that cascade clears members, messages, direct
@@ -78,7 +84,8 @@ afterAll(async () => {
     await db.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [createdUsers]);
   }
   await (db as unknown as pg.Pool).end();
-});
+  await testDatabase.stop();
+}, 60_000);
 
 suite("chat v2: direct conversation resolution", () => {
   it("collapses ten concurrent creates into one conversation", async () => {

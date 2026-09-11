@@ -1,0 +1,44 @@
+name: Mobile startup regression checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  startup:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            clients/mobile/package-lock.json
+      - run: npm ci
+        working-directory: server
+      - run: npm ci
+        working-directory: clients/mobile
+      - name: Startup and authentication regressions
+        run: node --import ./server/node_modules/tsx/dist/loader.mjs --test tests/mobile-startup.test.ts tests/auth-session-expiry.test.ts
+      - run: npm run typecheck
+        working-directory: clients/mobile
+      - run: npm run build
+        working-directory: server
+      - name: Build Android JavaScript bundle
+        if: runner.os == 'Linux'
+        env:
+          EXPO_OFFLINE: "1"
+          EXPO_PUBLIC_API_URL: http://127.0.0.1:8080
+        run: npx expo export --platform android --output-dir ../../.runtime/mobile-export
+        working-directory: clients/mobile

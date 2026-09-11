@@ -13,7 +13,7 @@ const border = "#e3e8f0";
 
 export default function CountryLinqaWorldScreen() {
   const router = useRouter();
-  const client = useMemo(() => new CountryLinqaService(process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080", () => accessTokenProvider.getAccessToken()), []);
+  const client = useMemo(() => new CountryLinqaService(process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080", () => accessTokenProvider.getAccessToken()), []);
   const [preferences, setPreferences] = useState<CountryLinqaPreferences | null>(null);
   useEffect(() => { client.preferences().then(setPreferences).catch(() => setPreferences(null)); }, [client]);
 

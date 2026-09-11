@@ -1,8 +1,10 @@
 import { loadConfig } from "../config.js";
 import { createPool } from "../db/pool.js";
 import { RealtimeHub } from "../realtime/hub.js";
-import { publishOutboxBatch, pruneOutbox } from "../chat/chat-outbox.service.js";
+import { publishOutboxBatch, pruneOutbox, startChatBusSubscriber } from "../chat/chat-outbox.service.js";
 import { runDeliveryBatch } from "../chat/chat-delivery.worker.js";
+import { createChatBus } from "../chat/chat-redis-bus.js";
+import { createServiceContainer } from "../bootstrap/service-container.js";
 
 /**
  * Chat background worker: outbox relay, delivery jobs and outbox pruning.
@@ -21,6 +23,17 @@ import { runDeliveryBatch } from "../chat/chat-delivery.worker.js";
 const config = loadConfig();
 const db = createPool(config);
 const hub = new RealtimeHub();
+
+// With Redis configured the worker's events reach every API node's sockets;
+// without it they reach nothing here, and clients pick them up from their own
+// node's relay or by replaying the outbox.
+const bus = createChatBus(config.REDIS_URL, (error) =>
+  console.warn(JSON.stringify({ worker: "chat", event: "redis_unavailable", error: error.message }))
+);
+startChatBusSubscriber(hub, bus);
+
+// Push needs the token vault and providers the container already assembles.
+const services = createServiceContainer(config, db);
 
 const OUTBOX_INTERVAL_MS = 1_000;
 const DELIVERY_INTERVAL_MS = 5_000;
@@ -44,13 +57,13 @@ let nextPruneAt = 0;
 log("started");
 while (!stopping) {
   try {
-    const published = await publishOutboxBatch(db, hub, 200);
+    const published = await publishOutboxBatch(db, hub, 200, bus);
     if (published) log("outbox_published", { published });
 
     const now = Date.now();
     if (now >= nextDeliveryAt) {
       nextDeliveryAt = now + DELIVERY_INTERVAL_MS;
-      const jobs = await runDeliveryBatch(db);
+      const jobs = await runDeliveryBatch(db, undefined, { push: services.push });
       if (jobs) log("delivery_batch", { jobs });
     }
     if (now >= nextPruneAt) {
@@ -66,4 +79,5 @@ while (!stopping) {
 }
 
 log("stopping");
+await bus.close();
 await db.end();

@@ -1,6 +1,24 @@
+import { randomUUID } from "node:crypto";
 import type { Database } from "../db/pool.js";
 import type { RealtimeHub } from "../realtime/hub.js";
+import type { ChatBus } from "./chat-redis-bus.js";
 import { withTransaction } from "./chat.service.js";
+
+/**
+ * Identifies this process on the shared bus.
+ *
+ * Redis delivers a publish to every subscriber including the publisher, so
+ * without an origin tag a node would deliver its own events twice -- once
+ * locally and once off the bus.
+ */
+const NODE_ID = randomUUID();
+
+/** What one node puts on the bus for the others to deliver. */
+interface BusFrame {
+  origin: string;
+  recipients: string[];
+  envelope: unknown;
+}
 
 /**
  * Transactional-outbox relay.
@@ -27,7 +45,8 @@ export interface OutboxRow {
 export async function publishOutboxBatch(
   db: Database,
   hub: RealtimeHub,
-  limit = 100
+  limit = 100,
+  bus?: ChatBus
 ): Promise<number> {
   const claimed = await withTransaction(db, async (client) => {
     const result = await client.query(
@@ -84,13 +103,37 @@ export async function publishOutboxBatch(
       occurredAt: new Date(row.createdAt).toISOString(),
       payload: row.payload
     };
-    for (const userId of membersByConversation.get(row.conversationId) ?? []) {
+    const recipients = membersByConversation.get(row.conversationId) ?? [];
+    for (const userId of recipients) {
       hub.sendToUser(userId, envelope);
     }
+    // Hand the same envelope to the other nodes. Recipient ids travel with it
+    // so a receiving node does not have to re-query membership for an event it
+    // may have no sockets for; Redis is inside the trust boundary.
+    bus?.publish({ origin: NODE_ID, recipients, envelope } satisfies BusFrame);
   }
 
   return claimed.length;
 }
+
+/**
+ * Delivers events published by *other* nodes to this node's sockets.
+ *
+ * Call once at boot. Frames from this process are ignored, so local delivery
+ * happens exactly once.
+ */
+export function startChatBusSubscriber(hub: RealtimeHub, bus: ChatBus): void {
+  bus.subscribe((payload) => {
+    const frame = payload as Partial<BusFrame>;
+    if (!frame || frame.origin === NODE_ID) return;
+    if (!Array.isArray(frame.recipients) || frame.envelope === undefined) return;
+    for (const userId of frame.recipients) {
+      if (typeof userId === "string") hub.sendToUser(userId, frame.envelope);
+    }
+  });
+}
+
+export const __testing = { NODE_ID };
 
 /**
  * Re-queues events that were claimed but never confirmed delivered.

@@ -3,6 +3,9 @@ export type CallStatus = "MISSED" | "REJECTED" | "COMPLETED" | "FAILED" | "CANCE
 export type PrivacyMode = "STANDARD" | "RELAY_ONLY";
 
 export type CallHistoryItem = {
+  /** ISO-3166 alpha-2 of the peer's *verified* country, never an IP guess. */
+  peerCountryCode?: string | null;
+  peerCountryName?: string | null;
   id: string;
   peerUserId: string;
   peerDisplayName: string;
@@ -30,6 +33,14 @@ export type PlacedCall = {
   createdAt: string;
   mode: string;
   privacyMode: PrivacyMode;
+};
+
+export type UpcomingCall = {
+  eventId: string;
+  callType: "AUDIO" | "VIDEO";
+  startsAt: string;
+  participantCount: number;
+  joinable: boolean;
 };
 
 export type JoinedScheduledCall = {
@@ -87,20 +98,38 @@ export class CallsService {
     const payload: unknown = text ? JSON.parse(text) : {};
 
     if (!response.ok) {
-      const error = (payload as { error?: string }).error;
-      if (response.status === 409 && error === "recipient_has_no_active_device") {
+      const envelope = payload as { code?: unknown; error?: unknown };
+      const nested =
+        envelope.error && typeof envelope.error === "object"
+          ? (envelope.error as { code?: unknown }).code
+          : undefined;
+      const code =
+        typeof envelope.code === "string"
+          ? envelope.code
+          : typeof envelope.error === "string"
+            ? envelope.error
+            : typeof nested === "string"
+              ? nested
+              : undefined;
+      if (
+        response.status === 409 &&
+        (code === "recipient_has_no_active_device" || code === "PEER_UNAVAILABLE")
+      ) {
         throw new NoActiveDeviceError();
       }
-      if (response.status === 401 && error === "device_bound_token_required") {
+      if (
+        (response.status === 401 || response.status === 403) &&
+        (code === "device_bound_token_required" || code === "DEVICE_BOUND_TOKEN_REQUIRED")
+      ) {
         throw new CallNotPermittedError();
       }
-      throw new Error(error ?? `Call request failed (${response.status}).`);
+      throw new Error(code ?? `Call request failed (${response.status}).`);
     }
 
     return payload as T;
   }
 
-  async listHistory(limit = 100): Promise<CallHistoryItem[]> {
+  async listHistory(limit = 50): Promise<CallHistoryItem[]> {
     const payload = await this.request<{ items?: unknown[] }>(`/v1/calls/history?limit=${limit}`);
     return (payload.items ?? []).map((raw) => {
       const item = raw as Record<string, unknown>;
@@ -112,9 +141,23 @@ export class CallsService {
         callType: (String(item.callType ?? item.call_type ?? "AUDIO").toUpperCase() as CallType),
         status: (String(item.status ?? "COMPLETED").toUpperCase() as CallStatus),
         durationSeconds: Number(item.durationSeconds ?? item.duration_seconds ?? 0),
-        createdAt: String(item.createdAt ?? item.created_at ?? new Date().toISOString())
+        createdAt: String(item.createdAt ?? item.created_at ?? new Date().toISOString()),
+        peerCountryCode: (item.peerCountryCode as string | null) ?? null,
+        peerCountryName: (item.peerCountryName as string | null) ?? null
       };
     });
+  }
+
+  /**
+   * The next scheduled call, with the server's own joinability verdict.
+   *
+   * `joinable` is not recomputed on the client: the window belongs to the
+   * server, and a device with a skewed clock must not be able to talk itself
+   * into a call room.
+   */
+  async upcoming(): Promise<UpcomingCall | null> {
+    const payload = await this.request<{ item: UpcomingCall | null }>("/v1/calls/upcoming");
+    return payload.item ?? null;
   }
 
   /**

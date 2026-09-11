@@ -4,7 +4,7 @@ import { useRouter } from "expo-router";
 import { LinqaSendService } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
 
 export default function LinqaSendJurisdiction() {
   const router = useRouter();

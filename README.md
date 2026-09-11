@@ -1,5 +1,17 @@
 # Linqa
 
+## Local Android launch
+
+Connect and authorize the phone over USB, then run `node scripts/start-mobile-usb.mjs`
+from this directory. The launcher starts the Expo mobile client (`com.linqa.mobile`),
+checks the API, and restores USB forwarding. Full setup and troubleshooting:
+[clients/mobile/README.md](clients/mobile/README.md).
+
+Historical implementation notes and assessments are now organized under
+[docs/reference](docs/reference/README.md). Put new local screenshots and logs in
+ignored `.runtime/`. The architecture and feature-status sections below contain
+historical assessments; a successful local launch is not a production release certification.
+
 **Secure messaging that outpaces WhatsApp, Signal, and Telegram.**
 
 Linqa is a next-generation end-to-end encrypted messenger built for 2026 and beyond.  

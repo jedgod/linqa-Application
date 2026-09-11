@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { GaHardeningService } from "../../services/ga-hardening.service";
 import { accessTokenProvider } from "../../services/session";
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
 
 const CATEGORIES = ["Messaging", "Calls", "Account & Login", "Devices", "File Vault", "Billing", "Enterprise", "Privacy", "Emergency"];
 

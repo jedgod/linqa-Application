@@ -5,7 +5,7 @@ import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
 import { normalizeIdentifier } from "../auth/normalize.js";
 import { AuthChallengeService } from "../services/auth-challenge.service.js";
-import { SessionService } from "../services/session.service.js";
+import { InvalidRefreshTokenError, SessionService } from "../services/session.service.js";
 import { hashIp, sha256 } from "../security/hash.js";
 import type { PhoneRegistrationService } from "../services/phone-registration.service.js";
 import type { OnboardingService } from "../services/onboarding.service.js";
@@ -241,8 +241,12 @@ export async function registerAuthRoutes(
       return await deps.sessionService.rotate({
         refreshToken: body.refreshToken
       });
-    } catch {
-      return reply.code(401).send({ error: "invalid_refresh_token" });
+    } catch (error) {
+      if (error instanceof InvalidRefreshTokenError) {
+        return reply.code(401).send({ error: "invalid_refresh_token" });
+      }
+      request.log.error({ err: error }, "session refresh temporarily unavailable");
+      return reply.code(503).send({ error: "session_refresh_unavailable" });
     }
   });
 }

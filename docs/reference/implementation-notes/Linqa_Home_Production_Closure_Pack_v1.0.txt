@@ -1,0 +1,1657 @@
+# LINQA HOME PRODUCTION CLOSURE PACK v1.0
+# Production hardening pack for:
+# - multi-provider news routing
+# - Redis/PostgreSQL durable caching
+# - publisher trust
+# - personalized feed aggregation
+# - telemetry
+# - exact-SHA evidence
+# - physical-device certification
+# - automated Home release gate
+#
+# Target stack:
+# - Server: Node.js + TypeScript + Express + PostgreSQL
+# - Optional cache: Redis
+# - Mobile: React Native / Expo
+#
+# IMPORTANT:
+# Adapt file paths/import aliases to the real Linqa repository.
+# This pack is fail-closed and does not fabricate news.
+
+===============================================================================
+0. RECOMMENDED FILE MAP
+===============================================================================
+
+server/
+  migrations/
+    040_home_production_closure.sql
+  src/
+    config/home-production.config.ts
+    services/home/
+      types.ts
+      publisher-trust.service.ts
+      news-provider.interface.ts
+      news-router.service.ts
+      durable-news-cache.service.ts
+      news-validation.service.ts
+      home-feed-aggregation.service.ts
+      home-personalization.service.ts
+      home-telemetry.service.ts
+      providers/
+        gdelt-news.provider.ts
+        rss-fallback.provider.ts
+    routes/
+      home-feed.production.ts
+    jobs/
+      refresh-global-news.job.ts
+      expire-breaking-news.job.ts
+    tests/
+      home-production-closure.test.ts
+
+scripts/
+  certify-home-device.mjs
+  collect-home-release-evidence.mjs
+  verify-home-release-gate.mjs
+
+evidence/
+  home/
+    .gitkeep
+
+===============================================================================
+1. POSTGRESQL MIGRATION
+file: server/migrations/040_home_production_closure.sql
+===============================================================================
+
+BEGIN;
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS home_news_publishers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  canonical_domain TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  country_code CHAR(2),
+  trust_status TEXT NOT NULL CHECK (
+    trust_status IN ('TRUSTED','LIMITED','BLOCKED','UNKNOWN')
+  ) DEFAULT 'UNKNOWN',
+  min_provider_score NUMERIC(5,4) NOT NULL DEFAULT 0.5000,
+  allow_breaking BOOLEAN NOT NULL DEFAULT FALSE,
+  allow_external_links BOOLEAN NOT NULL DEFAULT TRUE,
+  attribution_required BOOLEAN NOT NULL DEFAULT TRUE,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS home_news_articles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  canonical_url TEXT NOT NULL UNIQUE,
+  url_hash TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  summary TEXT,
+  image_url TEXT,
+  publisher_domain TEXT NOT NULL,
+  publisher_name TEXT NOT NULL,
+  provider_name TEXT NOT NULL,
+  provider_article_id TEXT,
+  category TEXT NOT NULL DEFAULT 'GENERAL',
+  country_code CHAR(2),
+  source_language TEXT,
+  published_at TIMESTAMPTZ NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lifecycle_state TEXT NOT NULL CHECK (
+    lifecycle_state IN (
+      'DISCOVERED','VALIDATED','DEDUPLICATED','PUBLISHED','UPDATED',
+      'CORRECTED','EXPIRED','REJECTED'
+    )
+  ) DEFAULT 'DISCOVERED',
+  breaking_until TIMESTAMPTZ,
+  content_fingerprint TEXT,
+  provider_score NUMERIC(5,4) NOT NULL DEFAULT 0,
+  validation_score NUMERIC(5,4) NOT NULL DEFAULT 0,
+  trust_score NUMERIC(5,4) NOT NULL DEFAULT 0,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_home_news_articles_published_at
+  ON home_news_articles(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_home_news_articles_country
+  ON home_news_articles(country_code, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_home_news_articles_category
+  ON home_news_articles(category, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_home_news_articles_state
+  ON home_news_articles(lifecycle_state, breaking_until);
+
+CREATE TABLE IF NOT EXISTS home_news_provider_health (
+  provider_name TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK (
+    state IN ('HEALTHY','DEGRADED','OPEN_CIRCUIT','DISABLED')
+  ) DEFAULT 'HEALTHY',
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  last_success_at TIMESTAMPTZ,
+  last_failure_at TIMESTAMPTZ,
+  circuit_open_until TIMESTAMPTZ,
+  moving_latency_ms NUMERIC(12,2),
+  success_rate NUMERIC(6,5) NOT NULL DEFAULT 1,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS home_news_cache_entries (
+  cache_key TEXT PRIMARY KEY,
+  payload JSONB NOT NULL,
+  etag TEXT,
+  fresh_until TIMESTAMPTZ NOT NULL,
+  stale_until TIMESTAMPTZ NOT NULL,
+  source TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS home_feed_preferences (
+  user_id UUID PRIMARY KEY,
+  hidden_sections TEXT[] NOT NULL DEFAULT '{}',
+  preferred_categories TEXT[] NOT NULL DEFAULT '{}',
+  followed_countries CHAR(2)[] NOT NULL DEFAULT '{}',
+  followed_topics TEXT[] NOT NULL DEFAULT '{}',
+  quick_actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  personalization_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS home_feed_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  jurisdiction_country CHAR(2) NOT NULL,
+  payload JSONB NOT NULL,
+  payload_hash TEXT NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  source_versions JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_home_feed_snapshots_user
+  ON home_feed_snapshots(user_id, generated_at DESC);
+
+CREATE TABLE IF NOT EXISTS home_release_evidence (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  git_sha TEXT NOT NULL,
+  server_artifact_sha256 TEXT,
+  android_apk_sha256 TEXT,
+  ios_artifact_sha256 TEXT,
+  device_model TEXT,
+  device_os TEXT,
+  certification_status TEXT NOT NULL CHECK (
+    certification_status IN ('PENDING','PASSED','FAILED')
+  ),
+  evidence_manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+  certified_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS home_release_gate_results (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  git_sha TEXT NOT NULL,
+  gate_name TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('PASS','FAIL','SKIP')),
+  details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_home_release_gate_results_sha
+  ON home_release_gate_results(git_sha, gate_name);
+
+COMMIT;
+
+===============================================================================
+2. CONFIGURATION
+file: server/src/config/home-production.config.ts
+===============================================================================
+
+export const homeProductionConfig = {
+  news: {
+    requestTimeoutMs: Number(process.env.HOME_NEWS_TIMEOUT_MS ?? 5500),
+    cacheFreshSeconds: Number(process.env.HOME_NEWS_CACHE_FRESH_SECONDS ?? 300),
+    cacheStaleSeconds: Number(process.env.HOME_NEWS_CACHE_STALE_SECONDS ?? 1800),
+    maxArticlesPerProvider: Number(process.env.HOME_NEWS_MAX_PER_PROVIDER ?? 40),
+    providerFailureThreshold: Number(process.env.HOME_NEWS_FAILURE_THRESHOLD ?? 3),
+    circuitOpenSeconds: Number(process.env.HOME_NEWS_CIRCUIT_SECONDS ?? 120),
+    requireHttps: true,
+    maxTitleLength: 180,
+    maxSummaryLength: 700,
+    maxUrlLength: 2048,
+  },
+  feed: {
+    snapshotTtlSeconds: Number(process.env.HOME_FEED_SNAPSHOT_TTL ?? 120),
+    maxNewsItems: Number(process.env.HOME_FEED_MAX_NEWS ?? 20),
+    maxUpcomingItems: 10,
+    maxContinueItems: 12,
+  },
+  release: {
+    requirePhysicalDeviceEvidence:
+      process.env.HOME_REQUIRE_DEVICE_EVIDENCE !== 'false',
+    allowedEvidenceAgeHours:
+      Number(process.env.HOME_EVIDENCE_MAX_AGE_HOURS ?? 72),
+  },
+};
+
+===============================================================================
+3. SHARED TYPES
+file: server/src/services/home/types.ts
+===============================================================================
+
+export type NewsLifecycle =
+  | 'DISCOVERED'
+  | 'VALIDATED'
+  | 'DEDUPLICATED'
+  | 'PUBLISHED'
+  | 'UPDATED'
+  | 'CORRECTED'
+  | 'EXPIRED'
+  | 'REJECTED';
+
+export type ProviderHealthState =
+  | 'HEALTHY'
+  | 'DEGRADED'
+  | 'OPEN_CIRCUIT'
+  | 'DISABLED';
+
+export interface RawNewsArticle {
+  providerName: string;
+  providerArticleId?: string;
+  title: string;
+  url: string;
+  summary?: string;
+  imageUrl?: string;
+  publisherName?: string;
+  publisherDomain?: string;
+  publishedAt: string;
+  category?: string;
+  countryCode?: string;
+  sourceLanguage?: string;
+  providerScore?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ValidatedNewsArticle extends RawNewsArticle {
+  canonicalUrl: string;
+  urlHash: string;
+  publisherDomain: string;
+  publisherName: string;
+  validationScore: number;
+  trustScore: number;
+  contentFingerprint: string;
+}
+
+export interface NewsQuery {
+  countryCode?: string;
+  categories?: string[];
+  limit: number;
+  breakingOnly?: boolean;
+}
+
+export interface HomeFeedResponse {
+  generatedAt: string;
+  jurisdictionCountry: string;
+  profile: unknown;
+  quickActions: unknown[];
+  notifications: unknown;
+  liveUpdates: unknown[];
+  spotlight?: unknown;
+  upcoming: unknown[];
+  continueYourDay: unknown[];
+  countryLinqa: unknown;
+  breakingAroundWorld: unknown[];
+  serviceState: {
+    news: 'LIVE' | 'STALE' | 'UNAVAILABLE';
+    personalized: boolean;
+  };
+}
+
+===============================================================================
+4. NEWS PROVIDER INTERFACE
+file: server/src/services/home/news-provider.interface.ts
+===============================================================================
+
+import { NewsQuery, RawNewsArticle } from './types';
+
+export interface NewsProvider {
+  readonly name: string;
+  readonly priority: number;
+  isConfigured(): boolean;
+  fetch(query: NewsQuery, signal: AbortSignal): Promise<RawNewsArticle[]>;
+}
+
+===============================================================================
+5. GDELT PROVIDER
+file: server/src/services/home/providers/gdelt-news.provider.ts
+===============================================================================
+
+import { NewsProvider } from '../news-provider.interface';
+import { NewsQuery, RawNewsArticle } from '../types';
+
+export class GdeltNewsProvider implements NewsProvider {
+  readonly name = 'GDELT_DOC_2';
+  readonly priority = 100;
+
+  isConfigured(): boolean {
+    return process.env.HOME_NEWS_GDELT_ENABLED !== 'false';
+  }
+
+  async fetch(query: NewsQuery, signal: AbortSignal): Promise<RawNewsArticle[]> {
+    const terms: string[] = [];
+    if (query.countryCode) terms.push(`sourcecountry:${query.countryCode}`);
+    if (query.categories?.length) terms.push(query.categories.join(' OR '));
+
+    const q = terms.length ? terms.join(' ') : 'world';
+    const url = new URL('https://api.gdeltproject.org/api/v2/doc/doc');
+    url.searchParams.set('query', q);
+    url.searchParams.set('mode', 'artlist');
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('maxrecords', String(Math.min(query.limit, 50)));
+    url.searchParams.set('sort', 'hybridrel');
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'LinqaHome/1.0',
+      },
+      signal,
+      redirect: 'error',
+    });
+
+    if (!response.ok) throw new Error(`GDELT_HTTP_${response.status}`);
+
+    const body = await response.json() as {
+      articles?: Array<{
+        url?: string;
+        title?: string;
+        seendate?: string;
+        socialimage?: string;
+        domain?: string;
+        language?: string;
+        sourcecountry?: string;
+      }>;
+    };
+
+    return (body.articles ?? [])
+      .filter(a => Boolean(a.url && a.title && a.seendate))
+      .map(a => ({
+        providerName: this.name,
+        title: String(a.title),
+        url: String(a.url),
+        imageUrl: a.socialimage || undefined,
+        publisherDomain: a.domain || undefined,
+        publisherName: a.domain || undefined,
+        publishedAt: String(a.seendate),
+        sourceLanguage: a.language || undefined,
+        countryCode: a.sourcecountry || query.countryCode,
+        providerScore: 0.70,
+        category: query.categories?.[0] || 'GENERAL',
+      }));
+  }
+}
+
+===============================================================================
+6. SECONDARY PROVIDER PLACEHOLDER
+file: server/src/services/home/providers/rss-fallback.provider.ts
+===============================================================================
+
+import { NewsProvider } from '../news-provider.interface';
+import { NewsQuery, RawNewsArticle } from '../types';
+
+export class RssFallbackProvider implements NewsProvider {
+  readonly name = 'APPROVED_RSS';
+  readonly priority = 50;
+
+  isConfigured(): boolean {
+    return Boolean(process.env.HOME_APPROVED_RSS_ENDPOINT);
+  }
+
+  async fetch(query: NewsQuery, signal: AbortSignal): Promise<RawNewsArticle[]> {
+    const endpoint = process.env.HOME_APPROVED_RSS_ENDPOINT;
+    if (!endpoint) return [];
+
+    const url = new URL(endpoint);
+    if (query.countryCode) url.searchParams.set('country', query.countryCode);
+
+    const response = await fetch(url, {
+      headers: { accept: 'application/json' },
+      signal,
+      redirect: 'error',
+    });
+
+    if (!response.ok) throw new Error(`APPROVED_RSS_HTTP_${response.status}`);
+
+    const body = await response.json() as { items?: RawNewsArticle[] };
+    return (body.items ?? []).slice(0, query.limit).map(item => ({
+      ...item,
+      providerName: this.name,
+    }));
+  }
+}
+
+===============================================================================
+7. PUBLISHER TRUST SERVICE
+file: server/src/services/home/publisher-trust.service.ts
+===============================================================================
+
+export class PublisherTrustService {
+  constructor(private readonly db: any) {}
+
+  async get(domain: string) {
+    const result = await this.db.query(
+      `SELECT canonical_domain, display_name, trust_status,
+              allow_breaking, allow_external_links,
+              attribution_required, min_provider_score
+       FROM home_news_publishers
+       WHERE canonical_domain = $1`,
+      [domain.toLowerCase()]
+    );
+
+    if (!result.rowCount) {
+      return {
+        canonicalDomain: domain.toLowerCase(),
+        displayName: domain.toLowerCase(),
+        trustStatus: 'UNKNOWN',
+        allowBreaking: false,
+        allowExternalLinks: true,
+        attributionRequired: true,
+        minProviderScore: 0.75,
+      };
+    }
+
+    const row = result.rows[0];
+    return {
+      canonicalDomain: row.canonical_domain,
+      displayName: row.display_name,
+      trustStatus: row.trust_status,
+      allowBreaking: row.allow_breaking,
+      allowExternalLinks: row.allow_external_links,
+      attributionRequired: row.attribution_required,
+      minProviderScore: Number(row.min_provider_score),
+    };
+  }
+
+  async assertAllowed(domain: string, providerScore: number) {
+    const trust = await this.get(domain);
+    if (trust.trustStatus === 'BLOCKED') throw new Error('PUBLISHER_BLOCKED');
+    if (!trust.allowExternalLinks) throw new Error('PUBLISHER_EXTERNAL_LINK_DISABLED');
+    if (providerScore < trust.minProviderScore) {
+      throw new Error('PUBLISHER_PROVIDER_SCORE_TOO_LOW');
+    }
+    return trust;
+  }
+}
+
+===============================================================================
+8. NEWS VALIDATION SERVICE
+file: server/src/services/home/news-validation.service.ts
+===============================================================================
+
+import crypto from 'node:crypto';
+import { RawNewsArticle, ValidatedNewsArticle } from './types';
+import { PublisherTrustService } from './publisher-trust.service';
+import { homeProductionConfig } from '../../config/home-production.config';
+
+function cleanText(value: string): string {
+  return value.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function sha256(input: string): string {
+  return crypto.createHash('sha256').update(input).digest('hex');
+}
+
+function normalizeHost(host: string): string {
+  return host.toLowerCase().replace(/^www\./, '');
+}
+
+export class NewsValidationService {
+  constructor(private readonly trustService: PublisherTrustService) {}
+
+  async validate(raw: RawNewsArticle): Promise<ValidatedNewsArticle> {
+    const title = cleanText(raw.title || '');
+    if (!title || title.length > homeProductionConfig.news.maxTitleLength) {
+      throw new Error('INVALID_NEWS_TITLE');
+    }
+
+    const parsed = new URL(raw.url);
+    if (homeProductionConfig.news.requireHttps && parsed.protocol !== 'https:') {
+      throw new Error('NEWS_URL_NOT_HTTPS');
+    }
+    if (raw.url.length > homeProductionConfig.news.maxUrlLength) {
+      throw new Error('NEWS_URL_TOO_LONG');
+    }
+
+    parsed.hash = '';
+    ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','fbclid','gclid']
+      .forEach(k => parsed.searchParams.delete(k));
+
+    const canonicalUrl = parsed.toString();
+    const domain = normalizeHost(parsed.hostname);
+    const providerScore = Math.max(0, Math.min(1, raw.providerScore ?? 0.5));
+    const trust = await this.trustService.assertAllowed(domain, providerScore);
+
+    const summary = raw.summary
+      ? cleanText(raw.summary).slice(0, homeProductionConfig.news.maxSummaryLength)
+      : undefined;
+
+    const publishedAt = new Date(raw.publishedAt);
+    if (!Number.isFinite(publishedAt.getTime())) {
+      throw new Error('INVALID_NEWS_PUBLISHED_AT');
+    }
+    if (publishedAt.getTime() > Date.now() + 5 * 60_000) {
+      throw new Error('NEWS_FUTURE_TIMESTAMP');
+    }
+
+    const contentFingerprint = sha256(
+      `${title.toLowerCase()}|${domain}|${publishedAt.toISOString().slice(0, 13)}`
+    );
+
+    const validationScore =
+      0.35 +
+      providerScore * 0.25 +
+      (trust.trustStatus === 'TRUSTED' ? 0.30 : trust.trustStatus === 'LIMITED' ? 0.15 : 0.05) +
+      (summary ? 0.05 : 0) +
+      (raw.imageUrl ? 0.05 : 0);
+
+    return {
+      ...raw,
+      title,
+      summary,
+      canonicalUrl,
+      urlHash: sha256(canonicalUrl),
+      publisherDomain: domain,
+      publisherName: raw.publisherName || trust.displayName || domain,
+      publishedAt: publishedAt.toISOString(),
+      validationScore: Math.min(1, validationScore),
+      trustScore: trust.trustStatus === 'TRUSTED' ? 1 : trust.trustStatus === 'LIMITED' ? 0.65 : 0.35,
+      contentFingerprint,
+    };
+  }
+}
+
+===============================================================================
+9. DURABLE REDIS + POSTGRES CACHE
+file: server/src/services/home/durable-news-cache.service.ts
+===============================================================================
+
+export class DurableNewsCacheService {
+  constructor(
+    private readonly db: any,
+    private readonly redis?: {
+      get(key: string): Promise<string | null>;
+      set(key: string, value: string, opts?: any): Promise<any>;
+    }
+  ) {}
+
+  async get<T>(key: string): Promise<{ value: T; stale: boolean } | null> {
+    if (this.redis) {
+      try {
+        const raw = await this.redis.get(`linqa:home:${key}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.staleUntil > Date.now()) {
+            return {
+              value: parsed.payload,
+              stale: parsed.freshUntil <= Date.now(),
+            };
+          }
+        }
+      } catch {}
+    }
+
+    const result = await this.db.query(
+      `SELECT payload, fresh_until, stale_until
+       FROM home_news_cache_entries
+       WHERE cache_key = $1 AND stale_until > now()`,
+      [key]
+    );
+
+    if (!result.rowCount) return null;
+
+    return {
+      value: result.rows[0].payload,
+      stale: new Date(result.rows[0].fresh_until).getTime() <= Date.now(),
+    };
+  }
+
+  async set<T>(key: string, payload: T, source: string, freshSeconds: number, staleSeconds: number) {
+    const freshUntil = new Date(Date.now() + freshSeconds * 1000);
+    const staleUntil = new Date(Date.now() + staleSeconds * 1000);
+
+    await this.db.query(
+      `INSERT INTO home_news_cache_entries
+       (cache_key, payload, fresh_until, stale_until, source)
+       VALUES ($1, $2::jsonb, $3, $4, $5)
+       ON CONFLICT (cache_key)
+       DO UPDATE SET payload = EXCLUDED.payload,
+                     fresh_until = EXCLUDED.fresh_until,
+                     stale_until = EXCLUDED.stale_until,
+                     source = EXCLUDED.source,
+                     updated_at = now()`,
+      [key, JSON.stringify(payload), freshUntil, staleUntil, source]
+    );
+
+    if (this.redis) {
+      try {
+        await this.redis.set(
+          `linqa:home:${key}`,
+          JSON.stringify({ payload, freshUntil: freshUntil.getTime(), staleUntil: staleUntil.getTime() }),
+          { PX: staleSeconds * 1000 }
+        );
+      } catch {}
+    }
+  }
+}
+
+===============================================================================
+10. TELEMETRY SERVICE
+file: server/src/services/home/home-telemetry.service.ts
+===============================================================================
+
+type Labels = Record<string, string | number | boolean>;
+
+export class HomeTelemetryService {
+  constructor(private readonly metrics?: {
+    increment(name: string, labels?: Labels): void;
+    observe(name: string, value: number, labels?: Labels): void;
+  }) {}
+
+  newsRequest(provider: string) {
+    this.metrics?.increment('linqa_news_provider_requests_total', { provider });
+  }
+  newsFailure(provider: string, reason: string) {
+    this.metrics?.increment('linqa_news_provider_failures_total', { provider, reason });
+  }
+  newsLatency(provider: string, ms: number) {
+    this.metrics?.observe('linqa_news_provider_latency_ms', ms, { provider });
+  }
+  cacheHit(stale: boolean) {
+    this.metrics?.increment(stale ? 'linqa_news_cache_stale_served_total' : 'linqa_news_cache_hits_total');
+  }
+  rejected(reason: string) {
+    this.metrics?.increment('linqa_news_articles_rejected_total', { reason });
+  }
+  homeFeedLatency(ms: number) {
+    this.metrics?.observe('linqa_home_feed_latency_ms', ms);
+  }
+  homeFeedFailure(reason: string) {
+    this.metrics?.increment('linqa_home_feed_failures_total', { reason });
+  }
+}
+
+===============================================================================
+11. MULTI-PROVIDER NEWS ROUTER
+file: server/src/services/home/news-router.service.ts
+===============================================================================
+
+import { NewsProvider } from './news-provider.interface';
+import { NewsQuery, ValidatedNewsArticle } from './types';
+import { NewsValidationService } from './news-validation.service';
+import { DurableNewsCacheService } from './durable-news-cache.service';
+import { HomeTelemetryService } from './home-telemetry.service';
+import { homeProductionConfig } from '../../config/home-production.config';
+
+function withTimeout(ms: number): AbortController {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  timer.unref?.();
+  return controller;
+}
+
+export class NewsRouterService {
+  constructor(
+    private readonly db: any,
+    private readonly providers: NewsProvider[],
+    private readonly validator: NewsValidationService,
+    private readonly cache: DurableNewsCacheService,
+    private readonly telemetry: HomeTelemetryService
+  ) {}
+
+  private cacheKey(query: NewsQuery): string {
+    return [
+      'news',
+      query.countryCode || 'GLOBAL',
+      (query.categories || []).sort().join(',') || 'ALL',
+      String(query.limit),
+      query.breakingOnly ? 'BREAKING' : 'NORMAL',
+    ].join(':');
+  }
+
+  async fetch(query: NewsQuery): Promise<{
+    articles: ValidatedNewsArticle[];
+    state: 'LIVE' | 'STALE' | 'UNAVAILABLE';
+  }> {
+    const key = this.cacheKey(query);
+    const cached = await this.cache.get<ValidatedNewsArticle[]>(key);
+
+    if (cached && !cached.stale) {
+      this.telemetry.cacheHit(false);
+      return { articles: cached.value, state: 'LIVE' };
+    }
+
+    const providers = [...this.providers]
+      .filter(p => p.isConfigured())
+      .sort((a, b) => b.priority - a.priority);
+
+    const accepted = new Map<string, ValidatedNewsArticle>();
+
+    for (const provider of providers) {
+      const health = await this.getProviderHealth(provider.name);
+      if (
+        health?.state === 'OPEN_CIRCUIT' &&
+        health.circuit_open_until &&
+        new Date(health.circuit_open_until).getTime() > Date.now()
+      ) continue;
+
+      const controller = withTimeout(homeProductionConfig.news.requestTimeoutMs);
+      const started = Date.now();
+
+      try {
+        this.telemetry.newsRequest(provider.name);
+        const raw = await provider.fetch(query, controller.signal);
+        this.telemetry.newsLatency(provider.name, Date.now() - started);
+
+        for (const article of raw) {
+          try {
+            const valid = await this.validator.validate(article);
+            if (valid.validationScore < 0.65 || valid.trustScore < 0.30) {
+              this.telemetry.rejected('LOW_SCORE');
+              continue;
+            }
+            if (!accepted.has(valid.contentFingerprint)) {
+              accepted.set(valid.contentFingerprint, valid);
+            }
+          } catch (error) {
+            this.telemetry.rejected(error instanceof Error ? error.message : 'VALIDATION_ERROR');
+          }
+        }
+
+        await this.recordProviderSuccess(provider.name, Date.now() - started);
+        if (accepted.size >= query.limit) break;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'UNKNOWN_PROVIDER_FAILURE';
+        this.telemetry.newsFailure(provider.name, reason);
+        await this.recordProviderFailure(provider.name);
+      }
+    }
+
+    const articles = [...accepted.values()]
+      .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
+      .slice(0, query.limit);
+
+    if (articles.length) {
+      await this.persistArticles(articles);
+      await this.cache.set(
+        key,
+        articles,
+        'MULTI_PROVIDER_ROUTER',
+        homeProductionConfig.news.cacheFreshSeconds,
+        homeProductionConfig.news.cacheStaleSeconds
+      );
+      return { articles, state: 'LIVE' };
+    }
+
+    if (cached) {
+      this.telemetry.cacheHit(true);
+      return { articles: cached.value, state: 'STALE' };
+    }
+
+    return { articles: [], state: 'UNAVAILABLE' };
+  }
+
+  private async getProviderHealth(provider: string) {
+    const result = await this.db.query(
+      `SELECT * FROM home_news_provider_health WHERE provider_name = $1`,
+      [provider]
+    );
+    return result.rows[0] || null;
+  }
+
+  private async recordProviderSuccess(provider: string, latencyMs: number) {
+    await this.db.query(
+      `INSERT INTO home_news_provider_health
+       (provider_name, state, consecutive_failures, last_success_at, moving_latency_ms, success_rate)
+       VALUES ($1, 'HEALTHY', 0, now(), $2, 1)
+       ON CONFLICT (provider_name)
+       DO UPDATE SET state = 'HEALTHY',
+                     consecutive_failures = 0,
+                     last_success_at = now(),
+                     circuit_open_until = NULL,
+                     moving_latency_ms = COALESCE(home_news_provider_health.moving_latency_ms * 0.8, 0) + ($2 * 0.2),
+                     success_rate = LEAST(1, home_news_provider_health.success_rate * 0.95 + 0.05),
+                     updated_at = now()`,
+      [provider, latencyMs]
+    );
+  }
+
+  private async recordProviderFailure(provider: string) {
+    const threshold = homeProductionConfig.news.providerFailureThreshold;
+    const circuitSeconds = homeProductionConfig.news.circuitOpenSeconds;
+
+    await this.db.query(
+      `INSERT INTO home_news_provider_health
+       (provider_name, state, consecutive_failures, last_failure_at, success_rate)
+       VALUES ($1, 'DEGRADED', 1, now(), 0.8)
+       ON CONFLICT (provider_name)
+       DO UPDATE SET
+         consecutive_failures = home_news_provider_health.consecutive_failures + 1,
+         last_failure_at = now(),
+         success_rate = GREATEST(0, home_news_provider_health.success_rate * 0.9),
+         state = CASE
+           WHEN home_news_provider_health.consecutive_failures + 1 >= $2 THEN 'OPEN_CIRCUIT'
+           ELSE 'DEGRADED'
+         END,
+         circuit_open_until = CASE
+           WHEN home_news_provider_health.consecutive_failures + 1 >= $2
+           THEN now() + make_interval(secs => $3)
+           ELSE home_news_provider_health.circuit_open_until
+         END,
+         updated_at = now()`,
+      [provider, threshold, circuitSeconds]
+    );
+  }
+
+  private async persistArticles(articles: ValidatedNewsArticle[]) {
+    for (const a of articles) {
+      await this.db.query(
+        `INSERT INTO home_news_articles
+         (canonical_url,url_hash,title,summary,image_url,publisher_domain,
+          publisher_name,provider_name,provider_article_id,category,country_code,
+          source_language,published_at,lifecycle_state,content_fingerprint,
+          provider_score,validation_score,trust_score,metadata)
+         VALUES
+         ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'PUBLISHED',$14,$15,$16,$17,$18::jsonb)
+         ON CONFLICT (canonical_url)
+         DO UPDATE SET title = EXCLUDED.title,
+                       summary = EXCLUDED.summary,
+                       image_url = EXCLUDED.image_url,
+                       last_seen_at = now(),
+                       lifecycle_state = CASE
+                         WHEN home_news_articles.title <> EXCLUDED.title THEN 'UPDATED'
+                         ELSE home_news_articles.lifecycle_state
+                       END,
+                       updated_at = now()`,
+        [
+          a.canonicalUrl,
+          a.urlHash,
+          a.title,
+          a.summary || null,
+          a.imageUrl || null,
+          a.publisherDomain,
+          a.publisherName,
+          a.providerName,
+          a.providerArticleId || null,
+          a.category || 'GENERAL',
+          a.countryCode || null,
+          a.sourceLanguage || null,
+          a.publishedAt,
+          a.contentFingerprint,
+          a.providerScore || 0,
+          a.validationScore,
+          a.trustScore,
+          JSON.stringify(a.metadata || {}),
+        ]
+      );
+    }
+  }
+}
+
+===============================================================================
+12. HOME PERSONALIZATION SERVICE
+file: server/src/services/home/home-personalization.service.ts
+===============================================================================
+
+export class HomePersonalizationService {
+  constructor(private readonly db: any) {}
+
+  async getPreferences(userId: string) {
+    const result = await this.db.query(
+      `SELECT hidden_sections, preferred_categories, followed_countries,
+              followed_topics, quick_actions, personalization_enabled
+       FROM home_feed_preferences
+       WHERE user_id = $1`,
+      [userId]
+    );
+
+    if (!result.rowCount) {
+      return {
+        hiddenSections: [],
+        preferredCategories: [],
+        followedCountries: [],
+        followedTopics: [],
+        quickActions: [],
+        personalizationEnabled: false,
+      };
+    }
+
+    const row = result.rows[0];
+    return {
+      hiddenSections: row.hidden_sections,
+      preferredCategories: row.preferred_categories,
+      followedCountries: row.followed_countries,
+      followedTopics: row.followed_topics,
+      quickActions: row.quick_actions,
+      personalizationEnabled: row.personalization_enabled,
+    };
+  }
+
+  rankNews<T extends { category?: string; countryCode?: string; publishedAt?: string }>(
+    items: T[],
+    preferences: any,
+    jurisdictionCountry: string
+  ): T[] {
+    if (!preferences.personalizationEnabled) return items;
+
+    return [...items]
+      .map(item => {
+        let score = 0;
+        if (item.category && preferences.preferredCategories.includes(item.category)) score += 20;
+        if (item.countryCode && preferences.followedCountries.includes(item.countryCode)) score += 15;
+        if (item.countryCode === jurisdictionCountry) score += 10;
+        if (item.publishedAt) {
+          const ageMinutes = (Date.now() - new Date(item.publishedAt).getTime()) / 60_000;
+          score += Math.max(0, 10 - ageMinutes / 30);
+        }
+        return { item, score };
+      })
+      .sort((a, b) => b.score - a.score)
+      .map(x => x.item);
+  }
+}
+
+===============================================================================
+13. HOME FEED AGGREGATION SERVICE
+file: server/src/services/home/home-feed-aggregation.service.ts
+===============================================================================
+
+import crypto from 'node:crypto';
+import { HomeFeedResponse } from './types';
+import { NewsRouterService } from './news-router.service';
+import { HomePersonalizationService } from './home-personalization.service';
+import { HomeTelemetryService } from './home-telemetry.service';
+import { homeProductionConfig } from '../../config/home-production.config';
+
+export class HomeFeedAggregationService {
+  constructor(
+    private readonly db: any,
+    private readonly newsRouter: NewsRouterService,
+    private readonly personalization: HomePersonalizationService,
+    private readonly telemetry: HomeTelemetryService,
+    private readonly dependencies: {
+      getProfile(userId: string): Promise<unknown>;
+      getNotifications(userId: string): Promise<unknown>;
+      getCountryLinqa(userId: string, country: string): Promise<unknown>;
+      getUpcoming(userId: string): Promise<unknown[]>;
+      getContinueYourDay(userId: string): Promise<unknown[]>;
+      getLiveUpdates(userId: string, country: string): Promise<unknown[]>;
+      getSpotlight(userId: string, country: string): Promise<unknown>;
+    }
+  ) {}
+
+  async build(userId: string, jurisdictionCountry: string): Promise<HomeFeedResponse> {
+    const started = Date.now();
+
+    try {
+      const prefs = await this.personalization.getPreferences(userId);
+
+      const [
+        profile,
+        notifications,
+        countryLinqa,
+        upcoming,
+        continueYourDay,
+        liveUpdates,
+        spotlight,
+        globalNews,
+      ] = await Promise.all([
+        this.dependencies.getProfile(userId),
+        this.dependencies.getNotifications(userId),
+        this.dependencies.getCountryLinqa(userId, jurisdictionCountry),
+        this.dependencies.getUpcoming(userId),
+        this.dependencies.getContinueYourDay(userId),
+        this.dependencies.getLiveUpdates(userId, jurisdictionCountry),
+        this.dependencies.getSpotlight(userId, jurisdictionCountry),
+        this.newsRouter.fetch({ limit: homeProductionConfig.feed.maxNewsItems }),
+      ]);
+
+      const rankedNews = this.personalization.rankNews(
+        globalNews.articles,
+        prefs,
+        jurisdictionCountry
+      );
+
+      const payload: HomeFeedResponse = {
+        generatedAt: new Date().toISOString(),
+        jurisdictionCountry,
+        profile,
+        quickActions: prefs.quickActions,
+        notifications,
+        liveUpdates: prefs.hiddenSections.includes('liveUpdates') ? [] : liveUpdates,
+        spotlight: prefs.hiddenSections.includes('spotlight') ? undefined : spotlight,
+        upcoming: prefs.hiddenSections.includes('upcoming')
+          ? []
+          : upcoming.slice(0, homeProductionConfig.feed.maxUpcomingItems),
+        continueYourDay: prefs.hiddenSections.includes('continueYourDay')
+          ? []
+          : continueYourDay.slice(0, homeProductionConfig.feed.maxContinueItems),
+        countryLinqa: prefs.hiddenSections.includes('countryLinqa') ? null : countryLinqa,
+        breakingAroundWorld: prefs.hiddenSections.includes('breakingAroundWorld') ? [] : rankedNews,
+        serviceState: {
+          news: globalNews.state,
+          personalized: prefs.personalizationEnabled,
+        },
+      };
+
+      await this.saveSnapshot(userId, jurisdictionCountry, payload);
+      this.telemetry.homeFeedLatency(Date.now() - started);
+      return payload;
+    } catch (error) {
+      this.telemetry.homeFeedFailure(error instanceof Error ? error.message : 'UNKNOWN');
+      throw error;
+    }
+  }
+
+  private async saveSnapshot(userId: string, jurisdictionCountry: string, payload: HomeFeedResponse) {
+    const serialized = JSON.stringify(payload);
+    const hash = crypto.createHash('sha256').update(serialized).digest('hex');
+
+    await this.db.query(
+      `INSERT INTO home_feed_snapshots
+       (user_id, jurisdiction_country, payload, payload_hash, expires_at)
+       VALUES ($1, $2, $3::jsonb, $4, now() + make_interval(secs => $5))`,
+      [
+        userId,
+        jurisdictionCountry,
+        serialized,
+        hash,
+        homeProductionConfig.feed.snapshotTtlSeconds,
+      ]
+    );
+  }
+}
+
+===============================================================================
+14. AUTHENTICATED HOME ROUTE
+file: server/src/routes/home-feed.production.ts
+===============================================================================
+
+import { Router } from 'express';
+
+export function createProductionHomeFeedRouter(deps: {
+  requireSession: any;
+  resolveJurisdictionCountry(userId: string): Promise<string>;
+  homeFeedService: { build(userId: string, jurisdictionCountry: string): Promise<any> };
+}) {
+  const router = Router();
+
+  router.get('/v1/mobile/home', deps.requireSession, async (req: any, res, next) => {
+    try {
+      const userId = req.session.userId;
+      const country = await deps.resolveJurisdictionCountry(userId);
+      if (!country) {
+        return res.status(409).json({ code: 'HOME_JURISDICTION_REQUIRED' });
+      }
+
+      const feed = await deps.homeFeedService.build(userId, country);
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.status(200).json(feed);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  return router;
+}
+
+===============================================================================
+15. NEWS REFRESH WORKER
+file: server/src/jobs/refresh-global-news.job.ts
+===============================================================================
+
+export async function runRefreshGlobalNewsJob(deps: {
+  newsRouter: { fetch(query: { countryCode?: string; categories?: string[]; limit: number }): Promise<any> };
+  activeCountries(): Promise<string[]>;
+}) {
+  const countries = await deps.activeCountries();
+  await deps.newsRouter.fetch({ limit: 40 });
+
+  for (const countryCode of countries) {
+    await deps.newsRouter.fetch({ countryCode, limit: 30 });
+  }
+}
+
+===============================================================================
+16. BREAKING NEWS EXPIRY WORKER
+file: server/src/jobs/expire-breaking-news.job.ts
+===============================================================================
+
+export async function expireBreakingNews(db: any) {
+  await db.query(
+    `UPDATE home_news_articles
+     SET lifecycle_state = 'EXPIRED', updated_at = now()
+     WHERE breaking_until IS NOT NULL
+       AND breaking_until <= now()
+       AND lifecycle_state IN ('PUBLISHED','UPDATED','CORRECTED')`
+  );
+}
+
+===============================================================================
+17. PHYSICAL-DEVICE CERTIFICATION SCRIPT
+file: scripts/certify-home-device.mjs
+===============================================================================
+
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+
+function run(cmd, args = []) {
+  return execFileSync(cmd, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+function sha256(file) {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
+}
+
+const gitSha = run('git', ['rev-parse', 'HEAD']);
+const status = run('git', ['status', '--porcelain']);
+if (status) throw new Error('HOME_CERTIFICATION_REQUIRES_CLEAN_WORKTREE');
+
+const serial = process.env.ANDROID_SERIAL || run('adb', ['get-serialno']);
+const model = run('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model']);
+const os = run('adb', ['-s', serial, 'shell', 'getprop', 'ro.build.version.release']);
+const packageName = process.env.LINQA_ANDROID_PACKAGE || 'com.linqa.mobile';
+
+run('adb', ['-s', serial, 'shell', 'am', 'force-stop', packageName]);
+run('adb', ['-s', serial, 'shell', 'monkey', '-p', packageName, '-c', 'android.intent.category.LAUNCHER', '1']);
+await new Promise(resolve => setTimeout(resolve, 5000));
+
+const logcat = run('adb', ['-s', serial, 'logcat', '-d', '-t', '400']);
+const fatalPatterns = [
+  /FATAL EXCEPTION/i,
+  /ReactNativeJS.*TypeError/i,
+  /ReactNativeJS.*ReferenceError/i,
+  /Unable to start activity/i,
+];
+const fatalMatches = fatalPatterns.filter(pattern => pattern.test(logcat)).map(String);
+
+mkdirSync('evidence/home', { recursive: true });
+const screenshotFile = path.resolve(`evidence/home/${gitSha}-${serial}-home.png`);
+const screenshot = execFileSync('adb', ['-s', serial, 'exec-out', 'screencap', '-p']);
+writeFileSync(screenshotFile, screenshot);
+
+const apkFile = process.env.LINQA_ANDROID_APK;
+const apkSha = apkFile && existsSync(apkFile) ? sha256(apkFile) : null;
+
+const manifest = {
+  schemaVersion: 1,
+  certification: 'LINQA_HOME_PHYSICAL_DEVICE',
+  gitSha,
+  certifiedAt: new Date().toISOString(),
+  device: { serial, model, os },
+  packageName,
+  apkFile: apkFile || null,
+  apkSha256: apkSha,
+  screenshot: screenshotFile,
+  screenshotSha256: sha256(screenshotFile),
+  fatalRuntimeErrors: fatalMatches,
+  passed: fatalMatches.length === 0,
+};
+
+const manifestFile = path.resolve(`evidence/home/${gitSha}-${serial}-manifest.json`);
+writeFileSync(manifestFile, JSON.stringify(manifest, null, 2));
+
+if (!manifest.passed) {
+  throw new Error(`HOME_DEVICE_CERTIFICATION_FAILED:${fatalMatches.join(',')}`);
+}
+
+console.log(JSON.stringify(manifest, null, 2));
+
+===============================================================================
+18. EXACT-SHA EVIDENCE COLLECTION
+file: scripts/collect-home-release-evidence.mjs
+===============================================================================
+
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+
+function run(cmd, args) {
+  return execFileSync(cmd, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+function digest(file) {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
+}
+
+const gitSha = run('git', ['rev-parse', 'HEAD']);
+const targets = {
+  serverArtifact: process.env.LINQA_SERVER_ARTIFACT,
+  androidApk: process.env.LINQA_ANDROID_APK,
+  iosArtifact: process.env.LINQA_IOS_ARTIFACT,
+};
+
+const evidence = {
+  schemaVersion: 1,
+  component: 'LINQA_HOME',
+  gitSha,
+  collectedAt: new Date().toISOString(),
+  artifacts: {},
+};
+
+for (const [name, file] of Object.entries(targets)) {
+  if (!file) continue;
+  if (!existsSync(file)) throw new Error(`MISSING_ARTIFACT:${name}:${file}`);
+  evidence.artifacts[name] = {
+    path: path.resolve(file),
+    sha256: digest(file),
+  };
+}
+
+mkdirSync('evidence/home', { recursive: true });
+const out = `evidence/home/${gitSha}-release-evidence.json`;
+writeFileSync(out, JSON.stringify(evidence, null, 2));
+console.log(out);
+
+===============================================================================
+19. AUTOMATED HOME RELEASE GATE
+file: scripts/verify-home-release-gate.mjs
+===============================================================================
+
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+
+function run(command, args, cwd = process.cwd()) {
+  execFileSync(command, args, {
+    cwd,
+    stdio: 'inherit',
+    env: process.env,
+  });
+}
+
+function gitOutput(args) {
+  return execFileSync('git', args, { encoding: 'utf8' }).trim();
+}
+
+const failures = [];
+const gitSha = gitOutput(['rev-parse', 'HEAD']);
+
+function gate(name, fn) {
+  try {
+    fn();
+    console.log(`[PASS] ${name}`);
+  } catch (error) {
+    console.error(`[FAIL] ${name}`);
+    console.error(error);
+    failures.push(name);
+  }
+}
+
+gate('clean_git_worktree', () => {
+  const status = gitOutput(['status', '--porcelain']);
+  if (status) throw new Error('Worktree is not clean');
+});
+
+gate('server_typescript', () => {
+  run('npm', ['run', 'build'], 'server');
+});
+
+gate('mobile_typescript', () => {
+  run('npx', ['tsc', '--noEmit'], 'clients/mobile');
+});
+
+gate('home_targeted_tests', () => {
+  run('npm', ['test', '--', '--runInBand', 'home-production-closure'], 'server');
+});
+
+gate('no_fabricated_news_fallbacks', () => {
+  const suspicious = [
+    'Global Tech Summit 2026',
+    'fabricatedHeadline',
+    'fakeNewsFallback',
+    'mockBreakingNews',
+  ];
+
+  const tracked = gitOutput(['ls-files'])
+    .split(/\r?\n/)
+    .filter(Boolean);
+
+  for (const file of tracked) {
+    if (!/\.(ts|tsx|js|jsx|json)$/.test(file)) continue;
+    const text = readFileSync(file, 'utf8');
+    for (const pattern of suspicious) {
+      if (text.includes(pattern)) {
+        throw new Error(`Suspicious fabricated fallback string found in ${file}: ${pattern}`);
+      }
+    }
+  }
+});
+
+gate('physical_device_evidence', () => {
+  const dir = path.resolve('evidence/home');
+  if (!existsSync(dir)) throw new Error('Evidence directory missing');
+
+  const manifests = readdirSync(dir)
+    .filter(name => name.startsWith(gitSha) && name.endsWith('-manifest.json'));
+
+  if (!manifests.length) throw new Error(`No physical-device manifest for SHA ${gitSha}`);
+
+  const valid = manifests.some(file => {
+    const manifest = JSON.parse(readFileSync(path.join(dir, file), 'utf8'));
+    return manifest.gitSha === gitSha &&
+           manifest.passed === true &&
+           Array.isArray(manifest.fatalRuntimeErrors) &&
+           manifest.fatalRuntimeErrors.length === 0;
+  });
+
+  if (!valid) throw new Error('No passing device certification for exact Git SHA');
+});
+
+gate('release_evidence_exact_sha', () => {
+  const file = path.resolve(`evidence/home/${gitSha}-release-evidence.json`);
+  if (!existsSync(file)) throw new Error(`Release evidence missing for exact SHA ${gitSha}`);
+
+  const evidence = JSON.parse(readFileSync(file, 'utf8'));
+  if (evidence.gitSha !== gitSha) throw new Error('Release evidence SHA mismatch');
+});
+
+if (failures.length) {
+  console.error(`HOME RELEASE BLOCKED. Failed gates: ${failures.join(', ')}`);
+  process.exit(1);
+}
+
+console.log(`HOME RELEASE GATE PASSED for ${gitSha}`);
+
+===============================================================================
+20. TARGETED TEST SUITE SKELETON
+file: server/src/tests/home-production-closure.test.ts
+===============================================================================
+
+import { describe, expect, it } from '@jest/globals';
+
+describe('Linqa Home Production Closure', () => {
+  it('rejects non-HTTPS news links', async () => {
+    expect(true).toBe(true);
+  });
+
+  it('rejects blocked publishers', async () => {
+    expect(true).toBe(true);
+  });
+
+  it('serves stale cache if all providers fail', async () => {
+    expect(true).toBe(true);
+  });
+
+  it('returns UNAVAILABLE if no provider and no cache exist', async () => {
+    expect(true).toBe(true);
+  });
+
+  it('deduplicates equivalent provider stories', async () => {
+    expect(true).toBe(true);
+  });
+
+  it('persists Home feed snapshot', async () => {
+    expect(true).toBe(true);
+  });
+
+  it('does not personalize when personalization is disabled', async () => {
+    expect(true).toBe(true);
+  });
+
+  it('does not expose hidden Home sections', async () => {
+    expect(true).toBe(true);
+  });
+
+  it('binds release evidence to exact Git SHA', async () => {
+    expect(true).toBe(true);
+  });
+
+  it('blocks release without physical-device evidence', async () => {
+    expect(true).toBe(true);
+  });
+});
+
+# IMPORTANT:
+# Replace the placeholder expectations above with real service construction,
+# database fixtures, provider stubs, and assertion logic before treating the
+# test suite as production evidence. A test name with expect(true) is not a
+# release-quality test.
+
+===============================================================================
+21. PACKAGE.JSON SCRIPTS
+===============================================================================
+
+{
+  "scripts": {
+    "home:news:refresh": "node dist/jobs/refresh-global-news.job.js",
+    "home:device:certify": "node scripts/certify-home-device.mjs",
+    "home:evidence:collect": "node scripts/collect-home-release-evidence.mjs",
+    "home:release:gate": "node scripts/verify-home-release-gate.mjs"
+  }
+}
+
+===============================================================================
+22. ENVIRONMENT VARIABLES
+===============================================================================
+
+HOME_NEWS_GDELT_ENABLED=true
+HOME_NEWS_TIMEOUT_MS=5500
+HOME_NEWS_CACHE_FRESH_SECONDS=300
+HOME_NEWS_CACHE_STALE_SECONDS=1800
+HOME_NEWS_MAX_PER_PROVIDER=40
+HOME_NEWS_FAILURE_THRESHOLD=3
+HOME_NEWS_CIRCUIT_SECONDS=120
+HOME_APPROVED_RSS_ENDPOINT=
+HOME_FEED_SNAPSHOT_TTL=120
+HOME_FEED_MAX_NEWS=20
+HOME_EVIDENCE_MAX_AGE_HOURS=72
+HOME_REQUIRE_DEVICE_EVIDENCE=true
+LINQA_SERVER_ARTIFACT=
+LINQA_ANDROID_APK=
+LINQA_IOS_ARTIFACT=
+LINQA_ANDROID_PACKAGE=com.linqa.mobile
+
+===============================================================================
+23. TELEMETRY CONTRACT
+===============================================================================
+
+linqa_news_provider_requests_total{provider}
+linqa_news_provider_failures_total{provider,reason}
+linqa_news_provider_latency_ms{provider}
+linqa_news_cache_hits_total
+linqa_news_cache_stale_served_total
+linqa_news_articles_rejected_total{reason}
+linqa_home_feed_latency_ms
+linqa_home_feed_failures_total{reason}
+
+Suggested alert thresholds:
+- P1: Home API error rate > 5% for 5 minutes.
+- P1: All news providers unavailable and stale cache exhausted.
+- P2: Primary news provider failure rate > 40% for 10 minutes.
+- P2: p95 Home feed latency > 1500 ms for 10 minutes.
+- P2: Stale news served > 20% for 15 minutes.
+- P3: Publisher rejection spike > 3x 7-day baseline.
+
+===============================================================================
+24. PHYSICAL-DEVICE CERTIFICATION CHECKLIST
+===============================================================================
+
+[ ] Clean Git worktree
+[ ] Exact Git SHA captured
+[ ] Server build passes
+[ ] Mobile TypeScript check passes
+[ ] Home targeted tests pass
+[ ] Android APK built from same SHA
+[ ] APK SHA-256 captured
+[ ] APK installed on physical Galaxy device
+[ ] Home launches without fatal runtime errors
+[ ] Authenticated profile renders
+[ ] Dynamic unread badges render
+[ ] Quick Actions route correctly
+[ ] Search routes correctly
+[ ] Notifications route correctly
+[ ] Linqa AI routes correctly
+[ ] Camera routes correctly
+[ ] Voice routes correctly
+[ ] Vault routes correctly
+[ ] Calls route correctly
+[ ] Chats route correctly
+[ ] LinqaSend routes correctly
+[ ] CountryLinqa renders real country data
+[ ] World News opens
+[ ] Publisher attribution renders
+[ ] External news link is HTTPS
+[ ] Provider failure shows honest Unavailable/Reconnecting state
+[ ] Screenshot captured
+[ ] Screenshot SHA-256 captured
+[ ] Device model captured
+[ ] Device OS captured
+[ ] Runtime fatal scan clean
+[ ] Evidence manifest stored
+[ ] Release evidence references exact same Git SHA
+[ ] Release gate passes
+
+===============================================================================
+25. AUTOMATED RELEASE-GATE POLICY
+===============================================================================
+
+RELEASE MUST FAIL if any of these are true:
+
+1. Server TypeScript/build fails.
+2. Mobile TypeScript check fails.
+3. Home targeted backend tests fail.
+4. Fabricated news fallback content exists.
+5. Non-HTTPS external news links can reach the client.
+6. Blocked publisher content can reach the client.
+7. News provider failures produce fake articles.
+8. No exact-SHA release evidence exists.
+9. No exact-SHA physical-device evidence exists.
+10. Physical-device runtime fatal scan failed.
+11. APK/server artifact digest cannot be bound to evidence.
+12. Evidence is older than policy allows.
+
+A passing CI build without matching physical-device evidence is NOT sufficient
+for Home production promotion.
+
+===============================================================================
+26. DEPLOYMENT ORDER
+===============================================================================
+
+STEP 1
+Run migration:
+  psql "$DATABASE_URL" -f server/migrations/040_home_production_closure.sql
+
+STEP 2
+Seed approved publisher trust records. Do not blindly trust publishers.
+
+STEP 3
+Wire:
+  GdeltNewsProvider
+  RssFallbackProvider or contracted second provider
+  PublisherTrustService
+  NewsValidationService
+  DurableNewsCacheService
+  NewsRouterService
+  HomePersonalizationService
+  HomeFeedAggregationService
+
+STEP 4
+Mount:
+  GET /v1/mobile/home
+
+STEP 5
+Schedule:
+  refresh global news every 5 minutes
+  expire breaking news every 5 minutes
+
+STEP 6
+Deploy Redis if available. PostgreSQL remains durable fallback.
+
+STEP 7
+Run:
+  npm run home:device:certify
+
+STEP 8
+Run:
+  npm run home:evidence:collect
+
+STEP 9
+Run:
+  npm run home:release:gate
+
+STEP 10
+Promote only if the gate passes.
+
+===============================================================================
+27. FINAL PRODUCTION ARCHITECTURE
+===============================================================================
+
+Authenticated Mobile Client
+         |
+         v
+/v1/mobile/home
+         |
+         v
+HomeFeedAggregationService
+         |
+   +-----+----------------+------------------+----------------+
+   |                      |                  |                |
+   v                      v                  v                v
+Profile/Activity      CountryLinqa      Personalization   Global News
+                                                               |
+                                                        NewsRouterService
+                                                               |
+                                                    +----------+---------+
+                                                    |                    |
+                                                    v                    v
+                                                  GDELT          Secondary Provider
+                                                    |                    |
+                                                    +----------+---------+
+                                                               |
+                                                        Validation
+                                                               |
+                                                        Publisher Trust
+                                                               |
+                                                        Deduplication
+                                                               |
+                                                     +---------+---------+
+                                                     |                   |
+                                                     v                   v
+                                                   Redis             PostgreSQL
+                                                     |                   |
+                                                     +---------+---------+
+                                                               |
+                                                       Home Feed Snapshot
+                                                               |
+                                                               v
+                                                        Galaxy / iPhone
+
+RELEASE PATH
+
+Source SHA
+   |
+   +--> build
+   +--> automated tests
+   +--> artifact SHA-256
+   +--> physical Galaxy certification
+   +--> screenshot + runtime log scan
+   +--> exact-SHA evidence manifest
+   +--> Home release gate
+   +--> production promotion
+
+===============================================================================
+END — LINQA HOME PRODUCTION CLOSURE PACK v1.0
+===============================================================================

@@ -28,12 +28,11 @@ export function setActiveAccountSessionResolver(resolver: SessionResolver | null
 export class FailClosedAccessTokenProvider implements AccessTokenProvider {
   async getAccessToken(): Promise<string> {
     if (activeAccountSessionResolver) {
-      // A resolver failure (e.g. secure storage unavailable) must still
-      // fail closed with the same clear error below, not leak a raw
-      // storage exception to whatever screen is awaiting this token.
+      // A connection/storage failure is retryable, not proof of an invalid
+      // session. Still fail closed: never return an expired token.
       const session = await activeAccountSessionResolver().catch((error) => {
         console.warn("[session] active account session resolver failed:", error);
-        return null;
+        throw new Error("Linqa could not resume your session. Check your connection and try again.");
       });
       if (session && new Date(session.expiresAt).getTime() > Date.now()) {
         return session.accessToken;

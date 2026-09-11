@@ -9,7 +9,7 @@ import { accessTokenProvider } from "../../services/session";
 import { PrimaryButton } from "../../components/PrimaryButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
 function flag(code: string) { return String.fromCodePoint(...code.toUpperCase().split("").map((letter) => 127397 + letter.charCodeAt(0))); }
 
 export default function CountryConfirmation() {

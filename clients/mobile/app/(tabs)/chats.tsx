@@ -27,6 +27,7 @@ import {
   type PresenceContact
 } from "../../services/chat-inbox.service";
 import { CallsService } from "../../services/calls.service";
+import { ChatRealtimeClient, TypingRegistry } from "../../services/chat-realtime.client";
 import { MobileHubService, type HubContact } from "../../services/mobile-hub.service";
 import { accessTokenProvider } from "../../services/session";
 import { fonts } from "../../theme/tokens";
@@ -175,7 +176,13 @@ export default function ChatsScreen() {
   const [hubOpen, setHubOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
   const [contacts, setContacts] = useState<HubContact[]>([]);
+  const [typingIn, setTypingIn] = useState<Set<string>>(new Set());
   const mounted = useRef(true);
+
+  const realtime = useMemo(
+    () => new ChatRealtimeClient(API, () => accessTokenProvider.getAccessToken()),
+    []
+  );
 
   const load = useCallback(
     async (signal?: AbortSignal, quiet = false) => {
@@ -211,16 +218,57 @@ export default function ChatsScreen() {
     };
   }, [load]);
 
+  /**
+   * Live inbox.
+   *
+   * A durable event triggers a refetch rather than patching the row in place:
+   * the inbox carries counts and ordering the client would have to recompute,
+   * and getting that subtly wrong is worse than one extra request. Typing is
+   * applied directly, because it is ephemeral and has nothing to reconcile.
+   */
+  useEffect(() => {
+    const typing = new TypingRegistry((ids) => {
+      if (mounted.current) setTypingIn(ids);
+    });
+
+    const unsubscribe = realtime.onEvent((event) => {
+      if (!mounted.current) return;
+      if (event.type === "message.created" || event.type === "conversation.read") {
+        void load(undefined, true);
+        return;
+      }
+      if (event.type === "typing.start") {
+        typing.start(event.conversationId, event.expiresInSeconds ?? 5);
+      } else if (event.type === "typing.stop") {
+        typing.stop(event.conversationId);
+      }
+    });
+
+    void realtime.start();
+    return () => {
+      unsubscribe();
+      typing.clear();
+      realtime.stop();
+    };
+  }, [realtime, load]);
+
+  // Watch exactly the conversations currently on screen.
+  useEffect(() => {
+    const ids = (data?.conversations ?? []).map((row) => row.conversationId);
+    if (ids.length) realtime.setConversations(ids);
+  }, [realtime, data?.conversations]);
+
   const counts = data?.counts ?? { all: 0, unread: 0, groups: 0, pinned: 0 };
   const conversations = data?.conversations ?? [];
   const scheduledCall = data?.scheduledCall ?? null;
 
   async function openConversation(item: ChatSummary) {
-    // Clear the badge first so the list and the tab agree immediately; a
-    // failure here must not block the user from reading the conversation.
-    if (item.unreadCount > 0) {
-      try {
-        await inbox.markRead(item.conversationId);
+    // Revalidate membership before navigating. A row can be stale after a
+    // block/removal event; navigating after this request fails would reopen a
+    // conversation the server has already withdrawn.
+    try {
+      await inbox.markRead(item.conversationId);
+      if (item.unreadCount > 0) {
         setData((current) =>
           current
             ? {
@@ -233,9 +281,11 @@ export default function ChatsScreen() {
               }
             : current
         );
-      } catch {
-        // Leave the badge as it was; the next refresh reconciles.
       }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "That conversation is no longer available.");
+      void load(undefined, true);
+      return;
     }
     router.push({ pathname: "/modules/conversation", params: { conversationId: item.conversationId } });
   }
@@ -402,7 +452,11 @@ export default function ChatsScreen() {
         }
         renderItem={({ item }) => (
           <ConversationRow
-            item={item}
+            item={
+              typingIn.has(item.conversationId)
+                ? { ...item, typingLabel: item.isGroup ? "Someone is typing…" : "typing…" }
+                : item
+            }
             onOpen={() => void openConversation(item)}
             onCall={(peerUserId, callType) => void startPeerCall(peerUserId, callType)}
           />

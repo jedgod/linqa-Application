@@ -12,7 +12,7 @@ export default function MediaScreen() {
   const service = useMemo(
     () =>
       new MediaService(
-        process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080",
+        process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080",
         () => accessTokenProvider.getAccessToken(),
       ),
     [],

@@ -9,7 +9,7 @@ type Mode = "DISABLED" | "ON_DEVICE" | "CONFIDENTIAL_CLOUD";
 
 export default function AiPrivacySettingsScreen() {
   const service = useMemo(() => new SettingsService(
-    process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080", accessTokenProvider
+    process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080", accessTokenProvider
   ), []);
   const [mode, setMode] = useState<Mode>("DISABLED");
   const [settings, setSettings] = useState<UserSettings | null>(null);

@@ -76,6 +76,7 @@ export async function buildApp(config: AppConfig, db: Database) {
   await enforceProductionBoot(config.NODE_ENV, services.runtimeCapabilities);
 
   app.get("/health/live", async () => ({
+    service: "linqa-api",
     status: "ok",
     version: process.env.npm_package_version ?? "development"
   }));
@@ -89,6 +90,7 @@ export async function buildApp(config: AppConfig, db: Database) {
         ]);
       }
       return {
+        service: "linqa-api",
         status: "ready",
         version: process.env.npm_package_version ?? "development"
       };

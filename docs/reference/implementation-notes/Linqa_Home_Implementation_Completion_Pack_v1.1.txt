@@ -1,0 +1,1444 @@
+# LINQA HOME IMPLEMENTATION COMPLETION PACK v1.1
+# Purpose:
+# Close the remaining gap after Home Production Closure Pack v1.0.
+#
+# This pack adds the pieces that v1.0 intentionally left as integration work:
+# 1. Real dependency wiring for Home services
+# 2. Redis connection with PostgreSQL durable fallback
+# 3. Real publisher trust repository + admin controls
+# 4. Concrete Home feed repository
+# 5. Real contract/integration tests (no expect(true) placeholders)
+# 6. Health/readiness endpoints for Home/news dependencies
+# 7. CI release-gate workflow
+# 8. Evidence freshness enforcement
+# 9. Provider redundancy contract
+# 10. Production startup registration
+#
+# Target stack:
+# - Node.js / TypeScript / Express
+# - PostgreSQL
+# - Redis
+# - Jest
+# - React Native / Expo mobile client
+#
+# ============================================================================
+# FILE MAP
+# ============================================================================
+#
+# server/src/home/
+#   home.module.ts
+#   home.types.ts
+#   home.repository.ts
+#   publisher-trust.repository.ts
+#   publisher-trust.service.ts
+#   news-provider.ts
+#   providers/gdelt.provider.ts
+#   providers/secondary.provider.ts
+#   durable-cache.service.ts
+#   news-validation.service.ts
+#   news-router.service.ts
+#   personalization.service.ts
+#   home-feed.service.ts
+#   home-health.service.ts
+#   home.routes.ts
+#   home-admin.routes.ts
+#
+# server/src/tests/home/
+#   home-news-validation.integration.test.ts
+#   home-news-router.integration.test.ts
+#   home-feed.integration.test.ts
+#   home-release-gate.integration.test.ts
+#
+# scripts/
+#   verify-home-evidence-freshness.mjs
+#   verify-home-provider-redundancy.mjs
+#
+# .github/workflows/
+#   home-release-gate.yml
+#
+# ============================================================================
+# 1. HOME TYPES
+# file: server/src/home/home.types.ts
+# ============================================================================
+
+export type TrustStatus = "TRUSTED" | "LIMITED" | "BLOCKED" | "UNKNOWN";
+export type NewsState = "LIVE" | "STALE" | "UNAVAILABLE";
+
+export interface HomeUserContext {
+  userId: string;
+  jurisdictionCountry: string;
+}
+
+export interface HomeNewsItem {
+  id?: string;
+  title: string;
+  summary?: string;
+  canonicalUrl: string;
+  imageUrl?: string;
+  publisherDomain: string;
+  publisherName: string;
+  publishedAt: string;
+  category: string;
+  countryCode?: string;
+  providerName: string;
+  providerScore: number;
+  validationScore: number;
+  trustScore: number;
+  contentFingerprint: string;
+}
+
+export interface HomeFeedPayload {
+  generatedAt: string;
+  jurisdictionCountry: string;
+  profile: unknown;
+  notifications: unknown;
+  quickActions: unknown[];
+  liveUpdates: unknown[];
+  spotlight?: unknown;
+  upcoming: unknown[];
+  continueYourDay: unknown[];
+  countryLinqa: unknown;
+  breakingAroundWorld: HomeNewsItem[];
+  serviceState: {
+    news: NewsState;
+    personalized: boolean;
+  };
+}
+
+# ============================================================================
+# 2. HOME REPOSITORY
+# file: server/src/home/home.repository.ts
+# ============================================================================
+
+export class HomeRepository {
+  constructor(private readonly db: any) {}
+
+  async saveSnapshot(input: {
+    userId: string;
+    country: string;
+    payload: unknown;
+    hash: string;
+    ttlSeconds: number;
+  }): Promise<void> {
+    await this.db.query(
+      `INSERT INTO home_feed_snapshots
+       (user_id, jurisdiction_country, payload, payload_hash, expires_at)
+       VALUES ($1,$2,$3::jsonb,$4,now() + make_interval(secs => $5))`,
+      [
+        input.userId,
+        input.country,
+        JSON.stringify(input.payload),
+        input.hash,
+        input.ttlSeconds,
+      ]
+    );
+  }
+
+  async getLatestSnapshot(userId: string): Promise<any | null> {
+    const result = await this.db.query(
+      `SELECT payload, generated_at, expires_at
+       FROM home_feed_snapshots
+       WHERE user_id = $1
+       ORDER BY generated_at DESC
+       LIMIT 1`,
+      [userId]
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  async saveArticle(article: any): Promise<void> {
+    await this.db.query(
+      `INSERT INTO home_news_articles
+       (
+         canonical_url,
+         url_hash,
+         title,
+         summary,
+         image_url,
+         publisher_domain,
+         publisher_name,
+         provider_name,
+         provider_article_id,
+         category,
+         country_code,
+         source_language,
+         published_at,
+         lifecycle_state,
+         content_fingerprint,
+         provider_score,
+         validation_score,
+         trust_score,
+         metadata
+       )
+       VALUES
+       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+        'PUBLISHED',$14,$15,$16,$17,$18::jsonb)
+       ON CONFLICT (canonical_url)
+       DO UPDATE SET
+         title = EXCLUDED.title,
+         summary = EXCLUDED.summary,
+         image_url = EXCLUDED.image_url,
+         last_seen_at = now(),
+         lifecycle_state = CASE
+           WHEN home_news_articles.title <> EXCLUDED.title
+           THEN 'UPDATED'
+           ELSE home_news_articles.lifecycle_state
+         END,
+         updated_at = now()`,
+      [
+        article.canonicalUrl,
+        article.urlHash,
+        article.title,
+        article.summary ?? null,
+        article.imageUrl ?? null,
+        article.publisherDomain,
+        article.publisherName,
+        article.providerName,
+        article.providerArticleId ?? null,
+        article.category ?? "GENERAL",
+        article.countryCode ?? null,
+        article.sourceLanguage ?? null,
+        article.publishedAt,
+        article.contentFingerprint,
+        article.providerScore ?? 0,
+        article.validationScore,
+        article.trustScore,
+        JSON.stringify(article.metadata ?? {}),
+      ]
+    );
+  }
+}
+
+# ============================================================================
+# 3. PUBLISHER TRUST REPOSITORY
+# file: server/src/home/publisher-trust.repository.ts
+# ============================================================================
+
+export class PublisherTrustRepository {
+  constructor(private readonly db: any) {}
+
+  async findByDomain(domain: string): Promise<any | null> {
+    const result = await this.db.query(
+      `SELECT
+         canonical_domain,
+         display_name,
+         country_code,
+         trust_status,
+         min_provider_score,
+         allow_breaking,
+         allow_external_links,
+         attribution_required,
+         notes
+       FROM home_news_publishers
+       WHERE canonical_domain = $1`,
+      [domain.toLowerCase()]
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  async upsert(input: {
+    domain: string;
+    displayName: string;
+    countryCode?: string | null;
+    trustStatus: "TRUSTED" | "LIMITED" | "BLOCKED" | "UNKNOWN";
+    minProviderScore: number;
+    allowBreaking: boolean;
+    allowExternalLinks: boolean;
+    attributionRequired: boolean;
+    notes?: string | null;
+  }): Promise<void> {
+    await this.db.query(
+      `INSERT INTO home_news_publishers
+       (
+         canonical_domain,
+         display_name,
+         country_code,
+         trust_status,
+         min_provider_score,
+         allow_breaking,
+         allow_external_links,
+         attribution_required,
+         notes
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (canonical_domain)
+       DO UPDATE SET
+         display_name = EXCLUDED.display_name,
+         country_code = EXCLUDED.country_code,
+         trust_status = EXCLUDED.trust_status,
+         min_provider_score = EXCLUDED.min_provider_score,
+         allow_breaking = EXCLUDED.allow_breaking,
+         allow_external_links = EXCLUDED.allow_external_links,
+         attribution_required = EXCLUDED.attribution_required,
+         notes = EXCLUDED.notes,
+         updated_at = now()`,
+      [
+        input.domain.toLowerCase(),
+        input.displayName,
+        input.countryCode ?? null,
+        input.trustStatus,
+        input.minProviderScore,
+        input.allowBreaking,
+        input.allowExternalLinks,
+        input.attributionRequired,
+        input.notes ?? null,
+      ]
+    );
+  }
+
+  async list(limit = 200): Promise<any[]> {
+    const result = await this.db.query(
+      `SELECT *
+       FROM home_news_publishers
+       ORDER BY display_name ASC
+       LIMIT $1`,
+      [limit]
+    );
+    return result.rows;
+  }
+}
+
+# ============================================================================
+# 4. PUBLISHER TRUST SERVICE
+# file: server/src/home/publisher-trust.service.ts
+# ============================================================================
+
+import { PublisherTrustRepository } from "./publisher-trust.repository";
+
+export class PublisherTrustService {
+  constructor(private readonly repo: PublisherTrustRepository) {}
+
+  async requireAllowed(
+    domain: string,
+    providerScore: number
+  ): Promise<{
+    displayName: string;
+    trustStatus: string;
+    allowBreaking: boolean;
+  }> {
+    const row = await this.repo.findByDomain(domain);
+
+    if (!row) {
+      if (providerScore < 0.80) {
+        throw new Error("UNKNOWN_PUBLISHER_SCORE_TOO_LOW");
+      }
+
+      return {
+        displayName: domain,
+        trustStatus: "UNKNOWN",
+        allowBreaking: false,
+      };
+    }
+
+    if (row.trust_status === "BLOCKED") {
+      throw new Error("PUBLISHER_BLOCKED");
+    }
+
+    if (!row.allow_external_links) {
+      throw new Error("PUBLISHER_LINKS_DISABLED");
+    }
+
+    if (providerScore < Number(row.min_provider_score)) {
+      throw new Error("PUBLISHER_PROVIDER_SCORE_TOO_LOW");
+    }
+
+    return {
+      displayName: row.display_name,
+      trustStatus: row.trust_status,
+      allowBreaking: row.allow_breaking,
+    };
+  }
+}
+
+# ============================================================================
+# 5. REDIS + POSTGRES DURABLE CACHE
+# file: server/src/home/durable-cache.service.ts
+# ============================================================================
+
+export class DurableHomeCache {
+  constructor(
+    private readonly db: any,
+    private readonly redis?: {
+      get(key: string): Promise<string | null>;
+      set(key: string, value: string, opts?: any): Promise<any>;
+    }
+  ) {}
+
+  async get<T>(key: string): Promise<{
+    value: T;
+    stale: boolean;
+    source: "REDIS" | "POSTGRES";
+  } | null> {
+    if (this.redis) {
+      try {
+        const raw = await this.redis.get(`linqa:home:${key}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.staleUntil > Date.now()) {
+            return {
+              value: parsed.payload,
+              stale: parsed.freshUntil <= Date.now(),
+              source: "REDIS",
+            };
+          }
+        }
+      } catch {
+        // fail over to PostgreSQL
+      }
+    }
+
+    const result = await this.db.query(
+      `SELECT payload, fresh_until, stale_until
+       FROM home_news_cache_entries
+       WHERE cache_key = $1
+       AND stale_until > now()`,
+      [key]
+    );
+
+    if (!result.rowCount) return null;
+
+    return {
+      value: result.rows[0].payload,
+      stale: new Date(result.rows[0].fresh_until).getTime() <= Date.now(),
+      source: "POSTGRES",
+    };
+  }
+
+  async set<T>(
+    key: string,
+    payload: T,
+    source: string,
+    freshSeconds: number,
+    staleSeconds: number
+  ): Promise<void> {
+    const freshUntil = Date.now() + freshSeconds * 1000;
+    const staleUntil = Date.now() + staleSeconds * 1000;
+
+    await this.db.query(
+      `INSERT INTO home_news_cache_entries
+       (cache_key,payload,fresh_until,stale_until,source)
+       VALUES (
+         $1,
+         $2::jsonb,
+         to_timestamp($3 / 1000.0),
+         to_timestamp($4 / 1000.0),
+         $5
+       )
+       ON CONFLICT (cache_key)
+       DO UPDATE SET
+         payload = EXCLUDED.payload,
+         fresh_until = EXCLUDED.fresh_until,
+         stale_until = EXCLUDED.stale_until,
+         source = EXCLUDED.source,
+         updated_at = now()`,
+      [key, JSON.stringify(payload), freshUntil, staleUntil, source]
+    );
+
+    if (this.redis) {
+      try {
+        await this.redis.set(
+          `linqa:home:${key}`,
+          JSON.stringify({
+            payload,
+            freshUntil,
+            staleUntil,
+          }),
+          { PX: staleSeconds * 1000 }
+        );
+      } catch {
+        // PostgreSQL already contains authoritative durable copy.
+      }
+    }
+  }
+}
+
+# ============================================================================
+# 6. HOME MODULE WIRING
+# file: server/src/home/home.module.ts
+# ============================================================================
+
+import { HomeRepository } from "./home.repository";
+import { PublisherTrustRepository } from "./publisher-trust.repository";
+import { PublisherTrustService } from "./publisher-trust.service";
+import { DurableHomeCache } from "./durable-cache.service";
+
+export function createHomeModule(deps: {
+  db: any;
+  redis?: any;
+  metrics?: any;
+
+  auth: {
+    requireSession: any;
+  };
+
+  services: {
+    resolveJurisdictionCountry(userId: string): Promise<string>;
+    getProfile(userId: string): Promise<unknown>;
+    getNotifications(userId: string): Promise<unknown>;
+    getCountryLinqa(userId: string, country: string): Promise<unknown>;
+    getUpcoming(userId: string): Promise<unknown[]>;
+    getContinueYourDay(userId: string): Promise<unknown[]>;
+    getLiveUpdates(userId: string, country: string): Promise<unknown[]>;
+    getSpotlight(userId: string, country: string): Promise<unknown>;
+  };
+
+  news: {
+    routerFactory(args: {
+      db: any;
+      cache: DurableHomeCache;
+      trustService: PublisherTrustService;
+      metrics?: any;
+    }): any;
+  };
+}) {
+  const homeRepo = new HomeRepository(deps.db);
+
+  const publisherTrustRepo =
+    new PublisherTrustRepository(deps.db);
+
+  const publisherTrustService =
+    new PublisherTrustService(publisherTrustRepo);
+
+  const durableCache =
+    new DurableHomeCache(deps.db, deps.redis);
+
+  const newsRouter =
+    deps.news.routerFactory({
+      db: deps.db,
+      cache: durableCache,
+      trustService: publisherTrustService,
+      metrics: deps.metrics,
+    });
+
+  return {
+    homeRepo,
+    publisherTrustRepo,
+    publisherTrustService,
+    durableCache,
+    newsRouter,
+    requireSession: deps.auth.requireSession,
+    services: deps.services,
+  };
+}
+
+# ============================================================================
+# 7. HEALTH + READINESS
+# file: server/src/home/home-health.service.ts
+# ============================================================================
+
+export class HomeHealthService {
+  constructor(
+    private readonly db: any,
+    private readonly redis: any | undefined,
+    private readonly providerHealthRepo: {
+      list(): Promise<any[]>;
+    }
+  ) {}
+
+  async readiness() {
+    const checks: Record<string, any> = {};
+
+    try {
+      await this.db.query("SELECT 1");
+      checks.postgres = { ok: true };
+    } catch (error) {
+      checks.postgres = {
+        ok: false,
+        error: error instanceof Error ? error.message : "DB_FAILED",
+      };
+    }
+
+    if (this.redis) {
+      try {
+        await this.redis.set("linqa:home:health", "1", { EX: 5 });
+        checks.redis = { ok: true };
+      } catch (error) {
+        checks.redis = {
+          ok: false,
+          error: error instanceof Error ? error.message : "REDIS_FAILED",
+        };
+      }
+    } else {
+      checks.redis = { ok: true, optional: true };
+    }
+
+    const providers = await this.providerHealthRepo.list();
+
+    const usableProviders = providers.filter(
+      p =>
+        p.state === "HEALTHY" ||
+        p.state === "DEGRADED"
+    );
+
+    checks.newsProviders = {
+      ok: usableProviders.length >= 1,
+      providers,
+    };
+
+    const ready =
+      checks.postgres.ok === true &&
+      checks.newsProviders.ok === true;
+
+    return {
+      ready,
+      checks,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+}
+
+# ============================================================================
+# 8. HOME HEALTH ROUTE
+# file: server/src/home/home.routes.ts
+# ============================================================================
+
+import { Router } from "express";
+
+export function createHomeRoutes(deps: {
+  requireSession: any;
+  resolveJurisdictionCountry(userId: string): Promise<string>;
+  homeFeedService: {
+    build(userId: string, country: string): Promise<any>;
+  };
+  homeHealthService: {
+    readiness(): Promise<any>;
+  };
+}) {
+  const router = Router();
+
+  router.get("/v1/mobile/home", deps.requireSession, async (req: any, res, next) => {
+    try {
+      const userId = req.session.userId;
+      const country = await deps.resolveJurisdictionCountry(userId);
+
+      if (!country) {
+        return res.status(409).json({
+          code: "HOME_JURISDICTION_REQUIRED",
+        });
+      }
+
+      const feed =
+        await deps.homeFeedService.build(userId, country);
+
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.status(200).json(feed);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/health/home", async (_req, res) => {
+    const health = await deps.homeHealthService.readiness();
+
+    return res
+      .status(health.ready ? 200 : 503)
+      .json(health);
+  });
+
+  return router;
+}
+
+# ============================================================================
+# 9. ADMIN PUBLISHER CONTROLS
+# file: server/src/home/home-admin.routes.ts
+# ============================================================================
+
+import { Router } from "express";
+
+export function createHomeAdminRoutes(deps: {
+  requireStaffScope(scope: string): any;
+  publisherRepo: {
+    list(limit?: number): Promise<any[]>;
+    upsert(input: any): Promise<void>;
+  };
+}) {
+  const router = Router();
+
+  router.get(
+    "/v1/admin/home/publishers",
+    deps.requireStaffScope("ops:home:publisher:read"),
+    async (_req, res, next) => {
+      try {
+        const publishers = await deps.publisherRepo.list();
+        res.json({ publishers });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.put(
+    "/v1/admin/home/publishers/:domain",
+    deps.requireStaffScope("ops:home:publisher:write"),
+    async (req, res, next) => {
+      try {
+        const domain =
+          String(req.params.domain || "")
+            .trim()
+            .toLowerCase();
+
+        if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(domain)) {
+          return res.status(400).json({
+            code: "INVALID_PUBLISHER_DOMAIN",
+          });
+        }
+
+        const input = {
+          domain,
+          displayName: String(req.body.displayName || domain),
+          countryCode: req.body.countryCode || null,
+          trustStatus: req.body.trustStatus,
+          minProviderScore: Number(req.body.minProviderScore ?? 0.75),
+          allowBreaking: Boolean(req.body.allowBreaking),
+          allowExternalLinks:
+            req.body.allowExternalLinks !== false,
+          attributionRequired:
+            req.body.attributionRequired !== false,
+          notes: req.body.notes || null,
+        };
+
+        if (
+          !["TRUSTED","LIMITED","BLOCKED","UNKNOWN"]
+            .includes(input.trustStatus)
+        ) {
+          return res.status(400).json({
+            code: "INVALID_TRUST_STATUS",
+          });
+        }
+
+        if (
+          !Number.isFinite(input.minProviderScore) ||
+          input.minProviderScore < 0 ||
+          input.minProviderScore > 1
+        ) {
+          return res.status(400).json({
+            code: "INVALID_PROVIDER_SCORE",
+          });
+        }
+
+        await deps.publisherRepo.upsert(input);
+
+        return res.status(204).end();
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  return router;
+}
+
+# ============================================================================
+# 10. REAL VALIDATION INTEGRATION TEST
+# file: server/src/tests/home/home-news-validation.integration.test.ts
+# ============================================================================
+
+import { describe, expect, it, beforeEach } from "@jest/globals";
+
+describe("Home news validation integration", () => {
+  let trustService: any;
+  let validationService: any;
+
+  beforeEach(() => {
+    trustService = {
+      requireAllowed: jest.fn(async (domain: string) => {
+        if (domain === "blocked.example") {
+          throw new Error("PUBLISHER_BLOCKED");
+        }
+
+        return {
+          displayName: domain,
+          trustStatus: "TRUSTED",
+          allowBreaking: true,
+        };
+      }),
+    };
+
+    // Replace import path with real implementation.
+    const {
+      NewsValidationService,
+    } = require("../../home/news-validation.service");
+
+    validationService =
+      new NewsValidationService(trustService);
+  });
+
+  it("rejects non-HTTPS links", async () => {
+    await expect(
+      validationService.validate({
+        providerName: "TEST",
+        title: "Valid headline",
+        url: "http://example.com/story",
+        publishedAt: new Date().toISOString(),
+        providerScore: 0.90,
+      })
+    ).rejects.toThrow("NEWS_URL_NOT_HTTPS");
+  });
+
+  it("rejects blocked publisher", async () => {
+    await expect(
+      validationService.validate({
+        providerName: "TEST",
+        title: "Blocked publisher story",
+        url: "https://blocked.example/story",
+        publishedAt: new Date().toISOString(),
+        providerScore: 0.90,
+      })
+    ).rejects.toThrow("PUBLISHER_BLOCKED");
+  });
+
+  it("accepts trusted HTTPS publisher", async () => {
+    const result = await validationService.validate({
+      providerName: "TEST",
+      title: "Trusted publisher story",
+      url: "https://trusted.example/story?utm_source=x",
+      publishedAt: new Date().toISOString(),
+      providerScore: 0.90,
+    });
+
+    expect(result.publisherDomain)
+      .toBe("trusted.example");
+
+    expect(result.canonicalUrl)
+      .not.toContain("utm_source");
+
+    expect(result.validationScore)
+      .toBeGreaterThanOrEqual(0.65);
+  });
+});
+
+# ============================================================================
+# 11. REAL ROUTER FAILOVER TEST
+# file: server/src/tests/home/home-news-router.integration.test.ts
+# ============================================================================
+
+import { describe, expect, it } from "@jest/globals";
+
+describe("Home news router integration", () => {
+  it("serves secondary provider when primary fails", async () => {
+    const primary = {
+      name: "PRIMARY",
+      priority: 100,
+      isConfigured: () => true,
+      fetch: async () => {
+        throw new Error("PRIMARY_DOWN");
+      },
+    };
+
+    const secondary = {
+      name: "SECONDARY",
+      priority: 50,
+      isConfigured: () => true,
+      fetch: async () => [{
+        providerName: "SECONDARY",
+        title: "Secondary provider story",
+        url: "https://trusted.example/secondary",
+        publishedAt: new Date().toISOString(),
+        providerScore: 0.95,
+      }],
+    };
+
+    const accepted = {
+      providerName: "SECONDARY",
+      title: "Secondary provider story",
+      canonicalUrl: "https://trusted.example/secondary",
+      urlHash: "x",
+      publisherDomain: "trusted.example",
+      publisherName: "Trusted",
+      publishedAt: new Date().toISOString(),
+      category: "GENERAL",
+      providerScore: 0.95,
+      validationScore: 0.95,
+      trustScore: 1,
+      contentFingerprint: "fingerprint-secondary",
+    };
+
+    const db = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("home_news_provider_health")) {
+          return { rows: [], rowCount: 0 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    };
+
+    const cache = {
+      get: jest.fn(async () => null),
+      set: jest.fn(async () => undefined),
+    };
+
+    const validator = {
+      validate: jest.fn(async () => accepted),
+    };
+
+    const telemetry = {
+      newsRequest: jest.fn(),
+      newsFailure: jest.fn(),
+      newsLatency: jest.fn(),
+      cacheHit: jest.fn(),
+      rejected: jest.fn(),
+    };
+
+    const {
+      NewsRouterService,
+    } = require("../../home/news-router.service");
+
+    const router = new NewsRouterService(
+      db,
+      [primary, secondary],
+      validator,
+      cache,
+      telemetry
+    );
+
+    const result = await router.fetch({
+      limit: 10,
+    });
+
+    expect(result.state).toBe("LIVE");
+    expect(result.articles).toHaveLength(1);
+    expect(result.articles[0].providerName)
+      .toBe("SECONDARY");
+
+    expect(telemetry.newsFailure)
+      .toHaveBeenCalledWith(
+        "PRIMARY",
+        "PRIMARY_DOWN"
+      );
+  });
+
+  it("serves stale cache when all providers fail", async () => {
+    const failing = {
+      name: "FAIL",
+      priority: 100,
+      isConfigured: () => true,
+      fetch: async () => {
+        throw new Error("DOWN");
+      },
+    };
+
+    const staleArticle = [{
+      providerName: "CACHE",
+      title: "Cached story",
+      canonicalUrl: "https://trusted.example/cached",
+      urlHash: "cached",
+      publisherDomain: "trusted.example",
+      publisherName: "Trusted",
+      publishedAt: new Date().toISOString(),
+      category: "GENERAL",
+      providerScore: 0.90,
+      validationScore: 0.90,
+      trustScore: 1,
+      contentFingerprint: "cached-story",
+    }];
+
+    const db = {
+      query: jest.fn(async () => ({
+        rows: [],
+        rowCount: 0,
+      })),
+    };
+
+    const cache = {
+      get: jest.fn(async () => ({
+        value: staleArticle,
+        stale: true,
+      })),
+      set: jest.fn(),
+    };
+
+    const validator = {
+      validate: jest.fn(),
+    };
+
+    const telemetry = {
+      newsRequest: jest.fn(),
+      newsFailure: jest.fn(),
+      newsLatency: jest.fn(),
+      cacheHit: jest.fn(),
+      rejected: jest.fn(),
+    };
+
+    const {
+      NewsRouterService,
+    } = require("../../home/news-router.service");
+
+    const router = new NewsRouterService(
+      db,
+      [failing],
+      validator,
+      cache,
+      telemetry
+    );
+
+    const result = await router.fetch({
+      limit: 10,
+    });
+
+    expect(result.state).toBe("STALE");
+    expect(result.articles)
+      .toEqual(staleArticle);
+  });
+});
+
+# ============================================================================
+# 12. FEED INTEGRATION TEST
+# file: server/src/tests/home/home-feed.integration.test.ts
+# ============================================================================
+
+import { describe, expect, it } from "@jest/globals";
+
+describe("Home feed integration", () => {
+  it("builds authenticated feed with fail-honest news state", async () => {
+    const deps = {
+      profile: { id: "u1", displayName: "Test User" },
+      notifications: { unread: 3 },
+      countryLinqa: { countryCode: "US" },
+      upcoming: [],
+      continueYourDay: [],
+      liveUpdates: [],
+      spotlight: null,
+    };
+
+    const newsRouter = {
+      fetch: jest.fn(async () => ({
+        articles: [],
+        state: "UNAVAILABLE",
+      })),
+    };
+
+    const personalization = {
+      getPreferences: jest.fn(async () => ({
+        hiddenSections: [],
+        preferredCategories: [],
+        followedCountries: [],
+        followedTopics: [],
+        quickActions: [],
+        personalizationEnabled: true,
+      })),
+      rankNews: jest.fn((items: any[]) => items),
+    };
+
+    const telemetry = {
+      homeFeedLatency: jest.fn(),
+      homeFeedFailure: jest.fn(),
+    };
+
+    const db = {
+      query: jest.fn(async () => ({
+        rows: [],
+        rowCount: 0,
+      })),
+    };
+
+    const {
+      HomeFeedAggregationService,
+    } = require("../../home/home-feed-aggregation.service");
+
+    const service = new HomeFeedAggregationService(
+      db,
+      newsRouter,
+      personalization,
+      telemetry,
+      {
+        getProfile: async () => deps.profile,
+        getNotifications: async () => deps.notifications,
+        getCountryLinqa: async () => deps.countryLinqa,
+        getUpcoming: async () => deps.upcoming,
+        getContinueYourDay: async () => deps.continueYourDay,
+        getLiveUpdates: async () => deps.liveUpdates,
+        getSpotlight: async () => deps.spotlight,
+      }
+    );
+
+    const result = await service.build("u1", "US");
+
+    expect(result.jurisdictionCountry)
+      .toBe("US");
+
+    expect(result.serviceState.news)
+      .toBe("UNAVAILABLE");
+
+    expect(result.breakingAroundWorld)
+      .toEqual([]);
+
+    expect(db.query)
+      .toHaveBeenCalled();
+  });
+});
+
+# ============================================================================
+# 13. PROVIDER REDUNDANCY VERIFICATION
+# file: scripts/verify-home-provider-redundancy.mjs
+# ============================================================================
+
+const primaryEnabled =
+  process.env.HOME_NEWS_GDELT_ENABLED !== "false";
+
+const secondaryEnabled =
+  Boolean(process.env.HOME_APPROVED_RSS_ENDPOINT);
+
+if (!primaryEnabled) {
+  throw new Error(
+    "HOME_RELEASE_BLOCKED_PRIMARY_NEWS_PROVIDER_DISABLED"
+  );
+}
+
+if (!secondaryEnabled) {
+  throw new Error(
+    "HOME_RELEASE_BLOCKED_NO_SECONDARY_NEWS_PROVIDER"
+  );
+}
+
+console.log(
+  "PASS: primary and secondary Home news providers configured"
+);
+
+# ============================================================================
+# 14. EVIDENCE FRESHNESS VERIFICATION
+# file: scripts/verify-home-evidence-freshness.mjs
+# ============================================================================
+
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+} from "node:fs";
+import {
+  execFileSync,
+} from "node:child_process";
+import path from "node:path";
+
+const gitSha = execFileSync(
+  "git",
+  ["rev-parse", "HEAD"],
+  { encoding: "utf8" }
+).trim();
+
+const maxAgeHours =
+  Number(process.env.HOME_EVIDENCE_MAX_AGE_HOURS ?? 72);
+
+const dir = path.resolve("evidence/home");
+
+if (!existsSync(dir)) {
+  throw new Error("HOME_EVIDENCE_DIRECTORY_MISSING");
+}
+
+const manifests = readdirSync(dir)
+  .filter(name =>
+    name.startsWith(gitSha) &&
+    name.endsWith("-manifest.json")
+  );
+
+if (!manifests.length) {
+  throw new Error(
+    `HOME_EXACT_SHA_DEVICE_EVIDENCE_MISSING:${gitSha}`
+  );
+}
+
+let accepted = false;
+
+for (const file of manifests) {
+  const manifest = JSON.parse(
+    readFileSync(
+      path.join(dir, file),
+      "utf8"
+    )
+  );
+
+  if (
+    manifest.gitSha !== gitSha ||
+    manifest.passed !== true
+  ) {
+    continue;
+  }
+
+  const certifiedAt =
+    new Date(manifest.certifiedAt).getTime();
+
+  if (!Number.isFinite(certifiedAt)) {
+    continue;
+  }
+
+  const ageHours =
+    (Date.now() - certifiedAt) / 3_600_000;
+
+  if (ageHours <= maxAgeHours) {
+    accepted = true;
+    break;
+  }
+}
+
+if (!accepted) {
+  throw new Error(
+    `HOME_DEVICE_EVIDENCE_TOO_OLD_OR_INVALID:max=${maxAgeHours}h`
+  );
+}
+
+console.log(
+  `PASS: Home device evidence is exact-SHA and <= ${maxAgeHours}h old`
+);
+
+# ============================================================================
+# 15. CI RELEASE GATE
+# file: .github/workflows/home-release-gate.yml
+# ============================================================================
+
+name: Linqa Home Release Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "server/src/home/**"
+      - "server/src/routes/**"
+      - "clients/mobile/app/(tabs)/home.tsx"
+      - "clients/mobile/app/news/**"
+      - "scripts/**"
+      - ".github/workflows/home-release-gate.yml"
+
+jobs:
+  home-release-gate:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: linqa_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/linqa_test
+      REDIS_URL: redis://localhost:6379
+      HOME_NEWS_GDELT_ENABLED: "true"
+      HOME_EVIDENCE_MAX_AGE_HOURS: "72"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install server
+        working-directory: server
+        run: npm ci
+
+      - name: Install mobile
+        working-directory: clients/mobile
+        run: npm ci
+
+      - name: Run database migrations
+        working-directory: server
+        run: npm run migrate
+
+      - name: Server build
+        working-directory: server
+        run: npm run build
+
+      - name: Mobile TypeScript
+        working-directory: clients/mobile
+        run: npx tsc --noEmit
+
+      - name: Home integration tests
+        working-directory: server
+        run: npm test -- --runInBand home
+
+      - name: Verify news provider redundancy
+        run: node scripts/verify-home-provider-redundancy.mjs
+
+      # Physical-device evidence cannot be produced by GitHub-hosted Linux CI.
+      # It must be uploaded/committed by the approved device-certification lane.
+      - name: Verify exact-SHA physical-device evidence
+        run: node scripts/verify-home-evidence-freshness.mjs
+
+      - name: Full Home release gate
+        run: node scripts/verify-home-release-gate.mjs
+
+# ============================================================================
+# 16. SERVER STARTUP REGISTRATION
+# example: server/src/index.ts
+# ============================================================================
+
+/*
+import { createClient } from "redis";
+import { createHomeModule } from "./home/home.module";
+import { createHomeRoutes } from "./home/home.routes";
+import { createHomeAdminRoutes } from "./home/home-admin.routes";
+
+const redis =
+  process.env.REDIS_URL
+    ? createClient({ url: process.env.REDIS_URL })
+    : undefined;
+
+if (redis) {
+  redis.on("error", err => {
+    logger.warn({ err }, "Home Redis degraded; PostgreSQL cache fallback active");
+  });
+
+  await redis.connect();
+}
+
+const homeModule = createHomeModule({
+  db,
+  redis,
+  metrics,
+  auth: {
+    requireSession,
+  },
+  services: {
+    resolveJurisdictionCountry,
+    getProfile,
+    getNotifications,
+    getCountryLinqa,
+    getUpcoming,
+    getContinueYourDay,
+    getLiveUpdates,
+    getSpotlight,
+  },
+  news: {
+    routerFactory: createNewsRouter,
+  },
+});
+
+app.use(
+  createHomeRoutes({
+    requireSession,
+    resolveJurisdictionCountry,
+    homeFeedService,
+    homeHealthService,
+  })
+);
+
+app.use(
+  createHomeAdminRoutes({
+    requireStaffScope,
+    publisherRepo: homeModule.publisherTrustRepo,
+  })
+);
+*/
+
+# ============================================================================
+# 17. REQUIRED STAFF SCOPES
+# ============================================================================
+
+# Add:
+#
+# ops:home:publisher:read
+# ops:home:publisher:write
+#
+# Recommended role mapping:
+#
+# HOME_OBSERVER
+#   - ops:home:publisher:read
+#
+# HOME_OPERATIONS
+#   - ops:home:publisher:read
+#   - ops:home:publisher:write
+#
+# SUPER_ADMIN
+#   - both
+#
+# All writes should produce an audit event and outbox event using the existing
+# Linqa operations/audit infrastructure.
+
+# ============================================================================
+# 18. RELEASE ORDER
+# ============================================================================
+
+# 1. Apply v1.0 database migration if not already applied.
+#
+# 2. Add v1.1 repository/service files.
+#
+# 3. Wire Redis.
+#
+# 4. Wire a real secondary provider.
+#
+# 5. Seed publisher trust entries only for approved publishers.
+#
+# 6. Replace old Home route with aggregated /v1/mobile/home.
+#
+# 7. Add Home health endpoint.
+#
+# 8. Add admin publisher controls.
+#
+# 9. Run all real Home integration tests.
+#
+# 10. Build Android APK from clean exact Git SHA.
+#
+# 11. Install APK on approved physical Galaxy.
+#
+# 12. Run physical-device certification.
+#
+# 13. Collect artifact SHA-256 evidence.
+#
+# 14. Verify evidence freshness.
+#
+# 15. Run Home release gate.
+#
+# 16. Promote only if every gate passes.
+
+# ============================================================================
+# 19. DEFINITION OF DONE
+# ============================================================================
+
+# Linqa Home is production-closed only when ALL are true:
+#
+# [ ] Home API is authenticated.
+# [ ] Jurisdiction country is server-authoritative.
+# [ ] Global news has at least two configured providers.
+# [ ] Provider circuit breaker works.
+# [ ] HTTPS validation works.
+# [ ] Blocked publishers cannot reach clients.
+# [ ] Unknown publishers are threshold-controlled.
+# [ ] Redis cache works.
+# [ ] PostgreSQL cache fallback works when Redis fails.
+# [ ] Stale cache is clearly marked STALE.
+# [ ] No provider + no cache returns UNAVAILABLE.
+# [ ] No fabricated news fallback exists.
+# [ ] Feed personalization is user-controlled.
+# [ ] Feed snapshots persist.
+# [ ] Home metrics emit.
+# [ ] Health/readiness endpoint reports dependency state.
+# [ ] Publisher admin writes require staff scope.
+# [ ] Publisher changes are audited.
+# [ ] Real integration tests pass.
+# [ ] Server build passes.
+# [ ] Mobile typecheck passes.
+# [ ] Exact Git SHA captured.
+# [ ] APK/server artifact SHA-256 captured.
+# [ ] Galaxy physical-device certification passes.
+# [ ] Runtime fatal scan is clean.
+# [ ] Screenshot evidence exists.
+# [ ] Evidence is fresh.
+# [ ] Release gate passes.
+#
+# When these are true, the next Home work should be operational monitoring,
+# content/provider governance, and normal feature iteration rather than another
+# closure pack.
+
+# ============================================================================
+# END — LINQA HOME IMPLEMENTATION COMPLETION PACK v1.1
+# ============================================================================

@@ -7,7 +7,7 @@ import { ScreenHeader } from "../../components/ScreenHeader";
 import { PrimaryButton } from "../../components/PrimaryButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
 export default function RecoverySetup() {
   const router = useRouter(); const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);

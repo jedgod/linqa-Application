@@ -19,6 +19,7 @@ import {
   withTransaction
 } from "./chat.service.js";
 import { publishOutboxBatch } from "./chat-outbox.service.js";
+import type { ChatBus } from "./chat-redis-bus.js";
 
 /**
  * Chat v2: conversations, messages, read state, scheduled-call join, QR
@@ -84,7 +85,8 @@ export async function registerChatV2Routes(
   app: FastifyInstance,
   config: AppConfig,
   db: Database,
-  hub: RealtimeHub
+  hub: RealtimeHub,
+  bus?: ChatBus
 ) {
   const authenticate = createAuthenticator(config);
 
@@ -148,7 +150,7 @@ export async function registerChatV2Routes(
    * announce a message that a later rollback erases.
    */
   const flush = (request: FastifyRequest) => {
-    void publishOutboxBatch(db, hub, 100).catch((error) => {
+    void publishOutboxBatch(db, hub, 100, bus).catch((error) => {
       request.log.warn({ err: error }, "chat outbox flush failed; relay will retry");
     });
   };

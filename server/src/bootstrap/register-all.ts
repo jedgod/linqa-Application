@@ -26,6 +26,8 @@ import { registerGaHardeningRoutes } from "../routes/ga-hardening.routes.js";
 import { createHomeModule } from "../home/home.module.js";
 import { registerChatRoutes } from "../routes/chats.js";
 import { registerChatV2Routes } from "../chat/chat-v2.routes.js";
+import { createChatBus } from "../chat/chat-redis-bus.js";
+import { startChatBusSubscriber } from "../chat/chat-outbox.service.js";
 import { registerHomeRoutes } from "../home/home.routes.js";
 import { registerHomeAdminRoutes } from "../home/home-admin.routes.js";
 import { registerGapClosureRoutes } from "../routes/gap-closure.js";
@@ -193,6 +195,17 @@ export async function registerAll(
   await registerRealtime(app, config, db, hub);
   await registerSignaling(app, config, db, services.signaling, hub);
   await registerMobileHubRoutes(app, config, db, hub);
+
+  // Cross-node chat fan-out. Without Redis this is a no-op and delivery falls
+  // back to in-process sockets plus durable replay, which is correct on a
+  // single node and degraded-but-working on several.
+  const chatBus = createChatBus(config.REDIS_URL, (error) =>
+    app.log.warn({ err: error }, "chat redis bus unavailable; using in-process fan-out")
+  );
+  startChatBusSubscriber(hub, chatBus);
   await registerChatRoutes(app, config, db);
-  await registerChatV2Routes(app, config, db, hub);
+  await registerChatV2Routes(app, config, db, hub, chatBus);
+  app.addHook("onClose", async () => {
+    await chatBus.close();
+  });
 }

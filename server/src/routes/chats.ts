@@ -134,7 +134,20 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
            FROM conversations c
            JOIN conversation_members cm
              ON cm.conversation_id = c.id AND cm.user_id = $1 AND cm.removed_at IS NULL
-           WHERE c.archived_at IS NULL ${filterClause}
+           WHERE c.archived_at IS NULL
+             AND (
+               c.conversation_type <> 'DIRECT'
+               OR NOT EXISTS (
+                 SELECT 1
+                   FROM conversation_members blocked_peer
+                   JOIN blocked_users bu
+                     ON (bu.blocker_user_id = $1 AND bu.blocked_user_id = blocked_peer.user_id)
+                     OR (bu.blocker_user_id = blocked_peer.user_id AND bu.blocked_user_id = $1)
+                  WHERE blocked_peer.conversation_id = c.id
+                    AND blocked_peer.user_id <> $1
+                    AND blocked_peer.removed_at IS NULL
+               )
+             ) ${filterClause}
            ORDER BY cm.pinned DESC, c.last_message_at DESC NULLS LAST
            LIMIT $2`,
           [principal.userId, limit]
@@ -163,6 +176,11 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
             AND peer.user_id <> mine.user_id AND peer.removed_at IS NULL
            JOIN user_profiles p ON p.user_id = peer.user_id
            WHERE mine.user_id = $1 AND mine.removed_at IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM blocked_users bu
+                WHERE (bu.blocker_user_id = $1 AND bu.blocked_user_id = peer.user_id)
+                   OR (bu.blocker_user_id = peer.user_id AND bu.blocked_user_id = $1)
+             )
            ORDER BY online DESC, p.display_name
            LIMIT 12`,
           [principal.userId]
@@ -178,7 +196,20 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
            FROM conversations c
            JOIN conversation_members cm
              ON cm.conversation_id = c.id AND cm.user_id = $1 AND cm.removed_at IS NULL
-           WHERE c.archived_at IS NULL`,
+           WHERE c.archived_at IS NULL
+             AND (
+               c.conversation_type <> 'DIRECT'
+               OR NOT EXISTS (
+                 SELECT 1
+                   FROM conversation_members blocked_peer
+                   JOIN blocked_users bu
+                     ON (bu.blocker_user_id = $1 AND bu.blocked_user_id = blocked_peer.user_id)
+                     OR (bu.blocker_user_id = blocked_peer.user_id AND bu.blocked_user_id = $1)
+                  WHERE blocked_peer.conversation_id = c.id
+                    AND blocked_peer.user_id <> $1
+                    AND blocked_peer.removed_at IS NULL
+               )
+             )`,
           [principal.userId]
         )
       ]);

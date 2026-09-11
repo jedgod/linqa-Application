@@ -4,7 +4,7 @@ import { useRouter } from "expo-router";
 import { LinqaSendService } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
 
-const API=process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const API=process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
 type Method={id:string;type:string;last4:string|null;verificationStatus:string};
 export default function LinqaSendPaymentMethods(){const router=useRouter();const client=useMemo(()=>new LinqaSendService(API,()=>accessTokenProvider.getAccessToken()),[]);const [items,setItems]=useState<Method[]|null>(null);const [type,setType]=useState<"BANK_ACCOUNT"|"MOBILE_WALLET">("BANK_ACCOUNT");const [reference,setReference]=useState("");const [last4,setLast4]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState<string|null>(null);const load=()=>client.listPaymentMethods().then(r=>setItems(r.items)).catch(e=>{setItems([]);setError(e instanceof Error?e.message:"Unable to load funding sources")});useEffect(()=>{void load()},[client]);
  async function add(){if(reference.trim().length<4){setError("Enter the opaque provider reference returned by your bank or wallet provider.");return}setBusy(true);setError(null);try{await client.addPaymentMethod({type,reference:reference.trim(),...(last4.length===4?{last4}:{})});setReference("");setLast4("");await load()}catch(e){setError(e instanceof Error?e.message:"Unable to add funding source")}finally{setBusy(false)}}

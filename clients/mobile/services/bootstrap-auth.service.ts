@@ -6,6 +6,8 @@
  * bearer token via accessTokenProvider, which is exactly what these
  * pre-session endpoints don't have yet — hence a separate client here.
  */
+import { startupRequest } from "./startup-request";
+
 export type RawSession = {
   accessToken: string;
   accessTokenExpiresIn: number;
@@ -46,7 +48,7 @@ export class BootstrapAuthService {
     if (options.body !== undefined) headers["content-type"] = "application/json";
     if (options.accessToken) headers.authorization = `Bearer ${options.accessToken}`;
 
-    const response = await fetch(`${this.apiBaseUrl}${path}`, {
+    const response = await startupRequest(`${this.apiBaseUrl}${path}`, {
       method: options.method,
       headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined

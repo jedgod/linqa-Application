@@ -5,7 +5,7 @@ import { LinqaSendService, type LinqaSendTransferDetail } from "../../services/l
 import { accessTokenProvider } from "../../services/session";
 import { colors, radius, spacing } from "../../theme/tokens";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.2.2:8080";
+const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
 const TERMINAL_STATUSES = new Set(["COMPLETED", "DECLINED", "CANCELED", "FAILED", "EXPIRED"]);
 
 /** SCREEN 7 (Transfer Tracking) + SCREEN 15 (Receipt): real status polling

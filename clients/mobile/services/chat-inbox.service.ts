@@ -86,8 +86,20 @@ export class ChatInboxService {
     const text = await response.text();
     const data: unknown = text ? JSON.parse(text) : {};
     if (!response.ok) {
-      const body = data as { code?: string; error?: string };
-      throw new Error(body.code ?? body.error ?? `Chat request failed (${response.status}).`);
+      const body = data as { code?: unknown; error?: unknown };
+      const nested =
+        body.error && typeof body.error === "object"
+          ? (body.error as { code?: unknown }).code
+          : undefined;
+      const code =
+        typeof body.code === "string"
+          ? body.code
+          : typeof body.error === "string"
+            ? body.error
+            : typeof nested === "string"
+              ? nested
+              : undefined;
+      throw new Error(code ?? `Chat request failed (${response.status}).`);
     }
     return data as T;
   }

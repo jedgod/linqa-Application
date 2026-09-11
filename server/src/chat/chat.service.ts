@@ -57,10 +57,23 @@ export async function assertMember(
     `SELECT cm.role
        FROM conversation_members cm
        JOIN conversations c ON c.id = cm.conversation_id
-      WHERE cm.conversation_id = $1
-        AND cm.user_id = $2
-        AND cm.removed_at IS NULL
-        AND c.archived_at IS NULL`,
+       WHERE cm.conversation_id = $1
+         AND cm.user_id = $2
+         AND cm.removed_at IS NULL
+         AND c.archived_at IS NULL
+         AND (
+           c.conversation_type <> 'DIRECT'
+           OR NOT EXISTS (
+             SELECT 1
+               FROM conversation_members peer
+               JOIN blocked_users bu
+                 ON (bu.blocker_user_id = $2 AND bu.blocked_user_id = peer.user_id)
+                 OR (bu.blocker_user_id = peer.user_id AND bu.blocked_user_id = $2)
+              WHERE peer.conversation_id = c.id
+                AND peer.user_id <> $2
+                AND peer.removed_at IS NULL
+           )
+         )`,
     [conversationId, userId]
   );
   if (!result.rowCount) throw new ChatError(404, "CONVERSATION_NOT_FOUND");
@@ -79,9 +92,22 @@ export async function filterMemberConversations(
        FROM conversation_members cm
        JOIN conversations c ON c.id = cm.conversation_id
       WHERE cm.user_id = $1
-        AND cm.removed_at IS NULL
-        AND c.archived_at IS NULL
-        AND cm.conversation_id = ANY($2::uuid[])`,
+         AND cm.removed_at IS NULL
+         AND c.archived_at IS NULL
+         AND (
+           c.conversation_type <> 'DIRECT'
+           OR NOT EXISTS (
+             SELECT 1
+               FROM conversation_members peer
+               JOIN blocked_users bu
+                 ON (bu.blocker_user_id = $1 AND bu.blocked_user_id = peer.user_id)
+                 OR (bu.blocker_user_id = peer.user_id AND bu.blocked_user_id = $1)
+              WHERE peer.conversation_id = c.id
+                AND peer.user_id <> $1
+                AND peer.removed_at IS NULL
+           )
+         )
+         AND cm.conversation_id = ANY($2::uuid[])`,
     [userId, conversationIds]
   );
   return (result.rows as Array<{ id: string }>).map((row) => row.id);
@@ -123,6 +149,14 @@ export async function resolveDirectConversation(
   if (callerId === otherUserId) throw new ChatError(422, "SELF_CHAT_NOT_ALLOWED");
 
   return withTransaction(db, async (client) => {
+    const blocked = await client.query(
+      `SELECT 1 FROM blocked_users
+        WHERE (blocker_user_id = $1 AND blocked_user_id = $2)
+           OR (blocker_user_id = $2 AND blocked_user_id = $1)`,
+      [callerId, otherUserId]
+    );
+    if (blocked.rowCount) throw new ChatError(404, "USER_NOT_FOUND");
+
     const target = await client.query(
       `SELECT COALESCE(p.display_name,'Linqa User') AS "displayName"
          FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id
@@ -294,6 +328,23 @@ export async function sendMessage(db: Database, input: SendMessageInput): Promis
       kind: row.kind,
       createdAt: new Date(row.createdAt).toISOString()
     });
+
+    // Queued in the same transaction as the message, so a push is never
+    // scheduled for a message that rolled back. Keyed on the message id, so a
+    // retried send cannot enqueue a second notification.
+    await client.query(
+      `INSERT INTO chat_delivery_jobs (job_type, dedupe_key, payload)
+       VALUES ('push.message', $1, $2::jsonb)
+       ON CONFLICT (dedupe_key) DO NOTHING`,
+      [
+        `push:${row.id}`,
+        JSON.stringify({
+          conversationId: input.conversationId,
+          senderUserId: input.senderUserId,
+          messageId: row.id
+        })
+      ]
+    );
 
     return {
       ...row,

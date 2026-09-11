@@ -35,6 +35,25 @@ export interface DeliveryJob {
   attempts: number;
 }
 
+/**
+ * The slice of `PushService` this worker needs.
+ *
+ * Injected rather than constructed here so the worker does not need the token
+ * vault's KMS credentials to run broadcast fan-out, and so tests can assert
+ * what would have been sent without a provider.
+ */
+export interface PushNotifier {
+  notifyDevice(input: {
+    deviceId: string;
+    kind: "MESSAGE_AVAILABLE" | "INCOMING_CALL" | "SECURITY_ALERT";
+    referenceId: string;
+  }): Promise<unknown>;
+}
+
+export interface DeliveryDeps {
+  push?: PushNotifier;
+}
+
 /** Non-retryable classes: retrying these just burns attempts. */
 function isRetryable(error: unknown): boolean {
   const code = (error as { code?: string })?.code;
@@ -207,6 +226,50 @@ function createStableHex(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
+/**
+ * Wakes a conversation's other members on their own devices.
+ *
+ * The payload carries a kind and the conversation id and nothing else: the
+ * message body is ciphertext the server cannot read, and a push notification
+ * is the one place where a "helpful" preview would hand plaintext to Apple or
+ * Google. The device fetches and decrypts locally.
+ */
+async function deliverMessagePush(
+  db: Database,
+  push: PushNotifier | undefined,
+  conversationId: string,
+  senderUserId: string
+): Promise<void> {
+  if (!push) throw new TypeError("PUSH_NOT_CONFIGURED");
+
+  const devices = await db.query(
+    `SELECT d.id
+       FROM conversation_members cm
+       JOIN devices d ON d.user_id = cm.user_id AND d.status = 'ACTIVE'
+      WHERE cm.conversation_id = $1
+        AND cm.user_id <> $2
+        AND cm.removed_at IS NULL
+        -- A muted conversation still delivers the message; it just does not
+        -- light up the recipient's phone.
+        AND cm.muted = FALSE`,
+    [conversationId, senderUserId]
+  );
+
+  for (const row of devices.rows as Array<{ id: string }>) {
+    // One failing endpoint must not strand the rest of the fan-out;
+    // `notifyDevice` already records per-endpoint failures.
+    try {
+      await push.notifyDevice({
+        deviceId: row.id,
+        kind: "MESSAGE_AVAILABLE",
+        referenceId: conversationId
+      });
+    } catch {
+      // Recorded by the push service; the message itself is already durable.
+    }
+  }
+}
+
 async function sendCallReminder(db: Database, callId: string): Promise<void> {
   const found = await db.query(
     `SELECT organizer_user_id AS "organizerId", participant_user_ids AS "participants", status
@@ -246,7 +309,11 @@ async function failJob(db: Database, job: DeliveryJob, error: unknown): Promise<
   );
 }
 
-export async function runDeliveryBatch(db: Database, limit = DEFAULT_BATCH): Promise<number> {
+export async function runDeliveryBatch(
+  db: Database,
+  limit = DEFAULT_BATCH,
+  deps: DeliveryDeps = {}
+): Promise<number> {
   const jobs = await claimJobs(db, limit);
   for (const job of jobs) {
     try {
@@ -254,6 +321,13 @@ export async function runDeliveryBatch(db: Database, limit = DEFAULT_BATCH): Pro
         await deliverBroadcast(db, String(job.payload.campaignId));
       } else if (job.jobType === "call.reminder") {
         await sendCallReminder(db, String(job.payload.callId));
+      } else if (job.jobType === "push.message") {
+        await deliverMessagePush(
+          db,
+          deps.push,
+          String(job.payload.conversationId),
+          String(job.payload.senderUserId)
+        );
       } else {
         // An unknown type will never become known by waiting.
         await failJob(db, { ...job, attempts: MAX_ATTEMPTS }, new TypeError("UNKNOWN_JOB_TYPE"));

@@ -108,7 +108,8 @@ export async function registerCallsV2Routes(
       }
 
       const result = await db.query(
-        `SELECT ch.id,
+         `SELECT ch.id,
+                ch.peer_user_id AS "peerUserId",
                 ch.direction,
                 ch.call_type AS "callType",
                 ch.status,
@@ -213,8 +214,9 @@ export async function registerCallsV2Routes(
       }
 
       const blocked = await db.query(
-        `SELECT 1 FROM user_blocks
-          WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)`,
+        `SELECT 1 FROM blocked_users
+          WHERE (blocker_user_id = $1 AND blocked_user_id = $2)
+             OR (blocker_user_id = $2 AND blocked_user_id = $1)`,
         [principal.userId, body.peerUserId]
       );
       if (blocked.rowCount) {

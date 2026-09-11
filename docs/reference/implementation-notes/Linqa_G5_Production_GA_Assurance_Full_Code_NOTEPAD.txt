@@ -1,0 +1,1036 @@
+LINQA G5 PRODUCTION / GA ASSURANCE FULL IMPLEMENTATION PACK
+Generated: 2026-08-09T21:21:37.223399+00:00
+
+
+==============================================================================================================
+FILE: .github/workflows/g5-ga-assurance.yml
+==============================================================================================================
+name: Linqa G5 GA Assurance
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*-rc*'
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --run tests/g5
+      - run: npm audit --audit-level=high
+      - name: Secret scan
+        run: |
+          command -v gitleaks >/dev/null || exit 1
+          gitleaks detect --source . --no-banner
+      - name: SBOM
+        run: ./scripts/create-sbom.sh
+
+  dr:
+    needs: supply-chain
+    runs-on: ubuntu-latest
+    environment: production-equivalent
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - run: npm run test:dr:restore
+
+  resilience:
+    needs: dr
+    runs-on: ubuntu-latest
+    environment: production-equivalent
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - run: npm run test:load
+      - run: npm run test:chaos
+
+  mobile:
+    needs: resilience
+    strategy:
+      matrix:
+        platform: [ios, android]
+    runs-on: ${{ matrix.platform == 'ios' && 'macos-latest' || 'ubuntu-latest' }}
+    environment: production-equivalent
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Build signed release candidate and run native release suite"
+      - run: npm run test:mobile:release -- --platform=${{ matrix.platform }}
+
+  external-assurance:
+    needs: mobile
+    runs-on: ubuntu-latest
+    environment: ga-approval
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - run: npm test -- --run tests/g5/external-assurance.spec.ts
+        env:
+          LINQA_G5_CRYPTO_REVIEW_EVIDENCE_ID: ${{ vars.LINQA_G5_CRYPTO_REVIEW_EVIDENCE_ID }}
+          LINQA_G5_PENTEST_EVIDENCE_ID: ${{ vars.LINQA_G5_PENTEST_EVIDENCE_ID }}
+          LINQA_G5_PRIVACY_EVIDENCE_ID: ${{ vars.LINQA_G5_PRIVACY_EVIDENCE_ID }}
+
+  final-ga:
+    needs: external-assurance
+    runs-on: ubuntu-latest
+    environment: ga-approval
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - name: Verify G0-G5 evidence
+        env:
+          GIT_SHA: ${{ github.sha }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+          LINQA_G5_EVIDENCE_ROOT: release-evidence/g5
+        run: npm run verify:g5
+      - name: Final admission
+        run: npm run verify:production-admission
+
+==============================================================================================================
+FILE: G5_GREEN_LABEL_RULES.md
+==============================================================================================================
+# G5 GREEN Label
+
+G5 is GREEN only if ALL sub-gates G5-A through G5-K are GREEN.
+
+Code can enforce:
+- evidence presence/hash binding
+- revision/release binding
+- scan/test results
+- artifact signing/SBOM/provenance
+- backup/DR/load/chaos thresholds
+- canary/rollback rules
+- mobile release checks
+- approval completeness
+
+Code cannot substitute for:
+- independent cryptographic review
+- independent penetration test
+- legal/privacy approval
+- human incident readiness
+- app-store review
+
+These must be represented as verified evidence artifacts and remain release-blocking.
+
+==============================================================================================================
+FILE: INTEGRATION_ORDER.md
+==============================================================================================================
+# G5 Integration Order
+
+1. Create release-evidence root and EvidenceRegistry.
+2. Wire G5 gate evaluator and GA release controller.
+3. Add supply-chain scanning and SBOM generation.
+4. Add artifact signing and provenance.
+5. Wire real production KMS adapter and secret rotation.
+6. Implement immutable audit -> SIEM export.
+7. Define SLOs and paging alerts.
+8. Implement backup restore into isolated environment.
+9. Add RPO/RTO measurement.
+10. Add load, soak and chaos suites.
+11. Add signed iOS/Android release candidate validation.
+12. Add canary controller and rollback compatibility checks.
+13. Register external crypto/pentest/privacy evidence manifests.
+14. Add formal multi-role go/no-go.
+15. Block GA tag/deployment until G0-G5 all GREEN.
+
+==============================================================================================================
+FILE: README.md
+==============================================================================================================
+# Linqa G5 Production / GA Assurance Pack
+
+This pack implements the code-controlled portion of G5.
+
+G5 sub-gates:
+- G5-A Independent crypto review evidence
+- G5-B Penetration test evidence
+- G5-C Supply-chain security
+- G5-D Infrastructure security
+- G5-E Backup / disaster recovery
+- G5-F Load / chaos / resilience
+- G5-G Observability / paging / security operations
+- G5-H Privacy / compliance evidence
+- G5-I Mobile release assurance
+- G5-J Canary / rollback
+- G5-K Formal go/no-go
+
+Important:
+External reviews cannot be replaced by code. This pack makes those artifacts
+mandatory and machine-verifiable before GA can be declared.
+
+==============================================================================================================
+FILE: config/g5-gates.example.json
+==============================================================================================================
+{
+  "G5-A": {
+    "required": [
+      "independent_crypto_review",
+      "zero_open_critical",
+      "zero_open_high_crypto"
+    ]
+  },
+  "G5-B": {
+    "required": [
+      "independent_penetration_test",
+      "zero_open_critical"
+    ]
+  },
+  "G5-C": {
+    "required": [
+      "sast",
+      "sca",
+      "secret_scan",
+      "container_scan",
+      "iac_scan",
+      "sbom",
+      "artifact_signature",
+      "provenance"
+    ]
+  },
+  "G5-D": {
+    "required": [
+      "kms_ready",
+      "secret_rotation_proven",
+      "tls_policy",
+      "service_identity",
+      "production_network_policy"
+    ]
+  },
+  "G5-E": {
+    "required": [
+      "backup_restore_proven",
+      "rpo_within_target",
+      "rto_within_target"
+    ]
+  },
+  "G5-F": {
+    "required": [
+      "load_test_green",
+      "soak_test_green",
+      "chaos_suite_green",
+      "multi_replica_green"
+    ]
+  },
+  "G5-G": {
+    "required": [
+      "slos_defined",
+      "paging_tested",
+      "security_alerts_tested",
+      "siem_export_green"
+    ]
+  },
+  "G5-H": {
+    "required": [
+      "privacy_review_approved",
+      "retention_approved",
+      "delete_export_tested",
+      "incident_response_approved"
+    ]
+  },
+  "G5-I": {
+    "required": [
+      "ios_release_green",
+      "android_release_green",
+      "upgrade_green",
+      "push_green",
+      "web_native_e2e_green"
+    ]
+  },
+  "G5-J": {
+    "required": [
+      "canary_green",
+      "rollback_proven",
+      "schema_rollback_compatible"
+    ]
+  },
+  "G5-K": {
+    "required": [
+      "engineering_approval",
+      "security_approval",
+      "sre_approval",
+      "privacy_legal_approval",
+      "product_approval"
+    ]
+  }
+}
+
+==============================================================================================================
+FILE: mobile/release/MobileReleaseAssurance.ts
+==============================================================================================================
+export interface MobileReleaseEvidence {
+  platform: "ios" | "android";
+  signed: boolean;
+  releaseBuild: boolean;
+  debugDisabled: boolean;
+  secureStoragePassed: boolean;
+  upgradeMigrationPassed: boolean;
+  reinstallRecoveryPassed: boolean;
+  backgroundReceivePassed: boolean;
+  pushPassed: boolean;
+  deviceRevocationPassed: boolean;
+  webNativeE2ePassed: boolean;
+  storeValidationPassed: boolean;
+}
+
+export function assertMobileRelease(e: MobileReleaseEvidence) {
+  const failures = Object.entries(e)
+    .filter(([k,v]) => typeof v === "boolean" && v !== true)
+    .map(([k]) => k);
+
+  if (failures.length) {
+    throw new Error(`MOBILE_RELEASE_BLOCKED:${e.platform}:${failures.join(",")}`);
+  }
+}
+
+==============================================================================================================
+FILE: ops/chaos/ChaosScenarioRegistry.ts
+==============================================================================================================
+export interface ChaosScenario {
+  id: string;
+  description: string;
+  expectedOutcome: string;
+  releaseBlocking: boolean;
+}
+
+export const CHAOS_SCENARIOS: ChaosScenario[] = [
+  { id: "postgres-primary-loss", description: "Terminate primary database", expectedOutcome: "failover without corrupting relay or identity state", releaseBlocking: true },
+  { id: "redis-loss", description: "Remove Redis", expectedOutcome: "degraded features fail closed; durable DB state preserved", releaseBlocking: true },
+  { id: "relay-restart", description: "Restart message relay", expectedOutcome: "leased messages recover after lease expiry", releaseBlocking: true },
+  { id: "websocket-restart", description: "Restart realtime service", expectedOutcome: "clients reconnect and recover using lease path", releaseBlocking: true },
+  { id: "kms-outage", description: "Block KMS access", expectedOutcome: "sensitive dependent capabilities become DEGRADED/NOT READY", releaseBlocking: true },
+  { id: "sms-provider-loss", description: "Disable SMS provider", expectedOutcome: "phone auth becomes DEGRADED and does not silently use dev delivery", releaseBlocking: true },
+  { id: "object-store-loss", description: "Disable object storage", expectedOutcome: "attachment/vault flows degrade without affecting ciphertext text relay", releaseBlocking: true },
+];
+
+==============================================================================================================
+FILE: ops/dr/BackupRestoreVerifier.ts
+==============================================================================================================
+import crypto from "node:crypto";
+
+export interface BackupAdapter {
+  createBackup(): Promise<{ id: string; checksum: string }>;
+  restoreIntoIsolatedTarget(backupId: string): Promise<{ connection: string }>;
+  runIntegrityChecks(connection: string): Promise<{
+    schemaOk: boolean;
+    rowCountsOk: boolean;
+    criticalQueriesOk: boolean;
+    encryptionMetadataOk: boolean;
+  }>;
+}
+
+export class BackupRestoreVerifier {
+  constructor(private readonly adapter: BackupAdapter) {}
+
+  async proveRestore() {
+    const backup = await this.adapter.createBackup();
+    const restored = await this.adapter.restoreIntoIsolatedTarget(backup.id);
+    const checks = await this.adapter.runIntegrityChecks(restored.connection);
+
+    const passed =
+      checks.schemaOk &&
+      checks.rowCountsOk &&
+      checks.criticalQueriesOk &&
+      checks.encryptionMetadataOk;
+
+    return {
+      id: `dr_${crypto.randomUUID()}`,
+      backupId: backup.id,
+      backupChecksum: backup.checksum,
+      passed,
+      checks,
+      verifiedAt: new Date().toISOString(),
+    };
+  }
+}
+
+==============================================================================================================
+FILE: ops/dr/RecoveryObjectivePolicy.ts
+==============================================================================================================
+export interface RecoveryMeasurement {
+  rpoSeconds: number;
+  rtoSeconds: number;
+  dataIntegrityPassed: boolean;
+}
+
+export function assertRecoveryObjectives(
+  actual: RecoveryMeasurement,
+  target: { maxRpoSeconds: number; maxRtoSeconds: number },
+) {
+  if (!actual.dataIntegrityPassed) throw new Error("DR_DATA_INTEGRITY_FAILED");
+  if (actual.rpoSeconds > target.maxRpoSeconds) throw new Error("DR_RPO_EXCEEDED");
+  if (actual.rtoSeconds > target.maxRtoSeconds) throw new Error("DR_RTO_EXCEEDED");
+}
+
+==============================================================================================================
+FILE: ops/load/LoadGatePolicy.ts
+==============================================================================================================
+export interface LoadResult {
+  scenario: string;
+  errorRate: number;
+  p95Ms: number;
+  p99Ms: number;
+  sustainedMinutes: number;
+}
+
+const LIMITS: Record<string, { errorRate: number; p95Ms: number; minMinutes: number }> = {
+  auth: { errorRate: 0.01, p95Ms: 1500, minMinutes: 30 },
+  relay: { errorRate: 0.005, p95Ms: 1000, minMinutes: 60 },
+  websocket_connect: { errorRate: 0.01, p95Ms: 2000, minMinutes: 30 },
+};
+
+export function assertLoadGate(r: LoadResult) {
+  const limit = LIMITS[r.scenario];
+  if (!limit) throw new Error(`UNKNOWN_LOAD_SCENARIO:${r.scenario}`);
+  if (r.errorRate > limit.errorRate) throw new Error(`LOAD_ERROR_RATE_EXCEEDED:${r.scenario}`);
+  if (r.p95Ms > limit.p95Ms) throw new Error(`LOAD_P95_EXCEEDED:${r.scenario}`);
+  if (r.sustainedMinutes < limit.minMinutes) throw new Error(`LOAD_DURATION_TOO_SHORT:${r.scenario}`);
+}
+
+==============================================================================================================
+FILE: ops/release/CanaryController.ts
+==============================================================================================================
+export interface CanaryMetrics {
+  errorRate: number;
+  authFailureDelta: number;
+  relayFailureDelta: number;
+  crashFreeSessions: number;
+  securityAlertCount: number;
+}
+
+export type CanaryDecision = "CONTINUE" | "HOLD" | "ROLLBACK";
+
+export function decideCanary(m: CanaryMetrics): CanaryDecision {
+  if (m.securityAlertCount > 0) return "ROLLBACK";
+  if (m.errorRate > 0.02) return "ROLLBACK";
+  if (m.crashFreeSessions < 0.995) return "ROLLBACK";
+  if (m.authFailureDelta > 0.25 || m.relayFailureDelta > 0.25) return "HOLD";
+  return "CONTINUE";
+}
+
+==============================================================================================================
+FILE: ops/release/GoNoGoService.ts
+==============================================================================================================
+export interface Approval {
+  role:
+    | "ENGINEERING"
+    | "SECURITY"
+    | "SRE"
+    | "PRIVACY_LEGAL"
+    | "PRODUCT";
+  approver: string;
+  approved: boolean;
+  approvedAt?: string;
+  evidenceId?: string;
+}
+
+export function assertGoNoGo(approvals: Approval[]) {
+  const required = ["ENGINEERING","SECURITY","SRE","PRIVACY_LEGAL","PRODUCT"];
+  const missing = required.filter(role =>
+    !approvals.some(a => a.role === role && a.approved && a.approvedAt)
+  );
+  if (missing.length) throw new Error(`GO_NO_GO_BLOCKED:${missing.join(",")}`);
+}
+
+==============================================================================================================
+FILE: ops/release/RollbackCompatibilityGuard.ts
+==============================================================================================================
+export interface CompatibilityInput {
+  deployedSchemaVersion: string;
+  previousAppMinSchema: string;
+  previousAppMaxSchema: string;
+  destructiveMigrationApplied: boolean;
+}
+
+export function assertRollbackCompatible(i: CompatibilityInput) {
+  if (i.destructiveMigrationApplied) throw new Error("ROLLBACK_BLOCKED_DESTRUCTIVE_MIGRATION");
+  if (
+    i.deployedSchemaVersion < i.previousAppMinSchema ||
+    i.deployedSchemaVersion > i.previousAppMaxSchema
+  ) {
+    throw new Error("ROLLBACK_SCHEMA_INCOMPATIBLE");
+  }
+}
+
+==============================================================================================================
+FILE: privacy/PrivacyEvidencePolicy.ts
+==============================================================================================================
+export interface PrivacyEvidence {
+  dataInventoryApproved: boolean;
+  retentionPolicyApproved: boolean;
+  deletionWorkflowTested: boolean;
+  exportWorkflowTested: boolean;
+  consentReviewApproved: boolean;
+  incidentResponseApproved: boolean;
+  privilegedAccessReviewApproved: boolean;
+}
+
+export function assertPrivacyEvidence(e: PrivacyEvidence) {
+  const failures = Object.entries(e).filter(([,v]) => !v).map(([k]) => k);
+  if (failures.length) throw new Error(`PRIVACY_ASSURANCE_BLOCKED:${failures.join(",")}`);
+}
+
+==============================================================================================================
+FILE: scripts/create-sbom.sh
+==============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+OUT="${1:-artifacts/sbom}"
+mkdir -p "$OUT"
+
+command -v syft >/dev/null 2>&1 || {
+  echo "syft required"; exit 1;
+}
+
+syft dir:. -o cyclonedx-json="$OUT/linqa.cdx.json"
+sha256sum "$OUT/linqa.cdx.json" > "$OUT/linqa.cdx.json.sha256"
+
+==============================================================================================================
+FILE: scripts/sign-release.sh
+==============================================================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+ARTIFACT="${1:?artifact required}"
+OUT="${2:-artifacts/signatures}"
+mkdir -p "$OUT"
+
+command -v cosign >/dev/null 2>&1 || {
+  echo "cosign required"; exit 1;
+}
+
+cosign sign-blob \
+  --yes \
+  --output-signature "$OUT/$(basename "$ARTIFACT").sig" \
+  "$ARTIFACT"
+
+sha256sum "$ARTIFACT" > "$OUT/$(basename "$ARTIFACT").sha256"
+
+==============================================================================================================
+FILE: scripts/verify-release-evidence.ts
+==============================================================================================================
+import { assertG5Green } from "../server/src/ga/GAReleaseController";
+
+async function main() {
+  const root = process.env.LINQA_G5_EVIDENCE_ROOT ?? "release-evidence/g5";
+  const revision = process.env.GIT_SHA;
+  const version = process.env.RELEASE_VERSION;
+
+  if (!revision) throw new Error("GIT_SHA required");
+  if (!version) throw new Error("RELEASE_VERSION required");
+
+  await assertG5Green(root, revision, version);
+  console.log(`G5 GREEN for ${version} @ ${revision}`);
+}
+
+main().catch(e => {
+  console.error(e);
+  process.exit(1);
+});
+
+==============================================================================================================
+FILE: server/src/ga/DeploymentAdmissionPolicy.ts
+==============================================================================================================
+export interface AdmissionInput {
+  environment: "staging" | "production";
+  revision: string;
+  artifactSigned: boolean;
+  sbomPresent: boolean;
+  provenancePresent: boolean;
+  secretScanGreen: boolean;
+  sastGreen: boolean;
+  scaGreen: boolean;
+  containerScanGreen: boolean;
+  iacScanGreen: boolean;
+  g0ToG4Green: boolean;
+  g5Green: boolean;
+  migrationDirty: boolean;
+  backupRestoreGreen: boolean;
+}
+
+export function assertDeploymentAdmitted(i: AdmissionInput) {
+  if (i.environment !== "production") return;
+
+  const failures: string[] = [];
+  if (!i.artifactSigned) failures.push("ARTIFACT_UNSIGNED");
+  if (!i.sbomPresent) failures.push("SBOM_MISSING");
+  if (!i.provenancePresent) failures.push("PROVENANCE_MISSING");
+  if (!i.secretScanGreen) failures.push("SECRET_SCAN_FAILED");
+  if (!i.sastGreen) failures.push("SAST_FAILED");
+  if (!i.scaGreen) failures.push("SCA_FAILED");
+  if (!i.containerScanGreen) failures.push("CONTAINER_SCAN_FAILED");
+  if (!i.iacScanGreen) failures.push("IAC_SCAN_FAILED");
+  if (!i.g0ToG4Green) failures.push("G0_G4_NOT_GREEN");
+  if (!i.g5Green) failures.push("G5_NOT_GREEN");
+  if (i.migrationDirty) failures.push("MIGRATION_DIRTY");
+  if (!i.backupRestoreGreen) failures.push("BACKUP_RESTORE_NOT_PROVEN");
+
+  if (failures.length) {
+    throw new Error(`PRODUCTION_ADMISSION_DENIED:${failures.join(",")}`);
+  }
+}
+
+==============================================================================================================
+FILE: server/src/ga/EvidenceRegistry.ts
+==============================================================================================================
+import fs from "node:fs/promises";
+import path from "node:path";
+import crypto from "node:crypto";
+import { EvidenceArtifact } from "./types";
+
+export class EvidenceRegistry {
+  constructor(private readonly root: string) {}
+
+  async register(input: Omit<EvidenceArtifact, "sha256"> & { contentPath: string }) {
+    const bytes = await fs.readFile(input.contentPath);
+    const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+
+    const artifact: EvidenceArtifact = {
+      id: input.id,
+      type: input.type,
+      path: input.path,
+      sha256,
+      producedAt: input.producedAt,
+      producer: input.producer,
+      environment: input.environment,
+      metadata: input.metadata,
+    };
+
+    await fs.mkdir(this.root, { recursive: true });
+    await fs.writeFile(
+      path.join(this.root, `${artifact.id}.json`),
+      JSON.stringify(artifact, null, 2),
+    );
+
+    return artifact;
+  }
+
+  async get(id: string): Promise<EvidenceArtifact | null> {
+    try {
+      return JSON.parse(await fs.readFile(path.join(this.root, `${id}.json`), "utf8"));
+    } catch {
+      return null;
+    }
+  }
+}
+
+==============================================================================================================
+FILE: server/src/ga/ExternalAssuranceVerifier.ts
+==============================================================================================================
+import fs from "node:fs/promises";
+import crypto from "node:crypto";
+
+export interface ExternalEvidenceManifest {
+  reviewType: "CRYPTO_REVIEW" | "PEN_TEST" | "PRIVACY_REVIEW";
+  organization: string;
+  reportPath: string;
+  reportSha256: string;
+  completedAt: string;
+  criticalOpen: number;
+  highOpen: number;
+  approved: boolean;
+}
+
+export async function verifyExternalEvidence(m: ExternalEvidenceManifest) {
+  const bytes = await fs.readFile(m.reportPath);
+  const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+
+  if (digest !== m.reportSha256) throw new Error("EXTERNAL_REPORT_HASH_MISMATCH");
+  if (!m.approved) throw new Error("EXTERNAL_REVIEW_NOT_APPROVED");
+  if (m.criticalOpen > 0) throw new Error("OPEN_CRITICAL_FINDINGS");
+  if (m.reviewType === "CRYPTO_REVIEW" && m.highOpen > 0) {
+    throw new Error("OPEN_HIGH_CRYPTO_FINDINGS");
+  }
+
+  return true;
+}
+
+==============================================================================================================
+FILE: server/src/ga/G5GateEvaluator.ts
+==============================================================================================================
+import { G5GateEvidence, G5SubGate, G5Check } from "./types";
+
+export function evaluateGate(
+  gate: G5SubGate,
+  revision: string,
+  releaseVersion: string,
+  checks: G5Check[],
+): G5GateEvidence {
+  const required = checks.filter(c => c.required);
+  const failed = required.filter(c => !c.passed);
+
+  return {
+    gate,
+    status: failed.length === 0 ? "GREEN" : required.some(c => c.passed) ? "AMBER" : "RED",
+    generatedAt: new Date().toISOString(),
+    revision,
+    releaseVersion,
+    checks,
+  };
+}
+
+==============================================================================================================
+FILE: server/src/ga/GAReleaseController.ts
+==============================================================================================================
+import fs from "node:fs/promises";
+import path from "node:path";
+import { G5GateEvidence, G5SubGate } from "./types";
+
+const GATES: G5SubGate[] = [
+  "G5-A","G5-B","G5-C","G5-D","G5-E",
+  "G5-F","G5-G","G5-H","G5-I","G5-J","G5-K"
+];
+
+export async function assertG5Green(root: string, expectedRevision: string, releaseVersion: string) {
+  const failures: string[] = [];
+
+  for (const gate of GATES) {
+    const file = path.join(root, gate, "gate-evidence.json");
+    let evidence: G5GateEvidence;
+    try {
+      evidence = JSON.parse(await fs.readFile(file, "utf8"));
+    } catch {
+      failures.push(`${gate}:MISSING_EVIDENCE`);
+      continue;
+    }
+
+    if (evidence.status !== "GREEN") failures.push(`${gate}:${evidence.status}`);
+    if (evidence.revision !== expectedRevision) failures.push(`${gate}:REVISION_MISMATCH`);
+    if (evidence.releaseVersion !== releaseVersion) failures.push(`${gate}:RELEASE_VERSION_MISMATCH`);
+  }
+
+  if (failures.length) {
+    throw new Error(`LINQA_GA_BLOCKED:${failures.join(",")}`);
+  }
+}
+
+==============================================================================================================
+FILE: server/src/ga/types.ts
+==============================================================================================================
+export type G5SubGate =
+  | "G5-A"
+  | "G5-B"
+  | "G5-C"
+  | "G5-D"
+  | "G5-E"
+  | "G5-F"
+  | "G5-G"
+  | "G5-H"
+  | "G5-I"
+  | "G5-J"
+  | "G5-K";
+
+export type GateStatus = "RED" | "AMBER" | "GREEN";
+
+export interface EvidenceArtifact {
+  id: string;
+  type: string;
+  path: string;
+  sha256: string;
+  producedAt: string;
+  producer: string;
+  environment: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface G5Check {
+  id: string;
+  description: string;
+  required: boolean;
+  passed: boolean;
+  evidenceIds: string[];
+  detail?: string;
+}
+
+export interface G5GateEvidence {
+  gate: G5SubGate;
+  status: GateStatus;
+  generatedAt: string;
+  revision: string;
+  releaseVersion: string;
+  checks: G5Check[];
+}
+
+==============================================================================================================
+FILE: server/src/observability/PagingPolicy.ts
+==============================================================================================================
+export interface AlertSample {
+  name: string;
+  value: number;
+  windowMinutes: number;
+}
+
+export type Severity = "INFO" | "WARNING" | "PAGE";
+
+export function classifyAlert(a: AlertSample): Severity {
+  if (a.name === "linqa_transparency_failure_total" && a.value > 0) return "PAGE";
+  if (a.name === "linqa_refresh_replay_total" && a.value >= 10 && a.windowMinutes <= 5) return "PAGE";
+  if (a.name === "linqa_key_package_rejected_total" && a.value >= 100 && a.windowMinutes <= 10) return "WARNING";
+  if (a.name === "linqa_auth_failure_total" && a.value >= 1000 && a.windowMinutes <= 5) return "WARNING";
+  return "INFO";
+}
+
+==============================================================================================================
+FILE: server/src/observability/SecurityMetrics.ts
+==============================================================================================================
+export interface MetricsSink {
+  increment(name: string, labels?: Record<string,string>): void;
+  observe(name: string, value: number, labels?: Record<string,string>): void;
+}
+
+export class SecurityMetrics {
+  constructor(private readonly sink: MetricsSink) {}
+
+  authFailure(reason: string) {
+    this.sink.increment("linqa_auth_failure_total", { reason });
+  }
+
+  refreshReplay() {
+    this.sink.increment("linqa_refresh_replay_total");
+  }
+
+  keyPackageRejected(reason: string) {
+    this.sink.increment("linqa_key_package_rejected_total", { reason });
+  }
+
+  transparencyFailure(reason: string) {
+    this.sink.increment("linqa_transparency_failure_total", { reason });
+  }
+
+  deviceEnrollmentRisk(level: string) {
+    this.sink.increment("linqa_device_enrollment_risk_total", { level });
+  }
+
+  relayLeaseFailure(reason: string) {
+    this.sink.increment("linqa_relay_lease_failure_total", { reason });
+  }
+}
+
+==============================================================================================================
+FILE: server/src/observability/SloRegistry.ts
+==============================================================================================================
+export interface Slo {
+  id: string;
+  description: string;
+  target: number;
+  windowDays: number;
+}
+
+export const LINQA_SLOS: Slo[] = [
+  { id: "auth_success_availability", description: "Successful eligible auth requests", target: 0.999, windowDays: 30 },
+  { id: "message_relay_availability", description: "Encrypted relay accepted", target: 0.9995, windowDays: 30 },
+  { id: "realtime_wake_availability", description: "Realtime wake delivery", target: 0.995, windowDays: 30 },
+  { id: "message_delivery_latency_p95", description: "Online encrypted message p95 latency objective", target: 2.0, windowDays: 30 },
+  { id: "security_audit_delivery", description: "Security audit event persistence", target: 0.9999, windowDays: 30 },
+];
+
+==============================================================================================================
+FILE: server/src/security/kms/ProductionKmsProvider.ts
+==============================================================================================================
+export interface KmsHealth {
+  state: "READY" | "DEGRADED" | "NOT_CONFIGURED";
+  keyId?: string;
+  checkedAt: string;
+  reason?: string;
+}
+
+export interface ProductionKmsProvider {
+  encrypt(input: {
+    keyId: string;
+    plaintext: Buffer;
+    context: Record<string,string>;
+  }): Promise<Buffer>;
+
+  decrypt(input: {
+    keyId: string;
+    ciphertext: Buffer;
+    context: Record<string,string>;
+  }): Promise<Buffer>;
+
+  generateDataKey(input: {
+    keyId: string;
+    context: Record<string,string>;
+  }): Promise<{ plaintext: Buffer; ciphertext: Buffer }>;
+
+  health(): Promise<KmsHealth>;
+}
+
+==============================================================================================================
+FILE: server/src/security/secrets/SecretRotationCoordinator.ts
+==============================================================================================================
+export interface RotatableSecretProvider {
+  id: string;
+  currentVersion(name: string): Promise<string>;
+  createNext(name: string): Promise<{ version: string }>;
+  validate(name: string, version: string): Promise<boolean>;
+  activate(name: string, version: string): Promise<void>;
+  retire(name: string, version: string): Promise<void>;
+}
+
+export class SecretRotationCoordinator {
+  constructor(private readonly provider: RotatableSecretProvider) {}
+
+  async rotate(name: string) {
+    const current = await this.provider.currentVersion(name);
+    const next = await this.provider.createNext(name);
+
+    if (!(await this.provider.validate(name, next.version))) {
+      throw new Error(`SECRET_ROTATION_VALIDATION_FAILED:${name}`);
+    }
+
+    await this.provider.activate(name, next.version);
+
+    // Retire only after the application has been observed using the new secret.
+    return { name, previousVersion: current, activeVersion: next.version };
+  }
+
+  async retirePrevious(name: string, previousVersion: string) {
+    await this.provider.retire(name, previousVersion);
+  }
+}
+
+==============================================================================================================
+FILE: server/src/security/siem/SecurityEventExporter.ts
+==============================================================================================================
+export interface SecurityEvent {
+  id: string;
+  type: string;
+  occurredAt: string;
+  actorUserId?: string;
+  actorDeviceId?: string;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  metadata?: Record<string,unknown>;
+}
+
+export interface SiemSink {
+  send(batch: SecurityEvent[]): Promise<void>;
+}
+
+export class SecurityEventExporter {
+  constructor(private readonly sink: SiemSink) {}
+
+  async export(events: SecurityEvent[]) {
+    const safe = events.map(e => ({
+      ...e,
+      metadata: this.redact(e.metadata ?? {}),
+    }));
+    await this.sink.send(safe);
+  }
+
+  private redact(obj: Record<string,unknown>) {
+    const blocked = new Set(["plaintext","otp","token","privateKey","authorization","cvc","cardNumber"]);
+    return Object.fromEntries(
+      Object.entries(obj).map(([k,v]) => [k, blocked.has(k) ? "[REDACTED]" : v])
+    );
+  }
+}
+
+==============================================================================================================
+FILE: tests/g5/canary.spec.ts
+==============================================================================================================
+import { describe, expect, it } from "vitest";
+import { decideCanary } from "../../ops/release/CanaryController";
+
+describe("canary decision", () => {
+  it("rolls back on security alert", () => {
+    expect(decideCanary({
+      errorRate: 0.001,
+      authFailureDelta: 0,
+      relayFailureDelta: 0,
+      crashFreeSessions: 0.999,
+      securityAlertCount: 1,
+    })).toBe("ROLLBACK");
+  });
+
+  it("continues healthy canary", () => {
+    expect(decideCanary({
+      errorRate: 0.001,
+      authFailureDelta: 0.02,
+      relayFailureDelta: 0.01,
+      crashFreeSessions: 0.999,
+      securityAlertCount: 0,
+    })).toBe("CONTINUE");
+  });
+});
+
+==============================================================================================================
+FILE: tests/g5/external-assurance.spec.ts
+==============================================================================================================
+import { describe, expect, it } from "vitest";
+
+describe("G5 external assurance evidence", () => {
+  it("requires independent crypto review artifact", () => {
+    expect(process.env.LINQA_G5_CRYPTO_REVIEW_EVIDENCE_ID).toMatch(/^evidence_/);
+  });
+
+  it("requires penetration test artifact", () => {
+    expect(process.env.LINQA_G5_PENTEST_EVIDENCE_ID).toMatch(/^evidence_/);
+  });
+
+  it("requires privacy/compliance approval artifact", () => {
+    expect(process.env.LINQA_G5_PRIVACY_EVIDENCE_ID).toMatch(/^evidence_/);
+  });
+});
+
+==============================================================================================================
+FILE: tests/g5/load-policy.spec.ts
+==============================================================================================================
+import { describe, expect, it } from "vitest";
+import { assertLoadGate } from "../../ops/load/LoadGatePolicy";
+
+describe("load gate", () => {
+  it("accepts relay load within limits", () => {
+    expect(() => assertLoadGate({
+      scenario: "relay",
+      errorRate: 0.001,
+      p95Ms: 400,
+      p99Ms: 900,
+      sustainedMinutes: 60,
+    })).not.toThrow();
+  });
+
+  it("rejects excessive error rate", () => {
+    expect(() => assertLoadGate({
+      scenario: "relay",
+      errorRate: 0.02,
+      p95Ms: 400,
+      p99Ms: 900,
+      sustainedMinutes: 60,
+    })).toThrow();
+  });
+});
+
+==============================================================================================================
+FILE: tests/g5/mobile-release.spec.ts
+==============================================================================================================
+import { describe, expect, it } from "vitest";
+import { assertMobileRelease } from "../../mobile/release/MobileReleaseAssurance";
+
+describe("mobile GA gate", () => {
+  it("fails if debug remains enabled", () => {
+    expect(() => assertMobileRelease({
+      platform:"android",
+      signed:true,
+      releaseBuild:true,
+      debugDisabled:false,
+      secureStoragePassed:true,
+      upgradeMigrationPassed:true,
+      reinstallRecoveryPassed:true,
+      backgroundReceivePassed:true,
+      pushPassed:true,
+      deviceRevocationPassed:true,
+      webNativeE2ePassed:true,
+      storeValidationPassed:true,
+    })).toThrow("MOBILE_RELEASE_BLOCKED");
+  });
+});
