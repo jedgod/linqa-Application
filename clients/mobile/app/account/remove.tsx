@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { StyleSheet, Text, Pressable, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, router } from "expo-router";
@@ -10,7 +10,7 @@ import { getOrCreateInstallationPublicId, currentPlatform } from "../../account/
 import { cacheInstallationServerId, getCachedInstallationServerId } from "../../account/InstallationRegistry";
 import { useAccounts } from "../../account/AccountContext";
 import { ErrorBanner } from "../../components/ErrorBanner";
-import { colors, radius } from "../../theme/tokens";
+import { radius, useTheme, type Palette } from "../../theme/tokens";
 import { getApiBaseUrl } from "../../config/api";
 
 const API_BASE_URL = getApiBaseUrl();
@@ -26,6 +26,8 @@ async function resolveInstallationId(client: MultiAccountApiService): Promise<st
 }
 
 export default function RemoveAccountScreen() {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const { userId, displayName } = useLocalSearchParams<{ userId: string; displayName?: string }>();
   const { accounts, setAccounts } = useAccounts();
   const [busy, setBusy] = useState(false);
@@ -69,7 +71,7 @@ export default function RemoveAccountScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg, padding: 22, paddingTop: 46 },
   top: { color: colors.danger, fontWeight: "800", textAlign: "center", marginBottom: 28 },
   p: { flexDirection: "row", gap: 12, alignItems: "center" },

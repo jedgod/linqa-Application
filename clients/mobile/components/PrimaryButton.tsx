@@ -1,5 +1,6 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text } from "react-native";
-import { colors, radius } from "../theme/tokens";
+import { useMemo } from "react";
+import { radius, useTheme, type Palette } from "../theme/tokens";
 
 export function PrimaryButton({
   label,
@@ -12,25 +13,27 @@ export function PrimaryButton({
   disabled?: boolean;
   busy?: boolean;
 }) {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled || busy}
       style={[s.button, (disabled || busy) && s.disabled]}
     >
-      {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={s.label}>{label}</Text>}
+      {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={s.label}>{label}</Text>}
     </Pressable>
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   button: {
     height: 54,
     borderRadius: 12,
-    backgroundColor: "#165DFF",
+    backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center"
   },
   disabled: { opacity: 0.5 },
-  label: { color: "#FFFFFF", fontWeight: "900", fontSize: 15 }
+  label: { color: colors.onAccent, fontWeight: "900", fontSize: 15 }
 });

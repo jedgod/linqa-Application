@@ -1,9 +1,9 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { LocalAccount } from "../account/AccountContext";
-import { avatarColorForSlot, colors, radius } from "../theme/tokens";
+import { avatarColorForSlot, radius, useTheme, type Palette } from "../theme/tokens";
 
 function labelForAccount(account: LocalAccount) {
   return account.label || account.displayName || "Personal";
@@ -26,6 +26,8 @@ export function AccountSwitcherSheet({
   onAdd(): void;
   onManage(): void;
 }) {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -83,10 +85,10 @@ export function AccountSwitcherSheet({
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: "flex-end" },
   sheet: {
-    backgroundColor: "#0D1E2B",
+    backgroundColor: colors.surface,
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
     paddingHorizontal: 18,
@@ -100,20 +102,20 @@ const s = StyleSheet.create({
     alignItems: "center",
     gap: 12,
     borderWidth: 1,
-    borderColor: "#1A3344",
+    borderColor: colors.border,
     borderRadius: 16,
-    backgroundColor: "#112A3D",
+    backgroundColor: colors.bg,
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 8
   },
-  accountActive: { borderColor: "#1ED6B5", backgroundColor: "#102B36" },
+  accountActive: { borderColor: colors.accent, backgroundColor: colors.surfaceAlt },
   avatar: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
   avatarText: { color: "white", fontWeight: "900", fontSize: 12 },
   accountText: { flex: 1 },
   name: { color: colors.text, fontWeight: "800", fontSize: 15 },
   nameActive: { color: colors.accent },
-  meta: { color: "#8FA4B7", fontSize: 12, marginTop: 3 },
+  meta: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
   action: {
     minHeight: 60,
     flexDirection: "row",

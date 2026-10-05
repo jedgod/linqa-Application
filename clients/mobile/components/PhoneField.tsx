@@ -1,5 +1,6 @@
 import { StyleSheet, Text, TextInput, View } from "react-native";
-import { colors, radius } from "../theme/tokens";
+import { useMemo } from "react";
+import { radius, useTheme, type Palette } from "../theme/tokens";
 
 export function PhoneField({
   country,
@@ -12,6 +13,8 @@ export function PhoneField({
   number: string;
   onNumberChange: (v: string) => void;
 }) {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View>
       <Text style={s.label}>Mobile number</Text>
@@ -38,7 +41,7 @@ export function PhoneField({
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   label: { color: colors.textMuted, fontWeight: "700", marginBottom: 6, fontSize: 12 },
   row: { flexDirection: "row", gap: 8 },
   country: {

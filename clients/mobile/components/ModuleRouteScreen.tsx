@@ -14,7 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { actionLabel, getModule, LINQA_MODULES } from "../modules/catalog";
 import { isGatedModule, moduleAvailable, type ModuleKey } from "../src/runtime/module-gates";
 import { RuntimeCapabilitiesService, type MobileCapabilitySnapshot } from "../services/runtime-capabilities.service";
-import { avatarPalette, colors, radius, spacing } from "../theme/tokens";
+import { avatarPalette, radius, spacing, useTheme, type Palette } from "../theme/tokens";
 import { getApiBaseUrl } from "../config/api";
 
 const API_BASE_URL = getApiBaseUrl();
@@ -273,6 +273,8 @@ function colorForAction(actionKey: string): string {
 }
 
 export function ModuleRouteScreen({ moduleKey }: { moduleKey: string }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const segments = useSegments();
   const inTabs = segments[0] === "(tabs)";
@@ -346,7 +348,7 @@ export function ModuleRouteScreen({ moduleKey }: { moduleKey: string }) {
         </View>
         {capabilitiesLoaded && !currentAvailable ? (
           <View style={styles.runtimeNotice}>
-            <View style={styles.runtimeIcon}><Ionicons name="shield-outline" size={19} color="#FFCA57" /></View>
+            <View style={styles.runtimeIcon}><Ionicons name="shield-outline" size={19} color={colors.warning} /></View>
             <View style={{ flex: 1 }}>
               <Text style={styles.runtimeTitle}>Interface available · secure actions limited</Text>
               <Text style={styles.runtimeCopy}>You can browse this page now. Provider-backed actions remain protected until their production dependencies are ready.</Text>
@@ -378,7 +380,7 @@ export function ModuleRouteScreen({ moduleKey }: { moduleKey: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: spacing.lg, paddingBottom: 120 },
   heading: { marginTop: 12, marginBottom: spacing.lg, flexDirection: "row", alignItems: "flex-start" },
@@ -396,10 +398,10 @@ const styles = StyleSheet.create({
     justifyContent: "center"
   },
   grid: { gap: spacing.xs + 3 },
-  runtimeNotice: { marginBottom: spacing.lg, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: "#6B5521", backgroundColor: "#2B2517", flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
-  runtimeIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: "#493B1B", alignItems: "center", justifyContent: "center" },
-  runtimeTitle: { color: "#FFE39A", fontSize: 13, fontWeight: "900" },
-  runtimeCopy: { color: "#C8B983", fontSize: 12, lineHeight: 16, marginTop: 3 },
+  runtimeNotice: { marginBottom: spacing.lg, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.warningBorder, backgroundColor: colors.warningBg, flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  runtimeIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: colors.warningBorder, alignItems: "center", justifyContent: "center" },
+  runtimeTitle: { color: colors.warning, fontSize: 13, fontWeight: "900" },
+  runtimeCopy: { color: colors.textMuted, fontSize: 12, lineHeight: 16, marginTop: 3 },
   action: {
     minHeight: 60,
     borderRadius: radius.md,

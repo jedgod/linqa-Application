@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { CountryLinqaService } from "../../services/countrylinqa.service";
 import { accessTokenProvider } from "../../services/session";
-import { colors, radius, spacing } from "../../theme/tokens";
+import { radius, spacing, useTheme, type Palette } from "../../theme/tokens";
 import { getApiBaseUrl } from "../../config/api";
 
 const API = getApiBaseUrl();
@@ -34,6 +34,8 @@ function fieldsForKind(kind: string): { primary: string; secondary?: string } {
  * in every pack screen that showed them).
  */
 export default function CountryLinqaListScreen() {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const params = useLocalSearchParams<{ kind: string; title?: string }>();
   const kind = params.kind ?? "feed";
@@ -100,7 +102,7 @@ export default function CountryLinqaListScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   header: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, paddingTop: 52 },
   back: { color: colors.text, fontSize: 20 },

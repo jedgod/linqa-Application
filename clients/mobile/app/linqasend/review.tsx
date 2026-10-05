@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Tex
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { LinqaSendApiError, LinqaSendService, type LinqaSendQuote, type LinqaSendSecurityWarning, type PreparedLinqaSendTransfer } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
-import { colors, radius, spacing } from "../../theme/tokens";
+import { radius, spacing, useTheme, type Palette } from "../../theme/tokens";
 import { getApiBaseUrl } from "../../config/api";
 
 const API = getApiBaseUrl();
@@ -20,6 +20,8 @@ function secondsRemaining(expiresAt: string): number {
  * implementation notes require: exact receive amount and rate shown before
  * confirmation, never described as "free exchange." */
 export default function LinqaSendReview() {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const params = useLocalSearchParams<{ quote: string; recipientName: string; purposeCode?: string }>();
   const quote: LinqaSendQuote = useMemo(() => JSON.parse(params.quote), [params.quote]);
@@ -153,7 +155,7 @@ export default function LinqaSendReview() {
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   header: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, paddingTop: 52 },
   back: { color: colors.text, fontSize: 20 },
@@ -174,8 +176,8 @@ const s = StyleSheet.create({
   pmText: { color: colors.text, fontWeight: "700" },
   pmCheck: { color: colors.accent, fontWeight: "900" },
   error: { color: colors.danger, fontSize: 12, marginBottom: spacing.md },
-  warningCard: { backgroundColor: "#3A2B12", borderColor: "#D69E2E", borderWidth: 1, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md },
-  warningTitle: { color: "#F6C453", fontWeight: "900", marginBottom: spacing.sm },
+  warningCard: { backgroundColor: colors.warningBg, borderColor: colors.warningBorder, borderWidth: 1, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md },
+  warningTitle: { color: colors.warning, fontWeight: "900", marginBottom: spacing.sm },
   warningText: { color: colors.text, fontSize: 12, lineHeight: 18, marginBottom: 4 },
   button: { backgroundColor: colors.accent, borderRadius: radius.lg, height: 54, alignItems: "center", justifyContent: "center" },
   buttonDisabled: { opacity: 0.4 },

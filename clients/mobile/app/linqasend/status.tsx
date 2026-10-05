@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Tex
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { LinqaSendService, type LinqaSendTransferDetail } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
-import { colors, radius, spacing } from "../../theme/tokens";
+import { radius, spacing, useTheme, type Palette } from "../../theme/tokens";
 import { getApiBaseUrl } from "../../config/api";
 
 const API = getApiBaseUrl();
@@ -13,6 +13,8 @@ const TERMINAL_STATUSES = new Set(["COMPLETED", "DECLINED", "CANCELED", "FAILED"
  * against the transfer's actual state and attempt timeline, not a fake
  * animated progress bar. */
 export default function LinqaSendStatus() {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const params = useLocalSearchParams<{ id: string }>();
   const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
@@ -99,7 +101,7 @@ export default function LinqaSendStatus() {
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   header: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, paddingTop: 52 },
   back: { color: colors.text, fontSize: 18 },

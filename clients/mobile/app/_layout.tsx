@@ -23,6 +23,7 @@ import { AccountSecureStorage } from "../account/AccountSecureStorage";
 import { AccountSessionStore } from "../account/AccountSessionStore";
 import { setActiveAccountSessionResolver } from "../services/session";
 import { createSessionRefresher } from "../services/session-refresh";
+import { useTheme } from "../theme/tokens";
 import { getApiBaseUrl } from "../config/api";
 
 const sessionStore = new AccountSessionStore(new AccountSecureStorage());
@@ -53,6 +54,7 @@ function AccountSessionBridge() {
 }
 
 export default function RootLayout() {
+  const { colors } = useTheme();
   const [fontsReady, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
@@ -64,7 +66,7 @@ export default function RootLayout() {
   // Holding the first paint avoids the flash where every screen renders in the
   // system face and then reflows once the real one arrives -- on Home that
   // shifts the whole layout, because the type is what sizes the cards.
-  if (!fontsReady && !fontError) return <View style={{ flex: 1, backgroundColor: "#FFFFFF" }} />;
+  if (!fontsReady && !fontError) return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
 
   return (
     <SafeAreaProvider>

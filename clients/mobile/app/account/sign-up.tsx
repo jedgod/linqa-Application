@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { StyleSheet, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -7,13 +7,15 @@ import { ScreenHeader } from "../../components/ScreenHeader";
 import { PrimaryButton } from "../../components/PrimaryButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { validateIdentifierInput } from "../../auth/validation";
-import { colors, radius } from "../../theme/tokens";
+import { radius, useTheme, type Palette } from "../../theme/tokens";
 import { getApiBaseUrl } from "../../config/api";
 
 const API_BASE_URL = getApiBaseUrl();
 const bootstrapAuth = new BootstrapAuthService(API_BASE_URL);
 
 export default function SignUpScreen() {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const params = useLocalSearchParams<{ purpose?: string; addAccount?: string }>();
   const purpose = params.purpose === "LOGIN" ? "LOGIN" : "REGISTRATION";
@@ -56,7 +58,7 @@ export default function SignUpScreen() {
           onChangeText={setPhone}
           keyboardType="phone-pad"
           placeholder="+1 202 555 0123"
-          placeholderTextColor="#667085"
+          placeholderTextColor={colors.textFaint}
           style={s.input}
           autoFocus
         />
@@ -67,16 +69,16 @@ export default function SignUpScreen() {
   );
 }
 
-const s = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#FFFFFF" },
+const makeStyles = (colors: Palette) => StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 22, paddingTop: 48 },
   input: {
     height: 54,
-    backgroundColor: "#F7F7F9",
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: "#E6EBF1",
+    borderColor: colors.border,
     borderRadius: 12,
-    color: "#111827",
+    color: colors.text,
     paddingHorizontal: 14,
     marginTop: 18,
     marginBottom: 20,

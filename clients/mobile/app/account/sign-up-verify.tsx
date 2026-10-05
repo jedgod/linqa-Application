@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -16,7 +16,7 @@ import { CodeInput } from "../../components/CodeInput";
 import { PrimaryButton } from "../../components/PrimaryButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { validateOtpInput } from "../../auth/validation";
-import { colors } from "../../theme/tokens";
+import { useTheme, type Palette } from "../../theme/tokens";
 import { getApiBaseUrl } from "../../config/api";
 
 const API = getApiBaseUrl();
@@ -25,6 +25,8 @@ const secure = new AccountSecureStorage();
 const sessions = new AccountSessionStore(secure);
 
 export default function SignUpVerifyScreen() {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const params = useLocalSearchParams<{ challengeId: string; phone?: string; purpose?: string; addAccount?: string }>();
   const { addAndActivate } = useAccounts();
@@ -165,11 +167,11 @@ export default function SignUpVerifyScreen() {
   );
 }
 
-const s = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#FFFFFF" },
+const makeStyles = (colors: Palette) => StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 22, paddingTop: 48 },
   field: { marginVertical: 20 },
   notice: { color: colors.textMuted, marginTop: 16 },
   resend: { paddingVertical: 16, alignItems: "center" },
-  resendText: { color: "#6558DC", fontWeight: "600" }
+  resendText: { color: colors.accent, fontWeight: "600" }
 });

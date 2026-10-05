@@ -3,9 +3,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { PrimaryButton } from "../../components/PrimaryButton";
-import { colors } from "../../theme/tokens";
+import { useMemo } from "react";
+import { useTheme, type Palette } from "../../theme/tokens";
 
 export default function MaxLimitScreen() {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   return (
     <SafeAreaView style={s.screen}>
       <View style={s.icon}>
@@ -20,7 +23,7 @@ export default function MaxLimitScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg, padding: 24, alignItems: "center", paddingTop: 110 },
   icon: { width: 96, height: 96, borderRadius: 48, borderWidth: 2, borderColor: colors.accent, alignItems: "center", justifyContent: "center" },
   title: { color: colors.text, fontSize: 25, fontWeight: "900", textAlign: "center", marginTop: 26 },

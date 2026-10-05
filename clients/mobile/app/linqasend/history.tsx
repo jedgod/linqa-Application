@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Tex
 import { useRouter } from "expo-router";
 import { LinqaSendService, type LinqaSendTransferSummary } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
-import { colors, radius, spacing } from "../../theme/tokens";
+import { radius, spacing, useTheme, type Palette } from "../../theme/tokens";
 import { getApiBaseUrl } from "../../config/api";
 
 const API = getApiBaseUrl();
@@ -11,6 +11,8 @@ const API = getApiBaseUrl();
 /** SCREEN 14 (Transaction History) — the full real list, not the 5-item
  * preview on the dashboard. */
 export default function LinqaSendHistory() {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
   const [items, setItems] = useState<LinqaSendTransferSummary[] | null>(null);
@@ -62,7 +64,7 @@ export default function LinqaSendHistory() {
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   header: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, paddingTop: 52 },
   back: { color: colors.text, fontSize: 20 },

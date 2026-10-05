@@ -4,9 +4,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useAccounts } from "../../account/AccountContext";
 import { ScreenHeader } from "../../components/ScreenHeader";
-import { avatarColorForSlot, colors, radius } from "../../theme/tokens";
+import { useMemo } from "react";
+import { avatarColorForSlot, radius, useTheme, type Palette } from "../../theme/tokens";
 
 export default function ManageAccountsScreen() {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const { accounts, active, activate } = useAccounts();
   const canAdd = accounts.length < 3;
 
@@ -66,7 +69,7 @@ export default function ManageAccountsScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 20, paddingTop: 48 },
   row: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 11, borderBottomWidth: 1, borderBottomColor: colors.border },

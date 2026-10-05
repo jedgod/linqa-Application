@@ -1,6 +1,6 @@
-import { useRef } from "react";
+import { useRef, useMemo } from "react";
 import { StyleSheet, TextInput, View } from "react-native";
-import { colors, radius } from "../theme/tokens";
+import { radius, useTheme, type Palette } from "../theme/tokens";
 
 export function CodeInput({
   value,
@@ -11,6 +11,8 @@ export function CodeInput({
   onChange: (v: string) => void;
   length?: number;
 }) {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const refs = useRef<Array<TextInput | null>>([]);
 
   function setDigit(index: number, digit: string) {
@@ -46,7 +48,7 @@ export function CodeInput({
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   row: { flexDirection: "row", gap: 8, justifyContent: "space-between" },
   box: {
     flex: 1,

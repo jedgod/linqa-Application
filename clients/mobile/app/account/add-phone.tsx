@@ -3,9 +3,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import { PrimaryButton } from "../../components/PrimaryButton";
-import { colors, radius } from "../../theme/tokens";
+import { useMemo } from "react";
+import { radius, useTheme, type Palette } from "../../theme/tokens";
 
 export default function AddPhoneAccountScreen() {
+  const { colors } = useTheme();
+  const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   return (
     <SafeAreaView style={s.screen}>
@@ -23,9 +26,9 @@ export default function AddPhoneAccountScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 20, paddingTop: 40, gap: 20 },
   notice: { backgroundColor: colors.surfaceAlt, borderRadius: radius.md, padding: 13 },
-  noticeText: { color: "#9BC8C5", fontSize: 12, lineHeight: 17 }
+  noticeText: { color: colors.textMuted, fontSize: 12, lineHeight: 17 }
 });
