@@ -112,7 +112,18 @@ android {
             }
         }
     }
+    def linqaReleaseProp = { String name -> findProperty(name) ?: System.getenv(name) }
+    def linqaReleaseSigning = linqaReleaseProp('LINQA_RELEASE_STORE_FILE') != null
+    if (linqaReleaseSigning) { project.ext.linqaReleaseSigningConfigured = true }
     signingConfigs {
+        if (linqaReleaseSigning) {
+            release {
+                storeFile file(linqaReleaseProp('LINQA_RELEASE_STORE_FILE'))
+                storePassword linqaReleaseProp('LINQA_RELEASE_STORE_PASSWORD')
+                keyAlias linqaReleaseProp('LINQA_RELEASE_KEY_ALIAS')
+                keyPassword linqaReleaseProp('LINQA_RELEASE_KEY_PASSWORD')
+            }
+        }
         debug {
             storeFile file('debug.keystore')
             storePassword 'android'
@@ -125,9 +136,12 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // Release builds are signed only with a real keystore supplied via
+            // LINQA_RELEASE_* properties (~/.gradle/gradle.properties or -P / env).
+            // Without them, release tasks fail instead of using the debug key.
+            if (linqaReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
@@ -193,5 +207,12 @@ dependencies {
         implementation("com.facebook.react:hermes-android")
     } else {
         implementation jscFlavor
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def releaseBuild = graph.allTasks.any { it.path.startsWith(project.path + ':') && it.name ==~ /(assemble|bundle|package)Release.*/ }
+    if (releaseBuild && !project.ext.has('linqaReleaseSigningConfigured')) {
+        throw new GradleException("Release build requires LINQA_RELEASE_STORE_FILE, LINQA_RELEASE_STORE_PASSWORD, LINQA_RELEASE_KEY_ALIAS and LINQA_RELEASE_KEY_PASSWORD. Refusing to sign with the debug key.")
     }
 }
