@@ -1,0 +1,63 @@
+LINQA - CLAUDE CODE ASSESSMENT (STATUS UPDATE)
+Updated: 2026-10-05   Branch: agent/production-module-hardening
+The original 2026-10-04 file was lost during the workspace cleanup; this replaces it
+with the findings and their current status.
+
+VERIFIED AT TIME OF WRITING
+  - Mobile typecheck (tsc --noEmit): clean
+  - Server typecheck: clean
+  - Server tests: 527 passed, 28 skipped (chat integration, need Postgres), 0 failed
+  - Mobile node tests (startup, session expiry, app/routes/theme): 25 passed
+  - NOT verified: running the app on a device/emulator, Rust core tests, Kotlin client
+
+CORRECTIONS TO THE FIRST REPORT
+  - Tabs: the bottom bar already has 5 visible items (Home, Calls, Create, Chats, Linqa).
+    Communities/Settings/Media are hidden routes (href: null) and Create is a deliberate
+    center action that opens a sheet. D7/F1 were not real problems.
+  - Theme: the app was not "dark-only"; it was a mix of hard-coded light and dark screens.
+  - Chat integration tests: CI (ci.yml) already provisions Postgres + Redis and sets
+    DATABASE_URL. They only skip on machines without a database.
+
+FIXED
+  B1  Missing getApiBaseUrl imports ............ fixed (config/api.ts, 43 files)
+  B3  Wrong default API port ................... fixed (8080 in dev)
+  B7  Release could fall back to http .......... fixed (release requires HTTPS URL)
+  B4  Release signed with debug key ............ fixed (needs LINQA_RELEASE_* props)
+  B5  Two timing-out server tests .............. passing
+  B6  allowBackup=true ......................... fixed (false)
+  B8  newArchEnabled=false (unsupported) ....... removed
+  B9  Stale header comment ..................... trimmed
+  S1  OTP brute-force + loose DB scripts ....... deleted
+  S3  Root clutter ............................. 48 byte-identical duplicates removed
+      (13 root files remain because scripts/README reference them by path)
+  D2  Icon-only buttons without labels ......... 16 labelled
+  D3  Font sizes 10-11 ......................... raised to 12
+  D4  Low-contrast text ........................ fixed, enforced by a unit test (AA 4.5:1)
+  D1  Light/dark design direction .............. PARTLY: palettes + useTheme() added;
+      18 files migrated (shared components, account flow). 45 files with ~970 hard-coded
+      colors still need migrating (Home, Calls, Settings, LinqaSend, News, onboarding,
+      Chats, Media, privacy, vault ...).
+  D5  Oversized screens ........................ home.tsx 1645 -> 1034 lines and
+      chats.tsx 1009 -> 378 lines (styles, helpers, presentational parts extracted).
+      HomeScreen itself is still a ~1000-line component.
+  F2  LinqaSend flag ........................... GET /v1/linqasend/availability (server,
+      from LINQASEND_REAL_MONEY_ENABLED) + mobile fail-closed gating of the home tile,
+      quick-create sheet, hub, search and LinqaSend home screen.
+      Deep links to other /linqasend/* screens are not individually gated; the server
+      readiness gate (REAL_MONEY_DISABLED) still refuses any transfer.
+  F3  Chat integration tests in CI ............. already provisioned; added
+      LINQA_REQUIRE_DB_TESTS=1 so a missing DB fails CI instead of skipping.
+  F4  Mobile tests ............................. tests/mobile-app.test.ts added to the
+      mobile-startup workflow: API URL rules, LinqaSend availability fails closed, every
+      route has a default export, Stack.Screen names resolve, imports resolve, no
+      hard-coded API URLs, palette contrast. Still missing: device/E2E tests.
+
+STILL OPEN (needs your input or an environment I do not have)
+  - Release keystore: create one and supply LINQA_RELEASE_STORE_FILE / _STORE_PASSWORD /
+    _KEY_ALIAS / _KEY_PASSWORD (Gradle properties or CI secrets). Do not commit it.
+      keytool -genkeypair -v -keystore linqa-release.jks -alias linqa -keyalg RSA -keysize 2048 -validity 10000
+  - F5 Two Android clients (clients/android Kotlin vs clients/mobile Expo): product decision.
+  - F7 iOS: no ios/ project; needs macOS to generate and verify.
+  - D1 remaining theme migration (see above), then D7 follow-up if desired.
+  - Device/E2E testing of the migrated screens (dark mode visual check, 12pt text fit).
+  - README.md has stray pasted text appended and a reformatted table (uncommitted).
