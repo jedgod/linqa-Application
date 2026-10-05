@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { SettingsService, type NotificationPreferences } from "../../services/settings.service";
 import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
 
 const defaults: NotificationPreferences = {
   messages: true, calls: true, communities: true, business: true,
@@ -12,7 +13,7 @@ const defaults: NotificationPreferences = {
 
 export default function NotificationSettingsScreen() {
   const service = useMemo(() => new SettingsService(
-    process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080",
+    getApiBaseUrl(),
     accessTokenProvider
   ), []);
   const [preferences, setPreferences] = useState(defaults);

@@ -3,8 +3,9 @@ import { ScrollView, Pressable, StyleSheet, Text, ActivityIndicator } from "reac
 import { SafeAreaView } from "react-native-safe-area-context";
 import { GaHardeningService } from "../../services/ga-hardening.service";
 import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API_BASE_URL = getApiBaseUrl();
 
 const CATEGORIES = ["Messaging", "Calls", "Account & Login", "Devices", "File Vault", "Billing", "Enterprise", "Privacy", "Emergency"];
 

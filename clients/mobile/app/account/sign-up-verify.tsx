@@ -17,8 +17,9 @@ import { PrimaryButton } from "../../components/PrimaryButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { validateOtpInput } from "../../auth/validation";
 import { colors } from "../../theme/tokens";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 const auth = new BootstrapAuthService(API);
 const secure = new AccountSecureStorage();
 const sessions = new AccountSessionStore(secure);

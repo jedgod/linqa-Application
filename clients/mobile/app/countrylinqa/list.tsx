@@ -5,8 +5,9 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { CountryLinqaService } from "../../services/countrylinqa.service";
 import { accessTokenProvider } from "../../services/session";
 import { colors, radius, spacing } from "../../theme/tokens";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 
 type Row = Record<string, unknown>;
 

@@ -11,8 +11,9 @@ import {
   type HomeLiveUpdate
 } from "../../services/home-feed.service";
 import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 const PAGE_SIZE = 20;
 
 const CATEGORIES = [

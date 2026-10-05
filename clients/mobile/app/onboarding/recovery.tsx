@@ -6,8 +6,9 @@ import { accessTokenProvider } from "../../services/session";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import { PrimaryButton } from "../../components/PrimaryButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 export default function RecoverySetup() {
   const router = useRouter(); const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);

@@ -4,12 +4,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { SettingsService, type UserSettings } from "../../services/settings.service";
 import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
 
 type Mode = "DISABLED" | "ON_DEVICE" | "CONFIDENTIAL_CLOUD";
 
 export default function AiPrivacySettingsScreen() {
   const service = useMemo(() => new SettingsService(
-    process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080", accessTokenProvider
+    getApiBaseUrl(), accessTokenProvider
   ), []);
   const [mode, setMode] = useState<Mode>("DISABLED");
   const [settings, setSettings] = useState<UserSettings | null>(null);

@@ -3,8 +3,9 @@ import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Tex
 import { useRouter } from "expo-router";
 import { LinqaSendService } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
 
-const API=process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API=getApiBaseUrl();
 const methods=["BANK","CARD","MOBILE_MONEY","PHONE_CLAIM","EMAIL_CLAIM"] as const;
 export default function ExternalRecipientScreen(){const router=useRouter();const client=useMemo(()=>new LinqaSendService(API,()=>accessTokenProvider.getAccessToken()),[]);const [displayName,setDisplayName]=useState("");const [country,setCountry]=useState("");const [currency,setCurrency]=useState("");const [method,setMethod]=useState<typeof methods[number]>("BANK");const [provider,setProvider]=useState("");const [token,setToken]=useState("");const [masked,setMasked]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState<string|null>(null);
 async function save(){setBusy(true);setError(null);try{const result=await client.addExternalRecipient({recipientKind:"EXTERNAL_PERSON",displayName:displayName.trim(),countryCode:country.trim().toUpperCase(),currency:currency.trim().toUpperCase(),deliveryMethod:method,provider:provider.trim(),providerToken:token.trim(),maskedDisplay:masked.trim()});router.replace({pathname:"/linqasend/amount",params:{recipientId:result.recipientId,recipientName:displayName.trim(),recipientCountry:country.trim().toUpperCase(),recipientCurrency:currency.trim().toUpperCase()}})}catch(e){setError(e instanceof Error?e.message.replace(/_/g," "):"Unable to save recipient")}finally{setBusy(false)}}

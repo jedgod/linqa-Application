@@ -38,8 +38,9 @@ import {
 } from "../../services/home-feed.service";
 import { accessTokenProvider } from "../../services/session";
 import { colors, fonts, radius, spacing } from "../../theme/tokens";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 
 /** Horizontal page padding of the scroll content, both sides. */
 const GUTTER = 18;

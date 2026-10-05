@@ -4,8 +4,9 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { LinqaSendService, type LinqaSendTransferDetail } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
 import { colors, radius, spacing } from "../../theme/tokens";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 const TERMINAL_STATUSES = new Set(["COMPLETED", "DECLINED", "CANCELED", "FAILED", "EXPIRED"]);
 
 /** SCREEN 7 (Transfer Tracking) + SCREEN 15 (Receipt): real status polling

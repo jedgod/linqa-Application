@@ -8,8 +8,9 @@ import { OnboardingApiService, type OnboardingStatus } from "../../services/onbo
 import { accessTokenProvider } from "../../services/session";
 import { PrimaryButton } from "../../components/PrimaryButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 function flag(code: string) { return String.fromCodePoint(...code.toUpperCase().split("").map((letter) => 127397 + letter.charCodeAt(0))); }
 
 export default function CountryConfirmation() {

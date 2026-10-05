@@ -11,8 +11,9 @@ import { OnboardingApiService } from "../../services/onboarding.service";
 import { HomeFeedService, type HomeBadges } from "../../services/home-feed.service";
 import { accessTokenProvider } from "../../services/session";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 
 /**
  * Floor between badge refreshes. The tab bar re-renders on every navigation,

@@ -3,8 +3,9 @@ import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Tex
 import { useRouter } from "expo-router";
 import { LinqaSendService, type LinqaSendRecipient } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
 
-const API=process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API=getApiBaseUrl();
 export default function LinqaSendRecipients(){const router=useRouter();const client=useMemo(()=>new LinqaSendService(API,()=>accessTokenProvider.getAccessToken()),[]);const [items,setItems]=useState<LinqaSendRecipient[]|null>(null);const [query,setQuery]=useState("");const [error,setError]=useState<string|null>(null);const [busy,setBusy]=useState(false);
   const load=()=>client.listRecipients().then(r=>setItems(r.items)).catch(e=>{setItems([]);setError(e instanceof Error?e.message:"Unable to load recipients")});useEffect(()=>{void load()},[client]);
   async function add(){if(query.trim().length<3)return;setBusy(true);setError(null);try{await client.addRecipient(query.trim());setQuery("");await load();}catch(e){setError(e instanceof Error?e.message:"Recipient was not found");}finally{setBusy(false)}}

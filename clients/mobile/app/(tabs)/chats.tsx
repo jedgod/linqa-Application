@@ -31,8 +31,9 @@ import { ChatRealtimeClient, TypingRegistry } from "../../services/chat-realtime
 import { MobileHubService, type HubContact } from "../../services/mobile-hub.service";
 import { accessTokenProvider } from "../../services/session";
 import { fonts } from "../../theme/tokens";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 
 /** Chats runs on the dark surface from the approved design. */
 const C = {

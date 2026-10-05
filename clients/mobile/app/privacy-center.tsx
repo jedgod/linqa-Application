@@ -10,13 +10,14 @@ import {
 } from "../services/privacy-center.service";
 import { accessTokenProvider } from "../services/session";
 import { LinkedDeviceAlertCard } from "../components/LinkedDeviceAlertCard";
+import { getApiBaseUrl } from "../config/api";
 
 export default function PrivacyCenterScreen() {
   const router = useRouter();
   const service = useMemo(
     () =>
       new PrivacyCenterService(
-        process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080",
+        getApiBaseUrl(),
         () => accessTokenProvider.getAccessToken(),
       ),
     [],

@@ -6,9 +6,10 @@ import * as SecureStore from "expo-secure-store";
 import { useRouter } from "expo-router";
 import { accessTokenProvider } from "../../services/session";
 import { VaultService, type EncryptedVaultItem, type VaultIntegrationStatus } from "../../services/vault.service";
+import { getApiBaseUrl } from "../../config/api";
 
 type Screen="home"|"files"|"intake"|"save"|"scan"|"private"|"share"|"plans"|"security";
-const API=process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API=getApiBaseUrl();
 const PRIVATE_UNLOCK_KEY="linqa.vault.private-unlock.v1";
 const size=(bytes:number)=>bytes<1_048_576?`${Math.max(1,Math.round(bytes/1024))} KB`:`${(bytes/1_048_576).toFixed(1)} MB`;
 const icon=(type:string):any=>type==="IDENTITY"?"id-card-outline":type==="RECOVERY"?"key-outline":type==="PHOTO"?"image-outline":"document-outline";

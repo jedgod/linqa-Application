@@ -3,7 +3,8 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, 
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons"; import { useRouter } from "expo-router";
 import { CountryLinqaService, type CountryLinqaPreferences, type DiscoveryMode } from "../../services/countrylinqa.service"; import { accessTokenProvider } from "../../services/session"; import { PrimaryButton } from "../../components/PrimaryButton"; import { ErrorBanner } from "../../components/ErrorBanner";
-const API=process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+import { getApiBaseUrl } from "../../config/api";
+const API=getApiBaseUrl();
 const modes:Array<{key:DiscoveryMode;label:string;detail:string;tier:"FREE"|"PREMIUM"|"ELITE"}>=[
   {key:"MY_COUNTRY",label:"My Country",detail:"Connect with people and activity in your verified country.",tier:"FREE"},
   {key:"SELECTED_COUNTRIES",label:"Selected Countries",detail:"Choose the countries you want to connect with.",tier:"PREMIUM"},

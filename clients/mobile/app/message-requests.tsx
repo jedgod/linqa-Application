@@ -7,12 +7,13 @@ import {
   type MessageRequest,
 } from "../services/message-request.service";
 import { accessTokenProvider } from "../services/session";
+import { getApiBaseUrl } from "../config/api";
 
 export default function MessageRequestsScreen() {
   const service = useMemo(
     () =>
       new MessageRequestService(
-        process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080",
+        getApiBaseUrl(),
         () => accessTokenProvider.getAccessToken(),
       ),
     [],

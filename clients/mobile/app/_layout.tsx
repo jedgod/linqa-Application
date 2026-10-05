@@ -23,9 +23,10 @@ import { AccountSecureStorage } from "../account/AccountSecureStorage";
 import { AccountSessionStore } from "../account/AccountSessionStore";
 import { setActiveAccountSessionResolver } from "../services/session";
 import { createSessionRefresher } from "../services/session-refresh";
+import { getApiBaseUrl } from "../config/api";
 
 const sessionStore = new AccountSessionStore(new AccountSecureStorage());
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API_BASE_URL = getApiBaseUrl();
 const loadFreshSession = createSessionRefresher(sessionStore, API_BASE_URL);
 
 /**

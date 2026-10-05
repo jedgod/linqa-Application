@@ -8,8 +8,9 @@ import { PrimaryButton } from "../../components/PrimaryButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { validateIdentifierInput } from "../../auth/validation";
 import { colors, radius } from "../../theme/tokens";
+import { getApiBaseUrl } from "../../config/api";
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API_BASE_URL = getApiBaseUrl();
 const bootstrapAuth = new BootstrapAuthService(API_BASE_URL);
 
 export default function SignUpScreen() {

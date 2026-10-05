@@ -8,8 +8,9 @@ import {
   type DiscoveryMode, type InboundReach
 } from "../../services/countrylinqa.service";
 import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 const purple = "#6045E8";
 type Screen = "SETTINGS" | "OUTBOUND_COUNTRIES" | "OUTBOUND_REGIONS" | "INBOUND_COUNTRIES" | "INBOUND_REGIONS" | "WORLDWIDE" | "PLANS" | "SUCCESS";
 type Draft = Pick<CountryLinqaPreferences,

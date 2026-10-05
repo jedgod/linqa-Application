@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { CountryLinqaService, type CountryLinqaPreferences } from "../../services/countrylinqa.service";
 import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
 
 const purple = "#6f5ae6";
 const bg = "#f5f6fa";
@@ -13,7 +14,7 @@ const border = "#e3e8f0";
 
 export default function CountryLinqaWorldScreen() {
   const router = useRouter();
-  const client = useMemo(() => new CountryLinqaService(process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080", () => accessTokenProvider.getAccessToken()), []);
+  const client = useMemo(() => new CountryLinqaService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken()), []);
   const [preferences, setPreferences] = useState<CountryLinqaPreferences | null>(null);
   useEffect(() => { client.preferences().then(setPreferences).catch(() => setPreferences(null)); }, [client]);
 

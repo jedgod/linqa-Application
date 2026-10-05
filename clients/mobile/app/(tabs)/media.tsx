@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { MediaService, type MediaItem } from "../../services/media.service";
 import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
 
 const FILTERS = ["ALL", "IMAGE", "VIDEO", "VOICE_NOTE", "DOCUMENT", "LINK"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -12,7 +13,7 @@ export default function MediaScreen() {
   const service = useMemo(
     () =>
       new MediaService(
-        process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080",
+        getApiBaseUrl(),
         () => accessTokenProvider.getAccessToken(),
       ),
     [],

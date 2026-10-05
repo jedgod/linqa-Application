@@ -4,8 +4,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { OnboardingApiService, type OnboardingNextStep } from "../../services/onboarding.service";
 import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
 
-const API = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+const API = getApiBaseUrl();
 const routes: Record<OnboardingNextStep, string> = {
   AUTH_REQUIRED: "/welcome", DEVICE_ENROLLMENT: "/account/sign-up?purpose=LOGIN",
   RECOVERY_SETUP: "/onboarding/recovery", COUNTRY_CONFIRMATION: "/onboarding/country-confirmation",
