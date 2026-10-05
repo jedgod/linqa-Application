@@ -105,6 +105,9 @@ export interface HomePendingTransfer {
   updatedAt: string;
 }
 
+const SPOTLIGHT_TRAVEL_INFO =
+  /\b(travel|airline|airport|flight|visa|tourism|tourist|itinerary|travel advisory|border crossing)\b/i;
+
 /**
  * Transfers that have left neither the user's hands nor the provider's.
  * Terminal states (COMPLETED, FAILED, REFUNDED, ...) belong in history, not on
@@ -420,16 +423,40 @@ export function createHomeDependencies(db: Database, repository: HomeRepository)
     },
 
     async getSpotlight(_userId: string, country: string): Promise<HomeLiveUpdate | null> {
-      // Spotlight is an image-led card, so an article without an image is not
-      // a candidate; local first, then world.
-      const local = await repository.listArticles({
-        countryCode: country,
-        withImageOnly: true,
-        sinceHours: 24,
-        limit: 1
-      });
-      const chosen = local[0]
-        ?? (await repository.listArticles({ withImageOnly: true, sinceHours: 24, limit: 1 }))[0];
+      // Spotlight is an image-led card for health, technology/AI, and travel
+      // information, so unrelated headlines are not promoted into it. When a
+      // technology-conference story is available, it takes precedence over
+      // general technology coverage, including coverage from around the world.
+      const [local, worldwide] = await Promise.all([
+        repository.listArticles({ countryCode: country, withImageOnly: true, sinceHours: 168, limit: 100 }),
+        repository.listArticles({ withImageOnly: true, sinceHours: 168, limit: 100 })
+      ]);
+      const isSpotlightTopic = (article: StoredNewsRow) =>
+        article.category === "HEALTH" ||
+        article.category === "TECHNOLOGY" ||
+        SPOTLIGHT_TRAVEL_INFO.test(`${article.title} ${article.summary ?? ""}`);
+      const localTopic = local.filter(isSpotlightTopic);
+      const worldwideTopic = worldwide.filter(isSpotlightTopic);
+      const localIds = new Set(localTopic.map((article) => article.id));
+      const candidates = [...localTopic, ...worldwideTopic.filter((article) => !localIds.has(article.id))];
+      const conferenceCoverage = candidates.filter((article) =>
+        article.category === "TECHNOLOGY" &&
+        /\b(?:conference|conferences|summit|summits|expo|expos|trade show|congress|CES|MWC|Web Summit|VivaTech|GITEX|Computex|IFA|SXSW|TechCrunch Disrupt|Google I\/O|WWDC)\b/i
+          .test(`${article.title} ${article.summary ?? ""}`)
+      );
+      const requestedPublishers = candidates.filter((article) =>
+        /^(?:gartner\.com|techcrunch\.com|theverge\.com)$/i.test(article.publisherDomain)
+      );
+      const chosen = (conferenceCoverage.length
+        ? conferenceCoverage
+        : requestedPublishers.length
+          ? requestedPublishers
+          : localTopic.length
+            ? localTopic
+            : worldwideTopic
+      ).sort(
+        (left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt)
+      )[0];
       return chosen ? toLiveUpdate(chosen) : null;
     }
   };

@@ -29,8 +29,8 @@ export interface RssFeedSource {
 }
 
 /**
- * Publishers already carried by the `home_news_publishers` allowlist
- * (migration 041). A feed whose articles resolve to an unlisted domain is
+ * Publishers carried by the `home_news_publishers` allowlist
+ * (migrations 041 and 043). A feed whose articles resolve to an unlisted domain is
  * rejected downstream by the validator, not here — this list only decides what
  * gets fetched.
  */
@@ -44,7 +44,13 @@ export const DEFAULT_RSS_FEEDS: RssFeedSource[] = [
   { url: "https://www.theguardian.com/environment/climate-crisis/rss", category: "CLIMATE", countryCode: "GB" },
   { url: "https://feeds.skynews.com/feeds/rss/world.xml", category: "WORLD", countryCode: "GB" },
   { url: "https://feeds.arstechnica.com/arstechnica/index", category: "TECHNOLOGY", countryCode: "US" },
+  { url: "https://moxie.foxnews.com/google-publisher/latest.xml", category: "WORLD", countryCode: "US" },
   { url: "https://www.cbsnews.com/latest/rss/world", category: "WORLD", countryCode: "US" },
+  { url: "https://www.abc.net.au/news/feed/51120/rss.xml", category: "WORLD", countryCode: "AU" },
+  { url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", category: "WORLD", countryCode: "US" },
+  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml", category: "TECHNOLOGY", countryCode: "US" },
+  { url: "https://techcrunch.com/feed/", category: "TECHNOLOGY", countryCode: "US" },
+  { url: "https://www.theverge.com/rss/index.xml", category: "TECHNOLOGY", countryCode: "US" },
   { url: "https://feeds.npr.org/1004/rss.xml", category: "WORLD", countryCode: "US" },
   { url: "https://feeds.npr.org/1128/rss.xml", category: "HEALTH", countryCode: "US" },
   { url: "https://www.aljazeera.com/xml/rss/all.xml", category: "WORLD", countryCode: "QA" }

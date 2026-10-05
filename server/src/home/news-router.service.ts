@@ -109,7 +109,10 @@ export class NewsRouterService {
         }
 
         await this.recordProviderSuccess(provider.name, Date.now() - started);
-        if (accepted.size >= query.limit) break;
+        // The unfiltered global feed must combine first-party publisher feeds
+        // with the broader index: sources without a working RSS endpoint (for
+        // example CNN and Gartner) are otherwise starved by the RSS lane.
+        if (accepted.size >= query.limit && query.categories?.length) break;
       } catch (error) {
         const reason = error instanceof Error ? error.message : "UNKNOWN_PROVIDER_FAILURE";
         this.telemetry.newsFailure(provider.name, reason);

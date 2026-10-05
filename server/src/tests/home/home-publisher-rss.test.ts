@@ -254,6 +254,16 @@ describe("publisher RSS provider: configuration", () => {
     for (const feed of DEFAULT_RSS_FEEDS) {
       expect(new URL(feed.url).protocol).toBe("https:");
     }
+    expect(DEFAULT_RSS_FEEDS.map((feed) => feed.url)).toEqual(
+      expect.arrayContaining([
+        "https://moxie.foxnews.com/google-publisher/latest.xml",
+        "https://www.abc.net.au/news/feed/51120/rss.xml",
+        "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+        "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
+        "https://techcrunch.com/feed/",
+        "https://www.theverge.com/rss/index.xml"
+      ])
+    );
   });
 
   it("reads an operator-supplied feed list and skips malformed entries", async () => {

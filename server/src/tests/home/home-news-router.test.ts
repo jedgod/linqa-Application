@@ -88,7 +88,7 @@ function harness(): Harness {
     db,
     cache: { get: vi.fn(async () => null), set: vi.fn(async () => undefined) },
     repository: { saveArticle: vi.fn(async () => undefined) },
-    validator: { validate: vi.fn(async (raw: RawNewsArticle) => newsItem({ title: raw.title, providerName: raw.providerName })) },
+    validator: { validate: vi.fn(async (raw: RawNewsArticle) => newsItem({ title: raw.title, providerName: raw.providerName, publishedAt: raw.publishedAt })) },
     telemetry: new HomeTelemetryService(metrics),
     metrics,
     healthRows,
@@ -161,15 +161,31 @@ describe("home news router: provider failover", () => {
     expect(result.articles[0]?.providerName).toBe("CONFIGURED");
   });
 
-  it("stops calling further providers once the requested limit is met", async () => {
+  it("stops calling further providers once a category limit is met", async () => {
     const first = stubProvider("FIRST", 100, async () => [
       rawArticle({ title: "Story one" }),
       rawArticle({ title: "Story two" })
     ]);
     const second = stubProvider("SECOND", 50, async () => [rawArticle({ title: "Story three" })]);
 
-    await buildRouter(h, [first, second]).fetch({ limit: 2 });
+    await buildRouter(h, [first, second]).fetch({ limit: 2, categories: ["WORLD"] });
     expect(second.fetch).not.toHaveBeenCalled();
+  });
+
+  it("combines all providers for the unfiltered global feed", async () => {
+    const olderPublishedAt = new Date(Date.now() - 60_000).toISOString();
+    const first = stubProvider("FIRST", 100, async () => [
+      rawArticle({ title: "Story one", publishedAt: olderPublishedAt }),
+      rawArticle({ title: "Story two", publishedAt: olderPublishedAt })
+    ]);
+    const second = stubProvider("SECOND", 50, async () => [
+      rawArticle({ providerName: "SECOND", title: "Global indexed story" })
+    ]);
+
+    const result = await buildRouter(h, [first, second]).fetch({ limit: 2 });
+
+    expect(second.fetch).toHaveBeenCalled();
+    expect(result.articles.map((article) => article.title)).toContain("Global indexed story");
   });
 });
 
