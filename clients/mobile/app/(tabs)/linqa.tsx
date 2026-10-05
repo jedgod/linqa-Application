@@ -4,14 +4,16 @@ import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { HUB_GROUPS, LINQA_HUB_SERVICES } from "../../navigation/information-architecture";
+import { useLinqaSendAvailability } from "../../services/linqasend-availability";
 
 export default function LinqaHubScreen() {
+  const moneyAvailable = useLinqaSendAvailability() === true;
   const router = useRouter();
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLowerCase();
   const services = useMemo(() => LINQA_HUB_SERVICES.filter((service) =>
-    !normalized || `${service.title} ${service.description} ${service.group}`.toLowerCase().includes(normalized)
-  ), [normalized]);
+    (moneyAvailable || service.key !== "send") && (!normalized || `${service.title} ${service.description} ${service.group}`.toLowerCase().includes(normalized))
+  ), [normalized, moneyAvailable]);
 
   return (
     <SafeAreaView edges={["left", "right"]} style={s.screen}>

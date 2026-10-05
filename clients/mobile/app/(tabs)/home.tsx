@@ -39,6 +39,7 @@ import {
 import { accessTokenProvider } from "../../services/session";
 import { colors, fonts, radius, spacing } from "../../theme/tokens";
 import { getApiBaseUrl } from "../../config/api";
+import { useLinqaSendAvailability } from "../../services/linqasend-availability";
 
 const API = getApiBaseUrl();
 
@@ -134,6 +135,7 @@ const CATEGORY_COLORS: Record<string, string> = {
  *    rest of Home carries on.
  */
 export default function HomeScreen() {
+  const moneyAvailable = useLinqaSendAvailability() === true;
   const router = useRouter();
   const { width } = useWindowDimensions();
   const homeClient = useMemo(
@@ -306,7 +308,7 @@ export default function HomeScreen() {
     }
   }
 
-  const quickActions = [
+  const allQuickActions = [
     {
       key: "chat",
       label: "Chat",
@@ -373,6 +375,7 @@ export default function HomeScreen() {
       onPress: () => router.push("/(tabs)/linqa")
     }
   ] as const;
+  const quickActions = allQuickActions.filter((item) => moneyAvailable || item.key !== "send");
 
   if (jurisdictionRequired) {
     // Jurisdiction is server-authoritative: Home is country-scoped, so there

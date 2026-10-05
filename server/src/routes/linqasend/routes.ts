@@ -100,6 +100,23 @@ export async function registerLinqaSendRoutes(
   const fraudSignals = new AuthoritativeFraudSignalsService(db);
 
   /**
+   * Whether the money flow may be shown to users at all. Clients hide every
+   * LinqaSend entry point unless this is true, so the UI never advertises
+   * transfers that the readiness gate would refuse (REAL_MONEY_DISABLED).
+   */
+  app.get(
+    "/v1/linqasend/availability",
+    withErrors(async (request) => {
+      const p = await authenticate(request);
+      requireScope(p, "linqasend:read");
+      return {
+        available: config.LINQASEND_REAL_MONEY_ENABLED === true,
+        mode: config.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION"
+      };
+    })
+  );
+
+  /**
    * Real funding-source registration by opaque reference — not a PCI card
    * tokenization flow (no PCI-capable provider SDK is integrated here, per
    * the pack's own rule #1: never store PAN/CVV/PIN/track data). A bank

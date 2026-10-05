@@ -21,12 +21,20 @@ describe("LinqaSend full module surface", () => {
   it("mounts the API surface required by the full UI/backend pack", async () => {
     app = await buildApp(config, database); await app.ready();
     const routes: Array<[string,string]> = [
-      ["GET","/v1/linqasend/home"], ["POST","/v1/linqasend/recipients/resolve/linqa"], ["POST","/v1/linqasend/recipients/resolve/external"],
+      ["GET","/v1/linqasend/availability"], ["GET","/v1/linqasend/home"], ["POST","/v1/linqasend/recipients/resolve/linqa"], ["POST","/v1/linqasend/recipients/resolve/external"],
       ["POST","/v1/linqasend/external-recipients"], ["PATCH","/v1/linqasend/external-recipients/:id"], ["POST","/v1/linqasend/payment-methods/setup"], ["POST","/v1/linqasend/payment-methods/confirm"], ["DELETE","/v1/linqasend/payment-methods/:id"],
       ["GET","/v1/linqasend/receive-profile"], ["POST","/v1/linqasend/requests"], ["GET","/v1/linqasend/requests"],
       ["POST","/v1/linqasend/requests/:id/pay"], ["POST","/v1/linqasend/requests/:id/decline"], ["GET","/v1/linqasend/limits"],
       ["GET","/v1/linqasend/settings"], ["PATCH","/v1/linqasend/settings"], ["POST","/v1/linqasend/transfers/:id/cancel"], ["POST","/v1/linqasend/transfers/:id/refund"]
     ];
     for (const [method,url] of routes) expect(app.hasRoute({ method, url })).toBe(true);
+  });
+
+  it("rejects unauthenticated reads of LinqaSend availability", async () => {
+    app = await buildApp(config, database); await app.ready();
+    const response = await app.inject({ method: "GET", url: "/v1/linqasend/availability" });
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    expect(response.statusCode).toBeLessThan(500);
+    expect(response.json()).not.toHaveProperty("available");
   });
 });

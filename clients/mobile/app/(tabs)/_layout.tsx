@@ -12,6 +12,7 @@ import { HomeFeedService, type HomeBadges } from "../../services/home-feed.servi
 import { accessTokenProvider } from "../../services/session";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getApiBaseUrl } from "../../config/api";
+import { isMoneyRoute, useLinqaSendAvailability } from "../../services/linqasend-availability";
 
 const API = getApiBaseUrl();
 
@@ -110,7 +111,11 @@ export default function TabsLayout() {
   const pathname = usePathname();
   const [createOpen, setCreateOpen] = useState(false);
   const insets = useSafeAreaInsets();
-  const actions = createActionsForPath(pathname);
+  const moneyAvailable = useLinqaSendAvailability() === true;
+  const actions = useMemo(
+    () => createActionsForPath(pathname).filter((item) => moneyAvailable || !isMoneyRoute(item.route)),
+    [pathname, moneyAvailable]
+  );
   const { active } = useAccounts();
   const badges = useTabBadges(active?.userId, pathname);
   const onboarding = useMemo(() => new OnboardingApiService(API, accessTokenProvider), []);

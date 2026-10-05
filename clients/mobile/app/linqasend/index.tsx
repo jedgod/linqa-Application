@@ -5,17 +5,24 @@ import { useRouter } from "expo-router";
 import { LinqaSendService, type LinqaSendTransferSummary } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
 import { getApiBaseUrl } from "../../config/api";
+import { useLinqaSendAvailability } from "../../services/linqasend-availability";
 
 const API = getApiBaseUrl();
 const money = (minor: string, currency: string) => `${(Number(minor) / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })} ${currency}`;
 
 export default function LinqaSendHome() {
   const router = useRouter();
+  const available = useLinqaSendAvailability();
   const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
   const [items, setItems] = useState<LinqaSendTransferSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { client.listTransfers(5).then(r => setItems(r.items)).catch(e => { setItems([]); setError(e instanceof Error ? e.message : "Unable to load activity"); }); }, [client]);
+  useEffect(() => { if (available !== true) return; client.listTransfers(5).then(r => setItems(r.items)).catch(e => { setItems([]); setError(e instanceof Error ? e.message : "Unable to load activity"); }); }, [client, available]);
+
+  if (available !== true) return <SafeAreaView style={s.screen}><View style={s.content}>
+    <Pressable onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="Back"><Ionicons name="chevron-back" size={27} color="#344054" /></Pressable>
+    {available === null ? <ActivityIndicator style={{ marginTop: 40 }} /> : <><Text style={s.brand}>LinqaSend</Text><Text style={s.greeting}>Money transfers are not available yet. We will let you know as soon as they launch in your region.</Text></>}
+  </View></SafeAreaView>;
 
   return <SafeAreaView style={s.screen}><ScrollView contentContainerStyle={s.content}>
     <View style={s.top}><View><Text style={s.brand}>LinqaSend</Text><Text style={s.greeting}>Move money with transparent rates</Text></View><Pressable onPress={()=>router.push("/linqasend/controls")} accessibilityLabel="Limits and settings"><Ionicons name="settings-outline" size={22} color="#111827" /></Pressable></View>

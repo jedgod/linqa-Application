@@ -4,19 +4,22 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { HUB_GROUPS, LINQA_HUB_SERVICES } from "../navigation/information-architecture";
+import { useLinqaSendAvailability } from "../services/linqasend-availability";
 
 const FILTERS = ["All", ...HUB_GROUPS] as const;
 
 export default function SearchScreen() {
+  const moneyAvailable = useLinqaSendAvailability() === true;
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("All");
 
   const results = useMemo(() => LINQA_HUB_SERVICES.filter((item) => {
+    if (!moneyAvailable && item.key === "send") return false;
     const q = query.trim().toLowerCase();
     return (!q || `${item.title} ${item.description} ${item.group}`.toLowerCase().includes(q)) &&
       (filter === "All" || item.group === filter);
-  }), [query, filter]);
+  }), [query, filter, moneyAvailable]);
 
   return (
     <SafeAreaView style={styles.screen}>
