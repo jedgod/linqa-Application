@@ -74,7 +74,7 @@ const s = StyleSheet.create({
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   avatarText: { color: "white", fontWeight: "900" },
   name: { color: colors.text, fontWeight: "800" },
-  meta: { color: colors.textMuted, fontSize: 10 },
+  meta: { color: colors.textMuted, fontSize: 12 },
   badge: {
     color: colors.accent, backgroundColor: colors.surfaceAlt, paddingHorizontal: 8, paddingVertical: 4,
     borderRadius: radius.pill, fontSize: 9, fontWeight: "800"
@@ -83,5 +83,5 @@ const s = StyleSheet.create({
   add: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 9, marginTop: 8 },
   addText: { color: colors.accent, fontWeight: "800" },
   disabled: { opacity: 0.4 },
-  limit: { color: colors.textMuted, fontSize: 10, marginLeft: 30, marginTop: -8 }
+  limit: { color: colors.textMuted, fontSize: 12, marginLeft: 30, marginTop: -8 }
 });

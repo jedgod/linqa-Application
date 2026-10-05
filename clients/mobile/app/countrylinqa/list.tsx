@@ -114,5 +114,5 @@ const s = StyleSheet.create({
     borderBottomColor: colors.border
   },
   rowTitle: { color: colors.text, fontWeight: "700" },
-  rowSub: { color: colors.textFaint, fontSize: 11, marginTop: 4 }
+  rowSub: { color: colors.textFaint, fontSize: 12, marginTop: 4 }
 });

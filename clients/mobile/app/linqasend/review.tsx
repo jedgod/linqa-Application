@@ -164,7 +164,7 @@ const s = StyleSheet.create({
   bigAmount: { color: colors.text, fontWeight: "900", fontSize: 18 },
   arrow: { color: colors.textFaint },
   rateDetail: { color: colors.textMuted, fontSize: 12, marginTop: spacing.sm },
-  expiry: { color: colors.accent, fontSize: 11, fontWeight: "700", marginTop: spacing.sm },
+  expiry: { color: colors.accent, fontSize: 12, fontWeight: "700", marginTop: spacing.sm },
   sectionTitle: { color: colors.text, fontWeight: "800", marginBottom: spacing.sm },
   muted: { color: colors.textFaint, fontSize: 13 },
   linkButton: { marginTop: spacing.sm },

@@ -242,7 +242,7 @@ const styles = StyleSheet.create({
   },
   eyebrow: {
     color: "#12D6AE",
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "800",
     letterSpacing: 1.3,
   },
@@ -262,7 +262,7 @@ const styles = StyleSheet.create({
   section: { marginTop: 18 },
   sectionTitle: {
     color: "#6F889A",
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "800",
     letterSpacing: 1,
     marginBottom: 8,
@@ -288,5 +288,5 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   itemTitle: { color: "#EFF7FC", fontSize: 14, fontWeight: "800" },
-  itemSubtitle: { color: "#718A9C", fontSize: 11, marginTop: 3 },
+  itemSubtitle: { color: "#718A9C", fontSize: 12, marginTop: 3 },
 });

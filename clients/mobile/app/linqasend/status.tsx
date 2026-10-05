@@ -124,5 +124,5 @@ const s = StyleSheet.create({
     borderBottomColor: colors.border
   },
   timelinePhase: { color: colors.text, fontSize: 12, fontWeight: "700" },
-  timelineStatus: { color: colors.textFaint, fontSize: 11 }
+  timelineStatus: { color: colors.textFaint, fontSize: 12 }
 });

@@ -145,6 +145,8 @@ export default function MessageRequestsScreen() {
 
                 <Pressable
                   style={styles.iconAction}
+                  accessibilityRole="button"
+                  accessibilityLabel="Block sender"
                   onPress={() => act(item.id, "BLOCK")}
                 >
                   <Ionicons name="ban-outline" size={19} color="#FF6B7A" />
@@ -152,6 +154,8 @@ export default function MessageRequestsScreen() {
 
                 <Pressable
                   style={styles.iconAction}
+                  accessibilityRole="button"
+                  accessibilityLabel="Report sender"
                   onPress={() => act(item.id, "REPORT")}
                 >
                   <Ionicons name="flag-outline" size={19} color="#FFB84D" />
@@ -185,7 +189,7 @@ const styles = StyleSheet.create({
   },
   eyebrow: {
     color: "#12D6AE",
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "800",
     letterSpacing: 1.3,
   },
@@ -247,7 +251,7 @@ const styles = StyleSheet.create({
   },
   avatarText: { color: "white", fontWeight: "900" },
   name: { color: "#F3F9FD", fontSize: 15, fontWeight: "800" },
-  meta: { color: "#748EA1", fontSize: 11, marginTop: 4 },
+  meta: { color: "#748EA1", fontSize: 12, marginTop: 4 },
   preview: {
     marginTop: 12,
     backgroundColor: "#061E2C",

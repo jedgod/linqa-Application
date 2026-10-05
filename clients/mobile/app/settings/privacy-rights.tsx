@@ -58,11 +58,11 @@ export default function PrivacyRightsScreen() {
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#001520" },
   content: { padding: 16, paddingBottom: 80 },
-  eyebrow: { color: "#12D6AE", fontSize: 11, fontWeight: "800", letterSpacing: 1.2, marginTop: 14 },
+  eyebrow: { color: "#12D6AE", fontSize: 12, fontWeight: "800", letterSpacing: 1.2, marginTop: 14 },
   title: { color: "#F5FBFF", fontSize: 27, fontWeight: "900", marginTop: 3 },
   sub: { color: "#748EA1", fontSize: 13, lineHeight: 18, marginTop: 6, marginBottom: 18 },
   card: { minHeight: 70, backgroundColor: "#082536", borderRadius: 16, borderWidth: 1, borderColor: "#17445A", padding: 14, marginBottom: 9, flexDirection: "row", alignItems: "center" },
   label: { color: "#F2F8FC", fontWeight: "800" },
-  meta: { color: "#748EA1", fontSize: 10, marginTop: 4 },
+  meta: { color: "#748EA1", fontSize: 12, marginTop: 4 },
   chevron: { color: "#587287", fontSize: 28 }
 });

@@ -78,7 +78,7 @@ const s = StyleSheet.create({
     borderBottomColor: colors.border
   },
   rowTitle: { color: colors.text, fontWeight: "700" },
-  rowSub: { color: colors.textFaint, fontSize: 11, marginTop: 2 },
+  rowSub: { color: colors.textFaint, fontSize: 12, marginTop: 2 },
   rowAmount: { color: colors.text, fontWeight: "700", fontSize: 12 },
-  rowStatus: { color: colors.textFaint, fontSize: 10, marginTop: 2 }
+  rowStatus: { color: colors.textFaint, fontSize: 12, marginTop: 2 }
 });

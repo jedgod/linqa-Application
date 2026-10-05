@@ -71,7 +71,7 @@ const styles = StyleSheet.create({
   },
   title: { color: "#FFCF7B", fontSize: 12, fontWeight: "900" },
   device: { color: "#F2F8FC", fontSize: 15, fontWeight: "800", marginTop: 3 },
-  meta: { color: "#768FA1", fontSize: 11, marginTop: 3 },
+  meta: { color: "#768FA1", fontSize: 12, marginTop: 3 },
   actions: { flexDirection: "row", gap: 8, marginTop: 12 },
   verify: {
     backgroundColor: "#12D6AE",

@@ -113,7 +113,7 @@ const s = StyleSheet.create({
   accountText: { flex: 1 },
   name: { color: colors.text, fontWeight: "800", fontSize: 15 },
   nameActive: { color: colors.accent },
-  meta: { color: "#8FA4B7", fontSize: 11, marginTop: 3 },
+  meta: { color: "#8FA4B7", fontSize: 12, marginTop: 3 },
   action: {
     minHeight: 60,
     flexDirection: "row",
@@ -124,6 +124,6 @@ const s = StyleSheet.create({
   },
   actionTextWrap: { flex: 1 },
   actionText: { color: colors.accent, fontWeight: "900", fontSize: 15 },
-  limit: { color: colors.textMuted, fontSize: 10, marginTop: 3 },
+  limit: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
   disabled: { opacity: 0.45 }
 });

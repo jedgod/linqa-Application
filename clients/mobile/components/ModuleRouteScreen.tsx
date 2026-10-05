@@ -382,7 +382,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: spacing.lg, paddingBottom: 120 },
   heading: { marginTop: 12, marginBottom: spacing.lg, flexDirection: "row", alignItems: "flex-start" },
-  eyebrow: { color: colors.accent, fontSize: 11, fontWeight: "800", letterSpacing: 1.2 },
+  eyebrow: { color: colors.accent, fontSize: 12, fontWeight: "800", letterSpacing: 1.2 },
   title: { color: colors.text, fontSize: 28, fontWeight: "900", marginTop: 3 },
   subtitle: { color: colors.textMuted, marginTop: 4 },
   searchButton: {
@@ -399,7 +399,7 @@ const styles = StyleSheet.create({
   runtimeNotice: { marginBottom: spacing.lg, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: "#6B5521", backgroundColor: "#2B2517", flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
   runtimeIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: "#493B1B", alignItems: "center", justifyContent: "center" },
   runtimeTitle: { color: "#FFE39A", fontSize: 13, fontWeight: "900" },
-  runtimeCopy: { color: "#C8B983", fontSize: 11, lineHeight: 16, marginTop: 3 },
+  runtimeCopy: { color: "#C8B983", fontSize: 12, lineHeight: 16, marginTop: 3 },
   action: {
     minHeight: 60,
     borderRadius: radius.md,

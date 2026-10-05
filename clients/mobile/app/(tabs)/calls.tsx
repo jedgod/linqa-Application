@@ -224,7 +224,7 @@ function Header({ onSearch, onSchedule }: { onSearch: () => void; onSchedule: ()
       <View style={styles.headerSpacer} />
       <IconPressable icon="search-outline" label="Search calls" onPress={onSearch} size={29} />
       <IconPressable icon="calendar-outline" label="Scheduled calls" onPress={onSchedule} size={27} />
-      <Pressable style={styles.profileRing} onPress={() => Alert.alert("Profile")}>
+      <Pressable style={styles.profileRing} onPress={() => Alert.alert("Profile")} accessibilityRole="button" accessibilityLabel="Open profile">
         <Image source={AVATARS.profile} style={styles.profileImage} />
       </Pressable>
     </View>
@@ -374,16 +374,16 @@ function CallRow({ call, last, onAudio, onVideo }: { call: Call; last: boolean; 
         <Ionicons name="lock-closed-outline" size={14} color={call.missed ? COLORS.red : COLORS.muted} style={styles.rowLock} />
       </View>
 
-      <Pressable style={styles.roundAction} onPress={onAudio}>
+      <Pressable style={styles.roundAction} onPress={onAudio} accessibilityRole="button" accessibilityLabel={`Voice call ${call.name}`}>
         <Ionicons name="call" size={21} color="#FFFFFF" />
         {call.id === "michael" ? <Ionicons name="wifi" size={8} color="#FFFFFF" style={styles.callSignal} /> : null}
       </Pressable>
       {call.kind !== "audio" ? (
-        <Pressable style={styles.videoAction} onPress={onVideo}>
+        <Pressable style={styles.videoAction} onPress={onVideo} accessibilityRole="button" accessibilityLabel={`Video call ${call.name}`}>
           <Ionicons name="videocam" size={20} color="#FFFFFF" />
         </Pressable>
       ) : <View style={styles.videoActionPlaceholder} />}
-      <Pressable onPress={() => Alert.alert(call.name, "Call options") } hitSlop={8} style={styles.moreButton}>
+      <Pressable onPress={() => Alert.alert(call.name, "Call options") } hitSlop={8} style={styles.moreButton} accessibilityRole="button" accessibilityLabel={`More options for ${call.name}`}>
         <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.muted} />
       </Pressable>
     </View>
@@ -466,7 +466,7 @@ const styles = StyleSheet.create({
   participant: { width: 25, height: 25, borderRadius: 8, borderWidth: 1.5, borderColor: COLORS.surface2 },
   participantOverlap: { marginLeft: -4 },
   morePeople: { width: 25, height: 25, borderRadius: 8, backgroundColor: "#142A50", borderWidth: 1, borderColor: "#34496C", alignItems: "center", justifyContent: "center" },
-  morePeopleText: { color: COLORS.muted, fontSize: 10 },
+  morePeopleText: { color: COLORS.muted, fontSize: 12 },
   joinWrap: { width: 80, height: 33, borderRadius: 10, overflow: "hidden" },
   joinButton: { flex: 1, alignItems: "center", justifyContent: "center", borderRadius: 10 },
   joinText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
@@ -487,7 +487,7 @@ const styles = StyleSheet.create({
   flag: { fontSize: 13 },
   country: { color: COLORS.muted, fontSize: 12.5, flexShrink: 1 },
   callTimeBlock: { width: 62, alignItems: "center" },
-  callTime: { color: COLORS.muted, fontSize: 11.5 },
+  callTime: { color: COLORS.muted, fontSize: 12.5 },
   callTimeMissed: { color: COLORS.red },
   rowLock: { marginTop: 8 },
   roundAction: { width: 37, height: 37, borderRadius: 19, backgroundColor: "#13284E", borderWidth: 1, borderColor: "#273B65", alignItems: "center", justifyContent: "center", marginLeft: 2 },
@@ -507,7 +507,7 @@ const styles = StyleSheet.create({
   bottomNav: { position: "absolute", left: 0, right: 0, bottom: 0, height: 82, flexDirection: "row", backgroundColor: "#061027", borderTopWidth: 1, borderTopColor: "#172644", paddingBottom: Platform.OS === "ios" ? 8 : 4 },
   navItem: { flex: 1, alignItems: "center", justifyContent: "center", gap: 6 },
   navIndicator: { position: "absolute", top: 0, width: 41, height: 2, backgroundColor: COLORS.cyan },
-  navLabel: { color: "#95A5D1", fontSize: 11.5 },
+  navLabel: { color: "#95A5D1", fontSize: 12.5 },
   navLabelActive: { color: COLORS.cyan },
 
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,.68)", paddingTop: 70, paddingHorizontal: 20 },

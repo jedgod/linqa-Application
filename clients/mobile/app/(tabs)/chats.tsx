@@ -790,7 +790,7 @@ const s = StyleSheet.create({
     elevation: 14
   },
   hubItem: { width: "33.333%", minHeight: 82, alignItems: "center", justifyContent: "center", gap: 7 },
-  hubLabel: { color: C.white, fontSize: 11.5, fontFamily: fonts.semibold, textAlign: "center" },
+  hubLabel: { color: C.white, fontSize: 12.5, fontFamily: fonts.semibold, textAlign: "center" },
 
   list: { paddingHorizontal: 14, paddingBottom: 32, gap: 9 },
 
@@ -828,7 +828,7 @@ const s = StyleSheet.create({
   },
   scheduleBody: { flex: 1 },
   scheduleTitle: { color: C.white, fontSize: 13.5, fontFamily: fonts.bold },
-  scheduleWhen: { color: C.muted, fontSize: 11.5, fontFamily: fonts.regular, marginTop: 2 },
+  scheduleWhen: { color: C.muted, fontSize: 12.5, fontFamily: fonts.regular, marginTop: 2 },
   joinButton: {
     paddingHorizontal: 17,
     paddingVertical: 9,
@@ -862,7 +862,7 @@ const s = StyleSheet.create({
     borderWidth: 2,
     borderColor: C.card
   },
-  groupAvatarText: { color: C.white, fontSize: 10, fontFamily: fonts.extrabold },
+  groupAvatarText: { color: C.white, fontSize: 12, fontFamily: fonts.extrabold },
 
   presenceContent: { paddingVertical: 14, gap: 16, alignItems: "flex-start" },
   presenceItem: { width: 66, alignItems: "center", gap: 7 },
@@ -871,7 +871,7 @@ const s = StyleSheet.create({
     width: 66,
     textAlign: "center",
     fontFamily: fonts.semibold,
-    fontSize: 11.5
+    fontSize: 12.5
   },
   statusCircle: {
     width: 58,
@@ -906,7 +906,7 @@ const s = StyleSheet.create({
     gap: 6
   },
   filterActive: { backgroundColor: "#0B4A48" },
-  filterText: { color: C.muted, fontFamily: fonts.bold, fontSize: 11.5 },
+  filterText: { color: C.muted, fontFamily: fonts.bold, fontSize: 12.5 },
   filterTextActive: { color: C.teal },
   filterCount: {
     minWidth: 22,
@@ -918,7 +918,7 @@ const s = StyleSheet.create({
     justifyContent: "center"
   },
   filterCountActive: { backgroundColor: C.teal },
-  filterCountText: { color: C.white, fontFamily: fonts.extrabold, fontSize: 11 },
+  filterCountText: { color: C.white, fontFamily: fonts.extrabold, fontSize: 12 },
   filterCountTextActive: { color: C.bg },
 
   row: {
@@ -935,11 +935,11 @@ const s = StyleSheet.create({
   rowBody: { flex: 1, gap: 3 },
   rowTitleLine: { flexDirection: "row", alignItems: "center", gap: 6 },
   rowTitle: { flex: 1, color: C.white, fontFamily: fonts.extrabold, fontSize: 15.5 },
-  rowTime: { color: C.muted, fontSize: 11.5, fontFamily: fonts.regular },
+  rowTime: { color: C.muted, fontSize: 12.5, fontFamily: fonts.regular },
   previewLine: { flexDirection: "row", alignItems: "center", gap: 5 },
   preview: { flex: 1, color: C.muted, fontSize: 13, fontFamily: fonts.regular },
   typing: { color: C.teal, fontFamily: fonts.bold },
-  voiceDuration: { color: C.muted, fontSize: 11, fontFamily: fonts.regular },
+  voiceDuration: { color: C.muted, fontSize: 12, fontFamily: fonts.regular },
   metaLine: { flexDirection: "row", alignItems: "center", gap: 4 },
   rowTail: { alignItems: "flex-end", justifyContent: "center", gap: 8 },
   rowActions: { flexDirection: "row", gap: 6 },
@@ -953,7 +953,7 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center"
   },
-  metaText: { color: C.muted, fontSize: 10.5, fontFamily: fonts.regular },
+  metaText: { color: C.muted, fontSize: 12.5, fontFamily: fonts.regular },
   unread: {
     minWidth: 26,
     height: 26,

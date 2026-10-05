@@ -35,10 +35,10 @@ export default function StatusViewerScreen() {
           <Text style={styles.name}>Avery Chen</Text>
           <Text style={styles.time}>12 minutes ago</Text>
         </View>
-        <Pressable style={styles.iconButton}>
+        <Pressable style={styles.iconButton} accessibilityRole="button" accessibilityLabel="Toggle sound">
           <Ionicons name="volume-high-outline" size={20} color="#D6E4EC" />
         </Pressable>
-        <Pressable style={styles.iconButton}>
+        <Pressable style={styles.iconButton} accessibilityRole="button" accessibilityLabel="More options">
           <Ionicons name="ellipsis-horizontal" size={20} color="#D6E4EC" />
         </Pressable>
       </View>
@@ -66,7 +66,7 @@ export default function StatusViewerScreen() {
           placeholderTextColor="#758B9B"
           style={styles.replyInput}
         />
-        <Pressable style={styles.sendButton}>
+        <Pressable style={styles.sendButton} accessibilityRole="button" accessibilityLabel="Send reply">
           <Ionicons name="send" size={19} color="#00212A" />
         </Pressable>
       </View>
@@ -99,7 +99,7 @@ const styles = StyleSheet.create({
   },
   avatarText: { color: "white", fontWeight: "900" },
   name: { color: "white", fontWeight: "800" },
-  time: { color: "#A1B3C0", fontSize: 11, marginTop: 2 },
+  time: { color: "#A1B3C0", fontSize: 12, marginTop: 2 },
   iconButton: {
     width: 36,
     height: 36,
@@ -121,7 +121,7 @@ const styles = StyleSheet.create({
     lineHeight: 39,
     textAlign: "center",
   },
-  statusId: { color: "#8DA1B2", fontSize: 11, marginTop: 16 },
+  statusId: { color: "#8DA1B2", fontSize: 12, marginTop: 16 },
   reactions: {
     flexDirection: "row",
     justifyContent: "space-around",

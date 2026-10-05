@@ -27,5 +27,5 @@ const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 20, paddingTop: 40, gap: 20 },
   notice: { backgroundColor: colors.surfaceAlt, borderRadius: radius.md, padding: 13 },
-  noticeText: { color: "#9BC8C5", fontSize: 11, lineHeight: 17 }
+  noticeText: { color: "#9BC8C5", fontSize: 12, lineHeight: 17 }
 });

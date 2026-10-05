@@ -253,8 +253,8 @@ const s = StyleSheet.create({
     shadowRadius: 16,
     shadowOffset: { width: 0, height: -4 }
   },
-  tabLabel: { fontSize: 11, fontWeight: "700" },
-  tabBadge: { backgroundColor: "#FF3B4E", color: "#FFFFFF", fontSize: 10, fontWeight: "900", minWidth: 18, lineHeight: 15 },
+  tabLabel: { fontSize: 12, fontWeight: "700" },
+  tabBadge: { backgroundColor: "#FF3B4E", color: "#FFFFFF", fontSize: 12, fontWeight: "900", minWidth: 18, lineHeight: 15 },
   createButton: {
     alignSelf: "center",
     top: -17,

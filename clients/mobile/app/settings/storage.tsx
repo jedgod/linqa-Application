@@ -157,6 +157,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   actionTitle: { color: "#EEF7FB", fontWeight: "800" },
-  actionCopy: { color: "#748EA1", fontSize: 11, marginTop: 3 },
+  actionCopy: { color: "#748EA1", fontSize: 12, marginTop: 3 },
   error: { color: "#FF8B97", fontSize: 12 },
 });

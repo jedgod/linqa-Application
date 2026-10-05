@@ -94,7 +94,7 @@ const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#F5F7FB" },
   content: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 116 },
   heading: { marginBottom: 18 },
-  eyebrow: { color: "#5B4CFF", fontSize: 11, fontWeight: "900", letterSpacing: 1.25 },
+  eyebrow: { color: "#5B4CFF", fontSize: 12, fontWeight: "900", letterSpacing: 1.25 },
   title: { color: "#11142D", fontSize: 32, lineHeight: 38, fontWeight: "900", marginTop: 3 },
   subtitle: { color: "#686E85", fontSize: 13, lineHeight: 19, marginTop: 4 },
   profileCard: { minHeight: 84, borderRadius: 20, backgroundColor: "#151932", padding: 14, flexDirection: "row", alignItems: "center", shadowColor: "#11142D", shadowOpacity: 0.14, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
@@ -102,7 +102,7 @@ const s = StyleSheet.create({
   avatarText: { color: "#FFFFFF", fontSize: 16, fontWeight: "900" },
   profileCopy: { flex: 1, marginLeft: 12 },
   profileName: { color: "#FFFFFF", fontSize: 16, fontWeight: "900" },
-  profileMeta: { color: "#AEB4C8", fontSize: 11, marginTop: 4 },
+  profileMeta: { color: "#AEB4C8", fontSize: 12, marginTop: 4 },
   verified: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#DDF7EC", borderRadius: 999, paddingHorizontal: 8, paddingVertical: 5 },
   verifiedText: { color: "#12805C", fontSize: 9, fontWeight: "900" },
   section: { marginTop: 24 },
@@ -114,6 +114,6 @@ const s = StyleSheet.create({
   icon: { width: 42, height: 42, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   rowCopy: { flex: 1, marginLeft: 12, marginRight: 8 },
   rowTitle: { color: "#1C2037", fontSize: 14, fontWeight: "800" },
-  rowSubtitle: { color: "#74798E", fontSize: 11, lineHeight: 16, marginTop: 3 },
-  version: { color: "#989DAE", fontSize: 11, textAlign: "center", marginTop: 26 }
+  rowSubtitle: { color: "#74798E", fontSize: 12, lineHeight: 16, marginTop: 3 },
+  version: { color: "#989DAE", fontSize: 12, textAlign: "center", marginTop: 26 }
 });

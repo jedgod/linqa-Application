@@ -45,7 +45,7 @@ export default function MediaScreen() {
           <Text style={styles.eyebrow}>SHARED CONTENT</Text>
           <Text style={styles.title}>Media</Text>
         </View>
-        <Pressable style={styles.actionButton}>
+        <Pressable style={styles.actionButton} accessibilityRole="button" accessibilityLabel="Search media">
           <Ionicons name="search" size={20} color="#AFC2CF" />
         </Pressable>
       </View>
@@ -142,7 +142,7 @@ const styles = StyleSheet.create({
   },
   eyebrow: {
     color: "#12D6AE",
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "800",
     letterSpacing: 1.3,
   },
@@ -211,7 +211,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 4,
   },
-  cardDate: { color: "#70889A", fontSize: 10 },
+  cardDate: { color: "#70889A", fontSize: 12 },
   empty: { alignItems: "center", paddingTop: 90 },
   emptyTitle: { color: "#F4FAFF", fontSize: 17, fontWeight: "800", marginTop: 12 },
 });

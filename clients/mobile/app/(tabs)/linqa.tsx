@@ -82,7 +82,7 @@ const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#F7F8FC" },
   content: { padding: 18, paddingBottom: 110 },
   intro: { paddingVertical: 10 },
-  eyebrow: { color: "#5B4CFF", fontSize: 11, fontWeight: "900", letterSpacing: 1.1 },
+  eyebrow: { color: "#5B4CFF", fontSize: 12, fontWeight: "900", letterSpacing: 1.1 },
   title: { color: "#11142D", fontSize: 34, lineHeight: 40, fontWeight: "900", marginTop: 4 },
   subtitle: { color: "#666C86", fontSize: 14, lineHeight: 20, marginTop: 3 },
   search: { minHeight: 54, marginTop: 14, paddingHorizontal: 15, borderRadius: 17, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E7F0", flexDirection: "row", alignItems: "center", gap: 10 },

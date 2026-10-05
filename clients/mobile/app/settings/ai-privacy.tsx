@@ -126,7 +126,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   optionTitle: { color: "#EFF7FC", fontSize: 15, fontWeight: "900" },
-  optionCopy: { color: "#718A9C", fontSize: 11, lineHeight: 16, marginTop: 4 },
+  optionCopy: { color: "#718A9C", fontSize: 12, lineHeight: 16, marginTop: 4 },
   notice: {
     marginTop: 10,
     backgroundColor: "#09284A",

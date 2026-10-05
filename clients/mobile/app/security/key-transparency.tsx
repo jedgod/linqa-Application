@@ -64,7 +64,7 @@ export default function KeyTransparencyScreen() {
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#001520" },
   content: { padding: 16, paddingBottom: 80 },
-  eyebrow: { color: "#12D6AE", fontSize: 11, fontWeight: "800", letterSpacing: 1.3, marginTop: 16 },
+  eyebrow: { color: "#12D6AE", fontSize: 12, fontWeight: "800", letterSpacing: 1.3, marginTop: 16 },
   title: { color: "#F5FBFF", fontSize: 27, fontWeight: "900", marginTop: 3 },
   subtitle: { color: "#748EA1", fontSize: 13, lineHeight: 18, marginTop: 6, marginBottom: 18 },
   errorText: { color: "#FF8B97", fontSize: 12, marginBottom: 12 },
@@ -74,5 +74,5 @@ const s = StyleSheet.create({
   card: { backgroundColor: "#082536", borderRadius: 16, borderWidth: 1, borderColor: "#17445A", padding: 14, marginBottom: 10 },
   row: { flexDirection: "row", alignItems: "center", gap: 12 },
   name: { color: "#F2F8FC", fontWeight: "800" },
-  meta: { color: "#748EA1", fontSize: 11, marginTop: 3 }
+  meta: { color: "#748EA1", fontSize: 12, marginTop: 3 }
 });

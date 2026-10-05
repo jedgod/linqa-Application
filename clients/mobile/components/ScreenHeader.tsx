@@ -31,7 +31,7 @@ export function ScreenHeader({
 
 const s = StyleSheet.create({
   back: { marginBottom: 10, width: 32, height: 32, justifyContent: "center" },
-  eyebrow: { color: "#165DFF", fontWeight: "900", fontSize: 11, letterSpacing: 1.2 },
+  eyebrow: { color: "#165DFF", fontWeight: "900", fontSize: 12, letterSpacing: 1.2 },
   title: { color: "#111827", fontSize: 26, fontWeight: "900", marginTop: 4, lineHeight: 32 },
   copy: { color: "#475467", lineHeight: 20, marginTop: 10, marginBottom: 4 }
 });
