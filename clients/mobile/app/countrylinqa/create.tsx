@@ -10,13 +10,19 @@ const API = getApiBaseUrl();
 
 export default function CountryLinqaCreateScreen() {
   const router = useRouter();
-  const { type } = useLocalSearchParams<{ type?: string }>();
+  const { type, title, startsAt: startsAtParam, city: cityParam } =
+    useLocalSearchParams<{ type?: string; title?: string; startsAt?: string; city?: string }>();
   const event = type === "event";
   const client = useMemo(() => new CountryLinqaService(API, () => accessTokenProvider.getAccessToken()), []);
-  const [body, setBody] = useState("");
-  const [city, setCity] = useState("");
-  const [startsAt, setStartsAt] = useState(new Date(Date.now() + 86_400_000).toISOString());
+  const [body, setBody] = useState(title ?? "");
+  const [city, setCity] = useState(cityParam ?? "");
+  const [startsAt, setStartsAt] = useState(
+    startsAtParam && Number.isFinite(Date.parse(startsAtParam))
+      ? startsAtParam
+      : new Date(Date.now() + 86_400_000).toISOString()
+  );
   const [saving, setSaving] = useState(false);
+  const canPublish = body.trim().length > 0 && !saving;
 
   async function submit() {
     if (!body.trim()) return;
@@ -41,8 +47,15 @@ export default function CountryLinqaCreateScreen() {
       <View style={s.header}>
         <Pressable onPress={() => router.back()}><Text style={s.cancel}>Cancel</Text></Pressable>
         <Text style={s.title}>{event ? "Create event" : "Create post"}</Text>
-        <Pressable disabled={saving || !body.trim()} onPress={() => void submit()}>
-          <Text style={[s.publish, (saving || !body.trim()) && s.disabled]}>{saving ? "Saving" : "Publish"}</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={event ? "Publish event" : "Publish post"}
+          accessibilityState={{ disabled: !canPublish }}
+          disabled={!canPublish}
+          onPress={() => void submit()}
+          style={[s.publishButton, !canPublish && s.publishButtonDisabled]}
+        >
+          <Text style={s.publish}>{saving ? "Saving" : "Publish"}</Text>
         </Pressable>
       </View>
       <TextInput
@@ -73,8 +86,17 @@ const s = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 14 },
   cancel: { color: "#596078", fontWeight: "700" },
   title: { color: "#171A35", fontSize: 18, fontWeight: "900" },
-  publish: { color: "#5B4CFF", fontWeight: "900" },
-  disabled: { opacity: 0.4 },
+  publishButton: {
+    minWidth: 92,
+    minHeight: 44,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: "#5B4CFF",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  publishButtonDisabled: { backgroundColor: "#A8A2F5" },
+  publish: { color: "#FFFFFF", fontWeight: "900" },
   editor: { minHeight: 150, borderRadius: 18, padding: 16, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E2E5EE", color: "#171A35", fontSize: 17, textAlignVertical: "top" },
   eventFields: { marginTop: 16, gap: 8 },
   label: { color: "#555C76", fontSize: 12, fontWeight: "800", marginTop: 5 },

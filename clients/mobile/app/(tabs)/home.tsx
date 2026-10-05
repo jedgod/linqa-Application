@@ -49,6 +49,17 @@ const HERO_SLOTS = 4;
 /** World cards per page, and pages, in "Breaking around the world". */
 const WORLD_PER_PAGE = 3;
 const WORLD_PAGES = 5;
+type HomeUpcomingCard = HomeUpcomingEvent & {
+  suggested?: boolean;
+  displayPlace?: { icon: string; label: string };
+};
+
+const UPCOMING_SUGGESTIONS = [
+  { title: "Design Review Meeting", daysFromNow: 1, hour: 10, minute: 30, icon: "videocam-outline", label: "Video call plan" },
+  { title: "Community Event: AI & You", daysFromNow: 3, hour: 14, minute: 0, icon: "globe-outline", label: "Online event plan" },
+  { title: "Product Team Standup", daysFromNow: 5, hour: 18, minute: 0, icon: "videocam-outline", label: "Google Meet plan" },
+  { title: "Flight Check-in and Itinerary", daysFromNow: 7, hour: 8, minute: 0, icon: "airplane-outline", label: "Travel plan" }
+] as const;
 
 const SECTION_LABELS: Record<HideableHomeSection, string> = {
   liveUpdates: "Live updates",
@@ -184,6 +195,8 @@ export default function HomeScreen() {
   // so their slide width has to be the exact content width.
   const cardWidth = width - GUTTER * 2;
   const worldCardWidth = cardWidth - 22;
+  const upcomingCardWidth = Math.floor((cardWidth - 20) / 3);
+  const compactUpcomingCards = upcomingCardWidth < 150;
 
   const stories = feed?.breakingAroundWorld ?? [];
   // The hero is image-led, so image-bearing stories are promoted into it, but
@@ -209,7 +222,28 @@ export default function HomeScreen() {
   const transfers = (feed?.pendingTransfers ?? []).slice(0, 2);
   const hasContinueCards = conversations.length + vaultItems.length + transfers.length > 0;
   const countryPanel = feed?.countryLinqa;
-  const upcoming = (feed?.upcoming ?? []).slice(0, 3);
+  const publishedUpcoming = (feed?.upcoming ?? []).slice(0, 4);
+  const upcoming: HomeUpcomingCard[] = [
+    ...publishedUpcoming,
+    ...(feed
+      ? UPCOMING_SUGGESTIONS.slice(0, 4 - publishedUpcoming.length).map((suggestion, index) => {
+          const startsAt = new Date();
+          startsAt.setDate(startsAt.getDate() + suggestion.daysFromNow);
+          startsAt.setHours(suggestion.hour, suggestion.minute, 0, 0);
+          return {
+            id: `suggested-${index}`,
+            title: suggestion.title,
+            startsAt: startsAt.toISOString(),
+            countryCode: null,
+            regionCode: null,
+            city: null,
+            suggested: true,
+            displayPlace: { icon: suggestion.icon, label: `Suggested · ${suggestion.label}` }
+          };
+        })
+      : [])
+  ].slice(0, 4);
+  const eventsRoute = "/countrylinqa/list?kind=events&title=Events";
 
   async function openLink(url: string | undefined) {
     if (!url) {
@@ -485,13 +519,8 @@ export default function HomeScreen() {
                         onPress={() => (story ? void openLink(story.canonicalUrl) : load())}
                       >
                         <Text style={s.heroButtonText}>{story ? "Read Full Story" : "Retry"}</Text>
-                        <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
+                        <Ionicons name="chevron-forward" size={14} color="#FFFFFF" />
                       </Pressable>
-                      {story ? (
-                        <Text style={s.heroPublisher} numberOfLines={1}>
-                          Opens on {story.publisherDomain}
-                        </Text>
-                      ) : null}
                     </View>
                     <View style={[s.livePill, newsState !== "LIVE" && s.stalePill]}>
                       <Text style={s.livePillText}>{stateCopy.label}</Text>
@@ -562,7 +591,7 @@ export default function HomeScreen() {
                   >
                     <View style={s.listThumbWrap}>
                       {item.imageUrl ? (
-                        <Image source={{ uri: item.imageUrl }} style={s.listThumb} />
+                        <Image source={{ uri: item.imageUrl }} style={s.listThumb} resizeMode="cover" />
                       ) : (
                         <View style={[s.listThumb, s.listThumbFallback]}>
                           <Ionicons name="newspaper-outline" size={18} color="#FFFFFF" />
@@ -642,7 +671,13 @@ export default function HomeScreen() {
           <>
             <View style={s.sectionRow}>
               <Text style={s.panelTitle}>UPCOMING</Text>
-              <Pressable onPress={() => router.push("/countrylinqa/world")}><Text style={s.seeAll}>See all</Text></Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="See all upcoming events"
+                onPress={() => router.push(eventsRoute as never)}
+              >
+                <Text style={s.seeAll}>See all</Text>
+              </Pressable>
             </View>
 
             <ScrollView
@@ -653,36 +688,61 @@ export default function HomeScreen() {
             >
               {upcoming.map((event) => {
                 const date = new Date(event.startsAt);
-                const place = eventPlace(event);
+                const place = event.displayPlace ?? eventPlace(event);
                 return (
-                  <Pressable key={event.id} style={s.eventCard} onPress={() => router.push("/countrylinqa/world")}>
-                    <View style={s.eventTopRow}>
-                      <View style={s.eventDateChip}>
-                        <Text style={s.eventMonth}>{date.toLocaleDateString(undefined, { month: "short" })}</Text>
-                        <Text style={s.eventDay}>{date.getDate()}</Text>
+                  <Pressable
+                    key={event.id}
+                    style={[
+                      s.eventCard,
+                      { width: upcomingCardWidth },
+                      compactUpcomingCards && s.eventCardCompact
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${event.suggested ? "Suggested plan" : "Event"}: ${event.title}`}
+                    onPress={() => event.suggested
+                      ? router.push({
+                          pathname: "/countrylinqa/create",
+                          params: {
+                            type: "event",
+                            title: event.title,
+                            startsAt: event.startsAt
+                          }
+                        })
+                      : router.push(eventsRoute as never)}
+                  >
+                    <View style={[s.eventTopRow, compactUpcomingCards && s.eventTopRowCompact]}>
+                      <View style={[s.eventDateChip, compactUpcomingCards && s.eventDateChipCompact]}>
+                        <Text style={[
+                          s.eventMonth,
+                          compactUpcomingCards && s.eventMonthCompact,
+                          event.suggested && s.eventSuggestedMonth
+                        ]}>
+                          {date.toLocaleDateString(undefined, { month: "short" })}
+                        </Text>
+                        <Text style={[s.eventDay, compactUpcomingCards && s.eventDayCompact]}>{date.getDate()}</Text>
                       </View>
                       <View style={s.eventHeadline}>
-                        <Text style={s.eventTime}>
+                        <Text style={[s.eventTime, compactUpcomingCards && s.eventTimeCompact]}>
                           {date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
                         </Text>
-                        <Text style={s.eventTitle} numberOfLines={2}>{event.title}</Text>
+                        <Text
+                          style={[s.eventTitle, compactUpcomingCards && s.eventTitleCompact]}
+                          numberOfLines={compactUpcomingCards ? 3 : 2}
+                        >
+                          {event.title}
+                        </Text>
                       </View>
                     </View>
-                    <View style={s.eventDivider} />
-                    <View style={s.eventMetaRow}>
+                    <View style={[s.eventDivider, compactUpcomingCards && s.eventDividerCompact]} />
+                    <View style={[s.eventMetaRow, compactUpcomingCards && s.eventMetaRowCompact]}>
                       <Ionicons name={place.icon as never} size={12} color="#64748B" />
-                      <Text style={s.eventMeta} numberOfLines={1}>{place.label}</Text>
+                      <Text style={[s.eventMeta, compactUpcomingCards && s.eventMetaCompact]} numberOfLines={1}>
+                        {place.label}
+                      </Text>
                     </View>
                   </Pressable>
                 );
               })}
-              {upcoming.length === 0 ? (
-                <Pressable style={[s.eventCard, s.emptyEventCard]} onPress={() => router.push("/countrylinqa/create?type=event")}>
-                  <View style={s.emptyEventIcon}><Ionicons name="add" size={20} color="#5B4CFF" /></View>
-                  <Text style={s.eventTitle}>Plan your next event</Text>
-                  <Text style={s.eventMeta}>Create a real CountryLinqa event</Text>
-                </Pressable>
-              ) : null}
             </ScrollView>
           </>
         )}
@@ -901,10 +961,16 @@ export default function HomeScreen() {
                             {item.category}
                           </Text>
                         </View>
-                        <Text style={s.worldLabel} numberOfLines={3}>{item.title}</Text>
-                        {/* Attribution is a licensing obligation, not decoration. */}
-                        <Text style={s.worldTime} numberOfLines={1}>{item.publisherName}</Text>
-                        <Text style={s.worldTime}>{relativeAge(item.publishedAt)}</Text>
+                        <Text style={s.worldLabel} numberOfLines={2}>{item.title}</Text>
+                        {item.summary ? (
+                          <Text style={s.worldSummary} numberOfLines={1}>{item.summary}</Text>
+                        ) : null}
+                        <View style={s.worldMeta}>
+                          {/* Attribution is a licensing obligation, not decoration. */}
+                          <Text style={s.worldTime} numberOfLines={1}>{item.publisherName}</Text>
+                          <Text style={s.worldTime}>·</Text>
+                          <Text style={s.worldTime} numberOfLines={1}>{relativeAge(item.publishedAt)}</Text>
+                        </View>
                       </View>
                     </Pressable>
                   ))}
@@ -943,16 +1009,17 @@ export default function HomeScreen() {
 
         <View style={s.aiToolsRow}>
           <Pressable style={s.askRow} onPress={() => router.push("/modules/ai")} accessibilityRole="button">
-            <View style={s.aiIconWrap}><Ionicons name="sparkles-outline" size={18} color="#FFFFFF" /></View>
+            <Image
+              source={require("../../assets/ai-assistant.png")}
+              style={s.aiIcon}
+              resizeMode="contain"
+              accessibilityLabel="Linqa AI assistant"
+            />
             <View style={s.aiTextWrap}>
-              <Text style={s.aiTitle}>Ask Linqa AI</Text>
-              <Text style={s.aiSubtitle}>
-                {notifications && notifications.unreadMessages > 0
-                  ? `Summarize my ${notifications.unreadMessages} unread messages`
-                  : "Summarize my unread messages"}
-              </Text>
+              <Text style={s.aiTitle} numberOfLines={1}>Ask Linqa AI</Text>
+              <Text style={s.aiSubtitle} numberOfLines={1}>Summarize my unread messages</Text>
             </View>
-            <Ionicons name="chevron-forward" size={20} color="#111827" />
+            <Ionicons name="chevron-forward" size={16} color="#4438CA" />
           </Pressable>
           <Pressable style={s.aiToolButton} onPress={() => router.push({ pathname: "/modules/ai", params: { mode: "voice" } })}>
             <Ionicons name="mic-outline" size={18} color="#5B4CFF" />
@@ -963,13 +1030,6 @@ export default function HomeScreen() {
             <Text style={s.aiToolText}>Camera</Text>
           </Pressable>
         </View>
-
-        {feed ? (
-          <Text style={s.provenance}>
-            Headlines open on the original publisher's site. {stateCopy.detail} Updated{" "}
-            {relativeAge(feed.generatedAt) || "now"}.
-          </Text>
-        ) : null}
 
         {error ? (
           <Pressable style={s.errorCard} onPress={load}>
@@ -1210,18 +1270,16 @@ const s = StyleSheet.create({
   securityBannerText: { flex: 1, color: "#B42318", fontSize: 12.5, fontFamily: fonts.bold },
   degradedBanner: { marginTop: 10, flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: "#FFFAEB", borderWidth: 1, borderColor: "#FEDF89" },
   degradedText: { flex: 1, color: "#B54708", fontSize: 12, fontFamily: fonts.regular, lineHeight: 15 },
-  heroPublisher: { marginTop: 8, color: "#AEB9CC", fontSize: 9.5, fontFamily: fonts.semibold, maxWidth: "58%" },
   worldEmpty: { alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 22 },
   worldEmptyText: { color: "#AEB9CC", fontSize: 12.5, fontFamily: fonts.regular, textAlign: "center", paddingHorizontal: 18 },
   worldRetry: { color: "#B89CFF", fontSize: 12, fontFamily: fonts.extrabold },
-  provenance: { marginTop: 14, color: "#64748B", fontSize: 12, fontFamily: fonts.regular, lineHeight: 14 },
   modalCopy: { color: colors.textMuted, fontSize: 12, fontFamily: fonts.regular, lineHeight: 17, marginBottom: spacing.md },
   preferenceRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
   preferenceCopy: { flex: 1 },
   preferenceLabel: { color: colors.text, fontSize: 13.5, fontFamily: fonts.bold },
   preferenceHint: { color: colors.textFaint, fontSize: 12, fontFamily: fonts.regular, marginTop: 2, lineHeight: 15 },
   screen: { flex: 1, backgroundColor: "#F4F6FB" },
-  content: { paddingHorizontal: GUTTER, paddingTop: 10, paddingBottom: 96 },
+  content: { paddingHorizontal: GUTTER, paddingTop: 10, paddingBottom: 16 },
   topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12 },
   brandWrap: { flexDirection: "row", alignItems: "center", gap: 9 },
   logoCircle: {
@@ -1278,20 +1336,20 @@ const s = StyleSheet.create({
   heroContent: { flex: 1, paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12 },
   kickerRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   heroKicker: { color: "#FF4859", fontSize: 9, fontFamily: fonts.extrabold, letterSpacing: 0.8 },
-  heroTitle: { marginTop: 9, color: "#FFFFFF", fontSize: 19, fontFamily: fonts.extrabold, letterSpacing: -0.35, lineHeight: 23, maxWidth: "66%" },
-  heroCopy: { marginTop: 6, color: "#E2E8F0", fontSize: 12.5, fontFamily: fonts.regular, lineHeight: 15, maxWidth: "62%" },
+  heroTitle: { marginTop: 7, color: "#FFFFFF", fontSize: 15, fontFamily: fonts.extrabold, letterSpacing: -0.2, lineHeight: 18, maxWidth: "66%" },
+  heroCopy: { marginTop: 4, color: "#E2E8F0", fontSize: 10.5, fontFamily: fonts.regular, lineHeight: 13, maxWidth: "62%" },
   heroButton: {
-    marginTop: 10,
+    marginTop: 7,
     flexDirection: "row",
     alignItems: "center",
     alignSelf: "flex-start",
     backgroundColor: "#4F46E5",
     borderRadius: 11,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    gap: 6
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    gap: 4
   },
-  heroButtonText: { color: "#FFFFFF", fontFamily: fonts.extrabold, fontSize: 12 },
+  heroButtonText: { color: "#FFFFFF", fontFamily: fonts.extrabold, fontSize: 10.5 },
   dotRow: { position: "absolute", bottom: 10, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 7 },
   dotActive: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#FFFFFF" },
   dotInactive: { width: 8, height: 8, borderRadius: 4, backgroundColor: "rgba(255,255,255,0.45)" },
@@ -1348,8 +1406,8 @@ const s = StyleSheet.create({
   listPanel: { flex: 1, backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E2E8F0", padding: 9 },
   listItem: { flexDirection: "row", alignItems: "center", paddingVertical: 7, gap: 8 },
   listItemDivided: { borderTopWidth: 1, borderTopColor: "#F1F5F9" },
-  listThumbWrap: { position: "relative" },
-  listThumb: { width: 40, height: 40, borderRadius: 10 },
+  listThumbWrap: { position: "relative", width: 44, height: 44, borderRadius: 11, overflow: "hidden" },
+  listThumb: { width: 44, height: 44, borderRadius: 11 },
   listThumbFallback: { backgroundColor: "#5B4CFF", alignItems: "center", justifyContent: "center" },
   thumbLiveTag: {
     position: "absolute",
@@ -1398,31 +1456,43 @@ const s = StyleSheet.create({
   railScroll: { marginTop: 10 },
   upcomingRow: { flexDirection: "row", gap: 8, paddingRight: 4 },
   eventCard: {
-    width: 152,
+    width: 232,
+    minHeight: 124,
     backgroundColor: "#FFFFFF",
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: "#E2E8F0",
-    padding: 9
+    padding: 12
   },
-  eventTopRow: { flexDirection: "row", gap: 8 },
+  eventCardCompact: { minHeight: 102, borderRadius: 12, padding: 7 },
+  eventTopRow: { flexDirection: "row", gap: 12, minHeight: 66 },
+  eventTopRowCompact: { gap: 6, minHeight: 52 },
   eventDateChip: {
-    width: 38,
-    borderRadius: 9,
+    width: 50,
+    minHeight: 62,
+    borderRadius: 12,
     backgroundColor: "#EEF2FF",
     alignItems: "center",
-    paddingVertical: 4
+    justifyContent: "center",
+    paddingVertical: 6
   },
-  eventMonth: { color: "#4F46E5", fontSize: 8, fontFamily: fonts.extrabold, textTransform: "uppercase", letterSpacing: 0.3 },
-  eventDay: { color: "#111827", fontSize: 17, fontFamily: fonts.extrabold, lineHeight: 20 },
+  eventDateChipCompact: { width: 32, minHeight: 48, borderRadius: 9, paddingVertical: 4 },
+  eventMonth: { color: "#4F46E5", fontSize: 10, fontFamily: fonts.extrabold, textTransform: "uppercase", letterSpacing: 0.3 },
+  eventMonthCompact: { fontSize: 8 },
+  eventSuggestedMonth: { color: "#6B58DE" },
+  eventDay: { color: "#111827", fontSize: 22, fontFamily: fonts.extrabold, lineHeight: 26 },
+  eventDayCompact: { fontSize: 17, lineHeight: 20 },
   eventHeadline: { flex: 1 },
-  eventTime: { color: "#64748B", fontSize: 9, fontFamily: fonts.bold },
-  eventTitle: { color: "#111827", fontSize: 12, fontFamily: fonts.extrabold, lineHeight: 14, marginTop: 2 },
-  eventDivider: { height: 1, backgroundColor: "#EEF2F6", marginVertical: 8 },
-  eventMetaRow: { flexDirection: "row", alignItems: "center", gap: 4 },
-  eventMeta: { color: "#64748B", fontSize: 9.5, fontFamily: fonts.regular, flexShrink: 1 },
-  emptyEventCard: { minHeight: 86, alignItems: "flex-start", justifyContent: "center", gap: 4 },
-  emptyEventIcon: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#F0EEFF" },
+  eventTime: { color: "#64748B", fontSize: 11, fontFamily: fonts.bold },
+  eventTimeCompact: { fontSize: 8 },
+  eventTitle: { color: "#111827", fontSize: 14, fontFamily: fonts.extrabold, lineHeight: 18, marginTop: 5 },
+  eventTitleCompact: { fontSize: 10, lineHeight: 12, marginTop: 3 },
+  eventDivider: { height: 1, backgroundColor: "#EEF2F6", marginVertical: 9 },
+  eventDividerCompact: { marginVertical: 6 },
+  eventMetaRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  eventMetaRowCompact: { gap: 4 },
+  eventMeta: { color: "#64748B", fontSize: 11, fontFamily: fonts.regular, flexShrink: 1 },
+  eventMetaCompact: { fontSize: 8, flexShrink: 1 },
   sectionRowWide: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   bottomSplit: { flexDirection: "row", gap: 10, marginTop: 18, alignItems: "flex-start" },
   continueColumn: { flex: 1.62 },
@@ -1496,52 +1566,56 @@ const s = StyleSheet.create({
   trendBody: { flex: 1 },
   trendTitle: { color: "#111827", fontSize: 12, fontFamily: fonts.bold },
   trendValue: { color: "#64748B", fontSize: 9, fontFamily: fonts.regular, marginTop: 2 },
-  worldPanel: { marginTop: 18, backgroundColor: "#071028", borderRadius: 15, padding: 11, overflow: "hidden" },
+  worldPanel: { marginTop: 18, backgroundColor: "#071028", borderRadius: 15, padding: 10, overflow: "hidden" },
   worldRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   worldHeading: { flexDirection: "row", alignItems: "center", gap: 6 },
-  worldPanelTitle: { color: "#FFFFFF", fontSize: 12.5, fontFamily: fonts.extrabold, letterSpacing: 0.1 },
+  worldPanelTitle: { color: "#FFFFFF", fontSize: 11.5, fontFamily: fonts.extrabold, letterSpacing: 0.1 },
   worldSeeAll: { color: "#C9D2E3", fontSize: 12.5, fontFamily: fonts.bold },
-  worldGrid: { flexDirection: "row", gap: 7, marginTop: 10 },
+  worldGrid: { flexDirection: "row", gap: 6, marginTop: 8 },
   worldCard: {
     flex: 1,
-    minHeight: 112,
+    height: 82,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.12)",
     overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,0.04)"
+    backgroundColor: "rgba(255,255,255,0.04)",
+    flexDirection: "row",
+    alignItems: "stretch"
   },
   worldCardFiller: { flex: 1 },
-  worldImage: { width: "100%", height: 45 },
+  worldImage: { width: 40, height: "100%" },
   worldImageFallback: { backgroundColor: "#141A38", alignItems: "center", justifyContent: "center" },
-  worldBody: { padding: 7, flex: 1 },
+  worldBody: { paddingHorizontal: 6, paddingVertical: 6, flex: 1, minWidth: 0, justifyContent: "center" },
   worldTagRow: { flexDirection: "row", alignItems: "center", gap: 3 },
   worldTagDot: { width: 5, height: 5, borderRadius: 2.5 },
-  worldTag: { fontSize: 6.8, fontFamily: fonts.extrabold, letterSpacing: 0.5, flexShrink: 1 },
-  worldLabel: { color: "#FFFFFF", fontSize: 9.5, fontFamily: fonts.extrabold, marginTop: 4, lineHeight: 12 },
-  worldTime: { color: "#AEB9CC", fontSize: 8, fontFamily: fonts.regular, marginTop: 4 },
-  worldDots: { marginTop: 9, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 5 },
+  worldTag: { fontSize: 6.5, fontFamily: fonts.extrabold, letterSpacing: 0.35, flexShrink: 1 },
+  worldLabel: { color: "#FFFFFF", fontSize: 8.5, fontFamily: fonts.extrabold, marginTop: 3, lineHeight: 10, flexShrink: 1 },
+  worldSummary: { color: "#AEB9CC", fontSize: 7.5, fontFamily: fonts.regular, marginTop: 2, lineHeight: 9 },
+  worldMeta: { flexDirection: "row", alignItems: "center", gap: 3, marginTop: 3 },
+  worldTime: { color: "#AEB9CC", fontSize: 6.8, fontFamily: fonts.regular },
+  worldDots: { marginTop: 7, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 5 },
   worldDotActive: { width: 17, height: 4, borderRadius: 2, backgroundColor: "#6C55FF" },
   worldDot: { width: 6, height: 4, borderRadius: 2, backgroundColor: "#536078" },
-  aiToolsRow: { flexDirection: "row", alignItems: "stretch", gap: 7, marginTop: 12 },
+  aiToolsRow: { flexDirection: "row", alignItems: "stretch", gap: 6, marginTop: 7 },
   askRow: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#F8F6FF",
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: "#ECE8FF",
     borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10
+    gap: 7
   },
-  aiIconWrap: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#4F46E5", alignItems: "center", justifyContent: "center" },
-  aiTextWrap: { flex: 1 },
-  aiTitle: { color: "#111827", fontFamily: fonts.extrabold, fontSize: 12.5 },
-  aiSubtitle: { color: "#64748B", fontSize: 12, fontFamily: fonts.regular, marginTop: 2 },
-  aiToolButton: { minWidth: 58, borderRadius: 14, borderWidth: 1, borderColor: "#E2E8F0", backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center", paddingHorizontal: 6, gap: 3 },
-  aiToolText: { color: "#5B4CFF", fontSize: 9.5, fontFamily: fonts.extrabold },
+  aiIcon: { width: 38, height: 38, borderRadius: 19 },
+  aiTextWrap: { flex: 1, minWidth: 0, alignItems: "flex-start", justifyContent: "center" },
+  aiTitle: { color: "#171B66", fontFamily: fonts.extrabold, fontSize: 10.5, lineHeight: 14 },
+  aiSubtitle: { color: "#35356F", fontSize: 9.5, lineHeight: 13, fontFamily: fonts.regular, marginTop: 1 },
+  aiToolButton: { minWidth: 47, borderRadius: 12, borderWidth: 1, borderColor: "#E2E8F0", backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center", paddingHorizontal: 4, gap: 2 },
+  aiToolText: { color: "#5B4CFF", fontSize: 8.5, fontFamily: fonts.extrabold },
   errorCard: { marginTop: 12, borderRadius: 12, padding: 10, backgroundColor: "#FEF3F2", borderWidth: 1, borderColor: "#FECDCA", flexDirection: "row", alignItems: "center", gap: 8 },
   errorText: { color: "#B42318", fontSize: 12.5, fontFamily: fonts.regular, flex: 1 },
   center: { alignItems: "center", justifyContent: "center", paddingVertical: spacing.xl, gap: spacing.sm },

@@ -1,7 +1,8 @@
-import { useState, useMemo } from "react";
-import { StyleSheet, TextInput, View } from "react-native";
+import { useEffect, useState, useMemo } from "react";
+import { Platform, StyleSheet, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import * as SecureStore from "expo-secure-store";
 import { BootstrapAuthService } from "../../services/bootstrap-auth.service";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import { PrimaryButton } from "../../components/PrimaryButton";
@@ -12,6 +13,7 @@ import { getApiBaseUrl } from "../../config/api";
 
 const API_BASE_URL = getApiBaseUrl();
 const bootstrapAuth = new BootstrapAuthService(API_BASE_URL);
+const REMEMBERED_PHONE_KEY = "linqa.auth.rememberedPhone";
 
 export default function SignUpScreen() {
   const { colors } = useTheme();
@@ -22,6 +24,24 @@ export default function SignUpScreen() {
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadRememberedPhone = async () => {
+      try {
+        const remembered = Platform.OS === "web"
+          ? window.localStorage.getItem(REMEMBERED_PHONE_KEY)
+          : await SecureStore.getItemAsync(REMEMBERED_PHONE_KEY);
+        if (!cancelled && remembered) {
+          setPhone((current) => current || remembered);
+        }
+      } catch (cause) {
+        console.warn("[SignUpScreen] unable to read remembered phone:", cause);
+      }
+    };
+    void loadRememberedPhone();
+    return () => { cancelled = true; };
+  }, []);
 
   async function handleContinue() {
     const validation = validateIdentifierInput(phone);
@@ -34,6 +54,12 @@ export default function SignUpScreen() {
     setError(null);
     try {
       const result = await bootstrapAuth.requestChallenge(validation.normalized, purpose);
+      try {
+        if (Platform.OS === "web") window.localStorage.setItem(REMEMBERED_PHONE_KEY, validation.normalized);
+        else await SecureStore.setItemAsync(REMEMBERED_PHONE_KEY, validation.normalized);
+      } catch (cause) {
+        console.warn("[SignUpScreen] unable to save remembered phone:", cause);
+      }
       router.push({
         pathname: "/account/sign-up-verify",
         params: { challengeId: result.challengeId, phone: validation.normalized, purpose, addAccount: params.addAccount ?? "0" }

@@ -1,10 +1,9 @@
-import { Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Image, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { DottedGlobe } from "../components/DottedGlobe";
 
 export default function WelcomeScreen() {
   const router = useRouter();
@@ -29,7 +28,14 @@ export default function WelcomeScreen() {
             <Ionicons name="location-outline" size={compact ? 56 : 66} color="#FFFFFF" accessibilityElementsHidden />
             <Text accessibilityRole="header" adjustsFontSizeToFit numberOfLines={1} style={[styles.title, compact && styles.titleCompact]}>Linqa World</Text>
             <Text adjustsFontSizeToFit numberOfLines={1} style={[styles.tagline, compact && styles.taglineCompact]}>Connect Locally. Connect Globally.</Text>
-            <View style={styles.globeWrap}><DottedGlobe size={globeSize} /></View>
+            <View style={styles.globeWrap}>
+              <Image
+                accessibilityLabel="Dotted map of the world"
+                source={require("../assets/welcome-globe.png")}
+                resizeMode="cover"
+                style={{ width: globeSize, height: globeSize * (358 / 388) }}
+              />
+            </View>
           </View>
 
           <View style={styles.actions}>

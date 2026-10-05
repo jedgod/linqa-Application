@@ -339,7 +339,7 @@ export default function ChatsScreen() {
 
   const hubActions: Array<[string, string, string, () => void]> = [
     ["New chat", "chatbubble-ellipses-outline", C.teal, openCompose],
-    ["New group", "people-outline", C.blue, () => go("/modules/contacts")],
+    ["New group", "people-outline", C.blue, () => go("/connections")],
     ["Schedule", "calendar-outline", C.purple, () => go("/(tabs)/calls")],
     ["Start call", "call-outline", C.teal, () => go("/(tabs)/calls")],
     ["Broadcast", "megaphone-outline", C.red, () => go("/modules/status")],
@@ -420,7 +420,7 @@ export default function ChatsScreen() {
             <PresenceStrip
               contacts={data?.presence ?? []}
               onStatus={() => go("/modules/status")}
-              onContact={() => go("/modules/contacts")}
+              onContact={() => go("/connections")}
             />
             <View style={s.filters}>
               {CHAT_FILTERS.map((key) => (
