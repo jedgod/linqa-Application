@@ -1,4 +1,0 @@
-LINQA LIVE-SOURCE COMPATIBILITY MANIFEST
-Compatibility path: Linqa_UniFFI_JNA_Private_Key_Boundary_Tests_CI_Guards_v1.0.txt
-
-Canonical boundary: core/src/uniffi_api.rs, core/uniffi/linqa_core.udl, core/tests/uniffi_private_key_boundary.rs, generated UniFFI Kotlin, certification/uniffi-jna-binding-allowlist.json, and certification/evidence/uniffi-jna-verdict.json. Generated bindings must not be hand-edited and private-key material must never cross the declared boundary.

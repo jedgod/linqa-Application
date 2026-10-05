@@ -166,7 +166,7 @@ export function createServiceContainer(config: AppConfig, db: Database) {
   // closed" pattern already established by objectStorage/vaultObjectStorage
   // above. Restored 2026-08-08 after a concurrent-edit collision with a
   // separate agent session's CountryLinqa work deleted this entire block —
-  // see claudeassess.txt / conversation history. OTP and line-intelligence
+  // see docs/reference/assessments/claudeassess.txt / conversation history. OTP and line-intelligence
   // are now layered three ways (real Twilio -> dev-console fallback in
   // non-production, from the other session's work -> fail closed in
   // production) instead of the two competing single-layer solutions that

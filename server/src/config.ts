@@ -47,7 +47,7 @@ const EnvSchema = z.object({
 
   // Real-when-configured providers (2026-08-07, restored 2026-08-08 after a
   // concurrent-edit collision with a separate agent's CountryLinqa work
-  // wiped this whole block out of config.ts — see claudeassess.txt /
+  // wiped this whole block out of config.ts — see docs/reference/assessments/claudeassess.txt /
   // conversation history for the incident. Re-merged here alongside
   // CountryLinqa's own fields below rather than replacing them again).
   // Each group follows the same all-or-nothing pattern as OBJECT_STORAGE_*

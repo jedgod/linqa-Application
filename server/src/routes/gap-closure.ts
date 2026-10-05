@@ -12,7 +12,7 @@ import type { GapClosureService } from "../services/gap-closure.service.js";
 // DeviceEnrollmentService.complete(), was never called from any route. Real
 // device enrollment now happens exclusively through
 // POST /v1/device-enrollment/complete in routes/enrollment.ts, which performs
-// real Ed25519 proof verification. See claudeassess.txt, "TODAY ASSESS TXT".
+// real Ed25519 proof verification. See docs/reference/assessments/claudeassess.txt, "TODAY ASSESS TXT".
 export async function registerGapClosureRoutes(app:FastifyInstance,config:AppConfig,db:Database,services:{gap:GapClosureService}) {
   const authenticate=createAuthenticator(config);
 

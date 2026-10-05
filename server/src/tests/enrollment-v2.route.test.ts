@@ -44,7 +44,7 @@ const database = {
  * (no proof verifier was ever wired in). Device enrollment now happens
  * exclusively through routes/enrollment.ts, which has a real Ed25519
  * verifier (see enrollment.route.test.ts). This file stays on disk, dormant
- * and unregistered, rather than being deleted. See claudeassess.txt,
+ * and unregistered, rather than being deleted. See docs/reference/assessments/claudeassess.txt,
  * "TODAY ASSESS TXT".
  */
 describe("enrollment v2 routes (deregistered)", () => {

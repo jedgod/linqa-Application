@@ -1,6 +1,0 @@
-LINQA LIVE-SOURCE COMPATIBILITY MANIFEST
-Compatibility path: Linqa_Advanced_Phone_Email_Authentication_Code_Notepad.txt
-
-This notebook is reference-only. The live source of truth is server/src plus clients/mobile, clients/android, clients/web, core, database migrations, tests, and certification. All modules use server/src/auth/normalize.ts, server/src/routes/auth.ts, server/src/services/auth-challenge.service.ts, and server/src/services/session.service.ts; no parallel authentication, database, API, or crypto implementation may be created.
-
-Extend canonical live files additively, retain authenticated ownership/scope checks, and keep provider-dependent capabilities fail-closed until production credentials and certification evidence exist.

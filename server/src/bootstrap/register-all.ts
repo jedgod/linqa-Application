@@ -73,7 +73,7 @@ export async function registerAll(
   // never-finished mechanisms found registered alongside this one during the
   // 2026-08-07 diagnostic; both are left on disk (dormant, unregistered) but
   // intentionally not mounted here to avoid three competing, confusing
-  // enrollment paths. See claudeassess.txt, "TODAY ASSESS TXT".
+  // enrollment paths. See docs/reference/assessments/claudeassess.txt, "TODAY ASSESS TXT".
   await registerEnrollmentRoutes(app, config, db, services.sessions);
   await registerAuthRoutes(app, config, db, {
     challengeService: services.authChallenges,

@@ -1,4 +1,0 @@
-LINQA LIVE-SOURCE COMPATIBILITY MANIFEST
-Compatibility path: Linqa_Additive_Closure_Implementation_No_Duplicates_v1.0.txt
-
-Canonical roots are server/src, clients/mobile, clients/android, clients/web, core, and certification. New behavior must extend the existing Fastify routes/services, shared authentication/session stack, migrations, and generated UniFFI boundary. Parallel backends, auth models, database histories, and crypto implementations are prohibited.

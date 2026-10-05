@@ -1,4 +1,0 @@
-LINQA LIVE-SOURCE COMPATIBILITY MANIFEST
-Compatibility path: Linqa_New_Mobile_Features_Code_Notepad.txt
-
-This notebook is reference-only. The live source of truth is server/src plus clients/mobile, clients/android, clients/web, core, database migrations, tests, and certification. All modules use the canonical server authentication, challenge, enrollment, session, and scope implementation; no parallel authentication, API, database, or crypto model may be created.
