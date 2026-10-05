@@ -71,5 +71,9 @@ export async function ensureTestDatabase(): Promise<TestDatabase | null> {
   if (attempted) return shared;
   attempted = true;
   shared = await startContainer();
+  // CI sets this so a missing database is a red build, not a silently skipped suite.
+  if (!shared && process.env.LINQA_REQUIRE_DB_TESTS === "1") {
+    throw new Error("LINQA_REQUIRE_DB_TESTS=1 but no test database is available (set DATABASE_URL)");
+  }
   return shared;
 }

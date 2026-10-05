@@ -84,6 +84,7 @@ jobs:
         working-directory: server
     env:
       NODE_ENV: test
+      LINQA_REQUIRE_DB_TESTS: "1"
       DATABASE_URL: postgresql://linqa:test_password@127.0.0.1:5432/linqa_test
       JWT_ISSUER: https://test.linqa.local
       JWT_AUDIENCE: linqa-api
