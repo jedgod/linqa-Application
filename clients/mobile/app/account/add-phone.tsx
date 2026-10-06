@@ -13,7 +13,7 @@ export default function AddPhoneAccountScreen() {
   return (
     <SafeAreaView style={s.screen}>
       <View style={s.content}>
-        <ScreenHeader eyebrow="ADD LINQA ACCOUNT" title="Sign in to the account"
+        <ScreenHeader eyebrow="STEP 11 OF 15 · ADD LINQA ACCOUNT" title="Sign in to the account"
           copy="Adding an account requires a fresh login and device enrollment. Linqa derives the target identity from that ceremony; an account ID is never accepted from the app." showBack />
         <PrimaryButton label="Continue to secure sign in" onPress={() => router.replace({
           pathname: "/account/sign-up", params: { purpose: "LOGIN", addAccount: "1" }

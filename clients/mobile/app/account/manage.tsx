@@ -22,7 +22,17 @@ export default function ManageAccountsScreen() {
           const isActive = account.userId === active?.userId;
           return (
             <View key={account.userId} style={s.row}>
-              <Pressable style={s.rowMain} onPress={() => !isActive && activate(account.userId)}>
+              <Pressable
+                style={s.rowMain}
+                onPress={() => {
+                  if (isActive) return;
+                  activate(account.userId);
+                  const label = (account.label || account.displayName).toLowerCase();
+                  router.replace(label.includes("business") || label.includes("research")
+                    ? "/(tabs)/chats"
+                    : "/onboarding/resolve");
+                }}
+              >
                 <View style={[s.avatar, { backgroundColor: avatarColorForSlot(account.slot) }]}>
                   <Text style={s.avatarText}>{(account.label || account.displayName)[0]?.toUpperCase() ?? "?"}</Text>
                 </View>
@@ -57,8 +67,8 @@ export default function ManageAccountsScreen() {
         })}
 
         <Pressable
-          style={[s.add, !canAdd && s.disabled]}
-          onPress={() => router.push(canAdd ? "/account/add-phone" : "/account/max-limit")}
+          style={s.add}
+          onPress={() => router.push(canAdd ? "/account/add-another" : "/account/max-limit")}
         >
           <Ionicons name="add" size={21} color={colors.accent} />
           <Text style={s.addText}>Add Account</Text>
@@ -85,6 +95,5 @@ const makeStyles = (colors: Palette) => StyleSheet.create({
   remove: { padding: 8 },
   add: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 9, marginTop: 8 },
   addText: { color: colors.accent, fontWeight: "800" },
-  disabled: { opacity: 0.4 },
   limit: { color: colors.textMuted, fontSize: 12, marginLeft: 30, marginTop: -8 }
 });

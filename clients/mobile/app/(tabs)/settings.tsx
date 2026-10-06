@@ -8,7 +8,7 @@ const SECTIONS = [
   {
     title: "Account",
     items: [
-      { title: "Account & profile", copy: "Identity, phone and account switching", icon: "person-circle-outline", color: "#5B4CFF", route: "/account/manage" },
+      { title: "Account", copy: "Profile and account switching", icon: "person-circle-outline", color: "#5B4CFF", route: "/account/settings" },
       { title: "Privacy center", copy: "Audience, data and visibility controls", icon: "eye-off-outline", color: "#4F6EF7", route: "/privacy-center" },
       { title: "Security", copy: "Devices, encryption and session protection", icon: "shield-checkmark-outline", color: "#12A87D", route: "/modules/security" },
       { title: "Key transparency", copy: "Verify secure messaging identities", icon: "key-outline", color: "#0EA5A8", route: "/security/key-transparency" }

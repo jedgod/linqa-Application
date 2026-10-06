@@ -113,6 +113,17 @@ test("launcher distinguishes Linqa readiness from Apache and occupied ports", as
   assert.equal(await apiReady(port), true);
 });
 
+test("launcher detects IPv6-only listeners on localhost", async (t) => {
+  const server = http.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "::1", resolve);
+  });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const port = (server.address() as { port: number }).port;
+  assert.equal(await portAvailable(port), false);
+});
+
 test("android relaunch sequence force-stops and clears the app task before starting the activity", () => {
   assert.deepEqual(resolveAndroidLaunchArgs("com.linqa.mobile", ".MainActivity"), {
     forceStop: ["shell", "am", "force-stop", "com.linqa.mobile"],

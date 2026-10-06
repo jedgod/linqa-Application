@@ -116,10 +116,14 @@ export default function RootLayout() {
         <Stack.Screen name="account/add-phone" options={{ presentation: "modal" }} />
         <Stack.Screen name="account/sign-up" />
         <Stack.Screen name="account/sign-up-verify" />
+        <Stack.Screen name="account/switcher" />
+        <Stack.Screen name="account/add-another" />
+        <Stack.Screen name="account/settings" />
         <Stack.Screen name="account/manage" />
         <Stack.Screen name="account/remove" options={{ presentation: "modal" }} />
         <Stack.Screen name="account/max-limit" options={{ presentation: "modal" }} />
         <Stack.Screen name="onboarding/resolve" />
+        <Stack.Screen name="onboarding/detect-country" />
         <Stack.Screen name="onboarding/recovery" />
         <Stack.Screen name="onboarding/recovery-verify" />
         <Stack.Screen name="onboarding/country-confirmation" />

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { StyleSheet, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { accessTokenProvider } from "../../services/session";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import { PrimaryButton } from "../../components/PrimaryButton";
@@ -10,7 +10,7 @@ import { getApiBaseUrl } from "../../config/api";
 
 const API = getApiBaseUrl();
 export default function RecoverySetup() {
-  const router = useRouter(); const [email, setEmail] = useState("");
+  const router = useRouter(); const params = useLocalSearchParams<{ flow?: string }>(); const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
   async function next() {
     setBusy(true); setError(null);
@@ -20,12 +20,19 @@ export default function RecoverySetup() {
       }, body: JSON.stringify({ email }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Unable to start recovery setup");
-      router.replace({ pathname: "/onboarding/recovery-verify", params: { challengeId: data.challengeId } });
+      router.replace({
+        pathname: "/onboarding/recovery-verify",
+        params: { challengeId: data.challengeId, ...(params.flow ? { flow: params.flow } : {}) }
+      });
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to continue"); }
     finally { setBusy(false); }
   }
   return <SafeAreaView style={s.screen}><View style={s.content}>
-    <ScreenHeader eyebrow="ACCOUNT RECOVERY" title="Add a recovery email" copy="Required for a new account. Existing configured accounts skip this step automatically." />
+    <ScreenHeader
+      eyebrow={params.flow === "ADD_ACCOUNT" ? "STEP 13 OF 15 · SECOND ACCOUNT EMAIL" : "STEP 6 OF 15 · ACCOUNT RECOVERY"}
+      title="Add a recovery email"
+      copy="Required when this account has not completed recovery setup. Existing configured accounts skip this step automatically."
+    />
     <TextInput style={s.input} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" placeholder="you@example.com" />
     <ErrorBanner message={error} /><PrimaryButton label="Send recovery code" onPress={next} disabled={!email} busy={busy} />
   </View></SafeAreaView>;

@@ -136,7 +136,9 @@ export default function SignUpVerifyScreen() {
         displayName,
         phoneSuffix: params.phone?.slice(-4)
       });
-      router.replace("/onboarding/resolve");
+      router.replace(params.addAccount === "1"
+        ? { pathname: "/onboarding/resolve", params: { flow: "ADD_ACCOUNT" } }
+        : "/onboarding/resolve");
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Verification failed.";
       setError(message === "invalid_or_expired_code"
@@ -149,7 +151,7 @@ export default function SignUpVerifyScreen() {
     <SafeAreaView style={s.screen}>
       <View style={s.content}>
         <ScreenHeader
-          eyebrow="VERIFY MOBILE NUMBER"
+          eyebrow={params.purpose !== "LOGIN" ? "STEP 5 OF 15 · VERIFY MOBILE NUMBER" : "VERIFY MOBILE NUMBER"}
           title="Enter the 6-digit code"
           copy="After verification, this device creates its cryptographic identity and the server resumes only the onboarding steps this account still needs."
         />

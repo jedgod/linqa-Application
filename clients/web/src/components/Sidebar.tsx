@@ -13,6 +13,7 @@ interface SidebarProps {
   onOpenMedia: () => void;
   onOpenPrivacy: () => void;
   onOpenVault: () => void;
+  onOpenCountryLinqa?: () => void;
   onOpenOperations?: () => void;
 }
 
@@ -25,6 +26,7 @@ export function Sidebar({
   onOpenMedia,
   onOpenPrivacy,
   onOpenVault,
+  onOpenCountryLinqa,
   onOpenOperations
 }: SidebarProps) {
   const [query, setQuery] = useState("");
@@ -66,6 +68,7 @@ export function Sidebar({
         </button>
       </div>
 
+      {onOpenCountryLinqa && <button className="countrylinqa-entry" onClick={onOpenCountryLinqa} aria-label="Open CountryLinqa">🌐 CountryLinqa</button>}
       <div className="search-box">
         <input
           placeholder="Search conversations"

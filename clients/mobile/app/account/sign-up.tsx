@@ -18,7 +18,7 @@ export default function SignUpScreen() {
   const { colors } = useTheme();
   const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
-  const params = useLocalSearchParams<{ purpose?: string; addAccount?: string }>();
+  const params = useLocalSearchParams<{ purpose?: string; addAccount?: string; countryCode?: string }>();
   const purpose = params.purpose === "LOGIN" ? "LOGIN" : "REGISTRATION";
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
@@ -89,12 +89,17 @@ export default function SignUpScreen() {
           <View style={s.phoneIcon}>
             <Ionicons name="phone-portrait-outline" size={38} color="#5B3BE8" />
           </View>
+          {purpose === "REGISTRATION" && <Text style={s.step}>STEP 3 OF 15</Text>}
+          {purpose === "LOGIN" && params.addAccount === "1" && <Text style={s.step}>STEP 12 OF 15</Text>}
           <Text accessibilityRole="header" style={s.title}>Verify your phone</Text>
           <Text style={s.copy}>Enter your mobile number to{"\n"}get started.</Text>
+          {purpose === "REGISTRATION" && params.countryCode && (
+            <Text style={s.region}>Device region: {params.countryCode}</Text>
+          )}
         </View>
 
         <View style={s.form}>
-          <Text style={s.label}>Phone number</Text>
+          <Text style={s.label}>Phone number {purpose === "REGISTRATION" && params.countryCode ? `(${params.countryCode})` : ""}</Text>
           <TextInput
             value={phone}
             onChangeText={setPhone}
@@ -114,10 +119,22 @@ export default function SignUpScreen() {
             {busy ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={s.submitText}>Send OTP</Text>
+              <Text style={s.submitText}>Continue</Text>
             )}
           </Pressable>
-          <Text style={s.smsHint}>We&rsquo;ll send you a verification code by SMS.</Text>
+          {busy ? (
+            <View style={s.carrierCheck} accessibilityLiveRegion="polite">
+              <ActivityIndicator size="small" color="#5736E8" />
+              <View style={s.carrierCopy}>
+                <Text style={s.carrierStep}>
+                  {purpose === "REGISTRATION" ? "STEP 4 OF 15 · CARRIER CHECK" : "SECURITY CHECK"}
+                </Text>
+                <Text style={s.smsHint}>Checking carrier, line type, and number eligibility securely.</Text>
+              </View>
+            </View>
+          ) : (
+            <Text style={s.smsHint}>We&rsquo;ll check your number and send a verification code by SMS.</Text>
+          )}
           <ErrorBanner message={error} />
         </View>
 
@@ -140,6 +157,8 @@ const makeStyles = (colors: Palette) => StyleSheet.create({
   intro: { alignItems: "center", marginTop: 20 },
   phoneIcon: { width: 86, height: 86, borderRadius: 43, backgroundColor: "#F0EDFF", alignItems: "center", justifyContent: "center", marginBottom: 30 },
   title: { color: colors.text, fontFamily: fonts.extrabold, fontSize: 29, lineHeight: 37, textAlign: "center" },
+  step: { color: colors.accent, fontFamily: fonts.extrabold, fontSize: 12, letterSpacing: 1, marginBottom: 10 },
+  region: { color: colors.textMuted, fontFamily: fonts.medium, fontSize: 13, marginTop: 8 },
   copy: { color: colors.textMuted, fontFamily: fonts.medium, fontSize: 18, lineHeight: 27, textAlign: "center", marginTop: 13 },
   form: { marginTop: 55 },
   label: { color: colors.textMuted, fontFamily: fonts.medium, fontSize: 16, marginBottom: 12 },
@@ -159,6 +178,9 @@ const makeStyles = (colors: Palette) => StyleSheet.create({
   submitPressed: { opacity: 0.9 },
   submitText: { color: "#FFFFFF", fontFamily: fonts.extrabold, fontSize: 19 },
   smsHint: { color: colors.textMuted, fontFamily: fonts.regular, fontSize: 14, lineHeight: 21, textAlign: "center", marginTop: 17 },
+  carrierCheck: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 10, marginTop: 17 },
+  carrierCopy: { flexShrink: 1, alignItems: "center" },
+  carrierStep: { color: colors.accent, fontFamily: fonts.extrabold, fontSize: 11, letterSpacing: 0.7 },
   privacy: { alignItems: "center", marginTop: 70 },
   privacyHeading: { flexDirection: "row", alignItems: "center", gap: 10 },
   privacyTitle: { color: colors.text, fontFamily: fonts.bold, fontSize: 17 },

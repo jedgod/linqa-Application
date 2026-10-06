@@ -14,6 +14,7 @@ import { FileVaultPage } from "./pages/FileVaultPage";
 import { getApiBaseUrl, getAccessToken } from "./app/apiSession";
 import { hasAnyOpsScope } from "./app/opsAccess";
 import { OperationsConsolePage } from "./admin/pages/OperationsConsolePage";
+import { CountryLinqaPage } from "./pages/CountryLinqaPage";
 
 export function App() {
   const { state: securityState, adapter: secureAdapter } = useSecurityRuntime();
@@ -25,6 +26,7 @@ export function App() {
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [vaultOpen, setVaultOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
+  const [countryOpen, setCountryOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState<"list" | "chat">("list");
   const showOperationsEntry = hasAnyOpsScope(getAccessToken());
 
@@ -41,6 +43,7 @@ export function App() {
   );
 
   function handleSelect(id: string) {
+    setCountryOpen(false);
     setActiveId(id);
     setMobilePane("chat");
   }
@@ -59,16 +62,17 @@ export function App() {
             onOpenMedia={() => setMediaOpen(true)}
             onOpenPrivacy={() => setPrivacyOpen(true)}
             onOpenVault={() => setVaultOpen(true)}
+            onOpenCountryLinqa={() => { setCountryOpen(true); setMobilePane("chat"); }}
             onOpenOperations={showOperationsEntry ? () => setOperationsOpen(true) : undefined}
           />
         </div>
         <div className="app-main">
-          <ChatView
+          {countryOpen ? <CountryLinqaPage apiBaseUrl={getApiBaseUrl()} accessToken={getAccessToken()} onClose={() => { setCountryOpen(false); setMobilePane("list"); }} /> : <ChatView
             conversation={activeConversation}
             securityState={securityState}
             secureAdapter={secureAdapter}
             onBack={() => setMobilePane("list")}
-          />
+          />}
         </div>
       </div>
       {settingsOpen && (

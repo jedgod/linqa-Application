@@ -16,7 +16,8 @@ export function AccountSwitcherSheet({
   onClose,
   onSwitch,
   onAdd,
-  onManage
+  onManage,
+  onSettings
 }: {
   visible: boolean;
   accounts: LocalAccount[];
@@ -25,6 +26,7 @@ export function AccountSwitcherSheet({
   onSwitch(userId: string): void;
   onAdd(): void;
   onManage(): void;
+  onSettings(): void;
 }) {
   const { colors } = useTheme();
   const s = useMemo(() => makeStyles(colors), [colors]);
@@ -33,7 +35,13 @@ export function AccountSwitcherSheet({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={s.backdrop} onPress={onClose}>
         <View style={[s.sheet, { paddingBottom: Math.max(insets.bottom + 18, 30) }]}>
-          <Text style={s.title}>Switch account</Text>
+          <Text style={s.title}>
+            {(() => {
+              const activeAccount = accounts.find((account) => account.userId === activeUserId);
+              return activeAccount ? `Switch to ${labelForAccount(activeAccount)}` : "Switch account";
+            })()}
+          </Text>
+          {accounts.length >= 3 && <Text style={s.limit}>3 accounts added. All account slots are in use.</Text>}
 
           {accounts.map((account) => {
             const active = account.userId === activeUserId;
@@ -67,7 +75,12 @@ export function AccountSwitcherSheet({
             );
           })}
 
-          <Pressable disabled={accounts.length >= 3} style={[s.action, accounts.length >= 3 && s.disabled]} onPress={onAdd}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={accounts.length >= 3 ? "Maximum of 3 accounts reached" : "Add account"}
+            style={s.action}
+            onPress={onAdd}
+          >
             <Ionicons name="add-circle-outline" size={21} color={colors.accent} />
             <View style={s.actionTextWrap}>
               <Text style={s.actionText}>Add account</Text>
@@ -78,6 +91,17 @@ export function AccountSwitcherSheet({
           <Pressable style={s.action} onPress={onManage}>
             <Ionicons name="settings-outline" size={20} color={colors.accent} />
             <Text style={s.actionText}>Manage accounts</Text>
+          </Pressable>
+          <Pressable style={s.action} onPress={onSettings}>
+            <Ionicons name="options-outline" size={20} color={colors.accent} />
+            <Text style={s.actionText}>Account settings</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            style={s.cancel}
+            onPress={onClose}
+          >
+            <Text style={s.cancelText}>Cancel</Text>
           </Pressable>
         </View>
       </Pressable>
@@ -127,5 +151,9 @@ const makeStyles = (colors: Palette) => StyleSheet.create({
   actionTextWrap: { flex: 1 },
   actionText: { color: colors.accent, fontWeight: "900", fontSize: 15 },
   limit: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
-  disabled: { opacity: 0.45 }
+  cancel: {
+    minHeight: 48, alignItems: "center", justifyContent: "center",
+    borderTopWidth: 1, borderTopColor: colors.border, marginTop: 4
+  },
+  cancelText: { color: colors.text, fontWeight: "700", fontSize: 14 },
 });

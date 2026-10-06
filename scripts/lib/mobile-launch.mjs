@@ -4,7 +4,7 @@ export async function portAvailable(port) {
   // Windows may allow a loopback bind alongside an existing wildcard listener.
   // Probe the endpoint before trying to bind, so we never start a second Metro.
   const listening = await new Promise((resolve) => {
-    const socket = net.createConnection({ host: "127.0.0.1", port });
+    const socket = net.createConnection({ host: "localhost", port });
     const finish = (value) => { socket.destroy(); resolve(value); };
     socket.once("connect", () => finish(true));
     socket.once("error", (error) => finish(error.code !== "ECONNREFUSED"));

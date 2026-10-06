@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { OnboardingApiService, type OnboardingNextStep } from "../../services/onboarding.service";
 import { accessTokenProvider } from "../../services/session";
 import { getApiBaseUrl } from "../../config/api";
@@ -16,6 +16,7 @@ const routes: Record<OnboardingNextStep, string> = {
 
 export default function OnboardingResolver() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ flow?: string }>();
   const client = useMemo(() => new OnboardingApiService(API, accessTokenProvider), []);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -24,7 +25,13 @@ export default function OnboardingResolver() {
     setError(null);
     const timer = setTimeout(() => client.status().then((status) => {
       if (!routes[status.nextStep]) throw new Error("Linqa could not resume your account. Please try again.");
-      if (!cancelled) router.replace(routes[status.nextStep] as never);
+      if (!cancelled) {
+        if (status.nextStep === "RECOVERY_SETUP" && params.flow === "ADD_ACCOUNT") {
+          router.replace({ pathname: "/onboarding/recovery", params: { flow: "ADD_ACCOUNT" } });
+        } else {
+          router.replace(routes[status.nextStep] as never);
+        }
+      }
     }).catch((cause) => {
       if (cancelled) return;
       const message = cause instanceof Error ? cause.message : "Unable to resume onboarding.";
@@ -35,7 +42,7 @@ export default function OnboardingResolver() {
       setError(message);
     }), 0);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [client, router, attempt]);
+  }, [client, router, attempt, params.flow]);
   return <SafeAreaView style={s.screen}>
     {!error && <ActivityIndicator color="#6558DC" />}
     <Text accessibilityRole={error ? "alert" : undefined} style={s.text}>{error ?? "Securely resuming your Linqa account…"}</Text>

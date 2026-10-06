@@ -89,17 +89,25 @@ function AccountHeader() {
         activeUserId={active?.userId}
         onClose={() => setSwitcherOpen(false)}
         onSwitch={(userId) => {
+          const target = accounts.find((account) => account.userId === userId);
           activate(userId);
           setSwitcherOpen(false);
-          router.replace("/onboarding/resolve");
+          const label = (target?.label || target?.displayName || "").toLowerCase();
+          router.replace(label.includes("business") || label.includes("research")
+            ? "/(tabs)/chats"
+            : "/onboarding/resolve");
         }}
         onAdd={() => {
           setSwitcherOpen(false);
-          router.push("/account/add-phone");
+          router.push(accounts.length >= 3 ? "/account/max-limit" : "/account/add-another");
         }}
         onManage={() => {
           setSwitcherOpen(false);
           router.push("/account/manage");
+        }}
+        onSettings={() => {
+          setSwitcherOpen(false);
+          router.push("/account/settings");
         }}
       />
     </View>

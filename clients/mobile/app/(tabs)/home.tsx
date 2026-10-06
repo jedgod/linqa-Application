@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, ImageBackground, Linking, Modal, Pressable, RefreshControl, ScrollView, Switch, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { MobileHubService, type HubContact, type HubSnapshot } from "../../services/mobile-hub.service";
 import { HIDEABLE_HOME_SECTIONS, HomeFeedService, JurisdictionRequiredError, attributionFor, newsStateLabel, relativeAge, type HideableHomeSection, type HomeFeedPayload, type HomeNewsItem } from "../../services/home-feed.service";
@@ -333,7 +332,7 @@ export default function HomeScreen() {
                 </View>
               ) : null}
             </Pressable>
-            <Pressable style={s.avatarButton} onPress={() => router.push("/account/manage")} accessibilityLabel="Open profile">
+            <Pressable style={s.avatarButton} onPress={() => router.push("/account/switcher")} accessibilityLabel="Switch account">
               <View style={s.avatarMini}>
                 <Text style={s.avatarMiniText}>{initialsOf(feed?.profile?.displayName ?? "Linqa User")}</Text>
               </View>
@@ -391,13 +390,7 @@ export default function HomeScreen() {
                   style={[s.heroCard, { width: cardWidth }]}
                   imageStyle={s.heroImage}
                 >
-                  <LinearGradient
-                    colors={["rgba(3,7,28,0.96)", "rgba(3,7,28,0.86)", "rgba(3,7,28,0.08)"]}
-                    locations={[0, 0.52, 1]}
-                    start={{ x: 0, y: 0.15 }}
-                    end={{ x: 1, y: 0.85 }}
-                    style={s.heroGradient}
-                  >
+                  <View style={[s.heroGradient, { backgroundColor: "rgba(3,7,28,0.76)" }]}>
                     <View style={s.heroContent}>
                       <View style={s.kickerRow}>
                         <Ionicons name="flash" size={13} color="#FF3B4E" />
@@ -424,7 +417,7 @@ export default function HomeScreen() {
                     <View style={[s.livePill, newsState !== "LIVE" && s.stalePill]}>
                       <Text style={s.livePillText}>{stateCopy.label}</Text>
                     </View>
-                  </LinearGradient>
+                  </View>
                 </ImageBackground>
               ))}
             </ScrollView>
@@ -525,13 +518,7 @@ export default function HomeScreen() {
                 style={s.spotlightCard}
                 imageStyle={s.spotlightImage}
               >
-                <LinearGradient
-                  colors={["rgba(3,7,28,0.95)", "rgba(3,7,28,0.74)", "rgba(3,7,28,0.14)"]}
-                  locations={[0, 0.55, 1]}
-                  start={{ x: 0, y: 0.2 }}
-                  end={{ x: 1, y: 0.9 }}
-                  style={s.spotlightGradient}
-                >
+                <View style={[s.spotlightGradient, { backgroundColor: "rgba(3,7,28,0.76)" }]}>
                   <View style={s.spotlightHeading}>
                     <Ionicons name="star" size={12} color="#FFC928" />
                     <Text style={s.spotlightHeader}>SPOTLIGHT</Text>
@@ -560,7 +547,7 @@ export default function HomeScreen() {
                       </Pressable>
                     ) : null}
                   </View>
-                </LinearGradient>
+                </View>
               </ImageBackground>
             )}
           </View>

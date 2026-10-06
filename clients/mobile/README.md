@@ -17,7 +17,7 @@ The launcher:
 - Leaves Apache or other services on computer port 8080 running.
 - Starts this project's Metro server on port 8081 with IPv4 support.
 - Sets the bundle's API URL to http://127.0.0.1:8080.
-- Forwards phone ports 8080 and 8088 to the API, and phone port 8081 to Metro.
+- Forwards phone ports 8080 and 8088 to the API, and phone ports 8081 and 8083 to Metro on computer port 8081.
 - Restarts Linqa to load its current bundle; stored app data is preserved.
 
 Keep USB connected. Run the launcher again after a phone restart or reconnection. Logs and process IDs are stored under .runtime/mobile-launch/ at the repository root.

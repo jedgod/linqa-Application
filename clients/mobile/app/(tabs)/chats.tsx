@@ -11,11 +11,14 @@ import { accessTokenProvider } from "../../services/session";
 import { getApiBaseUrl } from "../../config/api";
 import { C, s } from "../../components/chats/styles";
 import { FILTER_LABELS, Avatar, HeaderButton, SummaryCard, PresenceStrip, ConversationRow } from "../../components/chats/parts";
+import { AccountSwitcherSheet } from "../../components/AccountSwitcherSheet";
+import { useAccounts } from "../../account/AccountContext";
 
 const API = getApiBaseUrl();
 
 export default function ChatsScreen() {
   const router = useRouter();
+  const { accounts, active, activate } = useAccounts();
   const inbox = useMemo(
     () => new ChatInboxService(API, () => accessTokenProvider.getAccessToken()),
     []
@@ -36,6 +39,7 @@ export default function ChatsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [hubOpen, setHubOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [contacts, setContacts] = useState<HubContact[]>([]);
   const [typingIn, setTypingIn] = useState<Set<string>>(new Set());
   const mounted = useRef(true);
@@ -210,15 +214,10 @@ export default function ChatsScreen() {
     <SafeAreaView edges={["top", "left", "right"]} style={s.screen}>
       <View style={s.header}>
         <HeaderButton label="Open Linqa menu" icon="menu-outline" onPress={() => go("/(tabs)/linqa")} />
-        <Text style={s.brand}>Linqa</Text>
+        <Text style={[s.brand, { flexShrink: 1, maxWidth: 120 }]} numberOfLines={1}>
+          {active?.label || active?.displayName || "Linqa"}
+        </Text>
         <View style={s.headerSpacer} />
-        <HeaderButton
-          label={scheduledCall ? "Calendar, 1 call scheduled" : "Calendar"}
-          icon="calendar-outline"
-          onPress={() => go("/modules/calendar")}
-          dot={Boolean(scheduledCall)}
-        />
-        <HeaderButton label="Calls" icon="call-outline" onPress={() => go("/(tabs)/calls")} />
         <HeaderButton label="Search" icon="search-outline" onPress={() => go("/search")} />
         <HeaderButton
           label={hubOpen ? "Close create menu" : "Create"}
@@ -226,6 +225,18 @@ export default function ChatsScreen() {
           primary
           onPress={() => setHubOpen((open) => !open)}
         />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Switch account"
+          onPress={() => setSwitcherOpen(true)}
+          style={{ paddingLeft: 3 }}
+        >
+          <Avatar
+            seed={active?.userId ?? "linqa"}
+            initials={(active?.label || active?.displayName || "L").slice(0, 2).toUpperCase()}
+            size={32}
+          />
+        </Pressable>
       </View>
 
       {hubOpen ? (
@@ -373,6 +384,34 @@ export default function ChatsScreen() {
           </View>
         </View>
       </Modal>
+
+      <AccountSwitcherSheet
+        visible={switcherOpen}
+        accounts={accounts}
+        activeUserId={active?.userId}
+        onClose={() => setSwitcherOpen(false)}
+        onSwitch={(userId) => {
+          const target = accounts.find((account) => account.userId === userId);
+          activate(userId);
+          setSwitcherOpen(false);
+          const label = (target?.label || target?.displayName || "").toLowerCase();
+          router.replace(label.includes("business") || label.includes("research")
+            ? "/(tabs)/chats"
+            : "/onboarding/resolve");
+        }}
+        onAdd={() => {
+          setSwitcherOpen(false);
+          router.push(accounts.length >= 3 ? "/account/max-limit" : "/account/add-another");
+        }}
+        onManage={() => {
+          setSwitcherOpen(false);
+          router.push("/account/manage");
+        }}
+        onSettings={() => {
+          setSwitcherOpen(false);
+          router.push("/account/settings");
+        }}
+      />
     </SafeAreaView>
   );
 }

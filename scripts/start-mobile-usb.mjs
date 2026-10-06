@@ -66,19 +66,25 @@ async function main() {
     await waitUntil(() => apiReady(apiPort), "Linqa API/database");
   }
   const metroReady = async () => {
-    const manifest = await readJson("http://127.0.0.1:8081/", { "expo-platform": "android", accept: "application/json" }, 15_000);
+    const manifest = await readJson("http://localhost:8081/", { "expo-platform": "android", accept: "application/json" }, 15_000);
     return manifest?.extra?.expoClient?._internal?.projectRoot === mobile;
   };
   if (!await portAvailable(8081)) {
     if (!await metroReady()) throw new Error("Port 8081 belongs to another server. Stop it before launching Linqa.");
     if (state.metro?.signature !== signature) throw new Error("Restart the existing Metro server after dependency changes; then run this launcher again.");
   } else {
-    const env = { ...process.env, EXPO_PUBLIC_API_URL: "http://127.0.0.1:8080", EXPO_OFFLINE: "1", REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1" };
+    const env = {
+      ...process.env,
+      EXPO_PUBLIC_API_URL: "http://127.0.0.1:8080",
+      EXPO_OFFLINE: "1",
+      REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1",
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, "--dns-result-order=ipv4first"].filter(Boolean).join(" ")
+    };
     delete env.CI;
-    start("metro", ["node_modules/expo/bin/cli", "start", "--offline", "--port", "8081"], mobile, env);
+    start("metro", ["node_modules/expo/bin/cli", "start", "--host", "localhost", "--port", "8081"], mobile, env);
     await waitUntil(metroReady, "Linqa Metro");
   }
-  for (const [local, remote] of [[8080, apiPort], [8088, apiPort], [8081, 8081]]) {
+  for (const [local, remote] of [[8080, apiPort], [8088, apiPort], [8081, 8081], [8083, 8081]]) {
     device("reverse", "tcp:" + local, "tcp:" + remote);
   }
   state.apiPort = apiPort;
