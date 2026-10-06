@@ -165,6 +165,20 @@ describe("CountryLinqaService.savePreferences invariants", () => {
 });
 
 describe("CountryLinqa bidirectional reach predicates", () => {
+  it("re-evaluates paid reach against live subscription status in discovery queries", () => {
+    const cte = viewerScopeCte(1); const inbound = authorScopePredicate("author");
+    for (const sql of [cte, inbound]) {
+      expect(sql).toContain("subscription_accounts entitlement");
+      expect(sql).toContain("('ACTIVE','TRIAL','GRACE')");
+      expect(sql).toContain("upper(entitlement.plan_code)='ELITE'");
+      expect(sql).toContain("ELSE 'MY_COUNTRY'");
+    }
+  });
+  it("reports effective Free reach after a paid entitlement expires while retaining contacts-only privacy", async () => {
+    const query = vi.fn(async () => ({ rows: [{ mode: "GLOBAL",inboundReach: "CONTACTS_ONLY" }],rowCount: 1 }));
+    const service = makeService({ query,subscriptions: { getTier: vi.fn(async () => "FREE" as const) } });
+    expect(await service.preferences("user-1")).toMatchObject({ mode: "MY_COUNTRY",inboundReach: "CONTACTS_ONLY",subscriptionTier: "FREE" });
+  });
   it("applies pause, verified-only, inbound country/region, and contacts-only controls", () => {
     const cte = viewerScopeCte(1);
     const predicate = authorScopePredicate("author");

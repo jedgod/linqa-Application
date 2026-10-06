@@ -1,97 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
-import { CountryLinqaService, type CountryLinqaPreferences } from "../../services/countrylinqa.service";
-import { accessTokenProvider } from "../../services/session";
-import { getApiBaseUrl } from "../../config/api";
-
-const purple = "#6f5ae6";
-const bg = "#f5f6fa";
-const text = "#1f2937";
-const softText = "#64748b";
-const border = "#e3e8f0";
+import { Ionicons } from "@expo/vector-icons";
+import { useCallback, useState } from "react";
+import { Pressable, Text, View } from "react-native";
+import { useFocusEffect, useRouter } from "expo-router";
+import { CountryButton, CountryError, CountryLoading, CountryPage, countryStyles as s, countryTabs, useCountryClient } from "../../components/CountryLinqaUI";
+import type { CountryLinqaPreferences } from "../../services/countrylinqa.service";
+import { useAccounts } from "../../account/AccountContext";
 
 export default function CountryLinqaWorldScreen() {
-  const router = useRouter();
-  const client = useMemo(() => new CountryLinqaService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken()), []);
-  const [preferences, setPreferences] = useState<CountryLinqaPreferences | null>(null);
-  useEffect(() => { client.preferences().then(setPreferences).catch(() => setPreferences(null)); }, [client]);
-
-  return (
-    <SafeAreaView style={styles.screen}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} accessibilityLabel="Back">
-          <Text style={styles.back}>‹</Text>
-        </Pressable>
-        <Text style={styles.headerTitle}>Linqa World</Text>
-      </View>
-
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Connect Locally. Connect Globally.</Text>
-
-        <View style={styles.worldCard}>
-          <View style={styles.worldMap} />
-          <View style={styles.modeRow}>
-            <View>
-              <Text style={styles.modeLabel}>{preferences?.mode.replace(/_/g, " ") ?? "Discovery scope"}</Text>
-              <Text style={styles.modeValue}>{preferences?.verifiedCountryCode ?? "Verification required"}</Text>
-            </View>
-            <Text style={styles.modePill}>Live</Text>
-          </View>
-        </View>
-
-        <View style={styles.actionGrid}>
-          {[
-            ["🌐", "World Feed"],
-            ["👥", "People"],
-            ["🏬", "Businesses"],
-            ["🎉", "Events"],
-            ["🏘", "Communities"],
-            ["⚙", "Discovery Settings"],
-          ].map(([icon, label]) => (
-            <Pressable key={label as string} style={styles.gridItem} onPress={() => {
-              const routes: Record<string, string> = {
-                "World Feed": "/countrylinqa/list?kind=feed&title=World%20Feed",
-                People: "/countrylinqa/list?kind=people&title=People",
-                Businesses: "/countrylinqa/list?kind=businesses&title=Businesses",
-                Events: "/countrylinqa/list?kind=events&title=Events",
-                Communities: "/countrylinqa/list?kind=communities&title=Communities",
-                "Discovery Settings": "/settings/countrylinqa"
-              };
-              router.push(routes[label as string] as never);
-            }}>
-              <Text style={styles.gridIcon}>{icon as string}</Text>
-              <Text style={styles.gridLabel}>{label as string}</Text>
-            </Pressable>
-          ))}
-        </View>
-
-        <Pressable style={styles.primaryButton} onPress={() => router.push("/countrylinqa/list?kind=feed&title=World%20Feed" as never)}>
-          <Text style={styles.primaryButtonText}>Open World Feed</Text>
-        </Pressable>
-      </ScrollView>
-    </SafeAreaView>
-  );
+  const router = useRouter(); const client = useCountryClient(); const { active } = useAccounts();
+  const [prefs, setPrefs] = useState<CountryLinqaPreferences | null>(null);
+  const [error, setError] = useState<string | null>(null); const [reload, setReload] = useState(0);
+  useFocusEffect(useCallback(() => { let current = true; setPrefs(null); setError(null); client.preferences().then(value => { if (current) setPrefs(value); }).catch(cause => { if (current) setError(cause.message); }); return () => { current = false; }; }, [client, reload]));
+  return <CountryPage title="Linqa World" actions={<Pressable accessibilityLabel="CountryLinqa notifications" style={s.iconButton} onPress={() => router.push("/countrylinqa/notifications")}><Ionicons name="notifications-outline" size={22} color="#6045E8" /></Pressable>}>
+    <View style={[s.card, { backgroundColor: "#6045E8", alignItems: "center", paddingVertical: 30 }]}><Ionicons name="globe-outline" size={90} color="#FFFFFF" /><Text style={[s.title, { color: "#FFFFFF", textAlign: "center" }]}>Connect Locally. Connect Globally.</Text><Text style={[s.copy, { color: "#EEE9FF" }]}>Your world, with you in control.</Text></View>
+    <CountryError error={error} retry={() => setReload(value => value + 1)} />
+    {!prefs && !error && <CountryLoading />}
+    {prefs && <View style={s.card}><View style={s.row}><Text style={s.cardTitle}>{prefs.verifiedCountryCode ?? "Country confirmation required"}</Text><Text style={s.copy}>{prefs.verificationState.replace(/_/g, " ")}</Text></View><Text style={s.copy}>Discovery: {prefs.mode.replace(/_/g, " ")}{prefs.paused ? " · Paused" : ""}</Text><Text style={s.copy}>{[...prefs.selectedCountries, ...prefs.selectedRegions].join(" · ")}</Text><CountryButton secondary label="Manage discovery and visibility" onPress={() => router.push("/settings/countrylinqa")} />{prefs.verificationState !== "VERIFIED" && <CountryButton label="Review country verification" onPress={() => router.push("/onboarding/resolve")} />}</View>}
+    <Text style={s.cardTitle}>Discover</Text>
+    {countryTabs.map(tab => <Pressable key={tab.kind} style={[s.card, s.row]} accessibilityRole="button" onPress={() => router.push({ pathname: "/countrylinqa/list", params: { kind: tab.kind } })}><Ionicons name={tab.icon} size={28} color="#6045E8" /><Text style={[s.cardTitle, { flex: 1 }]}>{tab.kind === "feed" ? "World Feed" : tab.label}</Text><Ionicons name="chevron-forward" size={20} color="#667085" /></Pressable>)}
+    <View style={s.card}><Text style={s.cardTitle}>Search your world</Text><CountryButton label="Advanced search" onPress={() => router.push("/countrylinqa/search")} /><CountryButton secondary label="Saved searches" onPress={() => router.push("/countrylinqa/saved-searches")} /></View>
+    <View style={s.card}><Text style={s.cardTitle}>{active?.displayName ?? "Your account"}</Text><Text style={s.copy}>{prefs?.subscriptionTier ?? ""}{prefs ? " plan" : ""}</Text><CountryButton secondary label="My profile" onPress={() => router.push("/countrylinqa/profile")} /><CountryButton secondary label="Account settings" onPress={() => router.push("/account/settings")} /><CountryButton secondary label="Plans and subscription" onPress={() => router.push("/settings/countrylinqa?view=PLANS")} /><CountryButton secondary label="Security and privacy" onPress={() => router.push("/countrylinqa/security")} /><CountryButton secondary label="Help and support" onPress={() => router.push("/support")} /></View>
+  </CountryPage>;
 }
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: bg },
-  header: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 18, paddingTop: 18, paddingBottom: 8 },
-  back: { color: text, fontSize: 30, fontWeight: "700" },
-  headerTitle: { flex: 1, color: purple, fontSize: 20, fontWeight: "900", letterSpacing: -0.28 },
-  content: { paddingHorizontal: 18, paddingTop: 8, paddingBottom: 32 },
-  title: { color: text, fontSize: 20, fontWeight: "900", letterSpacing: -0.32, lineHeight: 28, marginBottom: 14, textAlign: "left" },
-  worldCard: { backgroundColor: "#fff", borderRadius: 18, borderWidth: 1, borderColor: border, padding: 14, marginBottom: 18, shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
-  worldMap: { width: "100%", height: 170, borderRadius: 16, backgroundColor: "#4d5ae7", marginBottom: 14 },
-  modeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  modeLabel: { color: text, fontSize: 12, fontWeight: "700" },
-  modeValue: { color: purple, fontSize: 18, fontWeight: "900", marginTop: 4, letterSpacing: -0.2 },
-  modePill: { backgroundColor: "#f1eeff", color: purple, fontSize: 12, fontWeight: "800", borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, overflow: "hidden" },
-  actionGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 10 },
-  gridItem: { width: "31%", backgroundColor: "#fff", borderWidth: 1, borderColor: border, borderRadius: 14, alignItems: "center", justifyContent: "center", paddingVertical: 12, minHeight: 88 },
-  gridIcon: { fontSize: 23 },
-  gridLabel: { marginTop: 8, color: text, fontWeight: "700", fontSize: 12.5, textAlign: "center", letterSpacing: -0.1 },
-  primaryButton: { marginTop: 22, backgroundColor: purple, borderRadius: 14, height: 48, alignItems: "center", justifyContent: "center", shadowColor: "#6f5ae6", shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 2 },
-  primaryButtonText: { color: "#fff", fontSize: 15, fontWeight: "900", letterSpacing: 0.08 }
-});

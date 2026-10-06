@@ -30,7 +30,7 @@ jobs:
       - run: npm ci
         working-directory: clients/mobile
       - name: Startup and authentication regressions
-        run: node --import ./server/node_modules/tsx/dist/loader.mjs --test tests/mobile-startup.test.ts tests/auth-session-expiry.test.ts tests/mobile-app.test.ts
+        run: node --import ./server/node_modules/tsx/dist/loader.mjs --test tests/mobile-startup.test.ts tests/auth-session-expiry.test.ts tests/mobile-app.test.ts tests/countrylinqa-certification.test.ts
       - run: npm run typecheck
         working-directory: clients/mobile
       - run: npm run build

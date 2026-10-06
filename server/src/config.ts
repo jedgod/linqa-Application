@@ -111,6 +111,8 @@ const EnvSchema = z.object({
   // as-is; not part of the provider block above.
   COUNTRY_SELECTION_PREMIUM_LIMIT: z.coerce.number().int().min(1).default(20),
   COUNTRYLINQA_DATA_KEY_V1: z.string().length(64).optional(),
+  // Signs discovery pagination cursors. Falls back to a key derived from JWT_HS256_SECRET.
+  COUNTRYLINQA_CURSOR_SECRET: z.string().min(32).optional(),
   SECURE_CORE_ARTIFACT_SHA256: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
   SECURE_CORE_ARTIFACT_PATH: z.string().min(1).optional(),
   COUNTRYLINQA_RISK_URL: z.string().url().optional(),

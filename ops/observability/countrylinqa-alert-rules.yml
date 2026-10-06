@@ -1,0 +1,25 @@
+# CountryLinqa discovery alerts. The server's /metrics endpoint exports counters and
+# summaries (count/sum/min/max), not histograms, so latency alerts use the mean and
+# the max; true P95/P99 comes from the k6 run and the load balancer's own histogram.
+groups:
+  - name: countrylinqa
+    rules:
+      - alert: CountryLinqaDiscoveryErrorRate
+        expr: sum(rate(countrylinqa_discovery_errors_total[5m])) / clamp_min(sum(rate(countrylinqa_discovery_requests_total[5m])), 1) > 0.01
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: More than 1% of CountryLinqa discovery requests are failing or rate limited.
+          runbook: docs/countrylinqa/ROLLOUT_RUNBOOK.md
+      - alert: CountryLinqaDiscoveryMeanLatencyHigh
+        expr: sum(rate(countrylinqa_discovery_latency_ms_sum[5m])) / clamp_min(sum(rate(countrylinqa_discovery_latency_ms_count[5m])), 1) > 250
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: Mean discovery latency is above 250 ms.
+      - alert: CountryLinqaCacheHitRateLow
+        expr: sum(rate(countrylinqa_discovery_requests_total{cache="hit"}[15m])) / clamp_min(sum(rate(countrylinqa_discovery_requests_total[15m])), 1) < 0.5
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: Under half of discovery requests are served from the ranked-pool cache.

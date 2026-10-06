@@ -4,6 +4,14 @@ import type { SubscriptionProvider, DiscoveryMode } from "./entitlements.js";
 import { assertEntitled, discoveryEntitlements } from "./entitlements.js";
 import type { PhoneEvidenceProvider, GeoIpProvider } from "./providers.js";
 import { evaluateCountryRisk } from "./risk.js";
+import { auditCountryLinqa } from "./final/audit.js";
+
+/** Scope and toggles only, so an audit row never carries more than the policy itself. */
+function policySummary(row: Record<string, unknown>) {
+  const keys = ["mode", "inboundReach", "selectedCountries", "selectedRegions", "inboundSelectedCountries",
+    "inboundSelectedRegions", "verifiedOnly", "allowBusinesses", "allowCommunities", "allowEvents", "paused", "version"];
+  return Object.fromEntries(keys.map((key) => [key, row[key]]));
+}
 
 export type InboundReach = DiscoveryMode | "CONTACTS_ONLY";
 
@@ -32,10 +40,13 @@ export class CountryLinqaService {
     const [preferences, tier] = await Promise.all([
       this.preferencesWithClient(this.db, userId), this.subscriptions.getTier(userId)
     ]);
+    const allowedModes = discoveryEntitlements(tier);
     return {
       ...preferences,
+      mode: allowedModes[preferences.mode as DiscoveryMode] ? preferences.mode : "MY_COUNTRY",
+      inboundReach: preferences.inboundReach === "CONTACTS_ONLY" || allowedModes[preferences.inboundReach as DiscoveryMode] ? preferences.inboundReach : "MY_COUNTRY",
       subscriptionTier: tier,
-      allowedModes: discoveryEntitlements(tier),
+      allowedModes,
       selectionLimits: {
         countries: tier === "FREE" ? 0 : tier === "PREMIUM" ? this.config.COUNTRY_SELECTION_PREMIUM_LIMIT : 250,
         regions: tier === "FREE" ? 0 : tier === "PREMIUM" ? 10 : 50
@@ -59,6 +70,7 @@ export class CountryLinqaService {
          COALESCE(p.allow_communities, TRUE) AS "allowCommunities",
          COALESCE(p.allow_events, TRUE) AS "allowEvents",
          COALESCE(NOT p.enabled, FALSE) AS paused,
+         COALESCE(p.version, 1)::int AS version,
          COALESCE((SELECT json_agg(cl.country_code) FROM country_links cl WHERE cl.user_id = u.id), '[]'::json) AS "selectedCountries",
          COALESCE((SELECT json_agg(rl.region_code) FROM regional_links rl WHERE rl.user_id = u.id), '[]'::json) AS "selectedRegions",
          COALESCE((SELECT json_agg(cl.country_code) FROM country_inbound_links cl WHERE cl.user_id = u.id), '[]'::json) AS "inboundSelectedCountries",
@@ -95,6 +107,8 @@ export class CountryLinqaService {
       allowCommunities?: boolean | undefined;
       allowEvents?: boolean | undefined;
       paused?: boolean | undefined;
+      /** Optimistic concurrency: the `version` the client last read. */
+      expectedVersion?: number | undefined;
     }
   ) {
     const tier = await this.subscriptions.getTier(userId);
@@ -139,6 +153,19 @@ export class CountryLinqaService {
     try {
       await client.query("BEGIN");
 
+      // No row means the implicit default policy, which reads as version 1. The first save
+      // therefore inserts version 2, so cursors issued under the default are retired too.
+      const before = await this.preferencesWithClient(client, userId);
+      const locked = await client.query(
+        `SELECT version FROM country_discovery_preferences WHERE user_id = $1 FOR UPDATE`, [userId]
+      );
+      if (input.expectedVersion !== undefined && locked.rowCount && Number(locked.rows[0].version) !== input.expectedVersion) {
+        const error: any = new Error("Your discovery settings changed elsewhere. Reload and try again.");
+        error.status = 409;
+        error.code = "PREFERENCE_VERSION_CONFLICT";
+        throw error;
+      }
+
       const allCountries = Array.from(new Set([...countries, ...(inboundCountries ?? [])]));
       if (allCountries.length > 0) {
         const found = await client.query(
@@ -169,9 +196,9 @@ export class CountryLinqaService {
       await client.query(
         `INSERT INTO country_discovery_preferences (
            user_id, mode, inbound_reach, show_country, show_state, verified_only,
-           allow_businesses, allow_communities, allow_events, enabled
+           allow_businesses, allow_communities, allow_events, enabled, version
          ) VALUES ($1,$2,COALESCE($3::country_inbound_reach,'MY_COUNTRY'),COALESCE($4,TRUE),COALESCE($5,FALSE),
-                   COALESCE($6,TRUE),COALESCE($7,TRUE),COALESCE($8,TRUE),COALESCE($9,TRUE),COALESCE(NOT $10,TRUE))
+                   COALESCE($6,TRUE),COALESCE($7,TRUE),COALESCE($8,TRUE),COALESCE($9,TRUE),COALESCE(NOT $10,TRUE),2)
          ON CONFLICT (user_id) DO UPDATE SET
            mode=EXCLUDED.mode,
            inbound_reach=COALESCE($3::country_inbound_reach,country_discovery_preferences.inbound_reach),
@@ -181,7 +208,8 @@ export class CountryLinqaService {
            allow_businesses=COALESCE($7,country_discovery_preferences.allow_businesses),
            allow_communities=COALESCE($8,country_discovery_preferences.allow_communities),
            allow_events=COALESCE($9,country_discovery_preferences.allow_events),
-           enabled=COALESCE(NOT $10,country_discovery_preferences.enabled), updated_at=now()`,
+           enabled=COALESCE(NOT $10,country_discovery_preferences.enabled),
+           version=country_discovery_preferences.version+1, updated_at=now()`,
         [userId, input.mode, input.inboundReach ?? null, input.showCountry ?? null, input.showState ?? null,
           input.verifiedOnly ?? null, input.allowBusinesses ?? null, input.allowCommunities ?? null,
           input.allowEvents ?? null, input.paused ?? null]
@@ -220,6 +248,13 @@ export class CountryLinqaService {
          WHERE id = $1`,
         [userId, input.locationPrecision ?? null, input.showCity ?? null]
       );
+
+      const after = await this.preferencesWithClient(client, userId);
+      // The audit records scope and toggles only: no search text, no coordinates.
+      await auditCountryLinqa(client as unknown as Database, {
+        userId, actorUserId: userId, eventType: "DISCOVERY_POLICY_UPDATED",
+        oldValue: policySummary(before), newValue: policySummary(after)
+      });
 
       await client.query("COMMIT");
     } catch (error) {

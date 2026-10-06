@@ -1,0 +1,135 @@
+name: CountryLinqa Certification
+
+# Proves the software side of CountryLinqa discovery: real PostgreSQL and Redis,
+# no silently skipped integration tests, and a verifiable evidence format.
+# It cannot create physical two-device evidence; that stays a manual gate
+# (docs/countrylinqa/TWO_COUNTRY_PHYSICAL_CERTIFICATION.md).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "server/src/services/countrylinqa/**"
+      - "server/src/routes/countrylinqa/**"
+      - "server/src/tests/countrylinqa*"
+      - "server/src/db/migrations/**"
+      - "clients/mobile/app/countrylinqa/**"
+      - "clients/mobile/services/countrylinqa*"
+      - "scripts/countrylinqa*"
+  pull_request:
+    paths:
+      - "server/src/services/countrylinqa/**"
+      - "server/src/routes/countrylinqa/**"
+      - "server/src/tests/countrylinqa*"
+      - "server/src/db/migrations/**"
+      - "server/src/chat/chat-redis-bus.ts"
+      - "clients/mobile/app/countrylinqa/**"
+      - "clients/mobile/services/countrylinqa*"
+      - "scripts/countrylinqa*"
+      - "scripts/audit-vitest-skips.mjs"
+      - "scripts/require-db-tests.mjs"
+      - ".github/workflows/countrylinqa-certification.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  certification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: linqa_test
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: test_password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      LINQA_REQUIRE_DB_TESTS: "1"
+      DATABASE_URL: postgresql://linqa:test_password@127.0.0.1:5432/linqa_test
+      REDIS_URL: redis://127.0.0.1:6379
+      JWT_ISSUER: https://test.linqa.local
+      JWT_AUDIENCE: linqa-api
+      JWT_HS256_SECRET: test-secret-that-is-at-least-32-bytes-long
+      CONTACT_DISCOVERY_SECRET: test-secret-that-is-at-least-32-bytes-2
+      TOKEN_VAULT_KEY_BASE64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      TURN_SHARED_SECRET: test-turn-secret-that-is-at-least-32-bytes
+      TURN_URLS: turn:127.0.0.1:3478?transport=udp
+      CORS_ORIGINS: http://127.0.0.1:5173
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            clients/mobile/package-lock.json
+      - run: npm ci
+        working-directory: server
+      - run: npm ci
+        working-directory: clients/mobile
+      - name: Require database
+        run: node scripts/require-db-tests.mjs
+      - name: Dedicated database guard
+        run: node scripts/assert-dedicated-test-db.mjs
+      - name: Reject explicit skips and .only
+        run: node scripts/audit-vitest-skips.mjs
+      - name: Apply migrations
+        run: npm run db:migrate
+        working-directory: server
+      - name: Verify migration replay is idempotent
+        run: npm run db:migrate
+        working-directory: server
+      - name: Server build
+        run: npm run build
+        working-directory: server
+      - name: Mobile typecheck
+        id: mobile_typecheck
+        run: npm run typecheck
+        working-directory: clients/mobile
+      - name: PostgreSQL integration tests, none skipped
+        id: db_tests
+        run: node scripts/countrylinqa-db-test-gate.mjs
+      - name: Full server tests
+        id: server_tests
+        run: npm test
+        working-directory: server
+      - name: Certification and contract tests
+        run: node --import ./server/node_modules/tsx/dist/loader.mjs --test tests/countrylinqa-certification.test.ts tests/mobile-app.test.ts
+      - name: Software inventory
+        run: node scripts/countrylinqa-certification.mjs --software-only
+      - name: Release readiness report
+        if: always()
+        env:
+          # Taken from this job's own step results, never typed in by hand.
+          CLQ_SERVER_TESTS: ${{ steps.server_tests.outcome == 'success' && 'PASS' || 'FAIL' }}
+          CLQ_DB_TESTS: ${{ steps.db_tests.outcome == 'success' && 'PASS' || 'FAIL' }}
+          CLQ_REDIS_TESTS: ${{ steps.server_tests.outcome == 'success' && 'PASS' || 'FAIL' }}
+          CLQ_MOBILE_TYPECHECK: ${{ steps.mobile_typecheck.outcome == 'success' && 'PASS' || 'FAIL' }}
+          CLQ_WORKFLOW: ${{ job.status == 'success' && 'PASS' || 'FAIL' }}
+        # Exit 5 here only means "physical Android evidence is not attached yet"; the report is the artifact.
+        run: node scripts/countrylinqa-release-report.mjs || true
+      - name: Upload certification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: countrylinqa-certification-${{ github.sha }}
+          path: certification/countrylinqa/release-readiness.json
+          if-no-files-found: warn

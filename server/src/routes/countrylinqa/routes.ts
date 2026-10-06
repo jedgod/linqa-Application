@@ -4,8 +4,10 @@ import type { AppConfig } from "../../config.js";
 import { createAuthenticator, requireScope } from "../../auth/jwt.js";
 import type { CountryLinqaService } from "../../services/countrylinqa/service.js";
 import { discoverUsers } from "../../services/countrylinqa/discovery.js";
-import { getFeedScope } from "../../services/countrylinqa/feed-scope.js";
+import { getFeedScope, viewerScopeCte, authorScopePredicate, safetyPredicate } from "../../services/countrylinqa/feed-scope.js";
 import type { Database } from "../../db/pool.js";
+import { discoverySearchSchema } from "../../services/countrylinqa/search.js";
+import { simpleRateLimit } from "../../services/countrylinqa/final/rate-limit.js";
 
 const countryCode = z.string().trim().length(2).transform((x) => x.toUpperCase());
 const regionCode = z.string().trim().min(1).max(16).transform((x) => x.toUpperCase());
@@ -25,7 +27,8 @@ const updatePreferencesSchema = z.object({
   allowBusinesses: z.boolean().optional(),
   allowCommunities: z.boolean().optional(),
   allowEvents: z.boolean().optional(),
-  paused: z.boolean().optional()
+  paused: z.boolean().optional(),
+  expectedVersion: z.number().int().min(1).optional()
 });
 
 const confirmCountrySchema = z.object({
@@ -34,17 +37,6 @@ const confirmCountrySchema = z.object({
   localeCountryCode: countryCode.optional()
 });
 const clarifyCountrySchema = z.object({ proposedCountryCode: countryCode.optional() });
-
-const discoverySearchSchema = z.object({
-  q: z.string().trim().max(100).optional(),
-  country: countryCode.optional(),
-  region: regionCode.optional(),
-  verifiedOnly: z.coerce.boolean().default(true),
-  onlineOnly: z.coerce.boolean().default(false),
-  language: z.string().trim().max(32).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(30),
-  cursor: z.string().uuid().optional()
-});
 
 /**
  * Every CountryLinqa service function throws plain Errors carrying
@@ -76,6 +68,72 @@ export async function registerCountryLinqaRoutes(
   service: CountryLinqaService
 ) {
   const auth = createAuthenticator(config);
+  const connectionLimit = simpleRateLimit({ windowMs: 60_000, max: 20, keyPrefix: "countrylinqa-connect" });
+
+  const loadProfile = async (userId: string) => {
+    const result = await db.query(`SELECT u.id, COALESCE(profile.display_name,'Linqa member') AS "displayName",
+      COALESCE(profile.bio,'') AS bio,u.verified_country_code AS "verifiedCountryCode",u.country_verification_state AS "verificationState"
+      FROM users u LEFT JOIN user_profiles profile ON profile.user_id=u.id WHERE u.id=$1 AND u.status='ACTIVE'`, [userId]);
+    if (!result.rows[0]) throw Object.assign(new Error("Account unavailable"), { status: 404, code: "ACCOUNT_UNAVAILABLE" });
+    return result.rows[0];
+  };
+  app.get("/v1/countrylinqa/profile", withErrors(async request => {
+    const p = await auth(request); requireScope(p, "countrylinqa:read"); return loadProfile(p.userId);
+  }));
+  app.put("/v1/countrylinqa/profile", withErrors(async request => {
+    const p = await auth(request); requireScope(p, "countrylinqa:write");
+    const body = z.object({ displayName: z.string().trim().min(1).max(100), bio: z.string().trim().max(500) }).strict().parse(request.body);
+    await loadProfile(p.userId);
+    await db.query(`INSERT INTO user_profiles(user_id,display_name,bio) VALUES($1,$2,$3)
+      ON CONFLICT(user_id) DO UPDATE SET display_name=EXCLUDED.display_name,bio=EXCLUDED.bio,updated_at=now()`, [p.userId,body.displayName,body.bio]);
+    return loadProfile(p.userId);
+  }));
+  app.get("/v1/countrylinqa/security/activity", withErrors(async request => {
+    const p = await auth(request); requireScope(p, "countrylinqa:read");
+    const result = await db.query(`SELECT id,event_type AS "eventType",severity,created_at AS "createdAt"
+      FROM countrylinqa_security_events WHERE user_id=$1 ORDER BY created_at DESC,id DESC LIMIT 50`, [p.userId]);
+    return { items: result.rows };
+  }));
+
+  app.post("/v1/countrylinqa/discover/users/:id/connect", withErrors(async (request, reply) => {
+    const p = await auth(request); requireScope(p, "countrylinqa:write"); connectionLimit(p.userId, request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const result = await db.query(`WITH ${viewerScopeCte(1)}
+      INSERT INTO contact_requests(sender_user_id,recipient_user_id)
+      SELECT $1,author.id FROM users author CROSS JOIN viewer_scope vs
+      WHERE author.id=$2 AND author.id<>$1 AND ${authorScopePredicate("author")} AND ${safetyPredicate("author", 1)}
+      ON CONFLICT(sender_user_id,recipient_user_id) DO UPDATE SET
+        status=CASE WHEN contact_requests.status IN ('CANCELLED','DECLINED') OR (contact_requests.status='PENDING' AND contact_requests.expires_at<=now()) THEN 'PENDING' ELSE contact_requests.status END,
+        expires_at=CASE WHEN contact_requests.status IN ('CANCELLED','DECLINED') OR contact_requests.expires_at<=now() THEN now()+interval '30 days' ELSE contact_requests.expires_at END,
+        updated_at=now()
+      WHERE contact_requests.status<>'BLOCKED'
+      RETURNING id,status`, [p.userId,id]);
+    if (result.rowCount !== 1) return reply.code(404).send({ error: "PERSON_UNAVAILABLE" });
+    return result.rows[0];
+  }));
+  app.get("/v1/countrylinqa/connections", withErrors(async request => {
+    const p = await auth(request); requireScope(p, "countrylinqa:read");
+    const result = await db.query(`SELECT cr.id,cr.status,cr.sender_user_id AS "senderUserId",cr.recipient_user_id AS "recipientUserId",
+        profile.display_name AS "displayName", (cr.recipient_user_id=$1) AS incoming
+      FROM contact_requests cr JOIN users author ON author.id=CASE WHEN cr.sender_user_id=$1 THEN cr.recipient_user_id ELSE cr.sender_user_id END
+      JOIN user_profiles profile ON profile.user_id=author.id
+      WHERE (cr.sender_user_id=$1 OR cr.recipient_user_id=$1) AND (cr.status='ACCEPTED' OR (cr.status='PENDING' AND cr.expires_at>now()))
+        AND ${safetyPredicate("author",1)} ORDER BY cr.created_at DESC LIMIT 100`, [p.userId]);
+    return { items: result.rows };
+  }));
+  app.post("/v1/countrylinqa/connections/:id/resolve", withErrors(async (request, reply) => {
+    const p = await auth(request); requireScope(p, "countrylinqa:write");
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { action } = z.object({ action: z.enum(["ACCEPT", "DECLINE", "CANCEL"]) }).parse(request.body);
+    const status = action === "ACCEPT" ? "ACCEPTED" : action === "DECLINE" ? "DECLINED" : "CANCELLED";
+    const result = await db.query(`UPDATE contact_requests cr SET status=$3,updated_at=now()
+      FROM users author WHERE cr.id=$2 AND cr.status='PENDING' AND cr.expires_at>now()
+      AND author.id=CASE WHEN cr.sender_user_id=$1 THEN cr.recipient_user_id ELSE cr.sender_user_id END
+      AND ${safetyPredicate("author",1)}
+      AND (($4='CANCEL' AND cr.sender_user_id=$1) OR ($4<>'CANCEL' AND cr.recipient_user_id=$1)) RETURNING cr.id,cr.status`, [p.userId,id,status,action]);
+    if (result.rowCount !== 1) return reply.code(404).send({ error: "CONNECTION_REQUEST_UNAVAILABLE" });
+    return result.rows[0];
+  }));
 
   app.get(
     "/v1/countrylinqa/catalog",

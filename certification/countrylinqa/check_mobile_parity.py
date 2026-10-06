@@ -50,7 +50,10 @@ android_mode_sources = "".join(
 mobile_mode_source = read("clients/mobile/services/countrylinqa.service.ts")
 
 android_world_source = read("clients/android/app/src/main/java/com/linqa/app/ui/screens/LinqaWorldScreen.kt")
-mobile_world_source = read("clients/mobile/app/countrylinqa/world.tsx")
+mobile_world_source = (
+    read("clients/mobile/app/countrylinqa/world.tsx")
+    + read("clients/mobile/components/CountryLinqaUI.tsx")
+)
 
 violations = []
 for term in REQUIRED_MODE_TERMS:

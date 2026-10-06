@@ -25,7 +25,7 @@ const RECONNECT_MAX_MS = 30_000;
 
 export const CHAT_CHANNEL = "linqa:chat:events";
 
-function encodeCommand(parts: string[]): Buffer {
+export function encodeCommand(parts: string[]): Buffer {
   let out = `*${parts.length}${CRLF}`;
   for (const part of parts) {
     out += `$${Buffer.byteLength(part)}${CRLF}${part}${CRLF}`;
@@ -45,7 +45,7 @@ type RespValue = string | number | null | RespValue[];
  * Only the shapes this bus can receive: simple strings, errors, integers, bulk
  * strings and arrays (a subscribe push is a three-element array).
  */
-function decode(buffer: Buffer, offset = 0): Decoded {
+export function decode(buffer: Buffer, offset = 0): Decoded {
   if (buffer.length - offset < 1) return { kind: "incomplete" };
   const marker = buffer[offset];
   const lineEnd = buffer.indexOf(CRLF, offset);

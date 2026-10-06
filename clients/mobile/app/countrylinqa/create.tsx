@@ -1,19 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { CountryLinqaService } from "../../services/countrylinqa.service";
-import { accessTokenProvider } from "../../services/session";
-import { getApiBaseUrl } from "../../config/api";
-
-const API = getApiBaseUrl();
+import { useCountryClient } from "../../components/CountryLinqaUI";
 
 export default function CountryLinqaCreateScreen() {
   const router = useRouter();
   const { type, title, startsAt: startsAtParam, city: cityParam } =
     useLocalSearchParams<{ type?: string; title?: string; startsAt?: string; city?: string }>();
   const event = type === "event";
-  const client = useMemo(() => new CountryLinqaService(API, () => accessTokenProvider.getAccessToken()), []);
+  const client = useCountryClient();
   const [body, setBody] = useState(title ?? "");
   const [city, setCity] = useState(cityParam ?? "");
   const [startsAt, setStartsAt] = useState(
@@ -22,6 +18,11 @@ export default function CountryLinqaCreateScreen() {
       : new Date(Date.now() + 86_400_000).toISOString()
   );
   const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setBody(title ?? ""); setCity(cityParam ?? "");
+    setStartsAt(startsAtParam && Number.isFinite(Date.parse(startsAtParam)) ? startsAtParam : new Date(Date.now() + 86_400_000).toISOString());
+    setSaving(false);
+  }, [client, title, cityParam, startsAtParam]);
   const canPublish = body.trim().length > 0 && !saving;
 
   async function submit() {

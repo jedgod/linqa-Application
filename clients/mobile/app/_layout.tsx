@@ -93,6 +93,15 @@ export default function RootLayout() {
         <Stack.Screen name="countrylinqa/world" />
         <Stack.Screen name="countrylinqa/full-flow" />
         <Stack.Screen name="countrylinqa/list" />
+        <Stack.Screen name="countrylinqa/search" />
+        <Stack.Screen name="countrylinqa/saved-searches" />
+        <Stack.Screen name="countrylinqa/recommendations" />
+        <Stack.Screen name="countrylinqa/discovery-profile" />
+        <Stack.Screen name="countrylinqa/notifications" />
+        <Stack.Screen name="countrylinqa/connections" />
+        <Stack.Screen name="countrylinqa/profile" />
+        <Stack.Screen name="countrylinqa/security" />
+        <Stack.Screen name="countrylinqa/report" />
         <Stack.Screen name="countrylinqa/create" options={{ presentation: "modal" }} />
         <Stack.Screen name="modules/file-vault" />
         <Stack.Screen name="linqasend/index" />

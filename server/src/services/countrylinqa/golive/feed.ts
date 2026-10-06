@@ -1,15 +1,17 @@
 import type { Database } from "../../../db/pool.js";
 import { viewerScopeCte, authorScopePredicate, safetyPredicate } from "../feed-scope.js";
 
-export async function getCountryFeed(db: Database, userId: string, limit = 30, cursor?: string) {
+export async function getCountryFeed(db: Database, userId: string, limit = 30, cursor?: string, filters: { q?: string | undefined; country?: string | undefined } = {}) {
   const cappedLimit = Math.min(limit, 100);
   const params: unknown[] = [userId];
   let cursorClause = "";
   if (cursor) {
     params.push(cursor);
-    cursorClause = ` AND p.id > $${params.length}`;
+    cursorClause = ` AND (p.created_at, p.id) < (SELECT boundary.created_at, boundary.id FROM posts boundary WHERE boundary.id = $${params.length})`;
   }
-  params.push(cappedLimit);
+  if (filters.q) { params.push(`%${filters.q}%`); cursorClause += ` AND p.body ILIKE $${params.length}`; }
+  if (filters.country) { params.push(filters.country); cursorClause += ` AND p.country_code = $${params.length}`; }
+  params.push(cappedLimit + 1);
   const limitIndex = params.length;
 
   const result = await db.query(
@@ -28,17 +30,12 @@ export async function getCountryFeed(db: Database, userId: string, limit = 30, c
      LEFT JOIN countrylinqa_user_affinity aff
        ON aff.user_id = $1 AND aff.affinity_type = 'COUNTRY' AND aff.affinity_key = p.country_code
      WHERE p.status = 'PUBLISHED' AND ${safetyPredicate("author", 1)} AND ${authorScopePredicate("author")}${cursorClause}
-     ORDER BY (
-       COALESCE(ps.engagement_score, 0) * 0.30
-       + GREATEST(0, 1 - EXTRACT(EPOCH FROM (now() - p.created_at)) / 86400 / 7) * 0.20
-       + COALESCE(aff.score, 0) * 0.30
-       + COALESCE(ps.quality_score, 0) * 0.20
-     ) DESC, p.id
+     ORDER BY p.created_at DESC, p.id DESC
      LIMIT $${limitIndex}`,
     params
   );
 
-  const items = result.rows;
-  const nextCursor = items.length === cappedLimit ? items[items.length - 1].id : null;
+  const items = result.rows.slice(0, cappedLimit);
+  const nextCursor = result.rows.length > cappedLimit ? items[items.length - 1].id : null;
   return { items, nextCursor };
 }

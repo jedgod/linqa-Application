@@ -24,6 +24,7 @@
     "home:providers:verify": "node ../scripts/verify-home-provider-redundancy.mjs",
     "home:release:gate": "node ../scripts/verify-home-release-gate.mjs",
     "chat:workers": "tsx src/jobs/chat-workers.ts",
+    "countrylinqa:workers": "tsx src/jobs/countrylinqa-workers.ts",
     "chat:test": "vitest run src/tests/chat"
   },
   "dependencies": {

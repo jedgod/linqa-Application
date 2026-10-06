@@ -4,6 +4,9 @@ import type { AppConfig } from "../../config.js";
 import { createAuthenticator, requireScope } from "../../auth/jwt.js";
 import type { Database } from "../../db/pool.js";
 import { simpleRateLimit } from "../../services/countrylinqa/final/rate-limit.js";
+import { searchFiltersSchema, collectionSearchSchema, pageItems } from "../../services/countrylinqa/search.js";
+import { discoverCommunities } from "../../services/countrylinqa/golive/communityDiscovery.js";
+import { viewerScopeCte, contentScopePredicate } from "../../services/countrylinqa/feed-scope.js";
 
 function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) => Promise<T>) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
@@ -40,20 +43,45 @@ const targetSchema = z.object({
 
 const saveSearchSchema = z.object({
   name: z.string().trim().min(1).max(80),
-  filters: z.object({
-    country: z.string().length(2).optional(),
-    region: z.string().max(16).optional(),
-    language: z.string().max(32).optional(),
-    verifiedOnly: z.boolean().optional(),
-    onlineOnly: z.boolean().optional(),
-    profession: z.string().max(80).optional(),
-    relationshipIntent: z.string().max(80).optional()
-  })
+  filters: searchFiltersSchema
 });
 
 export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, config: AppConfig, db: Database) {
   const auth = createAuthenticator(config);
   const businessRateLimit = simpleRateLimit({ windowMs: 60_000, max: 60, keyPrefix: "countrylinqa-business" });
+
+  const notificationSchema = z.object({
+    countryTrends: z.boolean(), regionalTrends: z.boolean(), selectedCountryActivity: z.boolean(),
+    countryEvents: z.boolean(), countryBusinesses: z.boolean(), securityAlerts: z.boolean(),
+    digestFrequency: z.enum(["OFF", "DAILY", "WEEKLY"])
+  }).strict();
+  const notificationColumns = `country_trends AS "countryTrends", regional_trends AS "regionalTrends",
+    selected_country_activity AS "selectedCountryActivity", country_events AS "countryEvents",
+    country_businesses AS "countryBusinesses", security_alerts AS "securityAlerts", digest_frequency AS "digestFrequency"`;
+  app.get("/v1/countrylinqa/notifications/preferences", withErrors(async request => {
+    const p = await auth(request); requireScope(p, "countrylinqa:read");
+    const result = await db.query(`SELECT ${notificationColumns} FROM countrylinqa_notification_preferences WHERE user_id=$1`, [p.userId]);
+    return result.rows[0] ?? { countryTrends: true, regionalTrends: true, selectedCountryActivity: true,
+      countryEvents: true, countryBusinesses: false, securityAlerts: true, digestFrequency: "DAILY" };
+  }));
+  app.put("/v1/countrylinqa/notifications/preferences", withErrors(async request => {
+    const p = await auth(request); requireScope(p, "countrylinqa:write");
+    const body = notificationSchema.parse(request.body);
+    const result = await db.query(`INSERT INTO countrylinqa_notification_preferences
+      (user_id,country_trends,regional_trends,selected_country_activity,country_events,country_businesses,security_alerts,digest_frequency)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (user_id) DO UPDATE SET
+      country_trends=EXCLUDED.country_trends,regional_trends=EXCLUDED.regional_trends,selected_country_activity=EXCLUDED.selected_country_activity,
+      country_events=EXCLUDED.country_events,country_businesses=EXCLUDED.country_businesses,security_alerts=EXCLUDED.security_alerts,
+      digest_frequency=EXCLUDED.digest_frequency,updated_at=now() RETURNING ${notificationColumns}`,
+      [p.userId,body.countryTrends,body.regionalTrends,body.selectedCountryActivity,body.countryEvents,body.countryBusinesses,body.securityAlerts,body.digestFrequency]);
+    return result.rows[0];
+  }));
+  app.get("/v1/countrylinqa/notifications", withErrors(async request => {
+    const p = await auth(request); requireScope(p, "countrylinqa:read");
+    const result = await db.query(`SELECT id,notification_type AS "notificationType",payload,created_at AS "createdAt"
+      FROM countrylinqa_notification_outbox WHERE user_id=$1 AND status='SENT' ORDER BY created_at DESC,id DESC LIMIT 100`, [p.userId]);
+    return { items: result.rows };
+  }));
 
   // ---- business geo-targeting ----
 
@@ -139,6 +167,13 @@ export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, conf
 
   // ---- country communities ----
 
+  app.get("/v1/countrylinqa/communities/discover", withErrors(async request => {
+    const p = await auth(request); requireScope(p, "countrylinqa:read");
+    const query = collectionSearchSchema.parse(request.query);
+    const result = await discoverCommunities(db, p.userId, query);
+    return pageItems(result.rows, query);
+  }));
+
   app.post(
     "/v1/countrylinqa/communities/country/:code/join",
     withErrors(async (request) => {
@@ -148,8 +183,9 @@ export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, conf
 
       const allowed = await db.query(
         `SELECT 1 FROM countries c JOIN countrylinqa_country_status s ON s.country_code = c.code
+         JOIN users u ON u.id=$2 AND u.status='ACTIVE' AND u.country_verification_state='VERIFIED'
          WHERE c.code = $1 AND c.enabled = TRUE AND s.community_enabled = TRUE`,
-        [params.code]
+        [params.code, p.userId]
       );
       if (allowed.rowCount !== 1) {
         const error: any = new Error("Community not available for this country.");
@@ -158,12 +194,14 @@ export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, conf
         throw error;
       }
 
-      await db.query(
+      const joined = await db.query(
         `INSERT INTO country_community_memberships (user_id, country_code, membership_type, status)
          VALUES ($1,$2,'MANUAL','ACTIVE')
-         ON CONFLICT (user_id, country_code) DO UPDATE SET status = 'ACTIVE', updated_at = now()`,
+         ON CONFLICT (user_id, country_code) DO UPDATE SET status = 'ACTIVE', joined_at=now(), updated_at = now()
+         WHERE country_community_memberships.status <> 'SUSPENDED' RETURNING country_code`,
         [p.userId, params.code]
       );
+      if (joined.rowCount !== 1) throw Object.assign(new Error("Community membership is suspended"), { status: 403, code: "COMMUNITY_MEMBERSHIP_SUSPENDED" });
       return { joined: true, countryCode: params.code };
     })
   );
@@ -175,7 +213,7 @@ export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, conf
       requireScope(p, "countrylinqa:write");
       const params = z.object({ code: z.string().length(2).transform((x) => x.toUpperCase()) }).parse(request.params);
       await db.query(
-        `UPDATE country_community_memberships SET status = 'LEFT', updated_at = now() WHERE user_id = $1 AND country_code = $2`,
+        `UPDATE country_community_memberships SET status = 'LEFT', updated_at = now() WHERE user_id = $1 AND country_code = $2 AND status='ACTIVE'`,
         [p.userId, params.code]
       );
       return { left: true, countryCode: params.code };
@@ -188,7 +226,8 @@ export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, conf
       const p = await auth(request);
       requireScope(p, "countrylinqa:read");
       const result = await db.query(
-        `SELECT c.code, c.name, m.membership_type AS "membershipType", m.status, m.joined_at AS "joinedAt"
+        `SELECT c.code, c.name, m.membership_type AS "membershipType", m.status, m.joined_at AS "joinedAt", TRUE AS joined,
+           (SELECT count(*)::int FROM country_community_memberships members WHERE members.country_code=c.code AND members.status='ACTIVE') AS "memberCount"
          FROM country_community_memberships m
          JOIN countries c ON c.code = m.country_code
          WHERE m.user_id = $1 AND m.status = 'ACTIVE'
@@ -223,7 +262,7 @@ export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, conf
       const p = await auth(request);
       requireScope(p, "countrylinqa:read");
       const result = await db.query(
-        `SELECT id, name, filters, created_at AS "createdAt", updated_at AS "updatedAt"
+        `SELECT id, name, filters, alerts_enabled AS "alertsEnabled", created_at AS "createdAt", updated_at AS "updatedAt"
          FROM countrylinqa_saved_searches WHERE user_id = $1 AND enabled = TRUE ORDER BY updated_at DESC`,
         [p.userId]
       );

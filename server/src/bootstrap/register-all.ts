@@ -14,6 +14,7 @@ import { registerContactDiscoveryRoutes } from "../routes/contact-discovery.js";
 import { registerCountryLinqaRoutes } from "../routes/countrylinqa/routes.js";
 import { registerCountryLinqaGoLiveRoutes } from "../routes/countrylinqa/golive-routes.js";
 import { registerCountryLinqaFinalRoutes } from "../routes/countrylinqa/final-routes.js";
+import { registerCountryLinqaEngineRoutes } from "../routes/countrylinqa/engine-routes.js";
 import { registerCountryLinqaAdminRoutes } from "../routes/countrylinqa/admin-routes.js";
 import { registerCountryLinqaSecurityRoutes } from "../routes/countrylinqa/security-routes.js";
 import { registerEnrollmentRoutes } from "../routes/enrollment.js";
@@ -168,6 +169,7 @@ export async function registerAll(
   await registerCountryLinqaRoutes(app, config, db, services.countryLinqa);
   await registerCountryLinqaGoLiveRoutes(app, config, db);
   await registerCountryLinqaFinalRoutes(app, config, db);
+  await registerCountryLinqaEngineRoutes(app, config, db, metrics);
   await registerCountryLinqaAdminRoutes(app, config, db);
   await registerCountryLinqaSecurityRoutes(app, config, db, services.countryReverification);
   await registerLinqaSendRoutes(app, config, db);
