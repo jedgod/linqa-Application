@@ -5,11 +5,13 @@ import { assertEntitled, discoveryEntitlements } from "./entitlements.js";
 import type { PhoneEvidenceProvider, GeoIpProvider } from "./providers.js";
 import { evaluateCountryRisk } from "./risk.js";
 import { auditCountryLinqa } from "./final/audit.js";
+import { CHAT_REACH_MODES, chatReachEntitlements, type ChatReachMode } from "./chat-access.js";
 
 /** Scope and toggles only, so an audit row never carries more than the policy itself. */
 function policySummary(row: Record<string, unknown>) {
   const keys = ["mode", "inboundReach", "selectedCountries", "selectedRegions", "inboundSelectedCountries",
-    "inboundSelectedRegions", "verifiedOnly", "allowBusinesses", "allowCommunities", "allowEvents", "paused", "version"];
+    "inboundSelectedRegions", "verifiedOnly", "allowBusinesses", "allowCommunities", "allowEvents", "paused", "version",
+    "chatReachMode", "chatSelectedCountries", "chatRegionCode", "chatExistingContactsBypass", "activated"];
   return Object.fromEntries(keys.map((key) => [key, row[key]]));
 }
 
@@ -41,8 +43,11 @@ export class CountryLinqaService {
       this.preferencesWithClient(this.db, userId), this.subscriptions.getTier(userId)
     ]);
     const allowedModes = discoveryEntitlements(tier);
+    const allowedChatModes = chatReachEntitlements(tier);
     return {
       ...preferences,
+      chatReachMode: allowedChatModes[preferences.chatReachMode as ChatReachMode] ? preferences.chatReachMode : "MY_COUNTRY",
+      allowedChatModes,
       mode: allowedModes[preferences.mode as DiscoveryMode] ? preferences.mode : "MY_COUNTRY",
       inboundReach: preferences.inboundReach === "CONTACTS_ONLY" || allowedModes[preferences.inboundReach as DiscoveryMode] ? preferences.inboundReach : "MY_COUNTRY",
       subscriptionTier: tier,
@@ -74,7 +79,12 @@ export class CountryLinqaService {
          COALESCE((SELECT json_agg(cl.country_code) FROM country_links cl WHERE cl.user_id = u.id), '[]'::json) AS "selectedCountries",
          COALESCE((SELECT json_agg(rl.region_code) FROM regional_links rl WHERE rl.user_id = u.id), '[]'::json) AS "selectedRegions",
          COALESCE((SELECT json_agg(cl.country_code) FROM country_inbound_links cl WHERE cl.user_id = u.id), '[]'::json) AS "inboundSelectedCountries",
-         COALESCE((SELECT json_agg(rl.region_code) FROM regional_inbound_links rl WHERE rl.user_id = u.id), '[]'::json) AS "inboundSelectedRegions"
+         COALESCE((SELECT json_agg(rl.region_code) FROM regional_inbound_links rl WHERE rl.user_id = u.id), '[]'::json) AS "inboundSelectedRegions",
+         COALESCE(p.chat_reach_mode, 'MY_COUNTRY') AS "chatReachMode",
+         p.chat_region_code AS "chatRegionCode",
+         COALESCE(p.existing_contacts_bypass_chat_reach, TRUE) AS "chatExistingContactsBypass",
+         COALESCE((SELECT json_agg(cc.country_code) FROM country_chat_links cc WHERE cc.user_id = u.id), '[]'::json) AS "chatSelectedCountries",
+         (p.activated_at IS NOT NULL) AS activated
        FROM users u
        LEFT JOIN country_discovery_preferences p ON p.user_id = u.id
        WHERE u.id = $1`,
@@ -107,6 +117,10 @@ export class CountryLinqaService {
       allowCommunities?: boolean | undefined;
       allowEvents?: boolean | undefined;
       paused?: boolean | undefined;
+      /** Who may start a NEW chat with this user. It never affects conversations that already exist. */
+      chatReach?: { mode: ChatReachMode; selectedCountries?: string[] | undefined; regionCode?: string | null | undefined; existingContactsBypass?: boolean | undefined } | undefined;
+      /** Marks first-time activation complete. */
+      activate?: boolean | undefined;
       /** Optimistic concurrency: the `version` the client last read. */
       expectedVersion?: number | undefined;
     }
@@ -147,6 +161,23 @@ export class CountryLinqaService {
       error.status = 422;
       error.code = "INBOUND_REGION_REQUIRED";
       throw error;
+    }
+
+    // Chat reach: same plan rules as inbound discovery for opening it up; narrowing is free.
+    const chat = input.chatReach;
+    const chatCountries = chat?.selectedCountries === undefined ? [] : Array.from(new Set(chat.selectedCountries.map((c) => c.toUpperCase())));
+    if (chat) {
+      if (!CHAT_REACH_MODES.includes(chat.mode)) {
+        const error: any = new Error("Unknown chat reach."); error.status = 422; error.code = "INVALID_CHAT_REACH"; throw error;
+      }
+      if (!chatReachEntitlements(tier)[chat.mode]) {
+        const error: any = new Error("Your plan does not include this chat reach."); error.status = 403; error.code = "CHAT_REACH_NOT_ENTITLED"; throw error;
+      }
+      if (chat.mode === "SELECTED_COUNTRIES") {
+        const limit = tier === "PREMIUM" ? this.config.COUNTRY_SELECTION_PREMIUM_LIMIT : 250;
+        if (chatCountries.length === 0) { const error: any = new Error("At least one chat country is required."); error.status = 422; error.code = "CHAT_COUNTRY_REQUIRED"; throw error; }
+        if (chatCountries.length > limit) { const error: any = new Error("Too many chat countries for your plan."); error.status = 403; error.code = "CHAT_COUNTRY_LIMIT"; throw error; }
+      }
     }
 
     const client = await this.db.connect();
@@ -236,6 +267,44 @@ export class CountryLinqaService {
         for (const code of inboundRegions) {
           await client.query(`INSERT INTO regional_inbound_links (user_id, region_code) VALUES ($1, $2)`, [userId, code]);
         }
+      }
+
+      if (chat) {
+        if (chatCountries.length > 0) {
+          const found = await client.query(`SELECT code FROM countries WHERE code = ANY($1) AND enabled = TRUE`, [chatCountries]);
+          if (found.rowCount !== chatCountries.length) {
+            const error: any = new Error("One or more chat countries are invalid."); error.status = 422; error.code = "INVALID_COUNTRY"; throw error;
+          }
+        }
+        // "My Region" means the region the user's own verified country is in, unless one is named.
+        let regionCode: string | null = chat.mode === "REGION" ? (chat.regionCode ?? null) : null;
+        if (chat.mode === "REGION" && !regionCode) {
+          const own = await client.query(
+            `SELECT c.region_code AS region FROM users u JOIN countries c ON c.code = u.verified_country_code WHERE u.id = $1 AND u.country_verification_state = 'VERIFIED'`, [userId]
+          );
+          regionCode = (own.rows[0]?.region as string | null | undefined) ?? null;
+        }
+        if (chat.mode === "REGION") {
+          const valid = regionCode ? await client.query(`SELECT 1 FROM geographic_regions WHERE code = $1 AND enabled = TRUE`, [regionCode.toUpperCase()]) : null;
+          if (!regionCode || !valid?.rowCount) {
+            const error: any = new Error("A chat region is required."); error.status = 422; error.code = "CHAT_REGION_REQUIRED"; throw error;
+          }
+          regionCode = regionCode.toUpperCase();
+        }
+        await client.query(
+          `UPDATE country_discovery_preferences
+              SET chat_reach_mode = $2, chat_region_code = $3,
+                  existing_contacts_bypass_chat_reach = COALESCE($4, existing_contacts_bypass_chat_reach)
+            WHERE user_id = $1`,
+          [userId, chat.mode, regionCode, chat.existingContactsBypass ?? null]
+        );
+        await client.query(`DELETE FROM country_chat_links WHERE user_id = $1`, [userId]);
+        if (chat.mode === "SELECTED_COUNTRIES") {
+          for (const code of chatCountries) await client.query(`INSERT INTO country_chat_links (user_id, country_code) VALUES ($1, $2)`, [userId, code]);
+        }
+      }
+      if (input.activate) {
+        await client.query(`UPDATE country_discovery_preferences SET activated_at = COALESCE(activated_at, now()) WHERE user_id = $1`, [userId]);
       }
 
       await client.query(

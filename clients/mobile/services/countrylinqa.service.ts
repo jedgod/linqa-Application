@@ -9,6 +9,8 @@ export type CountryCatalog = CountryLinqaCatalog;
 export type DiscoveryMode = "MY_COUNTRY" | "SELECTED_COUNTRIES" | "REGION" | "GLOBAL";
 export type CountryMode = DiscoveryMode;
 export type InboundReach = DiscoveryMode | "CONTACTS_ONLY";
+/** Who may START a new chat with you. It never affects conversations that already exist. */
+export type ChatReachMode = "MY_COUNTRY" | "SELECTED_COUNTRIES" | "REGION" | "WORLDWIDE" | "EXISTING_CONTACTS_ONLY" | "NOBODY";
 
 export type CountryLinqaPreferences = {
   mode: DiscoveryMode;
@@ -28,6 +30,13 @@ export type CountryLinqaPreferences = {
   allowCommunities: boolean;
   allowEvents: boolean;
   paused: boolean;
+  chatReachMode: ChatReachMode;
+  chatSelectedCountries: string[];
+  chatRegionCode: string | null;
+  chatExistingContactsBypass: boolean;
+  allowedChatModes: Record<ChatReachMode, boolean>;
+  /** False until first-time activation (Linqa World setup) is completed. */
+  activated: boolean;
   /** Bumped on every save. Send it back as `expectedVersion` so a stale screen cannot overwrite newer settings. */
   version: number;
   subscriptionTier: "FREE" | "PREMIUM" | "ELITE";
@@ -41,9 +50,9 @@ export type ItemsResponse<T = Record<string, unknown>> = { items: T[]; nextCurso
 export type CountryCollection = "feed" | "people" | "businesses" | "events" | "communities";
 export type CountrySearch = { q?: string; country?: string; region?: string; language?: string; verifiedOnly?: boolean };
 export type CountryPagination = { cursor?: string; offset?: number; limit?: number };
-export type CountryItem = { id: string; title: string; detail: string; body?: string; countryCode?: string; startsAt?: string; createdAt?: string; category?: string; joined?: boolean; suspended?: boolean; memberCount?: number; connectionStatus?: string; connectionIncoming?: boolean };
+export type CountryItem = { id: string; title: string; detail: string; body?: string; countryCode?: string; startsAt?: string; createdAt?: string; category?: string; joined?: boolean; suspended?: boolean; memberCount?: number; connectionStatus?: string; connectionIncoming?: boolean; city?: string; interested?: boolean; interestedCount?: number; logoUrl?: string };
 export type CountryConnection = { id: string; status: "PENDING" | "ACCEPTED"; displayName: string; incoming: boolean };
-export type SavedCountrySearch = { id: string; name: string; filters: CountrySearch; createdAt: string; alertsEnabled?: boolean };
+export type SavedCountrySearch = { id: string; name: string; filters: CountrySearch & Record<string, unknown>; createdAt: string; alertsEnabled?: boolean; lastUsedAt?: string | null };
 export type CountryNotificationPreferences = { countryTrends: boolean; regionalTrends: boolean; selectedCountryActivity: boolean; countryEvents: boolean; countryBusinesses: boolean; securityAlerts: boolean; digestFrequency: "OFF" | "DAILY" | "WEEKLY" };
 export type CountryNotification = { id: string; notificationType: string; payload: Record<string, unknown>; createdAt: string };
 export type CountryProfile = { id: string; displayName: string; bio: string; verifiedCountryCode: string | null; verificationState: string };
@@ -68,6 +77,9 @@ export function countryItem(kind: CountryCollection, row: Record<string, unknown
     ...(typeof row.startsAt === "string" ? { startsAt: row.startsAt } : {}),
     ...(typeof row.createdAt === "string" ? { createdAt: row.createdAt } : {}),
     ...(typeof row.category === "string" ? { category: row.category } : {}),
+    ...(typeof row.city === "string" ? { city: row.city } : {}),
+    ...(typeof row.logoUrl === "string" ? { logoUrl: row.logoUrl } : {}),
+    ...(kind === "events" ? { interested: row.interested === true, interestedCount: Number(row.interestedCount ?? 0) } : {}),
     ...(typeof row.connectionStatus === "string" ? { connectionStatus: row.connectionStatus, connectionIncoming: row.connectionIncoming === true } : {}),
     ...(kind === "communities" ? { joined: row.joined === true || row.status === "ACTIVE", suspended: row.suspended === true, memberCount: Number(row.memberCount ?? 0) } : {})
   };
@@ -126,6 +138,8 @@ export class CountryLinqaService {
     allowCommunities?: boolean;
     allowEvents?: boolean;
     paused?: boolean;
+    chatReach?: { mode: ChatReachMode; selectedCountries?: string[]; regionCode?: string | null; existingContactsBypass?: boolean };
+    activate?: boolean;
     expectedVersion?: number;
   }) {
     return this.request<CountryLinqaPreferences>("/v1/countrylinqa/preferences", {
@@ -202,9 +216,19 @@ export class CountryLinqaService {
   }
 
   savedSearches() { return this.request<ItemsResponse<SavedCountrySearch>>("/v1/countrylinqa/saved-searches"); }
-  saveSearch(name: string, filters: CountrySearch) {
+  saveSearch(name: string, filters: CountrySearch | Record<string, unknown>) {
     return this.request<SavedCountrySearch>("/v1/countrylinqa/saved-searches", { method: "POST", body: JSON.stringify({ name, filters }) });
   }
+  markSavedSearchUsed(id: string) { return this.request<{ lastUsedAt: string }>(`/v1/countrylinqa/saved-searches/${encodeURIComponent(id)}/used`, { method: "POST" }); }
+  plans() { return this.request<import("./countrylinqa-plans").PlansResponse>("/v1/countrylinqa/plans"); }
+  createCheckout(planCode: "PREMIUM" | "ELITE", method: import("./countrylinqa-plans").PaymentMethod, idempotencyKey: string) {
+    return this.request<import("./countrylinqa-plans").Checkout>("/v1/countrylinqa/checkouts", { method: "POST", body: JSON.stringify({ planCode, method, idempotencyKey }) });
+  }
+  checkout(id: string) { return this.request<import("./countrylinqa-plans").Checkout>(`/v1/countrylinqa/checkouts/${encodeURIComponent(id)}`); }
+  cancelCheckout(id: string) { return this.request<import("./countrylinqa-plans").Checkout>(`/v1/countrylinqa/checkouts/${encodeURIComponent(id)}/cancel`, { method: "POST", body: "{}" }); }
+  subscription() { return this.request<{ tier: "FREE" | "PREMIUM" | "ELITE"; status: string; provider: "APPLE" | "GOOGLE" | "STRIPE" | "MANUAL" | null; currentPeriodEnd: string | null }>("/v1/countrylinqa/subscription"); }
+  blockedAccounts() { return this.request<{ items: Array<{ userId: string; displayName: string; blockedAt: string }> }>("/v1/countrylinqa/blocked"); }
+  unblockAccount(userId: string) { return this.request<{ unblocked: boolean }>(`/v1/countrylinqa/blocked/${encodeURIComponent(userId)}`, { method: "DELETE" }); }
   deleteSavedSearch(id: string) { return this.request<{ deleted: boolean }>(`/v1/countrylinqa/saved-searches/${encodeURIComponent(id)}`, { method: "DELETE" }); }
   notificationPreferences() { return this.request<CountryNotificationPreferences>("/v1/countrylinqa/notifications/preferences"); }
   saveNotificationPreferences(input: CountryNotificationPreferences) {
@@ -218,6 +242,18 @@ export class CountryLinqaService {
     return this.request<{ reported: boolean }>("/v1/countrylinqa/reports", { method: "POST", body: JSON.stringify(input) });
   }
   connect(id: string) { return this.request<{ id: string; status: string }>(`/v1/countrylinqa/discover/users/${encodeURIComponent(id)}/connect`, { method: "POST" }); }
+  countryHub(code: string) { return this.request<import("./countrylinqa-world").CountryHub>(`/v1/countrylinqa/world/countries/${encodeURIComponent(code)}`); }
+  setEventInterest(eventId: string, interested: boolean) {
+    return this.request<{ interested: boolean; interestedCount: number }>(`/v1/countrylinqa/events/${encodeURIComponent(eventId)}/interest`, { method: "POST", body: JSON.stringify({ interested }) });
+  }
+  worldHome() { return this.request<import("./countrylinqa-world").WorldHome>("/v1/countrylinqa/world/home"); }
+  worldCountries() { return this.request<import("./countrylinqa-world").WorldCountries>("/v1/countrylinqa/world/countries"); }
+  /** Details for people the server is willing to show this viewer. Anyone else is simply missing from the answer. */
+  async peopleDetails(ids: string[]) {
+    if (ids.length === 0) return [] as import("./countrylinqa-world").PersonDetail[];
+    const result = await this.request<{ items: import("./countrylinqa-world").PersonDetail[] }>(`/v1/countrylinqa/people/details?ids=${encodeURIComponent(ids.slice(0, 50).join(","))}`);
+    return result.items;
+  }
   connections() { return this.request<ItemsResponse<CountryConnection>>("/v1/countrylinqa/connections"); }
   resolveConnection(id: string, action: "ACCEPT" | "DECLINE" | "CANCEL") { return this.request<{ id: string; status: string }>(`/v1/countrylinqa/connections/${encodeURIComponent(id)}/resolve`, { method: "POST", body: JSON.stringify({ action }) }); }
 

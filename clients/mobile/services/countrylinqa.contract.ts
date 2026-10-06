@@ -39,6 +39,8 @@ export type PeopleFilters = {
   query?: string;
   countries?: string[];
   region?: string;
+  /** Matches only people who chose to show their city. */
+  city?: string;
   languages?: string[];
   interests?: string[];
   profession?: string;

@@ -41,9 +41,16 @@ const targetSchema = z.object({
     .max(100)
 });
 
+const token = z.string().trim().min(1).max(60);
 const saveSearchSchema = z.object({
   name: z.string().trim().min(1).max(80),
-  filters: searchFiltersSchema
+  // The advanced search adds these to the original filters; the alert job already understands all of them.
+  filters: searchFiltersSchema.extend({
+    city: z.string().trim().min(1).max(80).optional(),
+    interests: z.array(token).max(20).optional(),
+    languages: z.array(token).max(10).optional(),
+    profession: token.optional()
+  })
 });
 
 export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, config: AppConfig, db: Database) {
@@ -262,11 +269,27 @@ export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, conf
       const p = await auth(request);
       requireScope(p, "countrylinqa:read");
       const result = await db.query(
-        `SELECT id, name, filters, alerts_enabled AS "alertsEnabled", created_at AS "createdAt", updated_at AS "updatedAt"
-         FROM countrylinqa_saved_searches WHERE user_id = $1 AND enabled = TRUE ORDER BY updated_at DESC`,
+        `SELECT id, name, filters, alerts_enabled AS "alertsEnabled", created_at AS "createdAt", updated_at AS "updatedAt", last_used_at AS "lastUsedAt"
+         FROM countrylinqa_saved_searches WHERE user_id = $1 AND enabled = TRUE ORDER BY COALESCE(last_used_at, created_at) DESC, id`,
         [p.userId]
       );
       return { items: result.rows };
+    })
+  );
+
+  // Opening a saved search records that it was used, so the list can say "Last used yesterday".
+  app.post(
+    "/v1/countrylinqa/saved-searches/:id/used",
+    withErrors(async (request, reply) => {
+      const p = await auth(request);
+      requireScope(p, "countrylinqa:write");
+      const params = z.object({ id: z.string().uuid() }).parse(request.params);
+      const result = await db.query(
+        `UPDATE countrylinqa_saved_searches SET last_used_at = now() WHERE id = $1 AND user_id = $2 AND enabled = TRUE RETURNING last_used_at AS "lastUsedAt"`,
+        [params.id, p.userId]
+      );
+      if (result.rowCount !== 1) return reply.code(404).send({ error: "SAVED_SEARCH_NOT_FOUND" });
+      return result.rows[0];
     })
   );
 

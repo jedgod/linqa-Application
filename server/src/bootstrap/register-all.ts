@@ -55,6 +55,7 @@ import { registerUsernameRoutes } from "../routes/usernames.js";
 import { registerVertical2Routes } from "../routes/vertical-2.routes.js";
 import type { MetricsRegistry } from "../observability/metrics-registry.js";
 import type { ServiceContainer } from "./service-container.js";
+import { registerCountryLinqaPlanRoutes } from "../routes/countrylinqa/plan-routes.js";
 
 export async function registerAll(
   app: FastifyInstance,
@@ -129,6 +130,7 @@ export async function registerAll(
   });
   await registerPasskeyRoutes(app, config, services.passkeys, services.stepUp);
   await registerFileVaultRoutes(app, config, services.fileVault);
+  await registerCountryLinqaPlanRoutes(app, config, db);
   await registerMobileFeatureRoutes(app, config, db);
   await registerNextMobileFeatureRoutes(app, config, db);
   await registerVertical2Routes(app, config, {

@@ -43,10 +43,14 @@ const suite = testDatabase ? describe : describe.skip;
 
 async function makeUser(name: string): Promise<string> {
   const id = randomUUID();
-  await db.query(`INSERT INTO users (id, external_subject, status) VALUES ($1,$2,'ACTIVE')`, [
-    id,
-    `chat-v2-test-${id}`
-  ]);
+  // Verified in the same country: a new chat is allowed by default only between people in the same
+  // country (CountryLinqa chat access). The access rules themselves are tested in
+  // countrylinqa-chat-access.integration.test.ts.
+  await db.query(
+    `INSERT INTO users (id, external_subject, status, verified_country_code, country_verification_state)
+     VALUES ($1,$2,'ACTIVE','US','VERIFIED')`,
+    [id, `chat-v2-test-${id}`]
+  );
   await db.query(`INSERT INTO user_profiles (user_id, display_name) VALUES ($1,$2)`, [id, name]);
   createdUsers.push(id);
   return id;

@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type pg from "pg";
 import type { Database } from "../db/pool.js";
+import { authorizeNewDirectChat, liveChatAccessDeps } from "../services/countrylinqa/chat-access.js";
 
 export type ChatRole = "OWNER" | "ADMIN" | "MEMBER";
 
@@ -186,6 +187,12 @@ export async function resolveDirectConversation(
         created: false
       };
     }
+
+    // CountryLinqa chat access: this is the only place a direct conversation is created, so the
+    // recipient's "who can start a chat with me" setting is enforced here and cannot be bypassed by
+    // a different route. An existing conversation returned above is never affected.
+    const decision = await authorizeNewDirectChat(callerId, otherUserId, liveChatAccessDeps(client));
+    if (!decision.allowed) throw new ChatError(403, decision.code);
 
     const conversation = await client.query(
       `INSERT INTO conversations (conversation_type, created_by_user_id, display_title, last_message_at)

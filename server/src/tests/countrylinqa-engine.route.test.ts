@@ -23,7 +23,8 @@ describe("CountryLinqa engine routes", () => {
     for (const [method, url] of [
       ["POST", "/v1/countrylinqa/discover/people/search"], ["GET", "/v1/countrylinqa/search"],
       ["GET", "/v1/countrylinqa/recommendations/people"], ["GET", "/v1/countrylinqa/discovery/features"],
-      ["PUT", "/v1/countrylinqa/discovery/features"], ["PATCH", "/v1/countrylinqa/saved-searches/:id/alerts"]
+      ["PUT", "/v1/countrylinqa/discovery/features"], ["PATCH", "/v1/countrylinqa/saved-searches/:id/alerts"],
+      ["GET", "/v1/countrylinqa/world/home"], ["GET", "/v1/countrylinqa/world/countries"], ["GET", "/v1/countrylinqa/people/details"], ["GET", "/v1/countrylinqa/world/countries/:code"], ["POST", "/v1/countrylinqa/events/:id/interest"], ["GET", "/v1/countrylinqa/subscription"], ["GET", "/v1/countrylinqa/blocked"], ["DELETE", "/v1/countrylinqa/blocked/:userId"], ["POST", "/v1/countrylinqa/saved-searches/:id/used"], ["GET", "/v1/countrylinqa/plans"], ["POST", "/v1/countrylinqa/checkouts"], ["GET", "/v1/countrylinqa/checkouts/:id"], ["POST", "/v1/countrylinqa/checkouts/:id/cancel"]
     ] as const) expect(app.hasRoute({ method, url }), `${method} ${url}`).toBe(true);
   });
 

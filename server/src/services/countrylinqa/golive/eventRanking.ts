@@ -18,6 +18,8 @@ export async function discoverEvents(db: Database, userId: string, limit = 30, q
      SELECT
        e.id, e.title, e.starts_at AS "startsAt", e.country_code AS "countryCode",
        e.region_code AS "regionCode", e.city, e.popularity_score AS "popularityScore",
+       EXISTS (SELECT 1 FROM country_event_interest i WHERE i.event_id = e.id AND i.user_id = $1) AS interested,
+       (SELECT count(*)::int FROM country_event_interest i WHERE i.event_id = e.id) AS "interestedCount",
        CASE
          WHEN e.country_code = vs.verified_country_code THEN 1.0
          WHEN e.region_code = c.region_code THEN 0.7

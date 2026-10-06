@@ -28,6 +28,13 @@ const updatePreferencesSchema = z.object({
   allowCommunities: z.boolean().optional(),
   allowEvents: z.boolean().optional(),
   paused: z.boolean().optional(),
+  chatReach: z.object({
+    mode: z.enum(["MY_COUNTRY", "SELECTED_COUNTRIES", "REGION", "WORLDWIDE", "EXISTING_CONTACTS_ONLY", "NOBODY"]),
+    selectedCountries: z.array(countryCode).max(250).optional(),
+    regionCode: regionCode.nullable().optional(),
+    existingContactsBypass: z.boolean().optional()
+  }).strict().optional(),
+  activate: z.boolean().optional(),
   expectedVersion: z.number().int().min(1).optional()
 });
 

@@ -6,6 +6,8 @@ export type DiscoveryFilters = {
   query?: string;
   countries?: string[];
   region?: string;
+  /** Matches only people who chose to show their city. */
+  city?: string;
   languages?: string[];
   interests?: string[];
   profession?: string;
@@ -26,7 +28,7 @@ const unique = <T>(values: T[]) => [...new Set(values)];
 export function validateFilters(raw: unknown): DiscoveryFilters {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) fail("INVALID_FILTERS");
   const input = raw as Record<string, unknown>;
-  const allowed = new Set(["query", "countries", "region", "languages", "interests", "profession", "verifiedOnly", "onlineOnly"]);
+  const allowed = new Set(["query", "countries", "region", "city", "languages", "interests", "profession", "verifiedOnly", "onlineOnly"]);
   for (const key of Object.keys(input)) if (!allowed.has(key)) fail("UNKNOWN_FILTER");
   // Presence is not exposed to strangers, so there is no "online now" filter.
   if (input.onlineOnly === true) fail("ONLINE_DISCOVERY_UNAVAILABLE");
@@ -48,6 +50,11 @@ export function validateFilters(raw: unknown): DiscoveryFilters {
   if (input.region !== undefined) {
     if (typeof input.region !== "string" || !REGION.test(input.region)) fail("INVALID_REGION_FILTER");
     out.region = input.region.toUpperCase();
+  }
+  if (input.city !== undefined) {
+    if (typeof input.city !== "string") fail("INVALID_CITY_FILTER");
+    const city = input.city.trim().slice(0, 80);
+    if (city) out.city = city;
   }
   for (const [key, max] of [["languages", 10], ["interests", 20]] as const) {
     const value = input[key];

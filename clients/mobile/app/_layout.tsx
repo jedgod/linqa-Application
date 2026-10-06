@@ -103,6 +103,26 @@ export default function RootLayout() {
         <Stack.Screen name="countrylinqa/security" />
         <Stack.Screen name="countrylinqa/report" />
         <Stack.Screen name="countrylinqa/create" options={{ presentation: "modal" }} />
+        <Stack.Screen name="settings/countrylinqa-reach" />
+        <Stack.Screen name="countrylinqa/activate" />
+        <Stack.Screen name="countrylinqa/people" />
+        <Stack.Screen name="countrylinqa/person" />
+        <Stack.Screen name="countrylinqa/countries" />
+        <Stack.Screen name="countrylinqa/country" />
+        <Stack.Screen name="countrylinqa/communities" />
+        <Stack.Screen name="countrylinqa/events" />
+        <Stack.Screen name="countrylinqa/businesses" />
+        <Stack.Screen name="countrylinqa/search-results" />
+        <Stack.Screen name="countrylinqa/search-filters" />
+        <Stack.Screen name="countrylinqa/manage-countries" />
+        <Stack.Screen name="countrylinqa/more-settings" />
+        <Stack.Screen name="countrylinqa/plan" />
+        <Stack.Screen name="countrylinqa/blocked" />
+        <Stack.Screen name="countrylinqa/plans-compare" />
+        <Stack.Screen name="countrylinqa/plans-method" />
+        <Stack.Screen name="countrylinqa/plans-confirm" />
+        <Stack.Screen name="countrylinqa/plans-result" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="countrylinqa/chat-access" options={{ presentation: "transparentModal", animation: "fade" }} />
         <Stack.Screen name="modules/file-vault" />
         <Stack.Screen name="linqasend/index" />
         <Stack.Screen name="linqasend/recipients" />

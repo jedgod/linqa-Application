@@ -48,6 +48,8 @@ function candidateSql(filters: DiscoveryFilters, extra?: { ids: string[] }) {
   if (filters.query) where.push(`profile.display_name ILIKE ${push(`%${escapeLike(filters.query)}%`)} ESCAPE '\\'`);
   if (filters.countries?.length) where.push(`author.verified_country_code = ANY(${push(filters.countries)}::text[])`);
   if (filters.region) where.push(`EXISTS (SELECT 1 FROM countries rc WHERE rc.code = author.verified_country_code AND rc.region_code = ${push(filters.region)})`);
+  // A city is searchable only for people who chose to show it, so this can not reveal a hidden city.
+  if (filters.city) where.push(`(COALESCE(ap.show_country, TRUE) AND author.show_city AND author.location_precision = 'CITY' AND author.city ILIKE ${push(`%${escapeLike(filters.city)}%`)} ESCAPE '\\')`);
   if (filters.languages?.length) where.push(`f.languages && ${push(filters.languages)}::text[]`);
   if (filters.interests?.length) where.push(`f.interests && ${push(filters.interests)}::text[]`);
   if (filters.profession) where.push(`f.profession_code = ${push(filters.profession)}`);
