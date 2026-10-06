@@ -52,7 +52,7 @@ const createQuoteSchema = z.object({
   sendAmountMinor: z.string().regex(/^\d+$/)
 });
 
-const createTransferSchema = z.object({
+export const createTransferSchema = z.object({
   quoteId: z.string().uuid(),
   paymentMethodId: z.string().uuid(),
   purposeCode: z.string().max(64).optional(),
@@ -61,7 +61,9 @@ const createTransferSchema = z.object({
   securityAuthorizationId: z.string().uuid(),
   transactionHash: z.string().length(64),
   acknowledgedWarningCodes: z.array(z.string().max(100)).max(20).default([])
-});
+  // Strict on purpose: a client must not be able to name a provider, entity, contract,
+  // responsibility map or readiness flag. The server resolves all of those itself.
+}).strict();
 
 /**
  * Real Fastify integration of the LinqaSend pack, adapted into this

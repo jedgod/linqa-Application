@@ -7,6 +7,7 @@ import { RiskEngineService } from "./risk-engine.service.js";
 import { assertTransition } from "./transfer-state.js";
 import { AtomicCompletionService } from "./atomic-completion.service.js";
 import { ProviderOperationService } from "./provider-operation.service.js";
+import { ResponsibilityError, ResponsibilityExecutionGuard } from "./v7-execution-guard.js";
 import type { ProviderTokenVaultService } from "./provider-token-vault.service.js";
 import { LinqaSendExecutionQueue } from "./execution-queue.service.js";
 
@@ -19,6 +20,7 @@ export class TransferOrchestratorService {
   private readonly completion: AtomicCompletionService;
   private readonly operations: ProviderOperationService;
   private readonly executionQueue: LinqaSendExecutionQueue;
+  private readonly responsibility: ResponsibilityExecutionGuard;
 
   constructor(
     private readonly db: Database,
@@ -31,6 +33,7 @@ export class TransferOrchestratorService {
     this.completion = new AtomicCompletionService(db);
     this.operations = new ProviderOperationService(db);
     this.executionQueue = new LinqaSendExecutionQueue(db);
+    this.responsibility = new ResponsibilityExecutionGuard(db);
   }
 
   /**
@@ -261,6 +264,20 @@ export class TransferOrchestratorService {
     if (!input.paymentMethodId) {
       await this.setStatus(id, "FUNDING_AUTHORIZATION", "DECLINED", { failureCode: "NO_PAYMENT_METHOD" });
       return { status: "DECLINED", reason: "NO_PAYMENT_METHOD" };
+    }
+
+    // Capability approval and create-time readiness are not enough: before ANY money-provider
+    // call, require the persisted responsibility snapshot, re-resolve it now, and authorize only
+    // the provider the approved contracts name. The worker and retries come through advance() too.
+    try {
+      await this.responsibility.authorize(id, input.quote.provider);
+    } catch (error) {
+      const code = error instanceof ResponsibilityError ? error.code : "REAL_MONEY_NOT_READY";
+      await this.setStatus(id, "FUNDING_AUTHORIZATION", "DECLINED", {
+        failureCode: code,
+        failureMessage: error instanceof Error ? error.message.slice(0, 500) : code
+      });
+      return { status: "DECLINED", reason: code };
     }
 
     if (!input.paymentMethodRef) throw new Error("VERIFIED_PROVIDER_PAYMENT_REFERENCE_REQUIRED");

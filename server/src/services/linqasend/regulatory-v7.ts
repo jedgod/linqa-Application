@@ -7,6 +7,26 @@ export type ResponsibilityRequirement = "REQUIRED" | "OPTIONAL" | "NOT_APPLICABL
 
 const responsibilities: FinancialResponsibility[] = ["CUSTOMER_ONBOARDING", "KYC_CIP", "AML_MONITORING", "SANCTIONS_SCREENING", "ACCEPT_CUSTOMER_FUNDS", "CUSTOMER_FUNDS_CUSTODY", "SAFEGUARDING", "CUSTOMER_ACCOUNT_ISSUER", "STORED_VALUE_ISSUER", "DOMESTIC_TRANSMISSION", "CROSS_BORDER_TRANSMISSION", "FX_EXECUTION", "CARD_ACQUIRING", "BANK_DEBIT", "MOBILE_MONEY_PAYOUT", "CARD_PUSH_PAYOUT", "LOCAL_BANK_PAYOUT", "DISPUTES", "CHARGEBACKS", "REFUNDS", "SETTLEMENT", "RECONCILIATION"];
 
+/**
+ * Key-order-independent JSON. The previous snapshot hash passed a sorted key list
+ * as the JSON.stringify replacer, which also filters NESTED keys, so every
+ * authority serialized as {} and the hash did not cover who was authorized.
+ */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+export function snapshotSha256(resolution: unknown): string {
+  return createHash("sha256").update(canonicalJson(resolution)).digest("hex");
+}
+
 export class ResponsibilityRequirementService {
   derive(args: { transferClass: string; fundingMode: string; receiveMode: string; sourceCurrency: string; destinationCurrency: string; custodyModel: CustodyModel }): Record<FinancialResponsibility, ResponsibilityRequirement> {
     const crossBorder = ["INTERNAL_CROSS_BORDER", "EXTERNAL_CROSS_BORDER"].includes(args.transferClass);
@@ -28,7 +48,7 @@ export class ResponsibilityRequirementService {
   }
 }
 
-export interface FinancialExecutionAuthority { responsibility: FinancialResponsibility; entityId: string; legalName: string; entityType: string; countryCode: string; contractId: string; contractStatus: string; regulatoryReference?: string; operationalStatus: string }
+export interface FinancialExecutionAuthority { responsibility: FinancialResponsibility; providerAdapterKey: string | null; entityId: string; legalName: string; entityType: string; countryCode: string; contractId: string; contractStatus: string; regulatoryReference?: string; operationalStatus: string }
 export interface RegulatedEntityResolution { responsibilityMapId: string; policyVersion: number; sourceCountry: string; destinationCountry: string; transferClass: string; custodyModel: CustodyModel; authorities: FinancialExecutionAuthority[]; legalApprovalReference: string; partnerApprovalReference: string; effectiveAt: string; complete: boolean; missingResponsibilities: FinancialResponsibility[]; blockedReasons: string[] }
 
 export class RegulatedEntityResolverV7 {
@@ -73,15 +93,14 @@ export class RegulatedEntityResolverV7 {
       const contract = contractResult.rows[0];
       if (!contract) { missing.push(responsibility); blockedReasons.push(`CONTRACT_NOT_FOUND:${responsibility}:${entityId}`); continue; }
       if (["DOWN", "UNKNOWN"].includes(entity.current_operational_status)) { blockedReasons.push(`PARTNER_OPERATIONALLY_UNAVAILABLE:${responsibility}:${entityId}`); continue; }
-      authorities.push({ responsibility, entityId, legalName: entity.legal_name, entityType: entity.entity_type, countryCode: entity.country_code, contractId: contract.id, contractStatus: contract.status, ...(entity.regulatory_reference ? { regulatoryReference: entity.regulatory_reference } : {}), operationalStatus: entity.current_operational_status });
+      authorities.push({ responsibility, providerAdapterKey: contract.provider_adapter_key ?? null, entityId, legalName: entity.legal_name, entityType: entity.entity_type, countryCode: entity.country_code, contractId: contract.id, contractStatus: contract.status, ...(entity.regulatory_reference ? { regulatoryReference: entity.regulatory_reference } : {}), operationalStatus: entity.current_operational_status });
     }
     return { responsibilityMapId: map.id, policyVersion: map.policy_version, sourceCountry: args.sourceCountry, destinationCountry: args.destinationCountry, transferClass: args.transferClass, custodyModel: map.custody_model, authorities, legalApprovalReference: map.legal_approval_reference, partnerApprovalReference: map.partner_approval_reference, effectiveAt: at.toISOString(), complete: missing.length === 0 && blockedReasons.length === 0, missingResponsibilities: [...new Set(missing)], blockedReasons };
   }
 
   async assertAndSnapshot(transferId: string, args: Parameters<RegulatedEntityResolverV7["resolve"]>[0]): Promise<RegulatedEntityResolution> {
     const resolution = await this.resolve(args);
-    const canonical = JSON.stringify(resolution, Object.keys(resolution).sort());
-    const hash = createHash("sha256").update(canonical).digest("hex");
+    const hash = snapshotSha256(resolution);
     await this.db.query(`INSERT INTO linqasend_responsibility_snapshots_v7(transfer_id,responsibility_map_id,policy_version,resolution,snapshot_hash,complete,blocked_reasons) VALUES($1,$2,$3,$4,$5,$6,$7)`, [transferId, resolution.responsibilityMapId === "NONE" ? null : resolution.responsibilityMapId, resolution.policyVersion, JSON.stringify(resolution), hash, resolution.complete, resolution.blockedReasons]);
     if (!resolution.complete) throw new Error(`REAL_MONEY_NOT_READY:${resolution.blockedReasons[0] ?? resolution.missingResponsibilities[0] ?? "RESPONSIBILITY_INCOMPLETE"}`);
     return resolution;
