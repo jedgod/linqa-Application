@@ -6,6 +6,7 @@ import { useAccounts } from "../../account/AccountContext";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import { useMemo } from "react";
 import { avatarColorForSlot, radius, useTheme, type Palette } from "../../theme/tokens";
+import { ACCOUNT_SWITCH_LANDING_ROUTE } from "../../account/landing";
 
 export default function ManageAccountsScreen() {
   const { colors } = useTheme();
@@ -27,10 +28,7 @@ export default function ManageAccountsScreen() {
                 onPress={() => {
                   if (isActive) return;
                   activate(account.userId);
-                  const label = (account.label || account.displayName).toLowerCase();
-                  router.replace(label.includes("business") || label.includes("research")
-                    ? "/(tabs)/chats"
-                    : "/onboarding/resolve");
+                  router.replace(ACCOUNT_SWITCH_LANDING_ROUTE);
                 }}
               >
                 <View style={[s.avatar, { backgroundColor: avatarColorForSlot(account.slot) }]}>

@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useAccounts, type LocalAccount } from "../../account/AccountContext";
 import { avatarColorForSlot, fonts, radius, useTheme, type Palette } from "../../theme/tokens";
+import { ACCOUNT_SWITCH_LANDING_ROUTE } from "../../account/landing";
 
 function accountLabel(account: LocalAccount): string {
   return account.label || account.displayName || "Personal";
@@ -15,13 +16,6 @@ function accountContact(account: LocalAccount): string {
   return account.countryIso2 ? `${account.countryIso2} ${suffix}` : suffix;
 }
 
-function homeRoute(account: LocalAccount): string {
-  const label = accountLabel(account).toLowerCase();
-  return label.includes("business") || label.includes("research")
-    ? "/(tabs)/chats"
-    : "/onboarding/resolve";
-}
-
 export default function AccountSwitcherScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -29,7 +23,7 @@ export default function AccountSwitcherScreen() {
 
   function switchTo(account: LocalAccount) {
     activate(account.userId);
-    router.replace(homeRoute(account) as never);
+    router.replace(ACCOUNT_SWITCH_LANDING_ROUTE);
   }
 
   return (

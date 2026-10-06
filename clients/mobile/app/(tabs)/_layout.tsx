@@ -13,6 +13,7 @@ import { accessTokenProvider } from "../../services/session";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getApiBaseUrl } from "../../config/api";
 import { isMoneyRoute, useLinqaSendAvailability } from "../../services/linqasend-availability";
+import { ACCOUNT_SWITCH_LANDING_ROUTE } from "../../account/landing";
 
 const API = getApiBaseUrl();
 
@@ -89,13 +90,9 @@ function AccountHeader() {
         activeUserId={active?.userId}
         onClose={() => setSwitcherOpen(false)}
         onSwitch={(userId) => {
-          const target = accounts.find((account) => account.userId === userId);
           activate(userId);
           setSwitcherOpen(false);
-          const label = (target?.label || target?.displayName || "").toLowerCase();
-          router.replace(label.includes("business") || label.includes("research")
-            ? "/(tabs)/chats"
-            : "/onboarding/resolve");
+          router.replace(ACCOUNT_SWITCH_LANDING_ROUTE);
         }}
         onAdd={() => {
           setSwitcherOpen(false);

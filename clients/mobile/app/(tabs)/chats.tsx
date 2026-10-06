@@ -13,6 +13,7 @@ import { C, s } from "../../components/chats/styles";
 import { FILTER_LABELS, Avatar, HeaderButton, SummaryCard, PresenceStrip, ConversationRow } from "../../components/chats/parts";
 import { AccountSwitcherSheet } from "../../components/AccountSwitcherSheet";
 import { useAccounts } from "../../account/AccountContext";
+import { ACCOUNT_SWITCH_LANDING_ROUTE } from "../../account/landing";
 
 const API = getApiBaseUrl();
 
@@ -391,13 +392,9 @@ export default function ChatsScreen() {
         activeUserId={active?.userId}
         onClose={() => setSwitcherOpen(false)}
         onSwitch={(userId) => {
-          const target = accounts.find((account) => account.userId === userId);
           activate(userId);
           setSwitcherOpen(false);
-          const label = (target?.label || target?.displayName || "").toLowerCase();
-          router.replace(label.includes("business") || label.includes("research")
-            ? "/(tabs)/chats"
-            : "/onboarding/resolve");
+          router.replace(ACCOUNT_SWITCH_LANDING_ROUTE);
         }}
         onAdd={() => {
           setSwitcherOpen(false);

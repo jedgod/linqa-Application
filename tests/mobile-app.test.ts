@@ -148,3 +148,16 @@ test("light and dark palettes keep body text at WCAG AA (4.5:1) on bg and surfac
 test("light and dark palettes define the same keys", () => {
   assert.deepEqual(Object.keys(lightColors).sort(), Object.keys(darkColors).sort());
 });
+
+// --- Account switching ---------------------------------------------------------
+
+test("switching accounts never routes by the account's display label", async () => {
+  const { ACCOUNT_SWITCH_LANDING_ROUTE } = await import("../clients/mobile/account/landing.ts");
+  assert.equal(ACCOUNT_SWITCH_LANDING_ROUTE, "/onboarding/resolve");
+  const offenders = routeFiles.filter((file) => /\.(label|displayName)\b[^;\n]*\.includes\(\s*["'](business|research)["']/i.test(fs.readFileSync(file, "utf8"))
+    || /label\.includes\(\s*["'](business|research)["']/i.test(fs.readFileSync(file, "utf8")));
+  assert.deepEqual(offenders.map((f) => path.relative(mobile, f)), []);
+  for (const name of ["app/(tabs)/chats.tsx", "app/(tabs)/_layout.tsx", "app/account/manage.tsx", "app/account/switcher.tsx"]) {
+    assert.match(fs.readFileSync(path.join(mobile, name), "utf8"), /ACCOUNT_SWITCH_LANDING_ROUTE/, `${name} should use the shared landing route`);
+  }
+});
