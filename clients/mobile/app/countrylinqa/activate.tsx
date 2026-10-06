@@ -6,7 +6,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useCountryClient } from "../../components/CountryLinqaUI";
 import type { CountryLinqaCatalog, CountryLinqaPreferences } from "../../services/countrylinqa.service";
-import { ACTIVATION_STEPS, activationPayload, activationSummary, defaultChoices, reachOptions, regionOfCountry, stepError, type ActivationChoices, type ActivationStep, type ReachOption } from "../../services/countrylinqa-activation";
+import { confirmCountryRoute, ACTIVATION_STEPS, activationPayload, activationSummary, defaultChoices, reachOptions, regionOfCountry, stepError, type ActivationChoices, type ActivationStep, type ReachOption } from "../../services/countrylinqa-activation";
 import { fonts } from "../../theme/tokens";
 
 const PURPLE = "#5B3FE0";
@@ -150,7 +150,7 @@ export default function CountryLinqaActivation() {
         <Text style={s.copy}>You can change your country if needed.</Text>
         <View style={s.spacer} />
         {primary("Continue", next, !verified)}
-        <Pressable accessibilityRole="button" style={s.secondary} onPress={() => router.push("/onboarding/resolve")}><Text style={s.secondaryText}>{verified ? "Change Country" : "Confirm Country"}</Text></Pressable>
+        <Pressable accessibilityRole="button" style={s.secondary} onPress={() => router.push(confirmCountryRoute("/countrylinqa/activate"))}><Text style={s.secondaryText}>{verified ? "Change Country" : "Confirm Country"}</Text></Pressable>
       </>
     );
   } else if (step === "DISCOVERY") {

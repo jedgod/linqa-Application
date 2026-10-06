@@ -123,3 +123,6 @@ export function chatAccessOutcome(code: string | undefined): ChatAccessOutcome {
 export function chatStartError(code?: string): string {
   return chatAccessOutcome(code).message;
 }
+
+/** Country confirmation for someone already signed in: straight to the confirm screen, back here after. */
+export const confirmCountryRoute = (returnTo: string) => ({ pathname: "/onboarding/country-confirmation", params: { returnTo } }) as const;

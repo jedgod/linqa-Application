@@ -4,8 +4,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import { useCountryClient } from "../../components/CountryLinqaUI";
 import { Chip, Empty, IconBtn, PersonRow, Spinner, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
-import type { CountryLinqaPreferences } from "../../services/countrylinqa.service";
+import type { CountryLinqaCatalog, CountryLinqaPreferences } from "../../services/countrylinqa.service";
+import { confirmCountryRoute } from "../../services/countrylinqa-activation";
 import { emptySearch, encodeSearch } from "../../services/countrylinqa-search";
+import { discoveredCountries } from "../../services/countrylinqa-settings";
 import { flagOf, joinPeople, titleCase, type PersonDetail, type WorldHome } from "../../services/countrylinqa-world";
 import { fonts } from "../../theme/tokens";
 
@@ -33,6 +35,8 @@ export default function CountryLinqaWorldHome() {
   const [people, setPeople] = useState<Array<{ id: string; detail: PersonDetail }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [catalog, setCatalog] = useState<CountryLinqaCatalog | null>(null);
+  const [open, setOpen] = useState(false);
   const [reload, setReload] = useState(0);
 
   useFocusEffect(useCallback(() => {
@@ -42,6 +46,7 @@ export default function CountryLinqaWorldHome() {
       const [preferences, worldHome] = await Promise.all([client.preferences(), client.worldHome()]);
       if (!active) return;
       setPrefs(preferences); setHome(worldHome);
+      client.catalog().then((c) => { if (active) setCatalog(c); }, () => undefined);
       // "People you may know" is a bonus; the page still works if it can not be loaded.
       try {
         const recommended = await client.recommendedPeople();
@@ -75,14 +80,29 @@ export default function CountryLinqaWorldHome() {
 
         {home ? (
           <>
-            <Pressable accessibilityRole="button" accessibilityLabel={`Exploring ${country?.name ?? "no country yet"}. Change`} style={s.country} onPress={() => router.push("/countrylinqa/countries")}>
+            <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} accessibilityLabel={`Countries selected. Exploring ${country?.name ?? "no country yet"}`} style={s.country} onPress={() => setOpen((v) => !v)}>
               <Text style={s.flag}>{country ? flagOf(country.code) : "🌐"}</Text>
               <Text style={s.countryName}>{country?.name ?? "Choose your country"}</Text>
-              <Ionicons name="chevron-down" size={16} color={world.muted} />
+              <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={world.muted} />
             </Pressable>
+            {open ? (
+              <View style={s.menu}>
+                <Text style={s.menuTitle}>Countries selected</Text>
+                {(prefs ? discoveredCountries(prefs) : []).map((code) => (
+                  <View key={code} style={s.menuRow}>
+                    <Text style={s.flag}>{flagOf(code)}</Text>
+                    <Text style={s.menuName}>{catalog?.countries.find((c) => c.code === code)?.name ?? (code === country?.code ? country.name : code)}</Text>
+                    {code === country?.code ? <Ionicons name="checkmark" size={18} color={world.purple} /> : null}
+                  </View>
+                ))}
+                <Pressable accessibilityRole="button" style={s.menuManage} onPress={() => { setOpen(false); router.push("/countrylinqa/manage-countries"); }}>
+                  <Ionicons name="options-outline" size={18} color={world.purple} /><Text style={s.menuManageText}>Manage countries</Text>
+                </Pressable>
+              </View>
+            ) : null}
 
             {!home.verified ? (
-              <Pressable accessibilityRole="button" style={s.banner} onPress={() => router.push("/onboarding/resolve")}>
+              <Pressable accessibilityRole="button" style={s.banner} onPress={() => router.push(confirmCountryRoute("/countrylinqa/world"))}>
                 <Ionicons name="shield-checkmark-outline" size={20} color={world.purple} />
                 <Text style={s.bannerText}>Confirm your country to start discovering people and communities.</Text>
                 <Ionicons name="chevron-forward" size={18} color={world.purple} />
@@ -97,8 +117,8 @@ export default function CountryLinqaWorldHome() {
             <View style={s.tiles}>
               {TILES.map((tile) => (
                 <Pressable key={tile.key} accessibilityRole="button" accessibilityLabel={tile.label} style={s.tile} onPress={() => router.push(tile.route as never)}>
-                  <View style={[s.tileIcon, { backgroundColor: `${tile.color}22` }]}><Ionicons name={tile.icon} size={26} color={tile.color} /></View>
-                  <Text style={s.tileLabel} numberOfLines={1}>{tile.label}</Text>
+                  <View style={[s.tileIcon, { backgroundColor: `${tile.color}22` }]}><Ionicons name={tile.icon} size={24} color={tile.color} /></View>
+                  <Text style={s.tileLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{tile.label}</Text>
                 </Pressable>
               ))}
             </View>
@@ -147,10 +167,16 @@ const s = StyleSheet.create({
   bannerText: { flex: 1, color: world.text, fontFamily: fonts.medium, fontSize: 14, lineHeight: 20 },
   search: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: world.border, paddingHorizontal: 14, marginTop: 14 },
   searchInput: { flex: 1, color: world.text, fontFamily: fonts.regular, fontSize: 15, paddingVertical: 8 },
-  tiles: { flexDirection: "row", flexWrap: "wrap", marginTop: 18, rowGap: 14 },
-  tile: { width: "25%", alignItems: "center", gap: 6, minHeight: 84 },
-  tileIcon: { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center" },
-  tileLabel: { color: world.text, fontFamily: fonts.medium, fontSize: 12 },
+  menu: { borderRadius: 14, borderWidth: 1, borderColor: world.border, backgroundColor: "#FFFFFF", marginTop: 8, paddingVertical: 6, paddingHorizontal: 14 },
+  menuTitle: { color: world.muted, fontFamily: fonts.semibold, fontSize: 12, marginTop: 6, marginBottom: 2 },
+  menuRow: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 44 },
+  menuName: { flex: 1, color: world.text, fontFamily: fonts.medium, fontSize: 15 },
+  menuManage: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 44, borderTopWidth: 1, borderTopColor: world.border },
+  menuManageText: { color: world.purple, fontFamily: fonts.semibold, fontSize: 14 },
+  tiles: { flexDirection: "row", justifyContent: "space-between", marginTop: 18, gap: 8 },
+  tile: { flex: 1, alignItems: "center", gap: 6 },
+  tileIcon: { width: "100%", aspectRatio: 1, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  tileLabel: { color: world.text, fontFamily: fonts.medium, fontSize: 11, alignSelf: "stretch", textAlign: "center" },
   section: { color: world.text, fontFamily: fonts.extrabold, fontSize: 18, marginTop: 22, marginBottom: 12 },
   sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   link: { color: world.purple, fontFamily: fonts.semibold, fontSize: 14, marginTop: 10 },

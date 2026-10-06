@@ -6,6 +6,7 @@ import { useCountryClient } from "../../components/CountryLinqaUI";
 import { Empty, Spinner, WorldHeader, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
 import type { CountryLinqaCatalog, CountryLinqaPreferences } from "../../services/countrylinqa.service";
 import { filterCountries, flagOf, type WorldCountries } from "../../services/countrylinqa-world";
+import { confirmCountryRoute } from "../../services/countrylinqa-activation";
 import { fonts } from "../../theme/tokens";
 
 /** 3.4 Countries: your country, the popular ones within your reach, and regions. Tapping one opens its people. */
@@ -63,7 +64,7 @@ export default function CountryLinqaCountries() {
         {data && !query.trim() ? (
           <>
             <Text style={s.section}>Your Country</Text>
-            {data.yours ? row(data.yours.code, flagOf(data.yours.code), data.yours.name, () => open(data.yours!.code, data.yours!.name)) : <Pressable accessibilityRole="button" style={s.confirm} onPress={() => router.push("/onboarding/resolve")}><Text style={s.confirmText}>Confirm your country to see it here</Text></Pressable>}
+            {data.yours ? row(data.yours.code, flagOf(data.yours.code), data.yours.name, () => open(data.yours!.code, data.yours!.name)) : <Pressable accessibilityRole="button" style={s.confirm} onPress={() => router.push(confirmCountryRoute("/countrylinqa/countries"))}><Text style={s.confirmText}>Confirm your country to see it here</Text></Pressable>}
 
             <Text style={s.section}>Popular Countries</Text>
             {data.popular.length ? data.popular.map((c) => row(c.code, flagOf(c.code), c.name, () => open(c.code, c.name), `${c.members} ${c.members === 1 ? "person" : "people"}`)) : <Text style={s.muted}>No other countries are within your discovery reach yet.</Text>}

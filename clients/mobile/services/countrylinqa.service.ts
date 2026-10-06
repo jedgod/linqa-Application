@@ -228,6 +228,7 @@ export class CountryLinqaService {
   cancelCheckout(id: string) { return this.request<import("./countrylinqa-plans").Checkout>(`/v1/countrylinqa/checkouts/${encodeURIComponent(id)}/cancel`, { method: "POST", body: "{}" }); }
   subscription() { return this.request<{ tier: "FREE" | "PREMIUM" | "ELITE"; status: string; provider: "APPLE" | "GOOGLE" | "STRIPE" | "MANUAL" | null; currentPeriodEnd: string | null }>("/v1/countrylinqa/subscription"); }
   blockedAccounts() { return this.request<{ items: Array<{ userId: string; displayName: string; blockedAt: string }> }>("/v1/countrylinqa/blocked"); }
+  blockUser(userId: string) { return this.request<Record<string, never>>("/v1/safety/blocks", { method: "POST", body: JSON.stringify({ blockedUserId: userId }) }); }
   unblockAccount(userId: string) { return this.request<{ unblocked: boolean }>(`/v1/countrylinqa/blocked/${encodeURIComponent(userId)}`, { method: "DELETE" }); }
   deleteSavedSearch(id: string) { return this.request<{ deleted: boolean }>(`/v1/countrylinqa/saved-searches/${encodeURIComponent(id)}`, { method: "DELETE" }); }
   notificationPreferences() { return this.request<CountryNotificationPreferences>("/v1/countrylinqa/notifications/preferences"); }

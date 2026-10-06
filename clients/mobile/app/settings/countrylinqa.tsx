@@ -7,6 +7,7 @@ import { Empty, Spinner, WorldHeader, WorldScreen, world } from "../../component
 import type { CountryLinqaCatalog, CountryLinqaPreferences } from "../../services/countrylinqa.service";
 import { reachSummaries } from "../../services/countrylinqa-settings";
 import { flagOf } from "../../services/countrylinqa-world";
+import { confirmCountryRoute } from "../../services/countrylinqa-activation";
 import { fonts } from "../../theme/tokens";
 
 /** 5.1 CountryLinqa Settings Home: your verified country, and where you discover and who can reach you. */
@@ -55,7 +56,7 @@ export default function CountryLinqaSettingsHome() {
                   <Text style={[s.badgeText, { color: verified ? "#12805C" : "#B54708" }]}>{verified ? "Verified" : "Not verified"}</Text>
                 </View>
               </View>
-              {!verified ? <Pressable accessibilityRole="button" style={s.confirm} onPress={() => router.push("/onboarding/resolve")}><Text style={s.confirmText}>Confirm</Text></Pressable> : null}
+              {!verified ? <Pressable accessibilityRole="button" style={s.confirm} onPress={() => router.push(confirmCountryRoute("/settings/countrylinqa"))}><Text style={s.confirmText}>Confirm</Text></Pressable> : null}
             </View>
 
             <Text style={s.section}>Discovery & Access</Text>

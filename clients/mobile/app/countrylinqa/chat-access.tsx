@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { WorldScreen, world } from "../../components/countrylinqa/WorldUI";
 import { getApiBaseUrl } from "../../config/api";
-import { chatAccessOutcome, type ChatAccessOutcome } from "../../services/countrylinqa-activation";
+import { confirmCountryRoute, chatAccessOutcome, type ChatAccessOutcome } from "../../services/countrylinqa-activation";
 import { ChatStartError, startDirectChat } from "../../services/countrylinqa-world";
 import { accessTokenProvider } from "../../services/session";
 import { fonts } from "../../theme/tokens";
@@ -76,7 +76,7 @@ export default function CountryLinqaChatAccess() {
             <Text style={s.text}>{state.message}</Text>
             <View style={s.actions}>
               {state.kind === "RETRY" ? <Pressable accessibilityRole="button" style={s.btn} onPress={() => void run()}><Text style={s.btnText}>Try Again</Text></Pressable> : null}
-              {state.kind === "VERIFY" ? <Pressable accessibilityRole="button" style={s.btn} onPress={() => router.replace("/onboarding/resolve")}><Text style={s.btnText}>Confirm Country</Text></Pressable> : null}
+              {state.kind === "VERIFY" ? <Pressable accessibilityRole="button" style={s.btn} onPress={() => router.replace(confirmCountryRoute("/countrylinqa/world"))}><Text style={s.btnText}>Confirm Country</Text></Pressable> : null}
               <Pressable accessibilityRole="button" style={state.kind === "UNAVAILABLE" ? s.btn : s.btnSecondary} onPress={leave}><Text style={state.kind === "UNAVAILABLE" ? s.btnText : s.btnSecondaryText}>OK</Text></Pressable>
             </View>
           </>

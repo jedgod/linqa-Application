@@ -2,19 +2,21 @@ import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { CountryLinqaService } from "../../services/countrylinqa.service";
 import { OnboardingApiService, type OnboardingStatus } from "../../services/onboarding.service";
 import { accessTokenProvider } from "../../services/session";
 import { PrimaryButton } from "../../components/PrimaryButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { getApiBaseUrl } from "../../config/api";
+import { safeReturn } from "../../services/countrylinqa-plans";
 
 const API = getApiBaseUrl();
 function flag(code: string) { return String.fromCodePoint(...code.toUpperCase().split("").map((letter) => 127397 + letter.charCodeAt(0))); }
 
 export default function CountryConfirmation() {
   const router = useRouter();
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const country = useMemo(() => new CountryLinqaService(API, () => accessTokenProvider.getAccessToken()), []);
   const onboarding = useMemo(() => new OnboardingApiService(API, accessTokenProvider), []);
   const [status, setStatus] = useState<OnboardingStatus | null>(null); const [busy, setBusy] = useState(false);
@@ -22,7 +24,7 @@ export default function CountryConfirmation() {
   useEffect(() => { onboarding.status().then(setStatus).catch((cause) => setError(cause instanceof Error ? cause.message : "Unable to detect country.")); }, [onboarding]);
   async function confirm() { if (!status?.detectedCountry) return; setBusy(true); setError(null); try {
     const result = await country.confirmCountry(status.detectedCountry.code);
-    router.replace(result.reviewRequired ? "/onboarding/security-review" : "/onboarding/resolve");
+    router.replace(result.reviewRequired ? "/onboarding/security-review" : returnTo ? (safeReturn(returnTo, "/countrylinqa/world") as never) : "/onboarding/resolve");
   } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to confirm country."); } finally { setBusy(false); } }
   return <SafeAreaView style={s.screen}><View style={s.content}>
     <Pressable onPress={() => router.back()} accessibilityLabel="Back"><Ionicons name="chevron-back" size={27} color="#344054" /></Pressable>
