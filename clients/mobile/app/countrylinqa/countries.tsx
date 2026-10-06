@@ -3,16 +3,19 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCountryClient } from "../../components/CountryLinqaUI";
-import { Empty, Spinner, WorldHeader, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
+import { CountryMenu, Empty, Spinner, WorldHeader, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
 import type { CountryLinqaCatalog, CountryLinqaPreferences } from "../../services/countrylinqa.service";
 import { filterCountries, flagOf, type WorldCountries } from "../../services/countrylinqa-world";
 import { confirmCountryRoute } from "../../services/countrylinqa-activation";
+import { useMyCountry } from "../../components/countrylinqa/useWorld";
 import { fonts } from "../../theme/tokens";
 
 /** 3.4 Countries: your country, the popular ones within your reach, and regions. Tapping one opens its people. */
 export default function CountryLinqaCountries() {
   const router = useRouter();
   const client = useCountryClient();
+  const me = useMyCountry();
+  const [menu, setMenu] = useState(false);
   const [data, setData] = useState<WorldCountries | null>(null);
   const [prefs, setPrefs] = useState<CountryLinqaPreferences | null>(null);
   const [catalog, setCatalog] = useState<CountryLinqaCatalog | null>(null);
@@ -47,7 +50,8 @@ export default function CountryLinqaCountries() {
 
   return (
     <WorldScreen>
-      <WorldHeader title="Countries" back />
+      <WorldHeader title="Countries" back {...(me.name ? { subtitle: me.name, onSubtitle: () => setMenu((v) => !v), subtitleOpen: menu } : {})} />
+      <CountryMenu open={menu} onClose={() => setMenu(false)} target="countries" />
       <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
         <View style={s.search}><Ionicons name="search" size={18} color={world.faint} /><TextInput accessibilityLabel="Search countries" value={query} onChangeText={setQuery} placeholder="Search countries" placeholderTextColor={world.faint} style={s.searchInput} /></View>
         {note ? <View style={s.note}><Text style={s.noteText} accessibilityLiveRegion="polite">{note}</Text><Pressable accessibilityRole="button" onPress={() => router.push("/settings/countrylinqa")}><Text style={s.noteLink}>Settings</Text></Pressable></View> : null}

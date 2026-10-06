@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCountryClient } from "../../components/CountryLinqaUI";
-import { Empty, IconBtn, Spinner, WorldHeader, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
+import { Empty, IconBtn, Spinner, CountryMenu, WorldHeader, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
 import { useCollection, useMyCountry } from "../../components/countrylinqa/useWorld";
 import { EVENT_TABS, eventWhen, flagOf, type EventTab } from "../../services/countrylinqa-world";
 import { fonts } from "../../theme/tokens";
@@ -17,6 +17,7 @@ export default function CountryLinqaEvents() {
   const client = useCountryClient();
   const params = useLocalSearchParams<{ country?: string; title?: string }>();
   const me = useMyCountry();
+  const [menu, setMenu] = useState(false);
   const [tab, setTab] = useState<EventTab>("FOR_YOU");
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -45,8 +46,9 @@ export default function CountryLinqaEvents() {
   return (
     <WorldScreen>
       <WorldHeader title={params.title ? `Events · ${params.title}` : "Events"} back={place}
-        {...(place ? {} : me.name ? { subtitle: me.name, onSubtitle: () => router.push("/countrylinqa/countries") } : {})}
+        {...(place ? {} : me.name ? { subtitle: me.name, onSubtitle: () => setMenu((v) => !v), subtitleOpen: menu } : {})}
         right={<><IconBtn icon={searching ? "close" : "search"} label={searching ? "Close search" : "Search events"} onPress={() => { setSearching((v) => !v); setQuery(""); }} /><IconBtn icon="add-circle-outline" label="Create an event" onPress={() => router.push("/countrylinqa/create?type=event")} /></>} />
+      <CountryMenu open={menu} onClose={() => setMenu(false)} target="events" />
       {searching ? <View style={s.search}><Ionicons name="search" size={18} color={world.faint} /><TextInput autoFocus accessibilityLabel="Search events" value={query} onChangeText={setQuery} placeholder="Search events" placeholderTextColor={world.faint} style={s.searchInput} /></View> : null}
       <View style={s.tabs} accessibilityRole="tablist">
         {EVENT_TABS.map((t) => (

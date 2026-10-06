@@ -1,10 +1,13 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { headline, locationLine, type PersonDetail } from "../../services/countrylinqa-world";
+import type { CountryLinqaCatalog, CountryLinqaPreferences } from "../../services/countrylinqa.service";
+import { discoveredCountries } from "../../services/countrylinqa-settings";
+import { flagOf, headline, locationLine, type PersonDetail } from "../../services/countrylinqa-world";
+import { useCountryClient } from "../CountryLinqaUI";
 import { fonts } from "../../theme/tokens";
 import { Avatar } from "../linqasend/ui";
 
@@ -15,14 +18,19 @@ export function WorldScreen({ children }: { children: ReactNode }) {
   return <SafeAreaView style={s.screen}><StatusBar style="dark" />{children}</SafeAreaView>;
 }
 
-export function WorldHeader({ title, subtitle, onSubtitle, back, right }: { title: string; subtitle?: string; onSubtitle?: () => void; back?: boolean; right?: ReactNode }) {
+export function WorldHeader({ title, subtitle, onSubtitle, subtitleOpen, back, right }: { title: string; subtitle?: string; onSubtitle?: () => void; subtitleOpen?: boolean; back?: boolean; right?: ReactNode }) {
   const router = useRouter();
   return (
     <View style={s.header}>
       {back ? <Pressable accessibilityRole="button" accessibilityLabel="Back" style={s.iconBtn} onPress={() => (router.canGoBack() ? router.back() : router.replace("/countrylinqa/world"))}><Ionicons name="chevron-back" size={26} color={world.text} /></Pressable> : null}
       <View style={{ flex: 1 }}>
         <Text accessibilityRole="header" style={s.title} numberOfLines={1}>{title}</Text>
-        {subtitle ? <Pressable accessibilityRole={onSubtitle ? "button" : undefined} disabled={!onSubtitle} onPress={onSubtitle}><Text style={s.subtitle}>{subtitle}{onSubtitle ? " ⌄" : ""}</Text></Pressable> : null}
+        {subtitle && onSubtitle ? (
+          <Pressable accessibilityRole="button" accessibilityState={{ expanded: !!subtitleOpen }} accessibilityLabel={`${subtitle}. Countries selected`} style={[s.select, subtitleOpen && s.selectOpen]} onPress={onSubtitle}>
+            <Text style={s.selectText} numberOfLines={1}>{subtitle}</Text>
+            <Ionicons name={subtitleOpen ? "chevron-up" : "chevron-down"} size={18} color={world.purple} />
+          </Pressable>
+        ) : subtitle ? <Text style={s.subtitle}>{subtitle}</Text> : null}
       </View>
       {right}
     </View>
@@ -77,6 +85,46 @@ export function useMessage(_onOpen?: (conversationId: string) => void) {
   return { message, busy: null as string | null, error: null as string | null, clear: () => undefined };
 }
 
+export type CountryMenuTarget = "people" | "countries" | "communities" | "events" | "businesses";
+
+/**
+ * The dropdown under a page title ("United States ⌄"): the countries you have selected, each one
+ * opening this page for that country, and a way to change the list.
+ */
+export function CountryMenu({ open, onClose, target }: { open: boolean; onClose: () => void; target: CountryMenuTarget }) {
+  const router = useRouter();
+  const client = useCountryClient();
+  const [data, setData] = useState<{ prefs: CountryLinqaPreferences; catalog: CountryLinqaCatalog } | null>(null);
+  useEffect(() => {
+    if (!open || data) return;
+    let active = true;
+    Promise.all([client.preferences(), client.catalog()]).then(([prefs, catalog]) => { if (active) setData({ prefs, catalog }); }, () => undefined);
+    return () => { active = false; };
+  }, [open, data, client]);
+  if (!open) return null;
+  const choose = (code: string, name: string) => {
+    onClose();
+    if (target === "countries") router.push({ pathname: "/countrylinqa/country", params: { code } });
+    else router.push({ pathname: `/countrylinqa/${target}`, params: { country: code, title: target === "communities" ? `${name} Communities` : name } });
+  };
+  return (
+    <View style={s.menu}>
+      <Text style={s.menuTitle}>Countries selected</Text>
+      {!data ? <ActivityIndicator color={world.purple} style={{ marginVertical: 12 }} /> : discoveredCountries(data.prefs).map((code) => {
+        const name = data.catalog.countries.find((c) => c.code === code)?.name ?? code;
+        return (
+          <Pressable key={code} accessibilityRole="button" accessibilityLabel={name} style={s.menuRow} onPress={() => choose(code, name)}>
+            <Text style={{ fontSize: 22 }}>{flagOf(code)}</Text><Text style={s.menuName}>{name}</Text>{code === data.prefs.verifiedCountryCode ? <Ionicons name="checkmark" size={18} color={world.purple} /> : null}
+          </Pressable>
+        );
+      })}
+      <Pressable accessibilityRole="button" style={s.menuManage} onPress={() => { onClose(); router.push("/countrylinqa/manage-countries"); }}>
+        <Ionicons name="options-outline" size={18} color={world.purple} /><Text style={s.menuManageText}>Manage countries</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 export function PersonRow({ person, onOpen, onMessage, messaging, action }: { person: PersonDetail; onOpen: () => void; onMessage?: () => void; messaging?: boolean; action?: { label: string; onPress: () => void } }) {
   const line = headline(person);
   return (
@@ -99,6 +147,15 @@ export function PersonRow({ person, onOpen, onMessage, messaging, action }: { pe
 }
 
 const s = StyleSheet.create({
+  select: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 10, minHeight: 40, marginTop: 6, paddingLeft: 14, paddingRight: 10, borderRadius: 10, borderWidth: 1.5, borderColor: "#D9D2FF", backgroundColor: "#FFFFFF" },
+  selectOpen: { borderColor: world.purple, backgroundColor: world.soft },
+  selectText: { color: world.text, fontFamily: fonts.semibold, fontSize: 15, flexShrink: 1 },
+  menu: { marginHorizontal: 16, marginTop: 4, marginBottom: 6, borderRadius: 10, borderWidth: 1.5, borderColor: "#D9D2FF", backgroundColor: "#FFFFFF", paddingVertical: 6, paddingHorizontal: 14 },
+  menuTitle: { color: world.muted, fontFamily: fonts.semibold, fontSize: 12, marginTop: 6, marginBottom: 2 },
+  menuRow: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 44 },
+  menuName: { flex: 1, color: world.text, fontFamily: fonts.medium, fontSize: 15 },
+  menuManage: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 44, borderTopWidth: 1, borderTopColor: world.border },
+  menuManageText: { color: world.purple, fontFamily: fonts.semibold, fontSize: 14 },
   screen: { flex: 1, backgroundColor: "#FFFFFF" },
   header: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6, minHeight: 56 },
   iconBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },

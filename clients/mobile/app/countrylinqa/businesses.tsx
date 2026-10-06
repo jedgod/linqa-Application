@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Empty, Spinner, WorldHeader, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
+import { Empty, Spinner, CountryMenu, WorldHeader, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
 import { useCollection, useMyCountry } from "../../components/countrylinqa/useWorld";
 import { Avatar } from "../../components/linqasend/ui";
 import { categoryChips, titleCase } from "../../services/countrylinqa-world";
@@ -16,6 +16,7 @@ export default function CountryLinqaBusinesses() {
   const router = useRouter();
   const params = useLocalSearchParams<{ country?: string; title?: string }>();
   const me = useMyCountry();
+  const [menu, setMenu] = useState(false);
   const [category, setCategory] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const place = !!params.country;
@@ -29,7 +30,8 @@ export default function CountryLinqaBusinesses() {
   return (
     <WorldScreen>
       <WorldHeader title={params.title ? `Businesses · ${params.title}` : "Businesses"} back={place}
-        {...(place ? {} : me.name ? { subtitle: me.name, onSubtitle: () => router.push("/countrylinqa/countries") } : {})} />
+        {...(place ? {} : me.name ? { subtitle: me.name, onSubtitle: () => setMenu((v) => !v), subtitleOpen: menu } : {})} />
+      <CountryMenu open={menu} onClose={() => setMenu(false)} target="businesses" />
       <View style={s.search}><Ionicons name="search" size={18} color={world.faint} /><TextInput accessibilityLabel="Search businesses" value={query} onChangeText={setQuery} placeholder="Search businesses" placeholderTextColor={world.faint} style={s.searchInput} /></View>
       {chips.length ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chips}>

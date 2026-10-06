@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCountryClient } from "../../components/CountryLinqaUI";
-import { Empty, IconBtn, PersonRow, Spinner, WorldHeader, WorldScreen, useMessage, world } from "../../components/countrylinqa/WorldUI";
+import { Empty, IconBtn, PersonRow, Spinner, CountryMenu, WorldHeader, WorldScreen, useMessage, world } from "../../components/countrylinqa/WorldUI";
 import type { PeopleFilters } from "../../services/countrylinqa.contract";
 import { PEOPLE_TABS, flagOf, joinPeople, peopleRequest, type PeopleTab, type PersonDetail } from "../../services/countrylinqa-world";
 import { fonts } from "../../theme/tokens";
@@ -27,6 +27,7 @@ export default function CountryLinqaPeople() {
   const [empty, setEmpty] = useState<string | null>(null);
   const [me, setMe] = useState<{ country: string | null; countryName: string | null; region: string | null } | null>(null);
   const [searching, setSearching] = useState(false);
+  const [menu, setMenu] = useState(false);
   const [query, setQuery] = useState("");
   const [term, setTerm] = useState("");
   const generation = useRef(0);
@@ -72,8 +73,9 @@ export default function CountryLinqaPeople() {
   const subtitle = place ? undefined : me?.countryName ?? undefined;
   return (
     <WorldScreen>
-      <WorldHeader title={title} {...(subtitle ? { subtitle } : {})} {...(subtitle ? { onSubtitle: () => router.push("/countrylinqa/countries") } : {})} back={place}
+      <WorldHeader title={title} {...(subtitle ? { subtitle } : {})} {...(subtitle ? { onSubtitle: () => setMenu((v) => !v), subtitleOpen: menu } : {})} back={place}
         right={<><IconBtn icon={searching ? "close" : "search"} label={searching ? "Close search" : "Search people"} onPress={() => { setSearching((v) => !v); setQuery(""); }} /><IconBtn icon="person-add-outline" label="Connection requests" onPress={() => router.push("/countrylinqa/connections")} /></>} />
+      <CountryMenu open={menu} onClose={() => setMenu(false)} target="people" />
       {searching ? (
         <View style={s.search}><Ionicons name="search" size={18} color={world.faint} /><TextInput autoFocus accessibilityLabel="Search people by name" value={query} onChangeText={setQuery} placeholder="Search by name" placeholderTextColor={world.faint} style={s.searchInput} /></View>
       ) : null}

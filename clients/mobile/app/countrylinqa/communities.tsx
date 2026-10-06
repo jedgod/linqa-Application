@@ -3,7 +3,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCountryClient } from "../../components/CountryLinqaUI";
-import { Empty, IconBtn, Spinner, WorldHeader, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
+import { Empty, IconBtn, Spinner, CountryMenu, WorldHeader, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
 import { useCollection, useMyCountry } from "../../components/countrylinqa/useWorld";
 import type { CountryItem } from "../../services/countrylinqa.service";
 import { PEOPLE_TABS, communityFilters, flagOf, membersLabel, rankCommunities, type PeopleTab } from "../../services/countrylinqa-world";
@@ -15,6 +15,7 @@ export default function CountryLinqaCommunities() {
   const client = useCountryClient();
   const params = useLocalSearchParams<{ country?: string; title?: string }>();
   const me = useMyCountry();
+  const [menu, setMenu] = useState(false);
   const [tab, setTab] = useState<PeopleTab>("FOR_YOU");
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -64,8 +65,9 @@ export default function CountryLinqaCommunities() {
   return (
     <WorldScreen>
       <WorldHeader title={params.title ? `${params.title}` : "Communities"} back={place}
-        {...(place ? {} : me.name ? { subtitle: me.name, onSubtitle: () => router.push("/countrylinqa/countries") } : {})}
+        {...(place ? {} : me.name ? { subtitle: me.name, onSubtitle: () => setMenu((v) => !v), subtitleOpen: menu } : {})}
         right={<IconBtn icon={searching ? "close" : "search"} label={searching ? "Close search" : "Search communities"} onPress={() => { setSearching((v) => !v); setQuery(""); }} />} />
+      <CountryMenu open={menu} onClose={() => setMenu(false)} target="communities" />
       {searching ? <View style={s.search}><Ionicons name="search" size={18} color={world.faint} /><TextInput autoFocus accessibilityLabel="Search communities" value={query} onChangeText={setQuery} placeholder="Search communities" placeholderTextColor={world.faint} style={s.searchInput} /></View> : null}
       {!place ? (
         <View style={s.tabs} accessibilityRole="tablist">
