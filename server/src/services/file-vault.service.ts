@@ -69,17 +69,24 @@ export class FileVaultService {
     return { itemId, ...upload };
   }
 
-  async list(userId: string) {
+  async list(userId: string, privateOnly = false) {
     const result = await this.db.query(
       `SELECT id,item_type,name_ciphertext,metadata_ciphertext,
               content_hash,encrypted_size,key_envelope,version,created_at
        FROM vault_items
        WHERE user_id=$1 AND deleted_at IS NULL
+         AND CASE WHEN $2::boolean THEN item_type IN ('IDENTITY','RECOVERY') ELSE item_type NOT IN ('IDENTITY','RECOVERY') END
        ORDER BY created_at DESC`,
-      [userId]
+      [userId, privateOnly]
     );
 
     return result.rows;
+  }
+
+  async isPrivateItem(userId: string,itemId: string) {
+    const row = (await this.db.query(`SELECT item_type FROM vault_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`,[itemId,userId])).rows[0];
+    if (!row) throw new Error("vault item not found");
+    return ["IDENTITY","RECOVERY"].includes(row.item_type);
   }
 
   async download(userId: string, itemId: string) {

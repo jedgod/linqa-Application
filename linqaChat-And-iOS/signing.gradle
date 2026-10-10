@@ -1,0 +1,50 @@
+// Paste into android/app/build.gradle inside the android block.
+// Reads linqa-signing.properties from the Android project root.
+// Falls back to a debug-signed release only if those properties are absent.
+
+def linqaSigning = new Properties()
+def linqaSigningFile = rootProject.file("linqa-signing.properties")
+if (linqaSigningFile.exists()) {
+    linqaSigningFile.withInputStream { linqaSigning.load(it) }
+}
+
+android {
+    signingConfigs {
+        release {
+            def storeName = linqaSigning.getProperty("LINQA_RELEASE_STORE_FILE")
+            if (storeName) {
+                storeFile rootProject.file(storeName)
+                storePassword linqaSigning.getProperty("LINQA_RELEASE_STORE_PASSWORD")
+                keyAlias linqaSigning.getProperty("LINQA_RELEASE_KEY_ALIAS")
+                keyPassword linqaSigning.getProperty("LINQA_RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            // Keep debug installable, but do not mix this native output with a release RN package.
+            matchingFallbacks = ["debug", "release"]
+        }
+        release {
+            signingConfig linqaSigning.getProperty("LINQA_RELEASE_STORE_FILE")
+                ? signingConfigs.release
+                : signingConfigs.debug
+            minifyEnabled true
+            shrinkResources true
+            debuggable false
+            jniDebuggable false
+            renderscriptDebuggable false
+            matchingFallbacks = ["release"]
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging false
+        }
+        pickFirst "lib/arm64-v8a/libc++_shared.so"
+        pickFirst "lib/armeabi-v7a/libc++_shared.so"
+        pickFirst "lib/x86/libc++_shared.so"
+        pickFirst "lib/x86_64/libc++_shared.so"
+    }
+}

@@ -1,0 +1,18 @@
+import {vi} from 'vitest';
+export const Platform={OS:'android'};
+export const requestCalendarPermissionsAsync=vi.fn();
+export const getDefaultCalendarAsync=vi.fn();
+export const getCalendarsAsync=vi.fn();
+export const createEventAsync=vi.fn();
+export const EntityTypes={EVENT:'event'};
+export const requestPermissionsAsync=vi.fn();
+export const setNotificationChannelAsync=vi.fn();
+export const scheduleNotificationAsync=vi.fn();
+export const cancelScheduledNotificationAsync=vi.fn();
+export const AndroidImportance={DEFAULT:3};
+export const SchedulableTriggerInputTypes={DATE:'date'};
+export const getDocumentAsync=vi.fn();
+export const requestMediaLibraryPermissionsAsync=vi.fn();
+export const requestCameraPermissionsAsync=vi.fn();
+export const launchImageLibraryAsync=vi.fn();
+export const launchCameraAsync=vi.fn();

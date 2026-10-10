@@ -1,0 +1,6 @@
+import {Pool} from 'pg';
+export type Handler=(payload:any)=>Promise<void>;
+export class OutboxWorker{constructor(private db:Pool,private handlers:Record<string,Handler>){}
+ async tick(limit=20){const c=await this.db.connect();let jobs:any[]=[];try{await c.query('BEGIN');const q=await c.query(`SELECT * FROM vault_outbox WHERE (state='READY' AND available_at<=now()) OR (state='LEASED' AND lease_until<now()) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT $1`,[limit]);jobs=q.rows;for(const j of jobs)await c.query(`UPDATE vault_outbox SET state='LEASED',lease_until=now()+interval '60 seconds',attempts=attempts+1 WHERE id=$1`,[j.id]);await c.query('COMMIT')}catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
+ for(const j of jobs){try{const h=this.handlers[j.event_type];if(!h)throw new Error('NO_HANDLER');await h(j.payload);await this.db.query(`UPDATE vault_outbox SET state='DONE',lease_until=NULL,last_error=NULL WHERE id=$1`,[j.id])}catch(e:any){await this.db.query(`UPDATE vault_outbox SET state=CASE WHEN attempts>=8 THEN 'DEAD' ELSE 'READY' END,available_at=now()+make_interval(secs=>LEAST(3600,POWER(2,attempts)::int)),lease_until=NULL,last_error=$2 WHERE id=$1`,[j.id,String(e?.message??e).slice(0,1000)])}}
+ return jobs.length}}

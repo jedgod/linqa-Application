@@ -1,0 +1,696 @@
+COUNTRYLINQA™ DISCOVERY ENGINE INTEGRATION v1
+====================================================================================================
+
+
+====================================================================================================
+FILE: INTEGRATION_ORDER.md
+====================================================================================================
+
+# Integration order
+
+1. Apply the Discovery Settings Production Finish pack first.
+2. Confirm country_discovery_policy_v2 matches the live schema.
+3. Add CountryLinqaPolicyResolver.
+4. Connect People discovery first.
+5. Enforce BOTH viewer outbound and candidate inbound policy.
+6. Apply block/safety rules before exposure.
+7. Connect posts/feed.
+8. Connect events.
+9. Connect businesses.
+10. Connect communities.
+11. Connect unified search.
+12. Add recommendation ranking only after eligibility filtering.
+13. Add Redis cache keyed by user + policy version + surface + cursor.
+14. Invalidate cache when discovery policy changes.
+15. Add telemetry using country/region scope only; avoid precise coordinates.
+16. Run two-account and two-country physical-device certification.
+
+
+====================================================================================================
+FILE: PRODUCTION_GATES.md
+====================================================================================================
+
+# Production gates
+
+## Correctness
+- [ ] My Country returns only eligible same-country candidates.
+- [ ] Selected Countries returns only selected-country candidates.
+- [ ] Region resolves against canonical region catalog.
+- [ ] Worldwide still respects candidate inbound privacy.
+- [ ] Contacts Only cannot leak strangers.
+- [ ] Pause Discovery removes a user from new-person discovery.
+- [ ] Existing contacts behavior matches product policy.
+- [ ] Block overrides every CountryLinqa mode.
+- [ ] Verified-only is enforced server-side.
+
+## Surfaces
+- [ ] People
+- [ ] Posts/feed
+- [ ] Events
+- [ ] Businesses
+- [ ] Communities
+- [ ] Unified search
+- [ ] Recommendations
+
+## Security
+- [ ] Client cannot inject arbitrary country scope.
+- [ ] Client cannot bypass Premium/Elite limits.
+- [ ] Verified country comes from server identity state.
+- [ ] Pagination cannot expose out-of-scope candidates.
+- [ ] Cache key contains policy version.
+- [ ] Cache invalidates on policy change.
+- [ ] Audit events record policy changes, not search contents.
+- [ ] Rate limiting applied to search/discovery endpoints.
+
+## Performance
+- [ ] Country-code indexes exist on all discovery surfaces.
+- [ ] Candidate filtering is moved into SQL for high-volume production.
+- [ ] No N+1 policy lookups.
+- [ ] Cursor pagination replaces OFFSET.
+- [ ] Load test P95/P99 measured.
+- [ ] Recommendation eligibility occurs before expensive ranking.
+
+## Certification
+- [ ] US -> US only test.
+- [ ] US -> US/GH selected countries test.
+- [ ] US -> West Africa region test.
+- [ ] Elite Worldwide test.
+- [ ] Candidate inbound restriction test.
+- [ ] Contacts Only test.
+- [ ] Pause Discovery test.
+- [ ] Block test.
+- [ ] Account-switch isolation test.
+- [ ] Physical Android test.
+- [ ] Physical iPhone test.
+- [ ] Evidence bound to exact Git SHA.
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+
+# CountryLinqa™ Discovery Engine Integration v1
+
+This is the integration layer after the Discovery Settings Production Finish pack.
+
+It connects the user's server-authoritative CountryLinqa policy to:
+- People
+- Country feeds/posts
+- Events
+- Businesses
+- Communities
+- Unified search
+- Recommendation candidate generation
+
+Core rule:
+A client never decides whether a candidate is geographically eligible.
+The server resolves the viewer's effective discovery policy and applies it before
+ranking, pagination, profile visibility, or recommendation delivery.
+
+Important:
+- Verified identity country remains separate from discovery preferences.
+- Block/mute/safety rules override CountryLinqa discovery.
+- Inbound policy and outbound policy must BOTH permit a new-person exposure.
+- Existing contacts may be handled separately from new discovery.
+- Precise location is not required by this engine.
+
+
+====================================================================================================
+FILE: clients/mobile/app/countrylinqa/world.tsx
+====================================================================================================
+
+import React from "react";
+
+const tabs=["People","Posts","Events","Businesses","Communities"] as const;
+
+export default function CountryLinqaWorld() {
+  const [tab,setTab]=React.useState<typeof tabs[number]>("People");
+
+  return (
+    <main className="mx-auto min-h-screen max-w-md bg-white">
+      <header className="px-5 pb-3 pt-5">
+        <div className="text-xs font-bold uppercase tracking-wide text-violet-500">
+          CountryLinqa™
+        </div>
+        <h1 className="mt-1 text-2xl font-bold">Discover</h1>
+        <p className="mt-1 text-sm text-zinc-500">
+          Results automatically respect your CountryLinqa reach and privacy settings.
+        </p>
+      </header>
+
+      <nav className="flex gap-2 overflow-x-auto px-5 py-3">
+        {tabs.map(x=>(
+          <button
+            key={x}
+            onClick={()=>setTab(x)}
+            className={[
+              "whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold",
+              tab===x ? "bg-violet-600 text-white" : "bg-zinc-100 text-zinc-600"
+            ].join(" ")}
+          >
+            {x}
+          </button>
+        ))}
+      </nav>
+
+      <section className="px-5 py-4">
+        <div className="rounded-2xl border border-zinc-200 p-4">
+          <div className="font-semibold">{tab}</div>
+          <div className="mt-2 text-sm text-zinc-500">
+            Bind this panel to the corresponding discovery-engine endpoint.
+            Filtering must remain server-authoritative.
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+
+====================================================================================================
+FILE: clients/mobile/src/countrylinqa/discoveryEngineApi.ts
+====================================================================================================
+
+export type DiscoverySurface =
+  | "people"
+  | "posts"
+  | "events"
+  | "businesses"
+  | "communities";
+
+export async function loadCountryLinqaSurface(
+  api:any,
+  surface:DiscoverySurface,
+  params:{limit?:number;cursor?:string}={}
+) {
+  return api.get(`/v2/people-connect/countrylinqa/${surface}`,{params});
+}
+
+
+====================================================================================================
+FILE: server/routes/countrylinqa.discovery-engine.routes.ts
+====================================================================================================
+
+import { Router } from "express";
+import { requireAuth } from "../middleware/auth.js";
+import { PeopleDiscoveryService } from "../services/countrylinqa/peopleDiscovery.js";
+import { CountryContentDiscoveryService } from "../services/countrylinqa/contentDiscovery.js";
+
+export const countryLinqaDiscoveryEngineRouter=Router();
+const people=new PeopleDiscoveryService();
+const content=new CountryContentDiscoveryService();
+
+countryLinqaDiscoveryEngineRouter.get("/people",requireAuth,async(req,res,next)=>{
+  try {
+    res.json(await people.list(
+      req.auth!.userId,
+      Number(req.query.limit ?? 30),
+      typeof req.query.cursor==="string" ? req.query.cursor : undefined
+    ));
+  } catch(e){ next(e); }
+});
+
+countryLinqaDiscoveryEngineRouter.get("/posts",requireAuth,async(req,res,next)=>{
+  try { res.json((await content.posts(req.auth!.userId)).rows); }
+  catch(e){ next(e); }
+});
+
+countryLinqaDiscoveryEngineRouter.get("/events",requireAuth,async(req,res,next)=>{
+  try { res.json((await content.events(req.auth!.userId)).rows); }
+  catch(e){ next(e); }
+});
+
+countryLinqaDiscoveryEngineRouter.get("/businesses",requireAuth,async(req,res,next)=>{
+  try { res.json((await content.businesses(req.auth!.userId)).rows); }
+  catch(e){ next(e); }
+});
+
+countryLinqaDiscoveryEngineRouter.get("/communities",requireAuth,async(req,res,next)=>{
+  try { res.json((await content.communities(req.auth!.userId)).rows); }
+  catch(e){ next(e); }
+});
+
+
+====================================================================================================
+FILE: server/services/countrylinqa/contentDiscovery.ts
+====================================================================================================
+
+import { db } from "../../db/pool.js";
+import { CountryLinqaPolicyResolver } from "./policyResolver.js";
+import { appendCountryPredicate } from "./sqlScope.js";
+
+export class CountryContentDiscoveryService {
+  private resolver=new CountryLinqaPolicyResolver();
+
+  async posts(userId:string,limit=30) {
+    const p=await this.resolver.resolve(userId);
+    const scope=this.resolver.outboundCountries(p);
+    let params:any[]=[userId];
+    const country=appendCountryPredicate(params,"posts.country_code",scope);
+    params=country.params;
+    params.push(limit);
+
+    return db.query(`
+      SELECT posts.*
+      FROM country_posts posts
+      WHERE posts.status='PUBLISHED'
+        ${country.sql}
+        AND NOT EXISTS(
+          SELECT 1 FROM user_blocks b
+          WHERE b.blocker_user_id=$1 AND b.blocked_user_id=posts.author_user_id
+        )
+      ORDER BY posts.created_at DESC
+      LIMIT $${params.length}
+    `,params);
+  }
+
+  async events(userId:string,limit=30) {
+    const p=await this.resolver.resolve(userId);
+    if (!p.allowEvents) return {rows:[]};
+    const scope=this.resolver.outboundCountries(p);
+    let params:any[]=[];
+    const country=appendCountryPredicate(params,"e.country_code",scope);
+    params=country.params;
+    params.push(limit);
+    return db.query(`
+      SELECT e.* FROM events e
+      WHERE e.visibility='PUBLIC' ${country.sql}
+      ORDER BY e.starts_at ASC
+      LIMIT $${params.length}
+    `,params);
+  }
+
+  async businesses(userId:string,limit=30) {
+    const p=await this.resolver.resolve(userId);
+    if (!p.allowBusinesses) return {rows:[]};
+    const scope=this.resolver.outboundCountries(p);
+    let params:any[]=[];
+    const country=appendCountryPredicate(params,"b.country_code",scope);
+    params=country.params;
+    params.push(limit);
+    return db.query(`
+      SELECT b.* FROM businesses b
+      WHERE b.status='ACTIVE' ${country.sql}
+      ORDER BY b.discovery_score DESC
+      LIMIT $${params.length}
+    `,params);
+  }
+
+  async communities(userId:string,limit=30) {
+    const p=await this.resolver.resolve(userId);
+    if (!p.allowCommunities) return {rows:[]};
+    const scope=this.resolver.outboundCountries(p);
+    let params:any[]=[];
+    const country=appendCountryPredicate(params,"c.country_code",scope);
+    params=country.params;
+    params.push(limit);
+    return db.query(`
+      SELECT c.* FROM communities c
+      WHERE c.status='ACTIVE' ${country.sql}
+      ORDER BY c.member_count DESC
+      LIMIT $${params.length}
+    `,params);
+  }
+}
+
+
+====================================================================================================
+FILE: server/services/countrylinqa/eligibility.ts
+====================================================================================================
+
+import { countriesForRegion } from "./regionCatalog.js";
+import type { EffectiveDiscoveryPolicy } from "./types.js";
+
+export type Candidate = {
+  userId:string;
+  verifiedCountryCode:string;
+  verified:boolean;
+  inboundMode:"MY_COUNTRY"|"SELECTED_COUNTRIES"|"REGION"|"GLOBAL"|"CONTACTS_ONLY";
+  inboundCountryCodes:string[];
+  inboundRegionCode:string|null;
+  discoveryPaused:boolean;
+};
+
+function outboundAllows(viewer:EffectiveDiscoveryPolicy,candidateCountry:string) {
+  switch(viewer.outboundMode) {
+    case "MY_COUNTRY": return candidateCountry===viewer.viewerCountryCode;
+    case "SELECTED_COUNTRIES": return viewer.outboundCountryCodes.includes(candidateCountry);
+    case "REGION": return countriesForRegion(viewer.outboundRegionCode).includes(candidateCountry);
+    case "GLOBAL": return true;
+  }
+}
+
+function inboundAllows(candidate:Candidate,viewerCountry:string,isExistingContact:boolean) {
+  if (candidate.discoveryPaused && !isExistingContact) return false;
+
+  switch(candidate.inboundMode) {
+    case "MY_COUNTRY": return candidate.verifiedCountryCode===viewerCountry;
+    case "SELECTED_COUNTRIES": return candidate.inboundCountryCodes.includes(viewerCountry);
+    case "REGION": return countriesForRegion(candidate.inboundRegionCode).includes(viewerCountry);
+    case "GLOBAL": return true;
+    case "CONTACTS_ONLY": return isExistingContact;
+  }
+}
+
+export function canExposePerson(input:{
+  viewer:EffectiveDiscoveryPolicy;
+  candidate:Candidate;
+  isExistingContact:boolean;
+  isBlocked:boolean;
+}) {
+  if (input.isBlocked) return false;
+  if (input.viewer.verifiedOnly && !input.candidate.verified) return false;
+  if (!outboundAllows(input.viewer,input.candidate.verifiedCountryCode)) return false;
+  if (!inboundAllows(input.candidate,input.viewer.viewerCountryCode,input.isExistingContact)) return false;
+  return true;
+}
+
+
+====================================================================================================
+FILE: server/services/countrylinqa/peopleDiscovery.ts
+====================================================================================================
+
+import { db } from "../../db/pool.js";
+import { CountryLinqaPolicyResolver } from "./policyResolver.js";
+import { canExposePerson } from "./eligibility.js";
+
+export class PeopleDiscoveryService {
+  private resolver=new CountryLinqaPolicyResolver();
+
+  async list(viewerUserId:string,limit=30,cursor?:string) {
+    const policy=await this.resolver.resolve(viewerUserId);
+
+    const rows=await db.query(`
+      SELECT
+        u.id AS user_id,
+        u.display_name,
+        u.verified_country_code,
+        COALESCE(u.identity_verified,FALSE) AS verified,
+        COALESCE(p.inbound_mode,'MY_COUNTRY') AS inbound_mode,
+        COALESCE(p.inbound_country_codes,'{}') AS inbound_country_codes,
+        p.inbound_region_code,
+        COALESCE(p.discovery_paused,FALSE) AS discovery_paused,
+        EXISTS(
+          SELECT 1 FROM contacts c
+          WHERE c.owner_user_id=$1 AND c.contact_user_id=u.id
+        ) AS existing_contact,
+        EXISTS(
+          SELECT 1 FROM user_blocks b
+          WHERE (b.blocker_user_id=$1 AND b.blocked_user_id=u.id)
+             OR (b.blocker_user_id=u.id AND b.blocked_user_id=$1)
+        ) AS blocked
+      FROM users u
+      LEFT JOIN country_discovery_policy_v2 p ON p.user_id=u.id
+      WHERE u.id<>$1
+      ORDER BY u.id
+      LIMIT $2
+    `,[viewerUserId,Math.min(limit*4,120)]);
+
+    const visible=rows.rows.filter((r:any)=>canExposePerson({
+      viewer:policy,
+      candidate:{
+        userId:r.user_id,
+        verifiedCountryCode:r.verified_country_code,
+        verified:r.verified,
+        inboundMode:r.inbound_mode,
+        inboundCountryCodes:r.inbound_country_codes,
+        inboundRegionCode:r.inbound_region_code,
+        discoveryPaused:r.discovery_paused
+      },
+      isExistingContact:r.existing_contact,
+      isBlocked:r.blocked
+    })).slice(0,limit);
+
+    return {
+      items:visible,
+      nextCursor:visible.length===limit ? visible.at(-1)?.user_id : null
+    };
+  }
+}
+
+
+====================================================================================================
+FILE: server/services/countrylinqa/policyResolver.ts
+====================================================================================================
+
+import { db } from "../../db/pool.js";
+import { countriesForRegion } from "./regionCatalog.js";
+import type { EffectiveDiscoveryPolicy } from "./types.js";
+
+export class CountryLinqaPolicyResolver {
+  async resolve(userId:string):Promise<EffectiveDiscoveryPolicy> {
+    const r = await db.query(`
+      SELECT
+        u.id,
+        u.verified_country_code,
+        p.outbound_mode,
+        p.inbound_mode,
+        p.outbound_country_codes,
+        p.inbound_country_codes,
+        p.outbound_region_code,
+        p.inbound_region_code,
+        p.verified_only,
+        p.discovery_paused,
+        p.allow_businesses,
+        p.allow_communities,
+        p.allow_events
+      FROM users u
+      LEFT JOIN country_discovery_policy_v2 p ON p.user_id=u.id
+      WHERE u.id=$1
+    `,[userId]);
+
+    if (!r.rowCount) throw Object.assign(new Error("USER_NOT_FOUND"),{status:404});
+
+    const x=r.rows[0];
+    if (!x.verified_country_code)
+      throw Object.assign(new Error("COUNTRY_PROFILE_REQUIRED"),{status:409});
+
+    return {
+      viewerUserId:userId,
+      viewerCountryCode:x.verified_country_code,
+      outboundMode:x.outbound_mode ?? "MY_COUNTRY",
+      outboundCountryCodes:x.outbound_country_codes ?? [],
+      outboundRegionCode:x.outbound_region_code ?? null,
+      inboundMode:x.inbound_mode ?? "MY_COUNTRY",
+      inboundCountryCodes:x.inbound_country_codes ?? [],
+      inboundRegionCode:x.inbound_region_code ?? null,
+      verifiedOnly:x.verified_only ?? true,
+      discoveryPaused:x.discovery_paused ?? false,
+      allowBusinesses:x.allow_businesses ?? true,
+      allowCommunities:x.allow_communities ?? true,
+      allowEvents:x.allow_events ?? true
+    };
+  }
+
+  outboundCountries(p:EffectiveDiscoveryPolicy):string[]|null {
+    if (p.outboundMode==="GLOBAL") return null;
+    if (p.outboundMode==="MY_COUNTRY") return [p.viewerCountryCode];
+    if (p.outboundMode==="SELECTED_COUNTRIES") return p.outboundCountryCodes;
+    return countriesForRegion(p.outboundRegionCode);
+  }
+}
+
+
+====================================================================================================
+FILE: server/services/countrylinqa/regionCatalog.ts
+====================================================================================================
+
+export const REGION_COUNTRIES: Record<string,string[]> = {
+  "NA": ["US","CA","MX"],
+  "EU": ["GB","IE","FR","DE","ES","IT","PT","NL","BE","SE","NO","DK","FI","PL"],
+  "AF-W": ["GH","NG","CI","SN","GM","SL","LR","TG","BJ","BF","ML","NE","GN","GW","CV"],
+  "AF-E": ["KE","UG","TZ","RW","BI","ET","SO","DJ","ER","SS"],
+  "AF-C": ["CM","CF","TD","CG","CD","GQ","GA","ST"],
+  "AF-S": ["ZA","BW","NA","ZM","ZW","MW","MZ","LS","SZ","AO"],
+  "ME": ["AE","SA","QA","KW","BH","OM","JO","LB","IL","IQ"],
+  "CAR": ["JM","TT","BB","BS","HT","DO","GD","LC","VC","AG","DM","KN"],
+  "APAC": ["JP","KR","CN","IN","SG","MY","TH","VN","PH","ID","AU","NZ"],
+  "SA": ["BR","AR","CL","CO","PE","EC","UY","PY","BO","GY","SR","VE"]
+};
+
+export function countriesForRegion(region:string|null):string[] {
+  return region ? REGION_COUNTRIES[region] ?? [] : [];
+}
+
+
+====================================================================================================
+FILE: server/services/countrylinqa/sqlScope.ts
+====================================================================================================
+
+import type { EffectiveDiscoveryPolicy } from "./types.js";
+import { countriesForRegion } from "./regionCatalog.js";
+
+export function outboundCountryScope(policy:EffectiveDiscoveryPolicy) {
+  if (policy.outboundMode==="GLOBAL") return null;
+  if (policy.outboundMode==="MY_COUNTRY") return [policy.viewerCountryCode];
+  if (policy.outboundMode==="SELECTED_COUNTRIES") return policy.outboundCountryCodes;
+  return countriesForRegion(policy.outboundRegionCode);
+}
+
+export function appendCountryPredicate(
+  params:any[],
+  countryColumn:string,
+  countries:string[]|null
+) {
+  if (countries===null) return {sql:"",params};
+  params.push(countries);
+  return {
+    sql:` AND ${countryColumn} = ANY($${params.length}::text[]) `,
+    params
+  };
+}
+
+
+====================================================================================================
+FILE: server/services/countrylinqa/types.ts
+====================================================================================================
+
+export type DiscoveryMode =
+  | "MY_COUNTRY"
+  | "SELECTED_COUNTRIES"
+  | "REGION"
+  | "GLOBAL";
+
+export type InboundMode =
+  | DiscoveryMode
+  | "CONTACTS_ONLY";
+
+export interface EffectiveDiscoveryPolicy {
+  viewerUserId: string;
+  viewerCountryCode: string;
+  outboundMode: DiscoveryMode;
+  outboundCountryCodes: string[];
+  outboundRegionCode: string | null;
+  inboundMode: InboundMode;
+  inboundCountryCodes: string[];
+  inboundRegionCode: string | null;
+  verifiedOnly: boolean;
+  discoveryPaused: boolean;
+  allowBusinesses: boolean;
+  allowCommunities: boolean;
+  allowEvents: boolean;
+}
+
+export type DiscoverySurface =
+  | "PEOPLE"
+  | "POSTS"
+  | "EVENTS"
+  | "BUSINESSES"
+  | "COMMUNITIES"
+  | "SEARCH";
+
+
+====================================================================================================
+FILE: server/services/countrylinqa/unifiedSearch.ts
+====================================================================================================
+
+import { CountryLinqaPolicyResolver } from "./policyResolver.js";
+
+export class CountryLinqaUnifiedSearch {
+  private resolver=new CountryLinqaPolicyResolver();
+
+  async search(input:{
+    userId:string;
+    query:string;
+    types:Array<"PEOPLE"|"POSTS"|"EVENTS"|"BUSINESSES"|"COMMUNITIES">;
+    limit:number;
+  }) {
+    const policy=await this.resolver.resolve(input.userId);
+
+    // Production integration:
+    // 1. Normalize query.
+    // 2. Resolve policy country scope.
+    // 3. Query each requested vertical.
+    // 4. Apply block/safety/inbound eligibility before exposing PEOPLE.
+    // 5. Apply recommendation toggles to events/businesses/communities.
+    // 6. Rank only eligible candidates.
+    // 7. Return opaque cursor, never raw relevance internals.
+    return {
+      query:input.query,
+      scope:{
+        mode:policy.outboundMode,
+        countries:this.resolver.outboundCountries(policy)
+      },
+      results:[],
+      nextCursor:null
+    };
+  }
+}
+
+
+====================================================================================================
+FILE: tests/countrylinqa.eligibility.test.ts
+====================================================================================================
+
+import { describe,it,expect } from "vitest";
+import { canExposePerson } from "../server/services/countrylinqa/eligibility";
+
+const viewer:any={
+  viewerUserId:"viewer",
+  viewerCountryCode:"US",
+  outboundMode:"SELECTED_COUNTRIES",
+  outboundCountryCodes:["US","GH"],
+  outboundRegionCode:null,
+  inboundMode:"MY_COUNTRY",
+  inboundCountryCodes:[],
+  inboundRegionCode:null,
+  verifiedOnly:true,
+  discoveryPaused:false,
+  allowBusinesses:true,
+  allowCommunities:true,
+  allowEvents:true
+};
+
+function candidate(overrides:any={}):any {
+  return {
+    userId:"candidate",
+    verifiedCountryCode:"GH",
+    verified:true,
+    inboundMode:"GLOBAL",
+    inboundCountryCodes:[],
+    inboundRegionCode:null,
+    discoveryPaused:false,
+    ...overrides
+  };
+}
+
+describe("CountryLinqa mutual discovery eligibility",()=>{
+  it("allows mutually eligible user",()=>{
+    expect(canExposePerson({
+      viewer,candidate:candidate(),isExistingContact:false,isBlocked:false
+    })).toBe(true);
+  });
+
+  it("block overrides geography",()=>{
+    expect(canExposePerson({
+      viewer,candidate:candidate(),isExistingContact:false,isBlocked:true
+    })).toBe(false);
+  });
+
+  it("viewer verified-only excludes unverified candidate",()=>{
+    expect(canExposePerson({
+      viewer,candidate:candidate({verified:false}),isExistingContact:false,isBlocked:false
+    })).toBe(false);
+  });
+
+  it("candidate contacts-only rejects strangers",()=>{
+    expect(canExposePerson({
+      viewer,candidate:candidate({inboundMode:"CONTACTS_ONLY"}),
+      isExistingContact:false,isBlocked:false
+    })).toBe(false);
+  });
+
+  it("candidate contacts-only permits existing contact",()=>{
+    expect(canExposePerson({
+      viewer,candidate:candidate({inboundMode:"CONTACTS_ONLY"}),
+      isExistingContact:true,isBlocked:false
+    })).toBe(true);
+  });
+
+  it("candidate pause discovery rejects new discovery",()=>{
+    expect(canExposePerson({
+      viewer,candidate:candidate({discoveryPaused:true}),
+      isExistingContact:false,isBlocked:false
+    })).toBe(false);
+  });
+});

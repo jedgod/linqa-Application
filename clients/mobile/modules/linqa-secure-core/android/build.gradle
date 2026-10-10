@@ -1,0 +1,16 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'com.linqa.securecore'
+version = '1.0.0'
+android {
+  namespace 'com.linqa.securecore'
+  defaultConfig { versionCode 1; versionName '1.0.0' }
+  // The compiled Rust core (liblinqa_core.so) and its generated Kotlin are staged here by `node stage-core.mjs`.
+  sourceSets { main { jniLibs.srcDirs = ['src/main/jniLibs'] } }
+}
+dependencies {
+  // UniFFI's generated Kotlin calls the core through JNA.
+  implementation 'net.java.dev.jna:jna:5.14.0@aar'
+}

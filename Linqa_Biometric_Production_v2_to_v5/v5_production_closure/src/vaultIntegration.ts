@@ -1,0 +1,3 @@
+import type {Pool} from 'pg';import type {Principal,Purpose} from './contracts';import type {BiometricAuthorizationService} from './service';
+export class VaultBiometricGate{constructor(private db:Pool,private bio:BiometricAuthorizationService){}
+ async consume(p:Principal,grantId:string,purpose:Extract<Purpose,`VAULT_${string}`>,resource:any,version=1){const c=await this.db.connect();try{await c.query('BEGIN');await this.bio.consume({client:c,principal:p,grantId,purpose,resource,resourceVersion:version});await c.query('COMMIT');return true}catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}}}

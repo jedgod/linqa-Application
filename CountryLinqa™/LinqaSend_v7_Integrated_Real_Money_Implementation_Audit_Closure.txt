@@ -1,0 +1,932 @@
+LINQASEND v7 REGULATED ENTITY RESOLVER — REPO INTEGRATION PATCH
+Target branch: agent/production-module-hardening
+Purpose: integrate v7 into the live Node/TypeScript + Express + PostgreSQL money path.
+
+===============================================================================
+1. REQUIRED LIVE FLOW
+===============================================================================
+AUTH
+ -> Recipient Resolver
+ -> Transfer Classifier
+ -> Capability Engine v3
+ -> Regulated Entity Resolver v7
+ -> Immutable Responsibility Snapshot
+ -> Security/Fraud v4
+ -> Regulated Provider Router
+ -> Durable Money Movement
+ -> Settlement/Reconciliation v5
+ -> Exact-SHA Certification v6
+
+RULE: Capability ALLOW alone must never authorize real money.
+
+===============================================================================
+2. MIGRATION: server/migrations/029_linqasend_regulated_entity_integration.sql
+===============================================================================
+BEGIN;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS linqasend_financial_entities (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ legal_name TEXT NOT NULL,
+ display_name TEXT NOT NULL,
+ entity_type TEXT NOT NULL,
+ country_code CHAR(2) NOT NULL,
+ status TEXT NOT NULL CHECK(status IN
+ ('DRAFT','PENDING_DUE_DILIGENCE','ACTIVE','RESTRICTED','SUSPENDED','TERMINATED','EXPIRED')),
+ due_diligence_status TEXT NOT NULL CHECK(due_diligence_status IN
+ ('NOT_STARTED','IN_PROGRESS','APPROVED','REJECTED','EXPIRED')),
+ operational_status TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK(operational_status IN
+ ('HEALTHY','DEGRADED','DOWN','UNKNOWN')),
+ regulatory_reference TEXT,
+ metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_partner_contracts (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ regulated_entity_id UUID NOT NULL REFERENCES linqasend_financial_entities(id),
+ contract_type TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('DRAFT','ACTIVE','SUSPENDED','EXPIRED','TERMINATED')),
+ source_countries TEXT[] NOT NULL DEFAULT '{}',
+ destination_countries TEXT[] NOT NULL DEFAULT '{}',
+ source_currencies TEXT[] NOT NULL DEFAULT '{}',
+ destination_currencies TEXT[] NOT NULL DEFAULT '{}',
+ allowed_responsibilities TEXT[] NOT NULL DEFAULT '{}',
+ approval_reference TEXT NOT NULL,
+ provider_adapter_key TEXT,
+ effective_from TIMESTAMPTZ NOT NULL,
+ effective_to TIMESTAMPTZ,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ CHECK(effective_to IS NULL OR effective_to > effective_from)
+);
+
+CREATE TABLE IF NOT EXISTS linqasend_financial_responsibility_maps (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ corridor_id TEXT NOT NULL,
+ source_country CHAR(2) NOT NULL,
+ destination_country CHAR(2) NOT NULL,
+ transfer_class TEXT NOT NULL,
+ source_currency CHAR(3) NOT NULL,
+ destination_currency CHAR(3) NOT NULL,
+ funding_mode TEXT NOT NULL,
+ receive_mode TEXT NOT NULL,
+ custody_model TEXT NOT NULL CHECK(custody_model IN
+ ('NO_CUSTOMER_FUNDS','PARTNER_CUSTODY','FBO_OR_EQUIVALENT_PARTNER_ACCOUNT',
+  'PARTNER_ISSUED_STORED_VALUE','PASS_THROUGH_ONLY')),
+ responsibility_entities JSONB NOT NULL,
+ legal_approval_reference TEXT NOT NULL,
+ partner_approval_reference TEXT NOT NULL,
+ policy_version INTEGER NOT NULL CHECK(policy_version > 0),
+ effective_from TIMESTAMPTZ NOT NULL,
+ effective_to TIMESTAMPTZ,
+ status TEXT NOT NULL CHECK(status IN ('DRAFT','ACTIVE','RESTRICTED','SUSPENDED','EXPIRED')),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ UNIQUE(corridor_id,funding_mode,receive_mode,policy_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_linqasend_responsibility_map_lookup
+ON linqasend_financial_responsibility_maps
+(source_country,destination_country,transfer_class,source_currency,
+ destination_currency,funding_mode,receive_mode,status);
+
+CREATE TABLE IF NOT EXISTS linqasend_financial_responsibility_snapshots (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ transfer_id UUID NOT NULL,
+ responsibility_map_id UUID NOT NULL REFERENCES linqasend_financial_responsibility_maps(id),
+ policy_version INTEGER NOT NULL,
+ snapshot JSONB NOT NULL,
+ snapshot_sha256 TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ UNIQUE(transfer_id)
+);
+
+ALTER TABLE linqasend_transfers_v3
+ ADD COLUMN IF NOT EXISTS financial_responsibility_map_id UUID,
+ ADD COLUMN IF NOT EXISTS financial_responsibility_version INTEGER,
+ ADD COLUMN IF NOT EXISTS financial_responsibility_snapshot_id UUID,
+ ADD COLUMN IF NOT EXISTS regulated_funding_entity_id UUID,
+ ADD COLUMN IF NOT EXISTS regulated_transmission_entity_id UUID,
+ ADD COLUMN IF NOT EXISTS regulated_fx_entity_id UUID,
+ ADD COLUMN IF NOT EXISTS regulated_payout_entity_id UUID;
+
+COMMIT;
+
+===============================================================================
+3. TYPES: regulatory/types.ts
+===============================================================================
+export type FinancialResponsibility =
+ | "KYC_CIP" | "AML_MONITORING" | "SANCTIONS_SCREENING"
+ | "ACCEPT_CUSTOMER_FUNDS" | "CUSTOMER_FUNDS_CUSTODY" | "SAFEGUARDING"
+ | "CUSTOMER_ACCOUNT_ISSUER" | "STORED_VALUE_ISSUER"
+ | "CARD_ACQUIRING" | "BANK_DEBIT"
+ | "DOMESTIC_TRANSMISSION" | "CROSS_BORDER_TRANSMISSION"
+ | "FX_EXECUTION" | "LOCAL_BANK_PAYOUT" | "MOBILE_MONEY_PAYOUT"
+ | "CARD_PUSH_PAYOUT" | "DISPUTES" | "CHARGEBACKS" | "REFUNDS"
+ | "SETTLEMENT" | "RECONCILIATION";
+
+export interface ResolvedAuthority {
+ responsibility: FinancialResponsibility;
+ entityId: string;
+ legalName: string;
+ entityType: string;
+ contractId: string;
+ providerAdapterKey: string | null;
+ regulatoryReference: string | null;
+}
+
+export interface FinancialResponsibilityResolution {
+ ready: boolean;
+ mapId: string;
+ corridorId: string;
+ policyVersion: number;
+ custodyModel: string;
+ legalApprovalReference: string;
+ partnerApprovalReference: string;
+ authorities: ResolvedAuthority[];
+ missing: FinancialResponsibility[];
+ blockedReasons: string[];
+}
+
+===============================================================================
+4. REPOSITORY LOOKUP
+===============================================================================
+export class FinancialResponsibilityRepository {
+ constructor(private readonly db: any) {}
+
+ async findActive(a: any) {
+  const r=await this.db.query(`
+   SELECT * FROM linqasend_financial_responsibility_maps
+   WHERE source_country=$1 AND destination_country=$2
+    AND transfer_class=$3 AND source_currency=$4 AND destination_currency=$5
+    AND funding_mode=$6 AND receive_mode=$7 AND status='ACTIVE'
+    AND effective_from <= $8 AND (effective_to IS NULL OR effective_to > $8)
+   ORDER BY policy_version DESC LIMIT 1`,
+   [a.sourceCountry,a.destinationCountry,a.transferClass,a.sourceCurrency,
+    a.destinationCurrency,a.fundingMode,a.receiveMode,a.at]);
+  return r.rows[0] ?? null;
+ }
+}
+
+export class RegulatedEntityRepository {
+ constructor(private readonly db:any) {}
+ async findById(id:string) {
+  const r=await this.db.query(
+   `SELECT * FROM linqasend_financial_entities WHERE id=$1 LIMIT 1`,[id]);
+  return r.rows[0] ?? null;
+ }
+}
+
+export class PartnerContractRepository {
+ constructor(private readonly db:any) {}
+ async findEffective(a:any) {
+  const r=await this.db.query(`
+   SELECT * FROM linqasend_partner_contracts
+   WHERE regulated_entity_id=$1 AND status='ACTIVE'
+    AND effective_from <= $2 AND (effective_to IS NULL OR effective_to > $2)
+    AND (cardinality(source_countries)=0 OR $3=ANY(source_countries))
+    AND (cardinality(destination_countries)=0 OR $4=ANY(destination_countries))
+    AND (cardinality(source_currencies)=0 OR $5=ANY(source_currencies))
+    AND (cardinality(destination_currencies)=0 OR $6=ANY(destination_currencies))
+    AND $7=ANY(allowed_responsibilities)
+   ORDER BY effective_from DESC LIMIT 1`,
+   [a.entityId,a.at,a.sourceCountry,a.destinationCountry,
+    a.sourceCurrency,a.destinationCurrency,a.responsibility]);
+  return r.rows[0] ?? null;
+ }
+}
+
+===============================================================================
+5. RESOLVER
+===============================================================================
+function requiredResponsibilities(a:any): FinancialResponsibility[] {
+ const s=new Set<FinancialResponsibility>([
+  "KYC_CIP","AML_MONITORING","SANCTIONS_SCREENING",
+  "REFUNDS","SETTLEMENT","RECONCILIATION"
+ ]);
+ const cross=a.transferClass==="INTERNAL_CROSS_BORDER" ||
+             a.transferClass==="EXTERNAL_CROSS_BORDER";
+ s.add(cross?"CROSS_BORDER_TRANSMISSION":"DOMESTIC_TRANSMISSION");
+ if(a.sourceCurrency!==a.destinationCurrency) s.add("FX_EXECUTION");
+
+ if(["DEBIT_CARD","CREDIT_CARD"].includes(a.fundingMode)) {
+  s.add("CARD_ACQUIRING"); s.add("ACCEPT_CUSTOMER_FUNDS"); s.add("CHARGEBACKS");
+ } else if(a.fundingMode==="BANK") {
+  s.add("BANK_DEBIT"); s.add("ACCEPT_CUSTOMER_FUNDS");
+ } else if(a.fundingMode==="LINQA_BALANCE") {
+  s.add("CUSTOMER_FUNDS_CUSTODY");
+ }
+
+ if(a.receiveMode==="LINQA_BALANCE") {
+  s.add("CUSTOMER_ACCOUNT_ISSUER"); s.add("STORED_VALUE_ISSUER");
+ } else if(a.receiveMode==="BANK") s.add("LOCAL_BANK_PAYOUT");
+ else if(a.receiveMode==="MOBILE_MONEY") s.add("MOBILE_MONEY_PAYOUT");
+ else if(a.receiveMode==="CARD") s.add("CARD_PUSH_PAYOUT");
+
+ if(["PARTNER_CUSTODY","FBO_OR_EQUIVALENT_PARTNER_ACCOUNT"].includes(a.custodyModel)){
+  s.add("CUSTOMER_FUNDS_CUSTODY"); s.add("SAFEGUARDING");
+ }
+ if(a.custodyModel==="PARTNER_ISSUED_STORED_VALUE"){
+  s.add("STORED_VALUE_ISSUER"); s.add("SAFEGUARDING");
+ }
+ return [...s];
+}
+
+export class RegulatedEntityResolverService {
+ constructor(private maps:any,private entities:any,private contracts:any){}
+
+ async resolve(a:any):Promise<FinancialResponsibilityResolution>{
+  const at=a.at??new Date();
+  const map=await this.maps.findActive({...a,at});
+  if(!map) return {ready:false,mapId:"",corridorId:"",policyVersion:0,
+   custodyModel:"NO_CUSTOMER_FUNDS",legalApprovalReference:"",
+   partnerApprovalReference:"",authorities:[],missing:[],
+   blockedReasons:["FINANCIAL_RESPONSIBILITY_MAP_NOT_CONFIGURED"]};
+
+  const required=requiredResponsibilities({...a,custodyModel:map.custody_model});
+  const authorities:ResolvedAuthority[]=[]; const missing:any[]=[]; const blocked:string[]=[];
+
+  for(const responsibility of required){
+   const entityId=map.responsibility_entities?.[responsibility];
+   if(!entityId){ missing.push(responsibility); continue; }
+
+   const e=await this.entities.findById(entityId);
+   if(!e){blocked.push(`ENTITY_NOT_FOUND:${responsibility}`);continue;}
+   if(e.status!=="ACTIVE"){blocked.push(`ENTITY_NOT_ACTIVE:${responsibility}`);continue;}
+   if(e.due_diligence_status!=="APPROVED"){blocked.push(`DUE_DILIGENCE_INVALID:${entityId}`);continue;}
+   if(["DOWN","UNKNOWN"].includes(e.operational_status)){
+    blocked.push(`ENTITY_UNAVAILABLE:${responsibility}`);continue;
+   }
+
+   const c=await this.contracts.findEffective({...a,entityId,responsibility,at});
+   if(!c){blocked.push(`ACTIVE_CONTRACT_NOT_FOUND:${responsibility}`);continue;}
+
+   authorities.push({responsibility,entityId:e.id,legalName:e.legal_name,
+    entityType:e.entity_type,contractId:c.id,
+    providerAdapterKey:c.provider_adapter_key,
+    regulatoryReference:e.regulatory_reference});
+  }
+
+  return {ready:missing.length===0&&blocked.length===0,
+   mapId:map.id,corridorId:map.corridor_id,policyVersion:map.policy_version,
+   custodyModel:map.custody_model,
+   legalApprovalReference:map.legal_approval_reference,
+   partnerApprovalReference:map.partner_approval_reference,
+   authorities,missing,blockedReasons:blocked};
+ }
+}
+
+===============================================================================
+6. FAIL-CLOSED READINESS GATE
+===============================================================================
+export class RealMoneyReadinessError extends Error {
+ code="LINQASEND_REAL_MONEY_NOT_READY";
+ constructor(public details:any){super("Real-money responsibility resolution failed");}
+}
+export class RealMoneyReadinessService {
+ constructor(private resolver:RegulatedEntityResolverService){}
+ async requireReady(a:any){
+  const r=await this.resolver.resolve(a);
+  if(!r.ready) throw new RealMoneyReadinessError({
+   mapId:r.mapId,missing:r.missing,blockedReasons:r.blockedReasons});
+  return r;
+ }
+}
+
+===============================================================================
+7. PREPARE FLOW PATCH
+===============================================================================
+// Immediately AFTER v3 capability approval:
+const responsibility=await realMoneyReadiness.requireReady({
+ sourceCountry:prepared.sourceCountry,
+ destinationCountry:prepared.destinationCountry,
+ transferClass:prepared.transferClass,
+ sourceCurrency:prepared.quote.sourceCurrency,
+ destinationCurrency:prepared.quote.destinationCurrency,
+ fundingMode:prepared.fundingMode,
+ receiveMode:prepared.receiveMode
+});
+
+// Return only safe summary to mobile:
+prepared.realMoneyReadiness={
+ ready:true,
+ corridorId:responsibility.corridorId,
+ policyVersion:responsibility.policyVersion
+};
+
+===============================================================================
+8. EXECUTION FLOW PATCH — REVALIDATE
+===============================================================================
+// NEVER trust the prepare response or client request.
+// Immediately before v4 security/funding:
+const responsibility=await realMoneyReadiness.requireReady({
+ sourceCountry:transfer.source_country,
+ destinationCountry:transfer.destination_country,
+ transferClass:transfer.transfer_class,
+ sourceCurrency:transfer.source_currency,
+ destinationCurrency:transfer.destination_currency,
+ fundingMode:transfer.funding_mode,
+ receiveMode:transfer.receive_mode
+});
+
+// Then run v4:
+const security=await securityV4.authorize({...});
+if(!security.approved) throw new Error("SECURITY_AUTHORIZATION_DENIED");
+
+// Persist immutable responsibility snapshot before provider routing.
+// Snapshot must contain map ID/version, entity IDs, contract IDs and approval refs.
+// SHA-256 the canonical serialized snapshot and store it.
+
+===============================================================================
+9. PROVIDER ROUTING RULE
+===============================================================================
+Provider routing must use ONLY providerAdapterKey values from the persisted,
+server-resolved responsibility snapshot.
+
+Reject request properties:
+ regulatedEntityId
+ fundingProviderId
+ payoutProviderId
+ fxProviderId
+ settlementProviderId
+ contractId
+ responsibilityMapId
+ legalApprovalReference
+ partnerApprovalReference
+ custodyModel
+ realMoneyReady
+
+Set additionalProperties:false on money-movement schemas.
+
+===============================================================================
+10. TESTS TO ADD
+===============================================================================
+A. Capability ALLOW + no v7 map => BLOCK.
+B. Inactive partner => BLOCK.
+C. Due diligence != APPROVED => BLOCK.
+D. Expired/missing contract => BLOCK.
+E. DOWN/UNKNOWN required partner => BLOCK.
+F. USD->GHS without FX authority => BLOCK.
+G. LINQA_BALANCE without custody/account issuer => BLOCK.
+H. Client-supplied provider ID => request rejected.
+I. Complete v7 map + contracts => READY.
+J. Execution revalidates v7 after prepare.
+K. Responsibility snapshot immutable after transfer starts.
+L. Provider router consumes snapshot, not client/provider query parameters.
+
+===============================================================================
+11. AUDIT EVENTS
+===============================================================================
+LINQASEND_REGULATED_ENTITY_RESOLUTION_STARTED
+LINQASEND_REGULATED_ENTITY_RESOLUTION_READY
+LINQASEND_REGULATED_ENTITY_RESOLUTION_BLOCKED
+LINQASEND_RESPONSIBILITY_SNAPSHOT_CREATED
+LINQASEND_PARTNER_ENTITY_INACTIVE
+LINQASEND_PARTNER_DUE_DILIGENCE_INVALID
+LINQASEND_PARTNER_CONTRACT_MISSING
+LINQASEND_PARTNER_OPERATIONAL_DOWN
+LINQASEND_REAL_MONEY_EXECUTION_BLOCKED
+LINQASEND_REAL_MONEY_EXECUTION_AUTHORIZED
+LINQASEND_REGULATED_PROVIDER_SELECTED
+
+===============================================================================
+12. v6 CERTIFICATION EVIDENCE EXTENSION
+===============================================================================
+Add to every physical transaction evidence record:
+ financialResponsibilityMapId
+ financialResponsibilityPolicyVersion
+ financialResponsibilitySnapshotId
+ financialResponsibilitySnapshotSha256
+ fundingEntityId
+ transmissionEntityId
+ fxEntityId
+ payoutEntityId
+ fundingContractId
+ transmissionContractId
+ fxContractId
+ payoutContractId
+
+Certification must bind these to the exact deployed Git SHA.
+
+===============================================================================
+13. CI RELEASE BLOCKERS
+===============================================================================
+G7.1 Capability-enabled corridor has no ACTIVE v7 responsibility map.
+G7.2 Required responsibility has no entity.
+G7.3 Required entity is not ACTIVE.
+G7.4 Due diligence is not APPROVED.
+G7.5 Required contract absent/expired/suspended.
+G7.6 Required partner health DOWN/UNKNOWN.
+G7.7 Client can select provider/entity IDs.
+G7.8 Snapshot not persisted before provider routing.
+G7.9 Provider router can bypass snapshot.
+G7.10 Production contains placeholder partner approvals.
+G7.11 Linqa balance lacks approved underlying custody/account model.
+G7.12 v6 evidence lacks v7 map/version/snapshot hash.
+
+===============================================================================
+14. PRODUCTION BOOTSTRAP
+===============================================================================
+Do NOT seed fake production financial partners.
+Do NOT mark placeholder responsibility maps ACTIVE.
+
+Production should have ZERO executable maps until real contracts/approvals exist.
+
+First launch:
+  1. choose ONE corridor;
+  2. onboard real regulated partners;
+  3. record executed contracts;
+  4. configure v7 map as DRAFT;
+  5. legal/compliance approve;
+  6. activate map;
+  7. implement real adapters;
+  8. run v4 security tests;
+  9. run v5 settlement/reconciliation;
+ 10. run v6 physical certification;
+ 11. bind evidence to exact SHA;
+ 12. enable only that certified corridor.
+
+===============================================================================
+15. IMPLEMENTATION ORDER ON agent/production-module-hardening
+===============================================================================
+1. Adapt/apply migration 029.
+2. Add the three repositories.
+3. Add RegulatedEntityResolverService.
+4. Add RealMoneyReadinessService.
+5. Patch live prepare path after v3.
+6. Patch live execute path to revalidate v7.
+7. Persist immutable responsibility snapshot.
+8. Patch provider router to use only snapshot authority.
+9. Reject client provider/entity fields.
+10. Add tests A-L.
+11. Extend certification evidence/gates.json generator for v7.
+12. Run server/mobile typecheck and tests.
+13. Run DB integration tests.
+14. Run physical-device/app flow separately.
+15. Commit implementation.
+16. Regenerate exact-SHA certification evidence from that commit.
+
+END
+
+================================================================================
+PART II — v7 IMPLEMENTATION AUDIT + DEFECT CLOSURE
+================================================================================
+
+PURPOSE
+-------
+Run this only after the v7 integration is applied. This is a closure stage,
+not a new architecture version.
+
+AUDIT ORDER
+-----------
+A1 Migration/schema
+A2 Repository correctness
+A3 Typecheck/build
+A4 Unit/integration tests
+A5 Prepare/execute enforcement
+A6 Actual provider routing
+A7 Snapshot immutability
+A8 v4 security integration
+A9 v5 settlement/reconciliation integration
+A10 v6 physical/exact-SHA evidence
+A11 Certification gates
+A12 Production configuration safety
+
+===============================================================================
+A1. MIGRATION AUDIT
+===============================================================================
+
+Required checks:
+
+SELECT to_regclass('public.linqasend_financial_entities');
+SELECT to_regclass('public.linqasend_partner_contracts');
+SELECT to_regclass('public.linqasend_financial_responsibility_maps');
+SELECT to_regclass('public.linqasend_financial_responsibility_snapshots');
+
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name IN (
+ 'linqasend_financial_entities',
+ 'linqasend_partner_contracts',
+ 'linqasend_financial_responsibility_maps',
+ 'linqasend_financial_responsibility_snapshots'
+)
+ORDER BY table_name, ordinal_position;
+
+DEFECT CLOSURE:
+- Wrong live transfer table name -> patch migration before production.
+- Missing FK/index -> add forward-only corrective migration.
+- Never edit an already-applied production migration.
+- Never delete financial evidence rows to "fix" migration state.
+
+===============================================================================
+A2. DATABASE INVARIANT AUDIT
+===============================================================================
+
+-- No active map without approval references.
+SELECT id
+FROM linqasend_financial_responsibility_maps
+WHERE status='ACTIVE'
+AND (
+ legal_approval_reference IS NULL OR trim(legal_approval_reference)=''
+ OR partner_approval_reference IS NULL OR trim(partner_approval_reference)=''
+);
+
+-- No active contract tied to non-active entity.
+SELECT c.id, c.regulated_entity_id
+FROM linqasend_partner_contracts c
+JOIN linqasend_financial_entities e ON e.id=c.regulated_entity_id
+WHERE c.status='ACTIVE' AND e.status<>'ACTIVE';
+
+-- No expired active contract.
+SELECT id
+FROM linqasend_partner_contracts
+WHERE status='ACTIVE'
+AND effective_to IS NOT NULL
+AND effective_to <= now();
+
+All queries above must return zero rows for an executable production corridor.
+
+===============================================================================
+A3. TYPECHECK / BUILD GATE
+===============================================================================
+
+Run the repository's actual scripts. Typical commands:
+
+npm run typecheck
+npm test
+
+If workspaces are used:
+npm --workspace <server-workspace> run typecheck
+npm --workspace <server-workspace> test
+npm --workspace <mobile-workspace> run typecheck
+npm --workspace <mobile-workspace> test
+
+Do not invent script names in CI. Inspect package.json and bind the gate to the
+real scripts.
+
+FAIL = release blocker.
+
+===============================================================================
+A4. REQUIRED AUTOMATED TESTS
+===============================================================================
+
+1. capability ALLOW + no v7 map => BLOCK
+2. inactive entity => BLOCK
+3. due diligence pending/rejected/expired => BLOCK
+4. missing contract => BLOCK
+5. expired contract => BLOCK
+6. DOWN required partner => BLOCK
+7. UNKNOWN required partner => BLOCK
+8. cross-border transfer without transmitter => BLOCK
+9. FX transfer without FX authority => BLOCK
+10. card funding without acquiring authority => BLOCK
+11. bank funding without bank-debit authority => BLOCK
+12. Linqa balance without custody/account issuer => BLOCK
+13. external bank payout without payout authority => BLOCK
+14. complete map => READY
+15. client-selected provider ID rejected
+16. execution revalidates v7 after prepare
+17. snapshot created before provider routing
+18. snapshot cannot be replaced
+19. provider router consumes snapshot authority
+20. concurrent execute cannot create two execution claims
+21. v4 denial prevents provider call
+22. provider failure does not mark transfer completed
+23. reconciliation mismatch creates break
+24. uncertified corridor remains disabled
+
+===============================================================================
+A5. PREPARE/EXECUTE BYPASS AUDIT
+===============================================================================
+
+Search the repository for every call into:
+- funding adapters
+- payout adapters
+- FX adapters
+- provider transfer/create/send methods
+- ledger finalization
+- transfer state COMPLETED/SUCCEEDED
+
+For each path prove:
+
+CAPABILITY -> v7 -> v4 -> durable workflow -> provider
+
+No controller, worker, retry handler, admin endpoint or recovery job may call a
+money provider without a persisted responsibility snapshot.
+
+CLOSE DEFECT:
+Move provider calls behind one execution boundary and require snapshot ID.
+
+===============================================================================
+A6. ACTUAL PROVIDER ROUTING AUDIT
+===============================================================================
+
+Provider selection must be derived from:
+
+responsibility snapshot
+ -> responsibility
+ -> approved entity
+ -> effective contract
+ -> provider_adapter_key
+ -> registered adapter
+
+Never from:
+req.body.providerId
+req.query.provider
+mobile-selected provider
+hard-coded default provider
+"first available" provider
+environment-only provider bypass
+
+Add runtime assertion:
+
+if (!job.responsibilitySnapshotId) {
+ throw new Error("REGULATED_RESPONSIBILITY_SNAPSHOT_REQUIRED");
+}
+
+===============================================================================
+A7. SNAPSHOT IMMUTABILITY AUDIT
+===============================================================================
+
+Required:
+- UNIQUE transfer_id
+- canonical serialization
+- SHA-256
+- map ID/version
+- entity IDs
+- contract IDs
+- approval references
+- provider adapter keys
+- timestamp
+
+Prohibit UPDATE/DELETE from application role where feasible.
+
+Recommended DB permissions:
+REVOKE UPDATE, DELETE
+ON linqasend_financial_responsibility_snapshots
+FROM linqa_app;
+
+Use a dedicated migration/admin role for exceptional maintenance.
+
+===============================================================================
+A8. v4 SECURITY INTEGRATION
+===============================================================================
+
+Verify v7 readiness occurs before final funding/provider dispatch, while v4
+still performs:
+- device trust
+- cooldown
+- recipient trust
+- velocity
+- funding fraud signals
+- risk assessment
+- transaction challenge/signature
+- single-use authorization consumption
+
+Required negative test:
+v7 READY + v4 DENY => zero provider calls.
+
+===============================================================================
+A9. v5 SETTLEMENT / RECONCILIATION INTEGRATION
+===============================================================================
+
+Every external provider transaction must carry:
+transfer_id
+responsibility_snapshot_id
+provider entity ID
+provider contract ID
+provider reference
+currency
+amount
+execution step/idempotency key
+
+Reconciliation must compare:
+1. internal ledger/workflow
+2. provider report/webhook
+3. bank/settlement statement where applicable
+
+Mismatch => durable reconciliation break.
+Never silently overwrite internal ledger from provider data.
+
+===============================================================================
+A10. RECONCILIATION FAILURE TESTS
+===============================================================================
+
+Inject:
+- provider record missing
+- internal record missing
+- amount mismatch
+- currency mismatch
+- duplicate provider record
+- duplicate bank statement line
+- late settlement
+- provider success/internal pending
+- internal success/provider failed
+- bank debit without provider match
+- payout without expected settlement
+- webhook replay
+- out-of-order webhook
+
+Expected:
+- no duplicate money movement
+- break/suspense created where required
+- audit event emitted
+- no false COMPLETED state
+- retry remains idempotent
+
+===============================================================================
+A11. v6 PHYSICAL TRANSACTION EVIDENCE
+===============================================================================
+
+Evidence record must include:
+
+gitSha
+artifactDigest
+environment
+testRunId
+transferId
+corridorId
+
+financialResponsibilityMapId
+financialResponsibilityPolicyVersion
+financialResponsibilitySnapshotId
+financialResponsibilitySnapshotSha256
+
+fundingEntityId
+transmissionEntityId
+fxEntityId
+payoutEntityId
+
+fundingContractId
+transmissionContractId
+fxContractId
+payoutContractId
+
+providerReferences
+bankStatementEvidence
+reconciliationRunId
+reconciliationResult
+testedAt
+reviewedBy
+approvedAt
+
+The deployed SHA must equal the certified SHA.
+
+===============================================================================
+A12. EXACT-SHA GATE
+===============================================================================
+
+Example shell gate:
+
+CURRENT_SHA="$(git rev-parse HEAD)"
+CERTIFIED_SHA="$(node scripts/read-certified-sha.js)"
+
+if [ "$CURRENT_SHA" != "$CERTIFIED_SHA" ]; then
+  echo "FAIL: deployed SHA is not certified"
+  exit 1
+fi
+
+Also fail if:
+- working tree is dirty during evidence generation
+- evidence artifact digest differs
+- migration set differs
+- responsibility map/version differs
+- certification expired
+- provider contract/evidence expired
+
+===============================================================================
+A13. CERTIFICATION GATE MODEL
+===============================================================================
+
+G0 AUTH/SESSION
+G1 CAPABILITY/CORRIDOR
+G2 v7 REGULATED RESPONSIBILITY
+G3 v4 SECURITY/FRAUD
+G4 DURABLE EXECUTION/IDEMPOTENCY
+G5 LEDGER ATOMICITY
+G6 v5 SETTLEMENT/SAFEGUARDING/RECONCILIATION
+G7 PHYSICAL PROVIDER TEST
+G8 EXACT-SHA EVIDENCE
+G9 OPERATIONAL READINESS
+G10 LEGAL/PARTNER APPROVAL FRESHNESS
+
+Production corridor enabled only when ALL are GREEN.
+
+Pseudo:
+
+const allGreen = gates.every(g => g.status === "GREEN");
+if (!allGreen) {
+ await corridorRepository.disable(corridorId, "CERTIFICATION_GATE_NOT_GREEN");
+}
+
+===============================================================================
+A14. gates.json EXTENSION
+===============================================================================
+
+{
+  "linqasend": {
+    "v7": {
+      "regulatedEntityResolver": "GREEN|RED",
+      "responsibilitySnapshot": "GREEN|RED",
+      "providerRouting": "GREEN|RED",
+      "clientProviderOverrideBlocked": "GREEN|RED"
+    },
+    "certification": {
+      "migration": "GREEN|RED",
+      "typecheck": "GREEN|RED",
+      "tests": "GREEN|RED",
+      "physicalTransaction": "GREEN|RED",
+      "reconciliation": "GREEN|RED",
+      "exactSha": "GREEN|RED"
+    }
+  }
+}
+
+Do not manually mark GREEN. Generate from evidence-producing checks.
+
+===============================================================================
+A15. PROVIDER ROUTING OBSERVABILITY
+===============================================================================
+
+Metrics:
+linqasend_v7_resolution_total{result,corridor}
+linqasend_v7_resolution_blocked_total{reason,corridor}
+linqasend_provider_route_total{entity,responsibility}
+linqasend_provider_route_failure_total{entity,reason}
+linqasend_responsibility_snapshot_total{corridor}
+linqasend_reconciliation_break_total{type,severity,corridor}
+
+Never put PAN, CVV, secrets, raw KYC documents or provider credentials in
+metric labels/logs.
+
+===============================================================================
+A16. CONCRETE DEFECT-CLOSURE TABLE
+===============================================================================
+
+DEFECT                              REQUIRED CLOSURE
+----------------------------------  --------------------------------------------
+Migration mismatch                  Forward corrective migration
+Repository query mismatch           Match live schema + integration test
+Type error                          Fix; no suppress/any workaround for money path
+Missing v7 call                     Insert fail-closed readiness gate
+Provider bypass                     Centralize behind snapshot router
+Client provider override            Reject request property
+Mutable snapshot                    Immutable row + hash + permissions
+Expired contract accepted           Effective-time query + test
+Unknown partner health accepted     Fail closed for required responsibility
+v4 bypass                           One execution boundary
+Duplicate execution                 DB claim/lease + idempotency key
+Provider success not reconciled     Durable inbox/report reconciliation
+Mismatch auto-corrected             Create break/suspense, preserve evidence
+Stale exact-SHA evidence            Regenerate from clean certified commit
+Manual gates.json GREEN             Evidence-generated gate only
+Uncertified corridor enabled        Automatic disable/kill switch
+
+===============================================================================
+A17. RELEASE COMMAND CHECKLIST
+===============================================================================
+
+[ ] migration applied in staging
+[ ] schema audit clean
+[ ] server typecheck clean
+[ ] mobile typecheck clean
+[ ] unit tests clean
+[ ] PostgreSQL integration tests clean
+[ ] v7 negative tests clean
+[ ] v4 denial test proves zero provider calls
+[ ] provider routing uses snapshot
+[ ] webhook/retry idempotency verified
+[ ] reconciliation failure suite clean
+[ ] physical provider transaction executed
+[ ] bank/provider/internal three-way reconciliation clean
+[ ] exact SHA recorded
+[ ] artifact digest recorded
+[ ] responsibility snapshot hash recorded
+[ ] gates generated, not hand-edited
+[ ] one corridor ALL GREEN
+[ ] rollback/kill switch tested
+[ ] production enablement approved
+
+===============================================================================
+A18. FINAL CLOSURE RULE
+===============================================================================
+
+After this combined v7 + audit pack is implemented:
+
+DO NOT create another architecture version simply to continue development.
+
+Instead:
+1. run the audit;
+2. capture failures;
+3. patch the exact repository defects;
+4. rerun;
+5. certify the clean SHA;
+6. enable one corridor;
+7. monitor and reconcile;
+8. expand corridor-by-corridor only after separate certification.
+
+END — v7 REGULATED ENTITY INTEGRATION + IMPLEMENTATION AUDIT/CLOSURE
+================================================================================

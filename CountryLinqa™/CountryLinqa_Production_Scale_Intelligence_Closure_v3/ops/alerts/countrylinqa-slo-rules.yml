@@ -1,0 +1,15 @@
+groups:
+  - name: countrylinqa
+    rules:
+      - alert: CountryLinqaHighErrorRate
+        expr: rate(countrylinqa_discovery_errors_total[5m]) / rate(countrylinqa_discovery_requests_total[5m]) > 0.01
+        for: 10m
+        labels: { severity: page }
+      - alert: CountryLinqaP95LatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(countrylinqa_discovery_latency_ms_bucket[5m])) by (le)) > 350
+        for: 15m
+        labels: { severity: warning }
+      - alert: CountryLinqaSavedSearchWorkerFailures
+        expr: rate(countrylinqa_saved_search_failed_total[15m]) > 0
+        for: 15m
+        labels: { severity: warning }

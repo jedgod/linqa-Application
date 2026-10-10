@@ -1,0 +1,510 @@
+COUNTRYLINQA™ REPO-NATIVE INTEGRATION + CERTIFICATION v4
+==============================================================================================================
+
+
+==============================================================================================================
+FILE: COUNTRYLINQA_FINAL_ACCEPTANCE.md
+==============================================================================================================
+
+# Final acceptance
+
+CountryLinqa is repo-native complete only when:
+
+- Existing routes/services are the single source of truth.
+- No generic v1/v2/v3 duplicate route stack remains.
+- Database migration numbering matches the live repository.
+- `body`, `displayName`, and `countryCode` contracts are consistent.
+- Onboarding country detection/discovery/completion is wired.
+- Discovery Settings controls outbound/inbound reach separately.
+- People discovery enforces mutual privacy before ranking.
+- Events/businesses/communities/feed use the effective country scope.
+- Advanced filters and saved searches re-evaluate current policy.
+- Redis cache and cursors cannot bypass changed policy.
+- Moderation/block/pause override discovery.
+- Typechecks/tests/builds pass.
+- Android physical test passes on the actual artifact.
+- iPhone physical test passes when iOS release is required.
+- Evidence is bound to the exact clean Git SHA and artifact SHA-256.
+
+
+==============================================================================================================
+FILE: FAILURE_CLOSURE_MATRIX.md
+==============================================================================================================
+
+# Failure Closure Matrix
+
+| Gate | Failure | Correct action |
+|---|---|---|
+| Inventory | Existing equivalent file/table found | Adapt existing code; do not duplicate |
+| Migration | Number collision | Rename to next live migration number |
+| DB | Missing column | Add minimal migration only for missing field/index |
+| Server build | Import/path mismatch | Correct to live repository module boundaries |
+| API contract | snake_case/camelCase mismatch | Fix DTO adapter, not individual screens |
+| People discovery | Privacy leak | Fail release; fix mutual eligibility before ranking |
+| Feed | `title`/`body` mismatch | Make `body` canonical; temporary adapter only |
+| Cache | stale out-of-scope result | Version cache by policy; fail closed |
+| Cursor | result leak after policy change | Reject stale policy-version cursor |
+| Mobile typecheck | route/component mismatch | Adapt to Expo Router live route |
+| Android | UI/runtime failure | Capture logcat + screenshot; patch only observed failure |
+| iOS | not physically tested | Keep certification PENDING |
+| Certification | dirty Git tree | Refuse manifest |
+| Certification | digest mismatch | Rebuild/retest; never rewrite evidence |
+
+
+==============================================================================================================
+FILE: README.md
+==============================================================================================================
+
+# CountryLinqa™ Repo-Native Integration + Certification v4
+
+Purpose: integrate the previously designed CountryLinqa v1→v3 packs into the ACTUAL Linqa repository without creating a parallel architecture.
+
+Known live repo anchors:
+- server/src/routes/countrylinqa/routes.ts
+- server/src/services/countrylinqa/discovery.ts
+- server/src/services/countrylinqa/feed-scope.ts
+- server/src/services/countrylinqa/service.ts
+- server/src/services/countrylinqa/golive/businessRanking.ts
+- server/src/services/countrylinqa/golive/eventRanking.ts
+- clients/mobile/services/countrylinqa.service.ts
+- clients/mobile/app/countrylinqa/{world.tsx,list.tsx,create.tsx}
+- clients/mobile/app/settings/countrylinqa.tsx
+- clients/mobile/app/onboarding/{country-confirmation.tsx,country-discovery.tsx,complete.tsx,resolve.tsx}
+- server/src/tests/countrylinqa-parity-invariants.test.ts
+- scripts/unified-onboarding-release-gate.mjs
+
+Known current schema includes 027_countrylinqa_discovery_controls.sql. Do NOT blindly add migration numbers from earlier generic packs. Use the next free migration number in the live repository after inventory.
+
+Known UI/API mismatch to close:
+- feed UI expected title while API uses body
+- people UI expected displayName/countryCode while API uses display_name/verified_country_code
+
+Certification truth:
+- Android Samsung SM-A037U has prior debug install/launch evidence.
+- iPhone physical certification is not yet demonstrated.
+- v4 therefore contains execution scripts/checklists; it does not mark certification PASS.
+
+Integration rule:
+ADAPT v1→v3 concepts into the existing files/tables/routes. Do not copy generic pack files if a live equivalent already exists.
+
+
+==============================================================================================================
+FILE: REPO_NATIVE_EXECUTION_RUNBOOK.md
+==============================================================================================================
+
+# CountryLinqa v1→v3 Repo-Native Execution Runbook
+
+## Phase A — freeze and inventory
+1. Create a checkpoint commit before integration.
+2. Run `node scripts/countrylinqa-repo-inventory.mjs`.
+3. Record the exact current migration list.
+4. DO NOT assume migration 041/042/043 from generic packs are free.
+5. Map every v1→v3 concept to the existing CountryLinqa files/tables first.
+
+## Phase B — close known contract mismatches
+1. Make `body` canonical for feed content.
+2. Map DB `display_name` -> DTO `displayName`.
+3. Map DB `verified_country_code` -> DTO `countryCode`.
+4. Centralize mappings in repo-native-adapter.ts.
+5. Remove screen-level guessing/fallback chains after all clients migrate.
+
+## Phase C — integrate discovery settings
+Adapt outbound/inbound reach, privacy visibility, pause discovery and entitlements
+into the schema created by 027_countrylinqa_discovery_controls.sql where possible.
+Only create a NEW migration for columns/indexes actually absent in the live schema.
+
+## Phase D — integrate discovery engine
+Patch the EXISTING:
+- discovery.ts
+- feed-scope.ts
+- service.ts
+- golive/businessRanking.ts
+- golive/eventRanking.ts
+Do not create duplicate engines under a second route tree.
+
+Mutual people eligibility:
+viewer outbound policy
+AND candidate inbound policy
+AND block/safety/moderation
+AND verified-only
+THEN ranking.
+
+## Phase E — advanced discovery
+Integrate:
+- language/interests/profession filters
+- saved searches
+- signed cursor pagination
+- Redis versioned cache
+- ranking reason codes
+- diversity controls
+- abuse limits
+- privacy-safe telemetry
+
+## Phase F — production scale
+Replace broad in-memory/oversampled filtering with indexed SQL candidate retrieval.
+Use keyset cursors. Keep policy checks server-authoritative.
+Recommendation workers must call the same eligibility policy implementation.
+
+## Phase G — migration execution
+Use the repository's actual migration runner.
+Apply only newly required migration(s) in order.
+Verify up/down/restart behavior in a disposable/staging database before production.
+
+## Phase H — build/test
+Use package.json scripts discovered from the live repo rather than guessed commands.
+Minimum gates:
+- server TypeScript build/typecheck
+- server unit/integration tests
+- CountryLinqa parity/contract tests
+- mobile typecheck
+- web typecheck if CountryLinqa web integration is enabled
+- unified onboarding release gate
+- CountryLinqa static gate
+- database behavior tests
+
+## Phase I — Android
+Build the actual Android artifact from clients/mobile.
+Install on the Samsung SM-A037U (or release target device).
+Test onboarding, settings, My Country, selected countries, region, worldwide,
+inbound restriction, pause, block, filters, saved search, pagination and cache invalidation.
+Capture evidence and artifact SHA-256.
+
+## Phase J — iPhone
+Build/sign the actual iOS artifact in the supported Apple build environment.
+Run the same matrix on a physical iPhone.
+Do not mark iOS PASS from simulator/mock-shell evidence.
+
+## Phase K — exact-SHA certification
+1. Clean worktree.
+2. Create server/mobile release artifacts.
+3. Generate `countrylinqa-certification-manifest.json`.
+4. Bind screenshots/logs/test reports to Git SHA and artifact digests.
+5. Fill evidence.json only from executed tests.
+6. Run final gate.
+7. Release only when the required physical-device matrix is PASS.
+
+
+==============================================================================================================
+FILE: certification/countrylinqa/evidence.example.json
+==============================================================================================================
+
+{
+  "gitSha": "TBD",
+  "serverSha256": "TBD",
+  "androidSha256": "TBD",
+  "iosSha256": "TBD",
+  "androidPhysical": "PENDING",
+  "iosRequired": true,
+  "iosPhysical": "PENDING",
+  "myCountry": "PENDING",
+  "selectedCountries": "PENDING",
+  "region": "PENDING",
+  "worldwide": "PENDING",
+  "inboundPrivacy": "PENDING",
+  "pauseDiscovery": "PENDING",
+  "block": "PENDING",
+  "advancedFilters": "PENDING",
+  "savedSearch": "PENDING",
+  "pagination": "PENDING",
+  "cacheInvalidation": "PENDING"
+}
+
+
+==============================================================================================================
+FILE: clients/mobile/services/countrylinqa.contract.ts
+==============================================================================================================
+
+export type CountryLinqaPerson={
+  id:string;
+  displayName:string;
+  countryCode:string|null;
+  avatarUrl:string|null;
+  verified:boolean;
+};
+
+export type CountryLinqaPost={
+  id:string;
+  body:string;
+  authorUserId:string;
+  countryCode:string|null;
+  createdAt:string;
+};
+
+export function assertPerson(x:any):CountryLinqaPerson{
+  if(!x || typeof x.id!=="string" || typeof x.displayName!=="string")
+    throw new Error("INVALID_COUNTRYLINQA_PERSON_CONTRACT");
+  return x;
+}
+
+export function assertPost(x:any):CountryLinqaPost{
+  if(!x || typeof x.id!=="string" || typeof x.body!=="string")
+    throw new Error("INVALID_COUNTRYLINQA_POST_CONTRACT");
+  return x;
+}
+
+
+==============================================================================================================
+FILE: scripts/countrylinqa-certification-manifest.mjs
+==============================================================================================================
+
+import fs from "node:fs";
+import crypto from "node:crypto";
+import {execFileSync} from "node:child_process";
+
+const sha=execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim();
+const dirty=execFileSync("git",["status","--porcelain"],{encoding:"utf8"}).trim();
+if(dirty) throw new Error("CERTIFICATION_REQUIRES_CLEAN_WORKTREE");
+
+const digest=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+const android=process.env.COUNTRYLINQA_ANDROID_APK;
+const ios=process.env.COUNTRYLINQA_IOS_IPA;
+const server=process.env.COUNTRYLINQA_SERVER_ARTIFACT;
+
+if(!android||!server) throw new Error("ANDROID_APK_AND_SERVER_ARTIFACT_REQUIRED");
+
+const manifest={
+ schemaVersion:4,
+ gitSha:sha,
+ generatedAt:new Date().toISOString(),
+ server:{path:server,sha256:digest(server)},
+ android:{path:android,sha256:digest(android)},
+ ios:ios?{path:ios,sha256:digest(ios)}:null,
+ certification:{
+   android:"PENDING_PHYSICAL_EXECUTION",
+   ios:ios?"PENDING_PHYSICAL_EXECUTION":"NOT_YET_AVAILABLE"
+ }
+};
+fs.writeFileSync("countrylinqa-certification-manifest.json",JSON.stringify(manifest,null,2));
+console.log(JSON.stringify(manifest,null,2));
+
+
+==============================================================================================================
+FILE: scripts/countrylinqa-final-gate.mjs
+==============================================================================================================
+
+import fs from "node:fs";
+
+const evidencePath=process.argv[2] ?? "certification/countrylinqa/evidence.json";
+if(!fs.existsSync(evidencePath)) throw new Error("CERTIFICATION_EVIDENCE_MISSING");
+const e=JSON.parse(fs.readFileSync(evidencePath,"utf8"));
+
+const required=[
+ "gitSha","serverSha256","androidSha256","androidPhysical",
+ "myCountry","selectedCountries","region","worldwide",
+ "inboundPrivacy","pauseDiscovery","block",
+ "advancedFilters","savedSearch","pagination","cacheInvalidation"
+];
+
+for(const k of required){
+ if(e[k]===undefined||e[k]===null||e[k]==="")
+   throw new Error(`MISSING:${k}`);
+}
+
+const pass=[
+ "androidPhysical","myCountry","selectedCountries","region","worldwide",
+ "inboundPrivacy","pauseDiscovery","block","advancedFilters",
+ "savedSearch","pagination","cacheInvalidation"
+];
+for(const k of pass) if(e[k]!=="PASS") throw new Error(`NOT_PASS:${k}`);
+
+if(e.iosRequired===true && e.iosPhysical!=="PASS")
+ throw new Error("IOS_PHYSICAL_CERTIFICATION_REQUIRED");
+
+console.log("COUNTRYLINQA_REPO_NATIVE_GATE=PASS");
+
+
+==============================================================================================================
+FILE: scripts/countrylinqa-repo-inventory.mjs
+==============================================================================================================
+
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+
+const must=[
+  "server/src/routes/countrylinqa/routes.ts",
+  "server/src/services/countrylinqa/discovery.ts",
+  "server/src/services/countrylinqa/feed-scope.ts",
+  "server/src/services/countrylinqa/service.ts",
+  "clients/mobile/services/countrylinqa.service.ts",
+  "clients/mobile/app/countrylinqa/world.tsx",
+  "clients/mobile/app/countrylinqa/list.tsx",
+  "clients/mobile/app/settings/countrylinqa.tsx"
+];
+
+const optional=[
+  "server/src/services/countrylinqa/golive/businessRanking.ts",
+  "server/src/services/countrylinqa/golive/eventRanking.ts",
+  "server/src/tests/countrylinqa-parity-invariants.test.ts",
+  "scripts/unified-onboarding-release-gate.mjs"
+];
+
+const sha=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+const rows=[...must.map(p=>({p,required:true})),...optional.map(p=>({p,required:false}))].map(x=>({
+  path:x.p, required:x.required, exists:fs.existsSync(x.p),
+  sha256:fs.existsSync(x.p)?sha(x.p):null
+}));
+
+const migrationDir="server/src/db/migrations";
+const migrations=fs.existsSync(migrationDir)
+  ? fs.readdirSync(migrationDir).filter(x=>/^\d+_.*\.sql$/.test(x)).sort()
+  : [];
+
+const nums=migrations.map(x=>Number(x.match(/^(\d+)_/)?.[1]||0));
+const nextMigration=(Math.max(0,...nums)+1).toString().padStart(3,"0");
+
+const out={generatedAt:new Date().toISOString(),rows,migrations,nextMigration};
+fs.writeFileSync("countrylinqa-repo-inventory.json",JSON.stringify(out,null,2));
+
+const missing=rows.filter(x=>x.required&&!x.exists);
+console.log(JSON.stringify(out,null,2));
+if(missing.length) process.exitCode=2;
+
+
+==============================================================================================================
+FILE: scripts/countrylinqa-v1-v3-static-gate.mjs
+==============================================================================================================
+
+import fs from "node:fs";
+
+const checks=[
+ ["routes","server/src/routes/countrylinqa/routes.ts"],
+ ["discovery","server/src/services/countrylinqa/discovery.ts"],
+ ["feed scope","server/src/services/countrylinqa/feed-scope.ts"],
+ ["service","server/src/services/countrylinqa/service.ts"],
+ ["mobile service","clients/mobile/services/countrylinqa.service.ts"],
+ ["world UI","clients/mobile/app/countrylinqa/world.tsx"],
+ ["list UI","clients/mobile/app/countrylinqa/list.tsx"],
+ ["settings UI","clients/mobile/app/settings/countrylinqa.tsx"],
+ ["country confirmation","clients/mobile/app/onboarding/country-confirmation.tsx"],
+ ["discovery onboarding","clients/mobile/app/onboarding/country-discovery.tsx"],
+ ["onboarding complete","clients/mobile/app/onboarding/complete.tsx"],
+ ["resolver","clients/mobile/app/onboarding/resolve.tsx"]
+];
+
+let fail=0;
+for(const [name,p] of checks){
+  const ok=fs.existsSync(p);
+  console.log(`${ok?"PASS":"FAIL"} ${name}: ${p}`);
+  if(!ok) fail++;
+}
+if(fail) process.exit(2);
+
+
+==============================================================================================================
+FILE: server/src/services/countrylinqa/repo-native-adapter.ts
+==============================================================================================================
+
+/**
+ * Compatibility boundary for CountryLinqa UI/API naming.
+ * Keep wire format stable and map DB snake_case -> client camelCase here.
+ * Do not make screens guess backend field names.
+ */
+export type CountryLinqaPersonRow={
+  id:string;
+  display_name:string|null;
+  verified_country_code:string|null;
+  avatar_url?:string|null;
+  identity_verified?:boolean|null;
+};
+
+export type CountryLinqaFeedRow={
+  id:string;
+  body:string|null;
+  author_user_id:string;
+  country_code?:string|null;
+  created_at:string|Date;
+};
+
+export function toPersonDto(row:CountryLinqaPersonRow){
+  return {
+    id:row.id,
+    displayName:row.display_name ?? "Linqa User",
+    countryCode:row.verified_country_code,
+    avatarUrl:row.avatar_url ?? null,
+    verified:Boolean(row.identity_verified)
+  };
+}
+
+export function toFeedDto(row:CountryLinqaFeedRow){
+  return {
+    id:row.id,
+    body:row.body ?? "",
+    // transitional compatibility only; remove after all clients consume body
+    title:row.body ?? "",
+    authorUserId:row.author_user_id,
+    countryCode:row.country_code ?? null,
+    createdAt:new Date(row.created_at).toISOString()
+  };
+}
+
+
+==============================================================================================================
+FILE: server/src/services/countrylinqa/repo-native-policy.ts
+==============================================================================================================
+
+export type Mode="MY_COUNTRY"|"SELECTED_COUNTRIES"|"REGION"|"GLOBAL";
+export type InboundMode=Mode|"CONTACTS_ONLY";
+
+export interface RepoNativeDiscoveryPolicy{
+  userId:string;
+  verifiedCountryCode:string;
+  outboundMode:Mode;
+  inboundMode:InboundMode;
+  selectedCountries:string[];
+  regionCode:string|null;
+  verifiedOnly:boolean;
+  paused:boolean;
+  version:number;
+}
+
+/**
+ * Integrate this resolver with the EXISTING 027 discovery-controls columns.
+ * Do not create country_discovery_policy_v2 unless inventory proves 027 lacks
+ * the required semantics.
+ */
+export function normalizePolicy(row:any):RepoNativeDiscoveryPolicy{
+  if(!row?.verified_country_code) throw Object.assign(
+    new Error("COUNTRY_VERIFICATION_REQUIRED"),{status:409}
+  );
+  return {
+    userId:row.user_id ?? row.id,
+    verifiedCountryCode:row.verified_country_code,
+    outboundMode:row.visibility_mode ?? row.outbound_mode ?? "MY_COUNTRY",
+    inboundMode:row.inbound_mode ?? "MY_COUNTRY",
+    selectedCountries:row.selected_countries ?? row.outbound_country_codes ?? [],
+    regionCode:row.region_code ?? row.outbound_region_code ?? null,
+    verifiedOnly:row.verified_only ?? true,
+    paused:row.discovery_paused ?? false,
+    version:Number(row.version ?? 1)
+  };
+}
+
+
+==============================================================================================================
+FILE: server/src/tests/countrylinqa-repo-native-contract.test.ts
+==============================================================================================================
+
+import {describe,it,expect} from "vitest";
+import {toPersonDto,toFeedDto} from "../services/countrylinqa/repo-native-adapter";
+
+describe("CountryLinqa repo-native API contract",()=>{
+  it("maps snake_case people rows to mobile DTO",()=>{
+    expect(toPersonDto({
+      id:"u1",display_name:"Ama",verified_country_code:"GH",
+      avatar_url:null,identity_verified:true
+    })).toEqual({
+      id:"u1",displayName:"Ama",countryCode:"GH",
+      avatarUrl:null,verified:true
+    });
+  });
+
+  it("makes body canonical for feed DTO",()=>{
+    const dto=toFeedDto({
+      id:"p1",body:"Hello Ghana",author_user_id:"u1",
+      country_code:"GH",created_at:"2026-10-05T00:00:00Z"
+    });
+    expect(dto.body).toBe("Hello Ghana");
+    expect(dto.title).toBe("Hello Ghana");
+  });
+});

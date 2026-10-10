@@ -6,7 +6,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { CountryLinqaCatalog, CountryLinqaPreferences } from "../../services/countrylinqa.service";
 import { discoveredCountries } from "../../services/countrylinqa-settings";
-import { flagOf, headline, locationLine, type PersonDetail } from "../../services/countrylinqa-world";
+import { armChatStart, flagOf, headline, locationLine, type PersonDetail } from "../../services/countrylinqa-world";
 import { useCountryClient } from "../CountryLinqaUI";
 import { fonts } from "../../theme/tokens";
 import { Avatar } from "../linqasend/ui";
@@ -80,6 +80,7 @@ export function Spinner() {
 export function useMessage(_onOpen?: (conversationId: string) => void) {
   const router = useRouter();
   const message = useCallback((userId: string, name?: string) => {
+    armChatStart(userId);
     router.push({ pathname: "/countrylinqa/chat-access", params: { userId, ...(name ? { name } : {}) } });
   }, [router]);
   return { message, busy: null as string | null, error: null as string | null, clear: () => undefined };

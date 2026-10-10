@@ -1,0 +1,378 @@
+COUNTRYLINQA™ CERTIFICATION EXECUTION v4.2
+=========================================================================================================
+
+
+=========================================================================================================
+FILE: .github/workflows/countrylinqa-release-gate.yml
+=========================================================================================================
+
+name: CountryLinqa Release Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "server/src/services/countrylinqa/**"
+      - "server/src/routes/countrylinqa/**"
+      - "server/src/tests/countrylinqa*"
+      - "clients/mobile/app/countrylinqa/**"
+      - "clients/mobile/services/countrylinqa*"
+      - "scripts/countrylinqa*"
+
+jobs:
+  certification:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: linqa_ci
+          POSTGRES_DB: linqa_countrylinqa_ci_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa_countrylinqa_ci_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://linqa:linqa_ci@127.0.0.1:5432/linqa_countrylinqa_ci_test
+      REDIS_URL: redis://127.0.0.1:6379
+      LINQA_REQUIRE_DB_TESTS: "1"
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            clients/mobile/package-lock.json
+
+      - name: Install server
+        run: npm ci
+        working-directory: server
+
+      - name: Install mobile
+        run: npm ci
+        working-directory: clients/mobile
+
+      - name: Dedicated DB guard
+        run: node scripts/assert-dedicated-test-db.mjs
+
+      - name: Apply migrations
+        run: npm run db:migrate
+        working-directory: server
+
+      - name: Migration idempotency
+        run: npm run db:migrate
+        working-directory: server
+
+      - name: Reject explicit skips/only
+        run: node scripts/audit-vitest-skips.mjs
+
+      - name: Server build
+        run: npm run build
+        working-directory: server
+
+      - name: Mobile typecheck
+        run: npm run typecheck
+        working-directory: clients/mobile
+
+      - name: DB certification tests
+        run: node scripts/countrylinqa-db-test-gate.mjs
+
+      - name: Full server suite
+        run: npm test
+        working-directory: server
+
+      - name: Existing CountryLinqa certification
+        run: node scripts/countrylinqa-certification.mjs --software-only
+
+      - name: Upload certification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: countrylinqa-certification-${{ github.sha }}
+          path: |
+            certification/countrylinqa/**
+            server/test-results/**
+          if-no-files-found: warn
+
+
+=========================================================================================================
+FILE: FAILURE_RESPONSE.md
+=========================================================================================================
+
+# What to do when the gate is red
+
+Do not create a new architecture pack.
+
+- Migration failure -> correct only the failing migration/repo schema assumption.
+- Typecheck failure -> correct only the reported contract/import.
+- DB test failure -> reproduce against dedicated test PostgreSQL and patch the failing behavior.
+- Redis test failure -> preserve cache-miss fallback and privacy recheck.
+- Skip detected -> remove accidental hard-coded skip/only; do not force unrelated environment-dependent tests to run without prerequisites.
+- Physical failure -> preserve evidence, patch observed behavior, rebuild, generate new artifact hash, rerun failed scenario and regression matrix.
+- SHA mismatch -> never edit evidence to match; rebuild/retest the exact release.
+
+
+=========================================================================================================
+FILE: README.md
+=========================================================================================================
+
+# CountryLinqa™ Certification Execution v4.2
+
+This is NOT another architecture pack. It is the execution layer after v4.1.
+
+It adds:
+- preflight certification runner
+- dedicated PostgreSQL safety guard
+- CI result/evidence collector
+- release readiness report
+- Android physical-certification evidence template
+- deterministic release gate
+- rollback checklist
+
+It intentionally does NOT add:
+- Online Now/presence discovery
+- another moderation service
+- another CountryLinqa certification authority
+- speculative iOS code
+
+Use the repository's existing `scripts/countrylinqa-certification.mjs` as the
+authoritative exact-SHA/physical evidence verifier.
+
+
+=========================================================================================================
+FILE: RELEASE_EXECUTION_ORDER.md
+=========================================================================================================
+
+# Release execution order
+
+1. Review current `git status`.
+2. Stage CountryLinqa-only changes; use `git add -p` on shared files.
+3. Commit CountryLinqa separately.
+4. Push the branch.
+5. Run `countrylinqa-release-gate.yml`.
+6. Require PostgreSQL tests to execute with zero skips.
+7. Fix only failures actually produced by CI.
+8. When green, create the Android release artifact.
+9. Hash server and Android artifacts.
+10. Run two-device/two-country Android certification.
+11. Feed evidence to the existing `countrylinqa-certification.mjs`.
+12. Keep iOS explicitly blocked until a real iOS project exists.
+13. Approve rollout only when the repository's authoritative release gate is green.
+
+
+=========================================================================================================
+FILE: certification/countrylinqa/ANDROID_TWO_COUNTRY_RUN.md
+=========================================================================================================
+
+# Android Two-Country Physical Run
+
+Release SHA: __________
+Server artifact SHA-256: __________
+APK/AAB SHA-256: __________
+Date UTC: __________
+
+Device A:
+- model:
+- Android:
+- account evidence ID:
+- verified country:
+
+Device B:
+- model:
+- Android:
+- account evidence ID:
+- verified country:
+
+The countries MUST differ.
+
+| Case | Expected | Result | Evidence |
+|---|---|---|---|
+| My Country | foreign candidate hidden | PENDING | |
+| Selected Countries | candidate appears only when mutually permitted | PENDING | |
+| Region | only eligible regional candidates | PENDING | |
+| Worldwide | inbound privacy still enforced | PENDING | |
+| Block | immediate exclusion | PENDING | |
+| Restricted user | excluded | PENDING | |
+| Pause discovery | stranger discovery excluded | PENDING | |
+| Saved search | current policy re-evaluated | PENDING | |
+| Pagination | no duplicate/leak | PENDING | |
+| Settings change | stale cache cannot leak | PENDING | |
+| Redis unavailable | uncached behavior remains correct | PENDING | |
+| Account switch | policy/cache isolation preserved | PENDING | |
+
+PASS only when every row has evidence tied to the exact SHA/artifact.
+
+
+=========================================================================================================
+FILE: certification/countrylinqa/IOS_BLOCKER.md
+=========================================================================================================
+
+# iOS certification blocker
+
+Status: BLOCKED — no iOS project/build target currently exists.
+
+Do not mark iOS as failed; it is not executable yet.
+Do not mark iOS as passed using simulator screenshots or Android evidence.
+
+Closure requires:
+1. real iOS project/target,
+2. signing configuration,
+3. installable IPA/TestFlight build,
+4. physical iPhone execution,
+5. evidence bound to exact Git SHA and IPA SHA-256.
+
+
+=========================================================================================================
+FILE: scripts/assert-dedicated-test-db.mjs
+=========================================================================================================
+
+const raw=process.env.DATABASE_URL;
+if(!raw){
+  console.error("DATABASE_URL missing.");
+  process.exit(2);
+}
+
+const u=new URL(raw);
+const db=u.pathname.replace(/^\\//,"").toLowerCase();
+const host=u.hostname.toLowerCase();
+
+const allowedByName=/(^|[_-])(test|ci)([_-]|$)/.test(db);
+const explicit=process.env.LINQA_ALLOW_CERT_DB==="1";
+
+if(!allowedByName && !explicit){
+  console.error(
+    `Refusing certification DB: "${db}". `+
+    `Use a dedicated database whose name contains test/ci, `+
+    `or explicitly set LINQA_ALLOW_CERT_DB=1 after verifying safety.`
+  );
+  process.exit(3);
+}
+
+if(["prod","production","linqa"].includes(db) && !explicit){
+  console.error("Refusing production-like database.");
+  process.exit(4);
+}
+
+console.log(`Dedicated certification database accepted: ${host}/${db}`);
+
+
+=========================================================================================================
+FILE: scripts/countrylinqa-cert-preflight.mjs
+=========================================================================================================
+
+import {spawnSync} from "node:child_process";
+import fs from "node:fs";
+
+function run(label,cmd,args,cwd="."){
+  console.log(`\n=== ${label} ===`);
+  const r=spawnSync(cmd,args,{
+    cwd,stdio:"inherit",shell:process.platform==="win32",
+    env:process.env
+  });
+  if((r.status ?? 1)!==0) throw new Error(`${label}_FAILED`);
+}
+
+const dirty=spawnSync("git",["status","--porcelain"],{
+  encoding:"utf8",shell:process.platform==="win32"
+}).stdout?.trim();
+
+if(dirty){
+  console.error("Working tree is not clean.");
+  console.error("Commit/stash unrelated edits before release certification.");
+  process.exit(2);
+}
+
+run("Skip audit","node",["scripts/audit-vitest-skips.mjs"]);
+run("DB test gate","node",["scripts/countrylinqa-db-test-gate.mjs"]);
+
+if(fs.existsSync("server/package.json")){
+  run("Server build","npm",["run","build"],"server");
+  run("Server tests","npm",["test"],"server");
+}
+if(fs.existsSync("clients/mobile/package.json")){
+  run("Mobile typecheck","npm",["run","typecheck"],"clients/mobile");
+}
+
+console.log("\nCOUNTRYLINQA_CERT_PREFLIGHT=PASS");
+
+
+=========================================================================================================
+FILE: scripts/countrylinqa-cert-run.mjs
+=========================================================================================================
+
+import {spawnSync} from "node:child_process";
+
+function run(cmd,args,cwd="."){
+  const r=spawnSync(cmd,args,{
+    cwd,stdio:"inherit",shell:process.platform==="win32",
+    env:{...process.env,LINQA_REQUIRE_DB_TESTS:"1"}
+  });
+  if((r.status ?? 1)!==0) process.exit(r.status ?? 1);
+}
+
+run("node",["scripts/assert-dedicated-test-db.mjs"]);
+run("node",["scripts/audit-vitest-skips.mjs"]);
+run("node",["scripts/countrylinqa-db-test-gate.mjs"]);
+
+// Keep existing repo certification script authoritative.
+run("node",["scripts/countrylinqa-certification.mjs","--software-only"]);
+
+console.log("COUNTRYLINQA_SOFTWARE_CERTIFICATION=PASS");
+
+
+=========================================================================================================
+FILE: scripts/countrylinqa-release-report.mjs
+=========================================================================================================
+
+import fs from "node:fs";
+import {execFileSync} from "node:child_process";
+
+const sha=execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim();
+const status=execFileSync("git",["status","--porcelain"],{encoding:"utf8"}).trim();
+
+const report={
+  generatedAt:new Date().toISOString(),
+  gitSha:sha,
+  cleanWorktree:status.length===0,
+  software:{
+    serverTests:process.env.CLQ_SERVER_TESTS ?? "UNKNOWN",
+    dbIntegration:process.env.CLQ_DB_TESTS ?? "UNKNOWN",
+    redisTests:process.env.CLQ_REDIS_TESTS ?? "UNKNOWN",
+    mobileTypecheck:process.env.CLQ_MOBILE_TYPECHECK ?? "UNKNOWN",
+    workflow:process.env.CLQ_WORKFLOW ?? "NOT_RUN"
+  },
+  physical:{
+    twoCountryAndroid:process.env.CLQ_ANDROID_PHYSICAL ?? "PENDING",
+    ios:process.env.CLQ_IOS_PHYSICAL ?? "BLOCKED_NO_IOS_PROJECT"
+  }
+};
+
+report.releaseReady =
+  report.cleanWorktree &&
+  Object.values(report.software).every(x=>x==="PASS") &&
+  report.physical.twoCountryAndroid==="PASS";
+
+fs.mkdirSync("certification/countrylinqa",{recursive:true});
+fs.writeFileSync(
+  "certification/countrylinqa/release-readiness.json",
+  JSON.stringify(report,null,2)
+);
+console.log(JSON.stringify(report,null,2));
+if(!report.releaseReady) process.exitCode=5;

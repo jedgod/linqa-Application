@@ -74,3 +74,12 @@ export function safeReturn(from: string | undefined, fallback = "/countrylinqa/p
 /** The server reads this as the person's plan being active. The app only asks again until it changes. */
 export const POLL_MS = 3000;
 export const POLL_LIMIT = 100;
+
+/** A payment page is only ever opened when it is a plain https address (never another app's scheme, never http). */
+export function isSafeCheckoutUrl(url: string | null | undefined): url is string {
+  if (!url || url.length > 2000) return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && !u.username && !u.password && u.hostname.includes(".");
+  } catch { return false; }
+}

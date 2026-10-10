@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCountryClient } from "../../components/CountryLinqaUI";
 import { WorldScreen, world } from "../../components/countrylinqa/WorldUI";
-import { POLL_LIMIT, POLL_MS, failureMessage, resultOf, safeReturn, type Checkout } from "../../services/countrylinqa-plans";
+import { POLL_LIMIT, POLL_MS, failureMessage, isSafeCheckoutUrl, resultOf, safeReturn, type Checkout } from "../../services/countrylinqa-plans";
 import { fonts } from "../../theme/tokens";
 
 /**
@@ -84,7 +84,7 @@ export default function CountryLinqaPlanResult() {
             <Text style={s.title}>{error ? "Can not check your payment" : "Waiting for your payment"}</Text>
             <Text style={s.text}>{error ?? (waited ? "It is taking longer than usual. Your plan will switch on as soon as the payment is confirmed. You can leave this screen." : "Finish paying on the payment page. This screen updates when it is confirmed.")}</Text>
             <View style={s.actions}>
-              {checkout?.checkoutUrl ? done("Open payment page again", () => void Linking.openURL(checkout.checkoutUrl!).catch(() => undefined)) : null}
+              {isSafeCheckoutUrl(checkout?.checkoutUrl) ? done("Open payment page again", () => void Linking.openURL(checkout!.checkoutUrl!).catch(() => undefined)) : null}
               {error || waited ? done("Check again", () => void poll(), true) : null}
               {done("Cancel payment", () => void cancel(), true)}
               {waited ? done("Leave", () => router.replace(origin as never), true) : null}

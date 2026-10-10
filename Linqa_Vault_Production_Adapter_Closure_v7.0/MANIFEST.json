@@ -1,0 +1,82 @@
+[
+  {
+    "path": "APPLY_TO_LIVE_REPO.md",
+    "sha256": "b2d198fa73d085295332cd306e807ee9a18e92e3311d099b2ef2caa88ce89ea3",
+    "bytes": 1383
+  },
+  {
+    "path": "README.md",
+    "sha256": "316dabbff974105b7d3880861b43f20a326bffbd151416ba5de317e91db02a82",
+    "bytes": 2660
+  },
+  {
+    "path": "certification/PRODUCTION_GATE.md",
+    "sha256": "3d33b10121cedd5a73c54754d7c72d6a96977f1c303b7d5aeaa2f44d730bd955",
+    "bytes": 1862
+  },
+  {
+    "path": "certification/release-report.mjs",
+    "sha256": "e6208a55808300ad248bd85a085d339bdbf295bf2c15c300dbf49cc97497c9eb",
+    "bytes": 1020
+  },
+  {
+    "path": "migrations/060_vault_production_adapter_closure.sql",
+    "sha256": "d5c0efd1a6dbf45db74a5c56687e1e38ff0f3e09be2bf472382e5740b5874e9f",
+    "bytes": 3142
+  },
+  {
+    "path": "src/billing/billing-service.ts",
+    "sha256": "a13638157df05cadecb667e7ef1bcf58a4bd96682a49a177373a30ceeada736b",
+    "bytes": 1485
+  },
+  {
+    "path": "src/contracts.ts",
+    "sha256": "84eaacf08cbacd1bc46e09168b38f991b9e8beae80a3e6536db939fc8f03c294",
+    "bytes": 2436
+  },
+  {
+    "path": "src/intake/intake-service.ts",
+    "sha256": "d911f5fa8f726a091bc6845434cf6febb006fc06cf9c91860d865cccaf37fc77",
+    "bytes": 3518
+  },
+  {
+    "path": "src/live/live-bindings.ts",
+    "sha256": "fe5b1df43e4b49eb56f5671cf159a6e5fb47002e7053c56f5379916ad1bd2918",
+    "bytes": 1126
+  },
+  {
+    "path": "src/providers/clamav-scanner.ts",
+    "sha256": "280a53f43bd17561850047fc0c9e500f838603c80e1c0905364d08186c090214",
+    "bytes": 651
+  },
+  {
+    "path": "src/providers/s3-object-store.ts",
+    "sha256": "de33c1d904b8a177fd8f78a037231ad9bdf2fd7ce6792620d9822d4a48d371e1",
+    "bytes": 444
+  },
+  {
+    "path": "src/routes.ts",
+    "sha256": "83a3a42402e7354dffcb790361525db1b08b49ec3ccbbefd3d4166636188b871",
+    "bytes": 1446
+  },
+  {
+    "path": "src/security/production-readiness.ts",
+    "sha256": "74bec1633f429c7de4109b4239012f6c61ccc2dc4c9b05c043c2b2a0642555a8",
+    "bytes": 1250
+  },
+  {
+    "path": "src/security/security-center.ts",
+    "sha256": "c29d03278185b5c5c336cf621ac8c9d6a91b51d7862c07e5125eaf933c076afd",
+    "bytes": 656
+  },
+  {
+    "path": "src/workers.ts",
+    "sha256": "e4b97ba20ce6ae89ffff1920cfb5d7407af489f82b3e07048bdb283e99a1734d",
+    "bytes": 841
+  },
+  {
+    "path": "tests/production-invariants.test.ts",
+    "sha256": "bc2ec97a0f2f0c8c15a256ec479f76e43e33dbf9c7f784a3adeb41b29d3e8ca6",
+    "bytes": 1516
+  }
+]

@@ -1,10 +1,13 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { HUB_GROUPS, LINQA_HUB_SERVICES } from "../navigation/information-architecture";
 import { useLinqaSendAvailability } from "../services/linqasend-availability";
+import { getApiBaseUrl } from "../config/api";
+import { ChatInboxService, type ChatSummary } from "../services/chat-inbox.service";
+import { accessTokenProvider } from "../services/session";
 
 const FILTERS = ["All", ...HUB_GROUPS] as const;
 
@@ -13,6 +16,18 @@ export default function SearchScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("All");
+
+  // Your chats are searchable too (by name and by the latest message preview), alongside the services.
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  useEffect(() => {
+    const inbox = new ChatInboxService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
+    inbox.inbox("all").then((result) => setChats(result.conversations), () => undefined);
+  }, []);
+  const chatResults = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || (filter !== "All" && filter !== "Connect")) return [];
+    return chats.filter((chat) => `${chat.title} ${chat.preview ?? ""}`.toLowerCase().includes(q)).slice(0, 8);
+  }, [chats, query, filter]);
 
   const results = useMemo(() => LINQA_HUB_SERVICES.filter((item) => {
     if (!moneyAvailable && item.key === "send") return false;
@@ -53,7 +68,32 @@ export default function SearchScreen() {
         data={results}
         keyExtractor={(item) => item.key}
         keyboardShouldPersistTaps="handled"
-        ListEmptyComponent={<Text style={styles.empty}>No matching Linqa service.</Text>}
+        ListHeaderComponent={
+          <View>
+            {query.trim() ? (
+              <Pressable style={styles.row} accessibilityRole="button" onPress={() => router.push({ pathname: "/modules/ai", params: { q: query.trim() } })}>
+                <View style={[styles.icon, { backgroundColor: "#5B4CFF16" }]}><Ionicons name="sparkles" size={21} color="#5B4CFF" /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.resultTitle}>Ask Linqa AI</Text>
+                  <Text numberOfLines={1} style={styles.resultSubtitle}>“{query.trim()}”</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#9095A9" />
+              </Pressable>
+            ) : null}
+            {chatResults.map((chat) => (
+              <Pressable key={chat.conversationId} style={styles.row} accessibilityRole="button"
+                onPress={() => router.push({ pathname: "/modules/conversation", params: { conversationId: chat.conversationId, name: chat.title } })}>
+                <View style={[styles.icon, { backgroundColor: "#5B4CFF16" }]}><Ionicons name="chatbubble-ellipses-outline" size={21} color="#5B4CFF" /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.resultTitle}>{chat.title}</Text>
+                  <Text numberOfLines={1} style={styles.resultSubtitle}>Chat{chat.preview ? ` · ${chat.preview}` : ""}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#9095A9" />
+              </Pressable>
+            ))}
+          </View>
+        }
+        ListEmptyComponent={chatResults.length ? null : <Text style={styles.empty}>No matching Linqa service.</Text>}
         renderItem={({ item }) => (
           <Pressable style={styles.row} onPress={() => router.push(item.route as never)} accessibilityRole="button">
             <View style={[styles.icon, { backgroundColor: `${item.color}16` }]}>

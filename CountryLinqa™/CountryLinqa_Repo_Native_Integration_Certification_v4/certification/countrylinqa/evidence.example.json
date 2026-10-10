@@ -1,0 +1,20 @@
+{
+  "gitSha": "TBD",
+  "serverSha256": "TBD",
+  "androidSha256": "TBD",
+  "iosSha256": "TBD",
+  "androidPhysical": "PENDING",
+  "iosRequired": true,
+  "iosPhysical": "PENDING",
+  "myCountry": "PENDING",
+  "selectedCountries": "PENDING",
+  "region": "PENDING",
+  "worldwide": "PENDING",
+  "inboundPrivacy": "PENDING",
+  "pauseDiscovery": "PENDING",
+  "block": "PENDING",
+  "advancedFilters": "PENDING",
+  "savedSearch": "PENDING",
+  "pagination": "PENDING",
+  "cacheInvalidation": "PENDING"
+}

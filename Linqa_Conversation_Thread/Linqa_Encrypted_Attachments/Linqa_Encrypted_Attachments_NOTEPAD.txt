@@ -1,0 +1,503 @@
+LINQA ENCRYPTED ATTACHMENTS
+Video, voice, document, design/crop, AI image, location share/request, event, meeting.
+Server stores envelopes only. Apply 028_thread_attachments.sql.
+
+
+========================================================================================
+FILE: server/migrations/028_thread_attachments.sql
+========================================================================================
+-- Encrypted thread attachments. Server stores ciphertext and vault pointers only.
+
+CREATE TABLE IF NOT EXISTS thread_attachments (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  sender_user_id  TEXT NOT NULL,
+  sender_device_id TEXT NOT NULL,
+  kind            TEXT NOT NULL CHECK (kind IN (
+    'VIDEO','VOICE','DOCUMENT','DESIGN','AI_IMAGE','LOCATION','EVENT','MEETING'
+  )),
+  vault_id        TEXT,
+  envelope        BYTEA NOT NULL,
+  byte_length     INTEGER NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS location_shares (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  owner_user_id   TEXT NOT NULL,
+  state           TEXT NOT NULL CHECK (state IN ('REQUESTED','SHARING','STOPPED','DECLINED')),
+  requested_by    TEXT NOT NULL,
+  expires_at      TIMESTAMPTZ,
+  envelope        BYTEA,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS thread_attachments_conv_idx
+  ON thread_attachments(conversation_id, created_at DESC);
+
+========================================================================================
+FILE: server/src/services/thread-attachment.service.ts
+========================================================================================
+import type { Database } from "../db/pool.js";
+
+export type AttachmentKind =
+  | "VIDEO"
+  | "VOICE"
+  | "DOCUMENT"
+  | "DESIGN"
+  | "AI_IMAGE"
+  | "LOCATION"
+  | "EVENT"
+  | "MEETING";
+
+export class ThreadAttachmentService {
+  constructor(private readonly db: Database) {}
+
+  async accept(input: {
+    id: string;
+    conversationId: string;
+    userId: string;
+    deviceId: string;
+    kind: AttachmentKind;
+    vaultId?: string;
+    envelope: Buffer;
+  }) {
+    await this.requireMember(input.userId, input.conversationId);
+    if (input.envelope.length < 32) throw new Error("ATTACHMENT_ENVELOPE_INVALID");
+    await this.db.query(
+      `INSERT INTO thread_attachments(
+         id,conversation_id,sender_user_id,sender_device_id,kind,vault_id,envelope,byte_length
+       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT(id) DO NOTHING`,
+      [
+        input.id,
+        input.conversationId,
+        input.userId,
+        input.deviceId,
+        input.kind,
+        input.vaultId ?? null,
+        input.envelope,
+        input.envelope.length,
+      ],
+    );
+    return { id: input.id, accepted: true };
+  }
+
+  async list(userId: string, conversationId: string, limit = 40) {
+    await this.requireMember(userId, conversationId);
+    const result = await this.db.query(
+      `SELECT id,kind,vault_id,envelope,byte_length,created_at,sender_user_id
+         FROM thread_attachments
+        WHERE conversation_id=$1
+        ORDER BY created_at DESC
+        LIMIT $2`,
+      [conversationId, limit],
+    );
+    return result.rows;
+  }
+
+  async requestLocation(input: {
+    id: string;
+    conversationId: string;
+    userId: string;
+    peerUserId: string;
+  }) {
+    await this.requireMember(input.userId, input.conversationId);
+    await this.db.query(
+      `INSERT INTO location_shares(id,conversation_id,owner_user_id,state,requested_by)
+       VALUES($1,$2,$3,'REQUESTED',$4)`,
+      [input.id, input.conversationId, input.peerUserId, input.userId],
+    );
+    return { id: input.id, state: "REQUESTED" };
+  }
+
+  async answerLocation(input: {
+    id: string;
+    userId: string;
+    accept: boolean;
+    envelope?: Buffer;
+    expiresAt?: Date;
+  }) {
+    const row = await this.db.query(
+      `SELECT owner_user_id,conversation_id FROM location_shares WHERE id=$1 AND state='REQUESTED'`,
+      [input.id],
+    );
+    if (row.rowCount !== 1 || row.rows[0].owner_user_id !== input.userId) {
+      throw new Error("LOCATION_SHARE_NOT_YOURS");
+    }
+    if (!input.accept) {
+      await this.db.query(`UPDATE location_shares SET state='DECLINED' WHERE id=$1`, [input.id]);
+      return { id: input.id, state: "DECLINED" };
+    }
+    if (!input.envelope || input.envelope.length < 32) throw new Error("LOCATION_ENVELOPE_REQUIRED");
+    await this.db.query(
+      `UPDATE location_shares
+          SET state='SHARING', envelope=$2, expires_at=$3
+        WHERE id=$1`,
+      [input.id, input.envelope, input.expiresAt ?? null],
+    );
+    return { id: input.id, state: "SHARING" };
+  }
+
+  async stopLocation(id: string, userId: string) {
+    const updated = await this.db.query(
+      `UPDATE location_shares SET state='STOPPED', envelope=NULL
+        WHERE id=$1 AND owner_user_id=$2 AND state='SHARING'`,
+      [id, userId],
+    );
+    if (updated.rowCount !== 1) throw new Error("LOCATION_SHARE_NOT_ACTIVE");
+    return { id, state: "STOPPED" };
+  }
+
+  private async requireMember(userId: string, conversationId: string) {
+    const result = await this.db.query(
+      `SELECT 1 FROM chat_members WHERE thread_id=$1 AND user_id=$2`,
+      [conversationId, userId],
+    );
+    if (result.rowCount !== 1) throw new Error("conversation access denied");
+  }
+}
+
+========================================================================================
+FILE: server/src/routes/thread-attachment.routes.ts
+========================================================================================
+import { z } from "zod";
+import type { ThreadAttachmentService } from "../services/thread-attachment.service.js";
+
+const kind = z.enum(["VIDEO", "VOICE", "DOCUMENT", "DESIGN", "AI_IMAGE", "LOCATION", "EVENT", "MEETING"]);
+
+export function registerThreadAttachmentRoutes(
+  app: { post: Function; get: Function },
+  deps: {
+    attachments: ThreadAttachmentService;
+    authenticate: (request: any) => Promise<{ userId: string; deviceId: string }>;
+  },
+) {
+  app.post("/v2/chats/:id/attachments", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    const body = z.object({
+      id: z.string().min(8),
+      kind,
+      vaultId: z.string().optional(),
+      envelopeBase64: z.string().min(16),
+    }).parse(request.body);
+    return deps.attachments.accept({
+      id: body.id,
+      conversationId: request.params.id,
+      userId: actor.userId,
+      deviceId: actor.deviceId,
+      kind: body.kind,
+      vaultId: body.vaultId,
+      envelope: Buffer.from(body.envelopeBase64, "base64url"),
+    });
+  });
+
+  app.get("/v2/chats/:id/attachments", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    const rows = await deps.attachments.list(actor.userId, request.params.id);
+    return {
+      attachments: rows.map((row: any) => ({
+        id: row.id,
+        kind: row.kind,
+        vaultId: row.vault_id,
+        envelopeBase64: Buffer.from(row.envelope).toString("base64url"),
+        createdAt: row.created_at,
+        senderUserId: row.sender_user_id,
+      })),
+    };
+  });
+
+  app.post("/v2/chats/:id/location-requests", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    const body = z.object({ id: z.string().min(8), peerUserId: z.string() }).parse(request.body);
+    return deps.attachments.requestLocation({
+      id: body.id,
+      conversationId: request.params.id,
+      userId: actor.userId,
+      peerUserId: body.peerUserId,
+    });
+  });
+
+  app.post("/v2/location-shares/:id/answer", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    const body = z.object({
+      accept: z.boolean(),
+      envelopeBase64: z.string().optional(),
+      expiresAt: z.string().datetime().optional(),
+    }).parse(request.body);
+    return deps.attachments.answerLocation({
+      id: request.params.id,
+      userId: actor.userId,
+      accept: body.accept,
+      envelope: body.envelopeBase64 ? Buffer.from(body.envelopeBase64, "base64url") : undefined,
+      expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
+    });
+  });
+
+  app.post("/v2/location-shares/:id/stop", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    return deps.attachments.stopLocation(request.params.id, actor.userId);
+  });
+}
+
+========================================================================================
+FILE: clients/mobile/src/services/AttachmentSendService.ts
+========================================================================================
+/**
+ * Client send path for encrypted thread attachments.
+ * Capture stays on device. Only a sealed envelope is posted.
+ */
+import type { SecureCoreMessaging } from "./ConversationService";
+import type { ApiClient } from "./ApiClient";
+import type { ThreadPayload } from "../conversation/thread-actions";
+
+export class AttachmentSendService {
+  constructor(
+    private readonly api: ApiClient,
+    private readonly core: SecureCoreMessaging,
+  ) {}
+
+  async send(conversationId: string, payload: ThreadPayload) {
+    const sealed = await this.core.encrypt({
+      conversationId,
+      plaintext: JSON.stringify(payload),
+      messageType: payload.kind,
+    });
+    return this.api.request(`/v2/chats/${conversationId}/attachments`, {
+      method: "POST",
+      body: JSON.stringify({
+        id: sealed.messageId,
+        kind: payload.kind,
+        vaultId: "vaultId" in payload ? payload.vaultId : undefined,
+        envelopeBase64: toBase64Url(sealed.ciphertext),
+      }),
+    });
+  }
+
+  async requestLocation(conversationId: string, peerUserId: string) {
+    return this.api.request(`/v2/chats/${conversationId}/location-requests`, {
+      method: "POST",
+      body: JSON.stringify({ id: `loc_${Date.now()}`, peerUserId }),
+    });
+  }
+
+  async shareLocation(input: {
+    shareId: string;
+    conversationId: string;
+    label: string;
+    latitude: number;
+    longitude: number;
+    minutes: number;
+  }) {
+    const sealed = await this.core.encrypt({
+      conversationId: input.conversationId,
+      plaintext: JSON.stringify({
+        kind: "LOCATION",
+        label: input.label,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        liveMinutes: input.minutes,
+      }),
+      messageType: "LOCATION",
+    });
+    return this.api.request(`/v2/location-shares/${input.shareId}/answer`, {
+      method: "POST",
+      body: JSON.stringify({
+        accept: true,
+        envelopeBase64: toBase64Url(sealed.ciphertext),
+        expiresAt: new Date(Date.now() + input.minutes * 60_000).toISOString(),
+      }),
+    });
+  }
+}
+
+function toBase64Url(bytes: Uint8Array) {
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+========================================================================================
+FILE: clients/mobile/src/conversation/location-sheet.ts
+========================================================================================
+/**
+ * Map location sheet. Not a navigation app.
+ * Shows a share pin and a request for the other person's live location.
+ * Coordinates leave the device only after accept, and only inside an envelope.
+ */
+export interface MapPin {
+  latitude: number;
+  longitude: number;
+  label: string;
+}
+
+export interface LocationSheetState {
+  myPin?: MapPin;
+  peerPin?: MapPin;
+  requestState: "IDLE" | "REQUESTED" | "SHARING" | "DECLINED";
+}
+
+export function regionFor(pins: MapPin[]) {
+  if (pins.length === 0) return { latitude: 0, longitude: 0, latitudeDelta: 40, longitudeDelta: 40 };
+  const lat = pins.reduce((sum, pin) => sum + pin.latitude, 0) / pins.length;
+  const lng = pins.reduce((sum, pin) => sum + pin.longitude, 0) / pins.length;
+  return { latitude: lat, longitude: lng, latitudeDelta: 0.08, longitudeDelta: 0.08 };
+}
+
+export function canSendPin(pin?: MapPin): pin is MapPin {
+  return !!pin && pin.latitude >= -90 && pin.latitude <= 90 && pin.longitude >= -180 && pin.longitude <= 180;
+}
+
+========================================================================================
+FILE: clients/mobile/src/conversation/thread-actions.ts
+========================================================================================
+/**
+ * Composer actions for the conversation thread.
+ * Media bytes never sit in the page model. The sheet hands a vault id
+ * or a structured payload to the core, which seals it before send.
+ */
+
+export type ThreadAction =
+  | "PHOTO"
+  | "LOCATION"
+  | "CONTACT"
+  | "DOCUMENT"
+  | "POLL"
+  | "EVENT"
+  | "AI_IMAGE"
+  | "DESIGN"
+  | "LIVE_SCREEN"
+  | "VOICE"
+  | "VIDEO"
+  | "MEETING";
+
+export interface ThreadActionSpec {
+  id: ThreadAction;
+  label: string;
+  group: "MEDIA" | "SHARE" | "CREATE" | "LIVE";
+  needsConsent: boolean;
+}
+
+export const THREAD_ACTIONS: ThreadActionSpec[] = [
+  { id: "PHOTO", label: "Photos", group: "MEDIA", needsConsent: false },
+  { id: "VIDEO", label: "Record video", group: "MEDIA", needsConsent: true },
+  { id: "VOICE", label: "Record voice", group: "MEDIA", needsConsent: true },
+  { id: "DOCUMENT", label: "Document", group: "MEDIA", needsConsent: false },
+  { id: "DESIGN", label: "Design / crop", group: "MEDIA", needsConsent: false },
+  { id: "AI_IMAGE", label: "AI image", group: "CREATE", needsConsent: false },
+  { id: "LOCATION", label: "Location", group: "SHARE", needsConsent: true },
+  { id: "CONTACT", label: "Contact", group: "SHARE", needsConsent: true },
+  { id: "POLL", label: "Poll", group: "CREATE", needsConsent: false },
+  { id: "EVENT", label: "Event", group: "CREATE", needsConsent: false },
+  { id: "MEETING", label: "Schedule meeting", group: "LIVE", needsConsent: false },
+  { id: "LIVE_SCREEN", label: "Share live screen", group: "LIVE", needsConsent: true },
+];
+
+export interface PhotoAttachment {
+  kind: "PHOTO";
+  vaultId: string;
+  width: number;
+  height: number;
+}
+
+export interface DocumentAttachment {
+  kind: "DOCUMENT";
+  vaultId: string;
+  fileName: string;
+  byteLength: number;
+}
+
+export interface LocationShare {
+  kind: "LOCATION";
+  label: string;
+  latitude: number;
+  longitude: number;
+  liveMinutes?: number;
+}
+
+export interface ContactShare {
+  kind: "CONTACT";
+  displayName: string;
+  handle: string;
+}
+
+export interface PollDraft {
+  kind: "POLL";
+  question: string;
+  options: string[];
+  allowsMultiple: boolean;
+}
+
+export interface EventDraft {
+  kind: "EVENT";
+  title: string;
+  startsAt: string;
+  place?: string;
+}
+
+export interface MeetingDraft {
+  kind: "MEETING";
+  title: string;
+  startsAt: string;
+  durationMinutes: number;
+}
+
+export interface VoiceNote {
+  kind: "VOICE";
+  vaultId: string;
+  durationMs: number;
+}
+
+export interface VideoNote {
+  kind: "VIDEO";
+  vaultId: string;
+  durationMs: number;
+}
+
+export interface DesignDraft {
+  kind: "DESIGN";
+  vaultId: string;
+  crop: { x: number; y: number; width: number; height: number };
+}
+
+export interface AiImageDraft {
+  kind: "AI_IMAGE";
+  prompt: string;
+  vaultId?: string;
+}
+
+export interface LiveScreenShare {
+  kind: "LIVE_SCREEN";
+  sessionId: string;
+}
+
+export type ThreadPayload =
+  | PhotoAttachment
+  | DocumentAttachment
+  | LocationShare
+  | ContactShare
+  | PollDraft
+  | EventDraft
+  | MeetingDraft
+  | VoiceNote
+  | VideoNote
+  | DesignDraft
+  | AiImageDraft
+  | LiveScreenShare;
+
+export function assertPayload(action: ThreadAction, payload: ThreadPayload): void {
+  if (payload.kind !== action && !(action === "PHOTO" && payload.kind === "PHOTO")) {
+    if (payload.kind !== action) throw new Error("THREAD_PAYLOAD_MISMATCH");
+  }
+  if (payload.kind === "POLL" && payload.options.filter((o) => o.trim()).length < 2) {
+    throw new Error("POLL_NEEDS_TWO_OPTIONS");
+  }
+  if (payload.kind === "LOCATION") {
+    if (payload.latitude < -90 || payload.latitude > 90) throw new Error("LOCATION_INVALID");
+    if (payload.longitude < -180 || payload.longitude > 180) throw new Error("LOCATION_INVALID");
+  }
+  if ((payload.kind === "PHOTO" || payload.kind === "DOCUMENT" || payload.kind === "VOICE" || payload.kind === "VIDEO" || payload.kind === "DESIGN") && !payload.vaultId) {
+    throw new Error("VAULT_ID_REQUIRED");
+  }
+}

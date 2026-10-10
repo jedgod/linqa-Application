@@ -56,9 +56,19 @@ export async function registerLinqaSendModuleSurfaceRoutes(app: FastifyInstance,
     return { recipientId: result.userId, type: "LINQA_USER", displayName: result.displayName, countryCode: result.country, currency: result.preferredCurrency, deliveryMethods: ["LINQA_PROFILE"], preferredDeliveryMethod: "LINQA_PROFILE" };
   }));
 
+  /**
+   * Certified payout providers a new external recipient may be attached to. The server, not the
+   * client, decides which providers are acceptable; the create call re-checks certification.
+   */
+  app.get("/v1/linqasend/payout-providers", guarded(async (request) => {
+    const p = await authenticate(request); requireScope(p, "linqasend:read");
+    const { rows } = await db.query(`SELECT DISTINCT provider_id FROM linqasend_provider_certifications_v6 WHERE status='CERTIFIED' AND expires_at>now() ORDER BY provider_id`);
+    return { items: rows.map((r) => ({ providerId: r.provider_id as string })) };
+  }));
+
   app.post("/v1/linqasend/external-recipients", guarded(async (request, reply) => {
     const p = await authenticate(request); requireScope(p, "linqasend:write");
-    const body = z.object({ recipientKind: z.enum(["EXTERNAL_PERSON", "EXTERNAL_BUSINESS"]), displayName: z.string().trim().min(2).max(160), countryCode: country, currency, deliveryMethod, provider: z.string().min(2).max(64), providerToken: z.string().min(8).max(512), maskedDisplay: z.string().min(3).max(160), phone: z.string().max(32).optional(), email: z.string().email().max(320).optional() }).parse(request.body);
+    const body = z.object({ recipientKind: z.enum(["EXTERNAL_PERSON", "EXTERNAL_BUSINESS"]), displayName: z.string().trim().min(2).max(160), countryCode: country, currency, deliveryMethod, provider: z.string().min(2).max(64), providerToken: z.string().min(8).max(512), maskedDisplay: z.string().min(3).max(160), phone: z.string().max(32).optional(), email: z.string().email().max(320).optional(), favorite: z.boolean().optional() }).strict().parse(request.body);
     const certified = await db.query(`SELECT 1 FROM linqasend_provider_certifications_v6 WHERE provider_id=$1 AND status='CERTIFIED' AND expires_at>now() LIMIT 1`, [body.provider]);
     if (!certified.rows[0]) return reply.code(409).send({ error: "certified_payout_provider_required" });
     if (!tokenVault) return reply.code(409).send({ error: "provider_token_kms_not_configured" });
@@ -72,7 +82,7 @@ export async function registerLinqaSendModuleSurfaceRoutes(app: FastifyInstance,
       await client.query(`INSERT INTO linqasend_external_recipients_v1(id,owner_user_id,recipient_kind,display_name,country_code,currency,phone_hash,email_hash,verification_status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'VERIFIED')`, [externalId, p.userId, body.recipientKind, body.displayName, body.countryCode, body.currency, hash(body.phone), hash(body.email)]);
       await client.query(`INSERT INTO linqasend_payout_endpoints_v1(id,external_recipient_id,delivery_method,provider,provider_token,provider_secret_id,masked_display,country_code,currency,status,verified_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'ACTIVE',now())`, [endpointId, externalId, body.deliveryMethod, body.provider, protectedReference, providerSecretId, body.maskedDisplay, body.countryCode, body.currency]);
       const recipientType = body.deliveryMethod === "MOBILE_MONEY" ? "MOBILE_WALLET" : body.deliveryMethod === "PHONE_CLAIM" ? "PHONE" : body.deliveryMethod === "EMAIL_CLAIM" ? "EMAIL" : body.deliveryMethod;
-      await client.query(`INSERT INTO linqasend_recipients(id,owner_user_id,recipient_type,external_recipient_id,display_name,country,preferred_currency,payout_profile_ref,payout_provider,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [recipientId, p.userId, recipientType, externalId, body.displayName, body.countryCode, body.currency, protectedReference, body.provider, JSON.stringify({ deliveryMethod: body.deliveryMethod, maskedDisplay: body.maskedDisplay, payoutEndpointId: endpointId })]);
+      await client.query(`INSERT INTO linqasend_recipients(id,owner_user_id,recipient_type,external_recipient_id,display_name,country,preferred_currency,payout_profile_ref,payout_provider,metadata,is_favorite) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [recipientId, p.userId, recipientType, externalId, body.displayName, body.countryCode, body.currency, protectedReference, body.provider, JSON.stringify({ deliveryMethod: body.deliveryMethod, maskedDisplay: body.maskedDisplay, payoutEndpointId: endpointId }), body.favorite === true]);
       await client.query("COMMIT");
       return reply.code(201).send({ id: externalId, recipientId, endpointId, verificationStatus: "VERIFIED" });
     } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -114,14 +124,14 @@ export async function registerLinqaSendModuleSurfaceRoutes(app: FastifyInstance,
     if (!config.LINQASEND_PROVIDER_URL || !config.LINQASEND_PROVIDER_TOKEN) return reply.code(409).send({ error: "provider_hosted_tokenization_not_configured" });
     const response = await fetch(`${config.LINQASEND_PROVIDER_URL.replace(/\/$/, "")}/payment-methods/confirm`, { method: "POST", headers: { authorization: `Bearer ${config.LINQASEND_PROVIDER_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ userId: p.userId, setupToken: body.setupToken }), signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error(`TOKENIZATION_PROVIDER_ERROR:${response.status}`);
-    const method = z.object({ provider: z.string().min(2).max(64), providerCustomerRef: z.string().max(255).optional(), providerPaymentMethodRef: z.string().min(8).max(255), type: z.enum(["DEBIT_CARD", "CREDIT_CARD", "BANK_ACCOUNT", "MOBILE_WALLET"]), last4: z.string().length(4).optional(), billingCountry: country.optional(), verificationStatus: z.literal("VERIFIED") }).parse(await response.json());
+    const method = z.object({ provider: z.string().min(2).max(64), providerCustomerRef: z.string().max(255).optional(), providerPaymentMethodRef: z.string().min(8).max(255), type: z.enum(["DEBIT_CARD", "CREDIT_CARD", "BANK_ACCOUNT", "MOBILE_WALLET"]), last4: z.string().length(4).optional(), billingCountry: country.optional(), verificationStatus: z.literal("VERIFIED"), brand: z.string().trim().max(24).optional(), expMonth: z.number().int().min(1).max(12).optional(), expYear: z.number().int().min(2000).max(2200).optional() }).parse(await response.json());
     const certified = await db.query(`SELECT 1 FROM linqasend_provider_certifications_v6 WHERE provider_id=$1 AND status='CERTIFIED' AND expires_at>now() LIMIT 1`, [method.provider]);
     if (!certified.rows[0]) return reply.code(409).send({ error: "certified_funding_provider_required" });
     if (!tokenVault) return reply.code(409).send({ error: "provider_token_kms_not_configured" });
     const protectedReference = await tokenVault.store({ ownerUserId: p.userId, providerId: method.provider, secretKind: "FUNDING_METHOD", plaintext: method.providerPaymentMethodRef, ...(method.last4 ? { maskedDisplay: `•••• ${method.last4}` } : {}) });
     const providerSecretId = protectedReference.slice("vault:".length);
     const id = randomUUID();
-    const { rows } = await db.query(`INSERT INTO linqasend_payment_methods(id,user_id,provider,provider_customer_ref,provider_payment_method_ref,provider_secret_id,type,last4,billing_country,verification_status) VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$8,'VERIFIED') ON CONFLICT(provider,provider_payment_method_ref) DO UPDATE SET updated_at=now() RETURNING id,type,last4,verification_status`, [id, p.userId, method.provider, protectedReference, providerSecretId, method.type, method.last4 ?? null, method.billingCountry ?? null]);
+    const { rows } = await db.query(`INSERT INTO linqasend_payment_methods(id,user_id,provider,provider_customer_ref,provider_payment_method_ref,provider_secret_id,type,last4,billing_country,verification_status,metadata) VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$8,'VERIFIED',$9::jsonb) ON CONFLICT(provider,provider_payment_method_ref) DO UPDATE SET updated_at=now() RETURNING id,type,last4,verification_status`, [id, p.userId, method.provider, protectedReference, providerSecretId, method.type, method.last4 ?? null, method.billingCountry ?? null, JSON.stringify({ ...(method.brand ? { brand: method.brand } : {}), ...(method.expMonth ? { expMonth: method.expMonth } : {}), ...(method.expYear ? { expYear: method.expYear } : {}) })]);
     return reply.code(201).send({ id: rows[0].id, type: rows[0].type, last4: rows[0].last4, verificationStatus: rows[0].verification_status });
   }));
 
@@ -148,12 +158,22 @@ export async function registerLinqaSendModuleSurfaceRoutes(app: FastifyInstance,
   app.get("/v1/linqasend/limits", guarded(async (request) => {
     const p = await authenticate(request); requireScope(p, "linqasend:read");
     const profile = await jurisdiction.getProfile(p.userId);
-    const [countryPolicy, corridors, used] = await Promise.all([
+    const [countryPolicy, corridors, used, cohort, month] = await Promise.all([
       db.query(`SELECT version,domestic_internal_status,cross_border_outbound_status,allowed_funding_modes,allowed_receive_modes FROM linqasend_country_capabilities_v3 WHERE country=$1 AND effective_from<=now() AND (effective_to IS NULL OR effective_to>now()) ORDER BY version DESC LIMIT 1`, [profile.regulatoryJurisdiction]),
       db.query(`SELECT destination_country,source_currencies,destination_currencies,min_amount_minor,max_amount_minor,status FROM linqasend_corridor_rules_v3 WHERE source_country=$1 AND effective_from<=now() AND (effective_to IS NULL OR effective_to>now()) ORDER BY destination_country,version DESC`, [profile.regulatoryJurisdiction]),
-      db.query(`SELECT coalesce(sum(send_amount_minor),0)::bigint AS used_minor,count(*)::int AS transfer_count FROM linqasend_transfers WHERE user_id=$1 AND created_at>now()-interval '24 hours' AND status NOT IN ('DECLINED','CANCELED','EXPIRED','FAILED')`, [p.userId])
+      db.query(`SELECT coalesce(sum(send_amount_minor),0)::bigint AS used_minor,count(*)::int AS transfer_count FROM linqasend_transfers WHERE user_id=$1 AND created_at>now()-interval '24 hours' AND status NOT IN ('DECLINED','CANCELED','EXPIRED','FAILED')`, [p.userId]),
+      db.query(`SELECT min(c.per_transfer_limit_minor)::bigint AS per_transfer_minor, min(c.daily_user_limit_minor)::bigint AS daily_minor FROM linqasend_launch_cohorts c JOIN linqasend_launch_cohort_members m ON m.cohort_id=c.id AND m.user_id=$1 AND m.removed_at IS NULL WHERE c.status='ACTIVE'`, [p.userId]),
+      db.query(`SELECT coalesce(sum(send_amount_minor),0)::bigint AS used_minor FROM linqasend_transfers WHERE user_id=$1 AND send_currency='USD' AND created_at>now()-interval '30 days' AND status NOT IN ('DECLINED','CANCELED','EXPIRED','FAILED')`, [p.userId])
     ]);
-    return { jurisdiction: profile.regulatoryJurisdiction, countryCapability: countryPolicy.rows[0] ?? null, corridors: corridors.rows.map((r) => ({ ...r, min_amount_minor: r.min_amount_minor === null ? null : String(r.min_amount_minor), max_amount_minor: r.max_amount_minor === null ? null : String(r.max_amount_minor) })), rolling24Hours: { usedMinor: String(used.rows[0]?.used_minor ?? 0), transferCount: used.rows[0]?.transfer_count ?? 0 } };
+    // Limits are reported only where one really exists. A null limit means "no fixed limit on this account", never a guess.
+    const dailyLimit = cohort.rows[0]?.daily_minor ?? null;
+    const dailyUsed = BigInt(used.rows[0]?.used_minor ?? 0);
+    const remaining = (limit: unknown, spent: bigint) => (limit === null || limit === undefined ? null : String(BigInt(limit as string) > spent ? BigInt(limit as string) - spent : 0n));
+    return { jurisdiction: profile.regulatoryJurisdiction, countryCapability: countryPolicy.rows[0] ?? null, corridors: corridors.rows.map((r) => ({ ...r, min_amount_minor: r.min_amount_minor === null ? null : String(r.min_amount_minor), max_amount_minor: r.max_amount_minor === null ? null : String(r.max_amount_minor) })), rolling24Hours: { usedMinor: String(used.rows[0]?.used_minor ?? 0), transferCount: used.rows[0]?.transfer_count ?? 0 },
+      currency: "USD",
+      perTransferLimitMinor: cohort.rows[0]?.per_transfer_minor === null || cohort.rows[0]?.per_transfer_minor === undefined ? null : String(cohort.rows[0].per_transfer_minor),
+      daily: { limitMinor: dailyLimit === null ? null : String(dailyLimit), usedMinor: String(dailyUsed), remainingMinor: remaining(dailyLimit, dailyUsed) },
+      monthly: { limitMinor: null, usedMinor: String(month.rows[0]?.used_minor ?? 0), remainingMinor: null } };
   }));
 
   app.get("/v1/linqasend/settings", guarded(async (request) => {

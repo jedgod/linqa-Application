@@ -222,8 +222,8 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
       const rows = (conversations.rows as Array<ConversationRow & { participantNames: string[] }>).map(
         (row) => ({
           conversationId: row.conversationId,
-          title: row.title,
-          initials: initialsOf(row.title),
+          title: !row.isGroup && row.participantNames?.[0] ? row.participantNames[0] : row.title,
+          initials: initialsOf(!row.isGroup && row.participantNames?.[0] ? row.participantNames[0] : row.title),
           isGroup: row.isGroup,
           // Stacked group avatars need the members, but only their initials
           // travel: the inbox has no business shipping a member roster to

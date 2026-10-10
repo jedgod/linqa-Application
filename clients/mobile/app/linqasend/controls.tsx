@@ -1,9 +1,106 @@
-import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect, useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { LinqaSendStatusBar, LinqaSendTabBar, send } from "../../components/linqasend/ui";
+import { getApiBaseUrl } from "../../config/api";
 import { LinqaSendService } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
-import { getApiBaseUrl } from "../../config/api";
-const API=getApiBaseUrl();
-export default function LinqaSendControls(){const router=useRouter();const client=useMemo(()=>new LinqaSendService(API,()=>accessTokenProvider.getAccessToken()),[]);const [limits,setLimits]=useState<Awaited<ReturnType<LinqaSendService["getLimits"]>>|null>(null);const [settings,setSettings]=useState<Awaited<ReturnType<LinqaSendService["getSettings"]>>|null>(null);const [currency,setCurrency]=useState("");const [saving,setSaving]=useState(false);const [error,setError]=useState("");useEffect(()=>{Promise.all([client.getLimits(),client.getSettings()]).then(([l,x])=>{setLimits(l);setSettings(x);setCurrency(x.default_currency??"")}).catch(e=>setError(e instanceof Error?e.message:"Unable to load controls"))},[client]);async function save(next:Partial<NonNullable<typeof settings>>={}){if(!settings)return;setSaving(true);setError("");try{await client.updateSettings({defaultCurrency:currency.toUpperCase()||undefined,transferNotifications:next.transfer_notifications??settings.transfer_notifications,requestNotifications:next.request_notifications??settings.request_notifications,scamWarningLevel:next.scam_warning_level??settings.scam_warning_level});setSettings({...settings,...next,default_currency:currency.toUpperCase()||null})}catch(e){setError(e instanceof Error?e.message:"Unable to save settings")}finally{setSaving(false)}}return <SafeAreaView style={s.screen}><View style={s.header}><Pressable onPress={()=>router.back()}><Text style={s.back}>‹</Text></Pressable><Text style={s.title}>Limits & Settings</Text></View><ScrollView contentContainerStyle={s.content}>{!limits||!settings?<ActivityIndicator color="#5146E5"/>:<><View style={s.card}><Text style={s.cardTitle}>Rolling 24 hours</Text><Text style={s.big}>{(Number(limits.rolling24Hours.usedMinor)/100).toFixed(2)}</Text><Text style={s.muted}>{limits.rolling24Hours.transferCount} transfers · jurisdiction {limits.jurisdiction}</Text><Text style={s.muted}>{limits.corridors.length} currently configured corridor policies</Text></View><View style={s.card}><Text style={s.cardTitle}>Preferences</Text><TextInput style={s.input} value={currency} onChangeText={setCurrency} maxLength={3} autoCapitalize="characters" placeholder="Default currency"/><View style={s.setting}><Text style={s.settingText}>Transfer notifications</Text><Switch value={settings.transfer_notifications} onValueChange={v=>{setSettings({...settings,transfer_notifications:v});void save({transfer_notifications:v})}}/></View><View style={s.setting}><Text style={s.settingText}>Request notifications</Text><Switch value={settings.request_notifications} onValueChange={v=>{setSettings({...settings,request_notifications:v});void save({request_notifications:v})}}/></View><Pressable style={s.level} onPress={()=>{const v=settings.scam_warning_level==="STANDARD"?"ENHANCED":"STANDARD";setSettings({...settings,scam_warning_level:v});void save({scam_warning_level:v})}}><Text style={s.settingText}>Scam warnings</Text><Text style={s.value}>{settings.scam_warning_level}</Text></Pressable><Pressable style={s.button} onPress={()=>save()} disabled={saving}><Text style={s.buttonText}>{saving?"Saving…":"Save currency"}</Text></Pressable></View></>}{error&&<Text style={s.error}>{error.replace(/_/g," ")}</Text>}</ScrollView></SafeAreaView>}
-const s=StyleSheet.create({screen:{flex:1,backgroundColor:"#F6F7FB"},header:{flexDirection:"row",alignItems:"center",padding:18,gap:12},back:{fontSize:34},title:{fontSize:22,fontWeight:"900"},content:{padding:18},card:{backgroundColor:"white",borderWidth:1,borderColor:"#E1E6EF",borderRadius:16,padding:17,marginBottom:14},cardTitle:{fontWeight:"900",fontSize:16},big:{fontSize:28,fontWeight:"900",marginTop:10},muted:{color:"#667085",fontSize:12,marginTop:5},input:{height:48,borderWidth:1,borderColor:"#DDE3EC",borderRadius:12,paddingHorizontal:12,marginTop:14},setting:{flexDirection:"row",justifyContent:"space-between",alignItems:"center",paddingVertical:13,borderBottomWidth:1,borderBottomColor:"#EAECF0"},settingText:{fontWeight:"700",color:"#344054"},level:{flexDirection:"row",justifyContent:"space-between",paddingVertical:15},value:{color:"#5146E5",fontWeight:"900"},button:{height:48,backgroundColor:"#5146E5",borderRadius:12,alignItems:"center",justifyContent:"center",marginTop:8},buttonText:{color:"white",fontWeight:"900"},error:{color:"#B42318"}});
+import { fonts } from "../../theme/tokens";
+
+const API = getApiBaseUrl();
+type Settings = Awaited<ReturnType<LinqaSendService["getSettings"]>>;
+type Entry = { label: string; hint: string; icon: keyof typeof Ionicons.glyphMap; route: string };
+
+const ENTRIES: Entry[] = [
+  { label: "Dashboard", hint: "Totals and recent activity", icon: "stats-chart-outline", route: "/linqasend/dashboard" },
+  { label: "Transaction History", hint: "Sent and received transfers", icon: "receipt-outline", route: "/linqasend/history" },
+  { label: "Transfer Limits", hint: "What you can still send", icon: "speedometer-outline", route: "/linqasend/transfer-limits" },
+  { label: "Cards on File", hint: "Payment methods", icon: "card-outline", route: "/linqasend/payment-methods" },
+  { label: "Global Contacts", hint: "Recipients outside Linqa", icon: "people-outline", route: "/linqasend/global-contacts" },
+  { label: "Requests", hint: "Money requests to and from you", icon: "mail-unread-outline", route: "/linqasend/requests" },
+  { label: "Region", hint: "Country of residence", icon: "earth-outline", route: "/linqasend/jurisdiction" }
+];
+
+/** More: shortcuts to every LinqaSend area, plus notification and scam-warning preferences. */
+export default function LinqaSendMore() {
+  const router = useRouter();
+  const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [error, setError] = useState("");
+
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    client.getSettings().then((value) => { if (active) setSettings(value); }, (cause) => { if (active) setError(cause instanceof Error ? cause.message.replace(/_/g, " ") : "Unable to load settings"); });
+    return () => { active = false; };
+  }, [client]));
+
+  // Optimistic: flip the switch, send the change, and put it back if the server refuses.
+  async function change(patch: Partial<Settings>, request: Parameters<LinqaSendService["updateSettings"]>[0]) {
+    if (!settings) return;
+    const before = settings;
+    setSettings({ ...settings, ...patch });
+    setError("");
+    try { await client.updateSettings(request); }
+    catch (cause) { setSettings(before); setError(cause instanceof Error ? cause.message.replace(/_/g, " ") : "Unable to save settings"); }
+  }
+
+  return (
+    <SafeAreaView style={s.screen}>
+      <LinqaSendStatusBar />
+      <Text accessibilityRole="header" style={s.title}>More</Text>
+      <ScrollView contentContainerStyle={s.content}>
+        {ENTRIES.map((entry) => (
+          <Pressable key={entry.route} accessibilityRole="button" accessibilityLabel={entry.label} style={s.entry} onPress={() => router.push(entry.route as never)}>
+            <View style={s.icon}><Ionicons name={entry.icon} size={22} color={send.primary} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.entryLabel}>{entry.label}</Text>
+              <Text style={s.entryHint}>{entry.hint}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={send.faint} />
+          </Pressable>
+        ))}
+
+        <Text style={s.section}>Preferences</Text>
+        {!settings && !error ? <ActivityIndicator color={send.primary} style={{ marginTop: 16 }} /> : null}
+        {settings ? (
+          <View style={s.card}>
+            <View style={s.setting}>
+              <Text style={s.settingText}>Transfer notifications</Text>
+              <Switch value={settings.transfer_notifications} trackColor={{ true: send.primary, false: send.border }} thumbColor="#FFFFFF" onValueChange={(v) => void change({ transfer_notifications: v }, { transferNotifications: v })} />
+            </View>
+            <View style={s.setting}>
+              <Text style={s.settingText}>Request notifications</Text>
+              <Switch value={settings.request_notifications} trackColor={{ true: send.primary, false: send.border }} thumbColor="#FFFFFF" onValueChange={(v) => void change({ request_notifications: v }, { requestNotifications: v })} />
+            </View>
+            <View style={[s.setting, { borderBottomWidth: 0 }]}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={s.settingText}>Enhanced scam warnings</Text>
+                <Text style={s.entryHint}>Extra checks before sending to new recipients</Text>
+              </View>
+              <Switch value={settings.scam_warning_level === "ENHANCED"} trackColor={{ true: send.primary, false: send.border }} thumbColor="#FFFFFF" onValueChange={(v) => { const level = v ? "ENHANCED" : "STANDARD"; void change({ scam_warning_level: level }, { scamWarningLevel: level }); }} />
+            </View>
+          </View>
+        ) : null}
+        {error ? <Text style={s.error}>{error}</Text> : null}
+      </ScrollView>
+      <LinqaSendTabBar active="more" />
+    </SafeAreaView>
+  );
+}
+
+const s = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: send.bg },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 24, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 6 },
+  content: { paddingHorizontal: 20, paddingBottom: 24 },
+  entry: { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: send.border },
+  icon: { width: 44, height: 44, borderRadius: 14, backgroundColor: send.primarySoft, alignItems: "center", justifyContent: "center" },
+  entryLabel: { color: send.text, fontFamily: fonts.semibold, fontSize: 16 },
+  entryHint: { color: send.muted, fontFamily: fonts.regular, fontSize: 13, marginTop: 2 },
+  section: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18, marginTop: 26, marginBottom: 6 },
+  card: { backgroundColor: send.surface, borderRadius: 16, paddingHorizontal: 16 },
+  setting: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: send.border },
+  settingText: { color: send.text, fontFamily: fonts.semibold, fontSize: 15 },
+  error: { color: send.danger, fontFamily: fonts.medium, fontSize: 14, marginTop: 14 }
+});

@@ -90,7 +90,14 @@ export class CallService {
     }
   }
 
-  async end(callId: string, deviceId: string): Promise<void> {
+  /**
+   * Ends a call and writes each person's history row.
+   *
+   * `reason` is only honoured before the call is answered: the callee declining is REJECTED, a connection that never came up is
+   * FAILED. Left out, an unanswered call is CANCELLED for the caller and MISSED for the callee, and an answered one COMPLETED.
+   * The state machine is one-way: a call that has already ended cannot be ended again, so a late "end" from the other phone is refused.
+   */
+  async end(callId: string, deviceId: string, reason?: "REJECTED" | "FAILED"): Promise<void> {
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
@@ -109,7 +116,8 @@ export class CallService {
       const row = call.rows[0];
       if (!row) throw new Error("call cannot be ended");
 
-      const terminalStatus = row.status === "ACTIVE" ? "COMPLETED" : "CANCELLED";
+      const answered = row.status === "ACTIVE";
+      const terminalStatus = answered ? "COMPLETED" : reason ?? "CANCELLED";
       await client.query(
         `UPDATE call_sessions
          SET status='ENDED',ended_at=now()
@@ -127,10 +135,10 @@ export class CallService {
            peer.user_id,
            CASE participant.role WHEN 'CALLER' THEN 'OUTGOING' ELSE 'INCOMING' END,
            $2,
-           $3,
-           COALESCE($4,$5),
+           CASE WHEN $3::text = 'CANCELLED' AND participant.role = 'CALLEE' THEN 'MISSED' ELSE $3::text END,
+           COALESCE($4::timestamptz,$5::timestamptz),
            now(),
-           GREATEST(0,EXTRACT(EPOCH FROM (now()-COALESCE($4,$5)))::integer)
+           GREATEST(0,EXTRACT(EPOCH FROM (now()-COALESCE($4::timestamptz,$5::timestamptz)))::integer)
          FROM call_participants participant
          LEFT JOIN call_participants peer
            ON peer.call_id=participant.call_id AND peer.device_id<>participant.device_id

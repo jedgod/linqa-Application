@@ -262,11 +262,17 @@ export async function sendMessage(db: Database, input: SendMessageInput): Promis
   return withTransaction(db, async (client) => {
     await assertMember(client, input.senderUserId, input.conversationId);
 
+    // Disappearing messages: drop what has already expired here, and stamp this message with its own expiry.
+    await client.query(`DELETE FROM chat_messages WHERE conversation_id = $1 AND expires_at IS NOT NULL AND expires_at <= now()`, [input.conversationId]);
+    const setting = await client.query(`SELECT disappear_after_seconds AS "seconds" FROM conversations WHERE id = $1`, [input.conversationId]);
+    const seconds = (setting.rows[0] as { seconds: number | null } | undefined)?.seconds ?? null;
+    const expiresAt = seconds ? new Date(Date.now() + seconds * 1000) : null;
+
     const inserted = await client.query(
       `INSERT INTO chat_messages
          (conversation_id, sender_user_id, sender_device_id, client_message_id,
-          kind, body_ciphertext, media_count, reply_to_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+          kind, body_ciphertext, media_count, reply_to_id, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        ON CONFLICT (conversation_id, sender_user_id, client_message_id) DO NOTHING
        RETURNING id, conversation_id AS "conversationId", sender_user_id AS "senderUserId",
                  kind::text AS kind, created_at AS "createdAt"`,
@@ -278,7 +284,8 @@ export async function sendMessage(db: Database, input: SendMessageInput): Promis
         input.kind,
         ciphertext,
         input.mediaCount,
-        input.replyToId ?? null
+        input.replyToId ?? null,
+        expiresAt
       ]
     );
 
@@ -369,6 +376,74 @@ export async function sendMessage(db: Database, input: SendMessageInput): Promis
  * alone instead of nulling it, and the pointer only ever moves forward, so a
  * late request from a backgrounded device cannot un-read newer messages.
  */
+export const DISAPPEAR_OPTIONS = [86_400, 604_800, 2_419_200] as const;
+export type ConversationSettings = { muted: boolean; pinned: boolean; disappearAfterSeconds: number | null };
+
+/** This member's settings for one conversation (mute, pin) and the conversation's disappearing-messages setting. */
+export async function getConversationSettings(db: Database, userId: string, conversationId: string): Promise<ConversationSettings> {
+  const client = await db.connect();
+  try {
+    await assertMember(client, userId, conversationId);
+    const r = await client.query(
+      `SELECT cm.muted, cm.pinned, c.disappear_after_seconds AS "seconds"
+         FROM conversation_members cm JOIN conversations c ON c.id = cm.conversation_id
+        WHERE cm.conversation_id = $1 AND cm.user_id = $2 AND cm.removed_at IS NULL`,
+      [conversationId, userId]
+    );
+    const row = r.rows[0] as { muted: boolean; pinned: boolean; seconds: number | null } | undefined;
+    if (!row) throw new ChatError(404, "CONVERSATION_NOT_FOUND");
+    return { muted: row.muted, pinned: row.pinned, disappearAfterSeconds: row.seconds };
+  } finally {
+    client.release();
+  }
+}
+
+/** Pins or unpins a conversation for this member only. */
+export async function setConversationPinned(db: Database, userId: string, conversationId: string, pinned: boolean): Promise<{ pinned: boolean }> {
+  return withTransaction(db, async (client) => {
+    await assertMember(client, userId, conversationId);
+    await client.query(
+      `UPDATE conversation_members SET pinned = $3 WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL`,
+      [conversationId, userId, pinned]
+    );
+    return { pinned };
+  });
+}
+
+/**
+ * Turns disappearing messages on (1 day, 1 week or 4 weeks) or off for the whole conversation; any member can change it.
+ * It applies to messages sent afterwards; existing messages keep the expiry they were stored with.
+ */
+export async function setDisappearAfter(db: Database, userId: string, conversationId: string, seconds: number | null): Promise<{ disappearAfterSeconds: number | null }> {
+  if (seconds !== null && !(DISAPPEAR_OPTIONS as readonly number[]).includes(seconds)) throw new ChatError(422, "INVALID_DISAPPEAR_SETTING");
+  return withTransaction(db, async (client) => {
+    await assertMember(client, userId, conversationId);
+    await client.query(`UPDATE conversations SET disappear_after_seconds = $2 WHERE id = $1`, [conversationId, seconds]);
+    return { disappearAfterSeconds: seconds };
+  });
+}
+
+/**
+ * Mutes or unmutes a conversation for this member only. A muted conversation still delivers messages; the push
+ * worker just does not light up the phone. Only a member can change it, and only their own setting.
+ */
+export async function setConversationMuted(
+  db: Database,
+  userId: string,
+  conversationId: string,
+  muted: boolean
+): Promise<{ muted: boolean }> {
+  return withTransaction(db, async (client) => {
+    await assertMember(client, userId, conversationId);
+    await client.query(
+      `UPDATE conversation_members SET muted = $3
+        WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL`,
+      [conversationId, userId, muted]
+    );
+    return { muted };
+  });
+}
+
 export async function markConversationRead(
   db: Database,
   userId: string,
@@ -380,6 +455,7 @@ export async function markConversationRead(
     const newest = await client.query(
       `SELECT id, created_at AS "createdAt" FROM chat_messages
         WHERE conversation_id = $1 AND deleted_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
         ORDER BY created_at DESC, id DESC LIMIT 1`,
       [conversationId]
     );
@@ -434,13 +510,15 @@ export async function listMessages(
   try {
     await assertMember(client, userId, conversationId);
     const after = cursor ? decodeCursor(cursor) : null;
+    // Postgres' encode(..., 'base64') wraps its output with a newline every 76 characters; clients reject that as invalid base64.
     const result = await client.query(
       `SELECT id, sender_user_id AS "senderUserId", kind::text AS kind,
-              encode(body_ciphertext,'base64') AS "ciphertext",
+              replace(encode(body_ciphertext,'base64'), chr(10), '') AS "ciphertext",
               media_count AS "mediaCount", reply_to_id AS "replyToId",
               created_at AS "createdAt", edited_at AS "editedAt"
          FROM chat_messages
         WHERE conversation_id = $1 AND deleted_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
           AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
         ORDER BY created_at DESC, id DESC
         LIMIT $4`,

@@ -1,35 +1,39 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Avatar, LinqaSendStatusBar, countryName, currencyFlag, deliveryLabel, formatMinor, send } from "../../components/linqasend/ui";
+import { getApiBaseUrl } from "../../config/api";
 import { LinqaSendApiError, LinqaSendService, type LinqaSendQuote, type LinqaSendSecurityWarning, type PreparedLinqaSendTransfer } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
-import { radius, spacing, useTheme, type Palette } from "../../theme/tokens";
-import { getApiBaseUrl } from "../../config/api";
+import { requestTransactionAuth } from "../../services/transaction-auth";
+import { fonts } from "../../theme/tokens";
+import { createBiometricClient } from "../../services/biometric-session";
 
 const API = getApiBaseUrl();
-
-function money(minor: string, currency: string): string {
-  return `${(Number(minor) / 100).toFixed(2)} ${currency}`;
-}
 
 function secondsRemaining(expiresAt: string): number {
   return Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
 }
 
-/** SCREEN 5 (Review & Confirm) — the disclosed-rate screen the pack's own
- * implementation notes require: exact receive amount and rate shown before
- * confirmation, never described as "free exchange." */
+type Method = { id: string; type: string; last4: string | null };
+const METHOD_NAME: Record<string, string> = { DEBIT_CARD: "Debit card", CREDIT_CARD: "Credit card", BANK_ACCOUNT: "Bank account", MOBILE_WALLET: "Mobile wallet" };
+
+/**
+ * Review & Confirm: the disclosed-rate screen. It shows the exact amount, rate and fees
+ * before the person authorizes. Confirming first asks for biometrics or the transfer PIN
+ * on this device; only then is the device key used to sign and submit the transfer.
+ */
 export default function LinqaSendReview() {
-  const { colors } = useTheme();
-  const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
-  const params = useLocalSearchParams<{ quote: string; recipientName: string; purposeCode?: string }>();
+  const params = useLocalSearchParams<{ quote: string; recipientName: string; recipientCountry?: string; recipientType?: string; purposeCode?: string; paymentMethodId?: string }>();
   const quote: LinqaSendQuote = useMemo(() => JSON.parse(params.quote), [params.quote]);
   const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
 
   const [remaining, setRemaining] = useState(() => secondsRemaining(quote.expiresAt));
   const [paymentMethodId, setPaymentMethodId] = useState<string | null>(null);
-  const [paymentMethods, setPaymentMethods] = useState<Array<{ id: string; type: string; last4: string | null }> | null>(null);
+  const [paymentMethods, setPaymentMethods] = useState<Method[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ transferId: string; status: string; reason?: string; action?: string } | null>(null);
@@ -46,20 +50,39 @@ export default function LinqaSendReview() {
       .listPaymentMethods()
       .then((r) => {
         setPaymentMethods(r.items);
-        if (r.items[0]) setPaymentMethodId(r.items[0].id);
+        // The method chosen on the Select Payment Method step wins; otherwise the first on file.
+        const chosen = r.items.find((item) => item.id === params.paymentMethodId);
+        if (chosen ?? r.items[0]) setPaymentMethodId((chosen ?? r.items[0])!.id);
       })
       .catch(() => setPaymentMethods([]));
-  }, [client]);
+  }, [client, params.paymentMethodId]);
+
+  const sendFee = Number(quote.senderFeeMinor ?? 0);
+  const recipientFee = Number(quote.recipientFeeMinor ?? 0);
+  const total = Number(quote.sendAmountMinor) + sendFee;
+  const method = (paymentMethods ?? []).find((m) => m.id === paymentMethodId) ?? null;
 
   async function confirm() {
     if (!paymentMethodId) return;
     setBusy(true);
     setError(null);
     try {
-      const prepared = pending ?? await client.prepareTransferConfirmation({ quoteId: quote.id, paymentMethodId, ...(params.purposeCode ? { purposeCode: params.purposeCode } : {}) });
-      setPending(prepared);
+      let prepared = pending;
+      if (!prepared) {
+        // The production signer prompts on the transaction-bound hardware key itself.
+        const strong = (await createBiometricClient(() => accessTokenProvider.getAccessToken()).available()).strong;
+        if (!strong) {
+          if (!__DEV__) throw new Error("Strong biometric signing is required. Rebuild the app and enroll device biometrics.");
+          const auth = await requestTransactionAuth({ amountLabel: `$${formatMinor(quote.sendAmountMinor)} ${quote.sendCurrency}`, recipientName: params.recipientName });
+          if (auth !== "AUTHORIZED") return;
+        }
+        prepared = await client.prepareTransferConfirmation({ quoteId: quote.id, paymentMethodId, ...(params.purposeCode ? { purposeCode: params.purposeCode } : {}) });
+        setPending(prepared);
+      }
       const outcome = await client.submitPreparedTransfer(prepared, warnings.map((warning) => warning.code));
-      setResult(outcome);
+      // Authorized and submitted: go straight to tracking. Only a refusal needs this screen to explain itself.
+      if (outcome.status === "DECLINED") setResult(outcome);
+      else router.replace({ pathname: "/linqasend/status", params: { id: outcome.transferId } });
     } catch (e) {
       if (e instanceof LinqaSendApiError && e.payload.error === "scam_warning_acknowledgement_required" && Array.isArray(e.payload.warnings)) {
         setWarnings(e.payload.warnings as LinqaSendSecurityWarning[]);
@@ -73,117 +96,145 @@ export default function LinqaSendReview() {
   }
 
   if (result) {
+    const good = result.status === "COMPLETED";
+    const bad = result.status === "DECLINED";
     return (
       <SafeAreaView style={s.screen}>
+        <LinqaSendStatusBar />
         <View style={s.resultBox}>
-          <Text style={s.resultIcon}>{result.status === "COMPLETED" ? "✅" : result.status === "DECLINED" ? "⛔" : "🕓"}</Text>
-          <Text style={s.resultTitle}>{result.status.replace(/_/g, " ")}</Text>
-          {result.reason && <Text style={s.resultSub}>Reason: {result.reason.replace(/_/g, " ").toLowerCase()}</Text>}
-          {result.status === "MANUAL_REVIEW" && (
-            <Text style={s.resultSub}>
-              This transfer is held for manual review — no live compliance/KYC provider is connected in this environment, so
-              transfers never auto-clear.
-            </Text>
-          )}
-          <Pressable style={s.button} onPress={() => router.push({ pathname: "/linqasend/status", params: { id: result.transferId } })}>
-            <Text style={s.buttonText}>Track Transfer</Text>
+          <View style={[s.resultIcon, { backgroundColor: good ? "#ECFDF3" : bad ? "#FEF3F2" : send.primarySoft }]}>
+            <Ionicons name={good ? "checkmark-circle" : bad ? "close-circle" : "time"} size={54} color={good ? send.success : bad ? send.danger : send.primary} />
+          </View>
+          <Text style={s.resultTitle}>{result.status.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase())}</Text>
+          {result.reason ? <Text style={s.resultSub}>Reason: {result.reason.replace(/_/g, " ").toLowerCase()}</Text> : null}
+          {result.status === "MANUAL_REVIEW" ? (
+            <Text style={s.resultSub}>This transfer is held for manual review. No live compliance provider is connected in this environment, so transfers never clear automatically.</Text>
+          ) : null}
+          <Pressable accessibilityRole="button" style={[s.confirm, { alignSelf: "stretch", marginTop: 28 }]} onPress={() => router.replace({ pathname: "/linqasend/status", params: { id: result.transferId } })}>
+            <Text style={s.confirmText}>Track Transfer</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" style={{ marginTop: 14, padding: 10 }} onPress={() => router.replace("/linqasend")}>
+            <Text style={s.link}>Back to LinqaSend</Text>
           </Pressable>
         </View>
       </SafeAreaView>
     );
   }
 
+  const disabled = busy || !paymentMethodId || remaining === 0;
+
   return (
     <SafeAreaView style={s.screen}>
+      <LinqaSendStatusBar />
       <View style={s.header}>
-        <Pressable onPress={() => router.back()} accessibilityLabel="Back">
-          <Text style={s.back}>←</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Back" style={s.headerButton} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={26} color={send.text} />
         </Pressable>
-        <Text style={s.headerTitle}>Review & Confirm</Text>
+        <Text accessibilityRole="header" style={s.title}>Review & Confirm</Text>
+        <View style={s.headerButton} />
       </View>
+
       <ScrollView contentContainerStyle={s.content}>
-        <View style={s.card}>
-          <View style={s.rateRow}>
-            <Text style={s.bigAmount}>{money(quote.sendAmountMinor, quote.sendCurrency)}</Text>
-            <Text style={s.arrow}>→</Text>
-            <Text style={s.bigAmount}>{money(quote.receiveAmountMinor, quote.receiveCurrency)}</Text>
-          </View>
-          <Text style={s.rateDetail}>
-            1 {quote.sendCurrency} = {Number(quote.customerRate).toFixed(4)} {quote.receiveCurrency} (includes disclosed FX
-            spread — no separate sender/recipient fee)
-          </Text>
-          <Text style={s.rateDetail}>To: {params.recipientName}</Text>
-          <Text style={s.expiry}>Rate locked for {remaining}s</Text>
+        <Text style={s.label}>You Send</Text>
+        <View style={s.moneyCard}>
+          <Text style={s.flag}>{currencyFlag(quote.sendCurrency)}</Text>
+          <Text style={s.moneyValue}>{formatMinor(quote.sendAmountMinor)}</Text>
+          <Text style={s.moneyCode}>{quote.sendCurrency}</Text>
         </View>
 
-        <Text style={s.sectionTitle}>Funding Source</Text>
-        {paymentMethods === null && <ActivityIndicator color={colors.accent} />}
-        {paymentMethods !== null && paymentMethods.length === 0 && (
-          <View style={s.card}>
-            <Text style={s.muted}>No funding source on file.</Text>
-            <Pressable style={s.linkButton} onPress={() => router.push("/linqasend/payment-methods")}>
-              <Text style={s.linkButtonText}>Add a funding source</Text>
-            </Pressable>
+        <Text style={[s.label, { marginTop: 16 }]}>They Receive</Text>
+        <View style={s.moneyCard}>
+          <Text style={s.flag}>{currencyFlag(quote.receiveCurrency)}</Text>
+          <Text style={s.moneyValue}>{formatMinor(quote.receiveAmountMinor)}</Text>
+          <Text style={s.moneyCode}>{quote.receiveCurrency}</Text>
+        </View>
+
+        <Text style={[s.label, { marginTop: 18 }]}>To</Text>
+        <View style={s.toRow}>
+          <Avatar name={params.recipientName} size={56} />
+          <View style={{ flex: 1 }}>
+            <Text style={s.toName}>{params.recipientName}</Text>
+            <Text style={s.toMeta}>{[params.recipientCountry ? countryName(params.recipientCountry) : "", params.recipientType ? deliveryLabel(params.recipientType) : ""].filter(Boolean).join(" • ") || `Receives in ${quote.receiveCurrency}`}</Text>
           </View>
-        )}
-        {(paymentMethods ?? []).map((pm) => (
-          <Pressable key={pm.id} style={[s.card, s.pmRow, paymentMethodId === pm.id && s.pmRowSelected]} onPress={() => setPaymentMethodId(pm.id)}>
-            <Text style={s.pmText}>
-              {pm.type.replace(/_/g, " ")} {pm.last4 ? `•••• ${pm.last4}` : ""}
-            </Text>
-            {paymentMethodId === pm.id && <Text style={s.pmCheck}>✓</Text>}
-          </Pressable>
-        ))}
+        </View>
 
-        {error && <Text style={s.error}>{error}</Text>}
+        <View style={s.divider} />
 
-        {warnings.length > 0 && (
+        <View style={s.line}><Text style={s.lineLabel}>Exchange rate</Text><Text style={s.lineValue}>1 {quote.sendCurrency} = {Number(quote.customerRate).toFixed(4)} {quote.receiveCurrency}</Text></View>
+        <View style={s.line}><Text style={s.lineLabel}>Transfer fee</Text><Text style={s.lineValue}>${formatMinor(sendFee)}</Text></View>
+        <View style={s.line}><Text style={s.lineLabel}>Recipient fee</Text><Text style={s.lineValue}>${formatMinor(recipientFee)}</Text></View>
+        <View style={s.line}><Text style={s.totalLabel}>Total to be charged</Text><Text style={s.totalValue}>${formatMinor(total)}</Text></View>
+        <View style={s.line}>
+          <Text style={s.lineLabel}>Paid with</Text>
+          {paymentMethods === null ? <ActivityIndicator color={send.primary} /> : method ? (
+            <Text style={s.lineValue}>{METHOD_NAME[method.type] ?? method.type.replace(/_/g, " ")}{method.last4 ? ` •••• ${method.last4}` : ""}</Text>
+          ) : (
+            <Pressable accessibilityRole="button" onPress={() => router.push("/linqasend/payment-methods")}><Text style={s.link}>Add a payment method</Text></Pressable>
+          )}
+        </View>
+        <Text style={[s.lock, remaining === 0 && { color: send.danger }]}>
+          {remaining === 0 ? "This rate expired. Go back to get a new one." : `Rate locked for ${remaining}s`}
+        </Text>
+
+        <View style={s.banner}>
+          <View style={s.bannerIcon}><Ionicons name="shield-checkmark-outline" size={22} color={send.success} /></View>
+          <Text style={s.bannerText}>No separate fees. The rate includes our disclosed margin.</Text>
+        </View>
+
+        {error ? <Text style={s.error}>{error}</Text> : null}
+
+        {warnings.length > 0 ? (
           <View style={s.warningCard} accessibilityRole="alert">
             <Text style={s.warningTitle}>Pause and verify before sending</Text>
-            {warnings.map((warning) => (
-              <Text key={warning.code} style={s.warningText}>• {warning.code.replace(/_/g, " ").toLowerCase()}</Text>
-            ))}
+            {warnings.map((warning) => <Text key={warning.code} style={s.warningText}>• {warning.code.replace(/_/g, " ").toLowerCase()}</Text>)}
             <Text style={s.warningText}>Only continue if you know the recipient and nobody is pressuring you to send money.</Text>
           </View>
-        )}
-
-        <Pressable style={[s.button, (!paymentMethodId || remaining === 0) && s.buttonDisabled]} onPress={confirm} disabled={busy || !paymentMethodId || remaining === 0}>
-          {busy ? <ActivityIndicator color={colors.onAccent} /> : <Text style={s.buttonText}>{remaining === 0 ? "Quote expired" : warnings.length ? "I understand — send money" : "Securely confirm & send"}</Text>}
-        </Pressable>
+        ) : null}
       </ScrollView>
+
+      <View style={s.footer}>
+        <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} style={[s.confirm, disabled && { opacity: 0.45 }]} onPress={confirm}>
+          {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={s.confirmText}>{remaining === 0 ? "Quote expired" : warnings.length ? "I understand, send money" : "Confirm & Continue"}</Text>}
+        </Pressable>
+      </View>
     </SafeAreaView>
   );
 }
 
-const makeStyles = (colors: Palette) => StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, paddingTop: 52 },
-  back: { color: colors.text, fontSize: 20 },
-  headerTitle: { color: colors.text, fontSize: 17, fontWeight: "700" },
-  content: { padding: spacing.lg, paddingBottom: 60 },
-  card: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md },
-  rateRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
-  bigAmount: { color: colors.text, fontWeight: "900", fontSize: 18 },
-  arrow: { color: colors.textFaint },
-  rateDetail: { color: colors.textMuted, fontSize: 12, marginTop: spacing.sm },
-  expiry: { color: colors.accent, fontSize: 12, fontWeight: "700", marginTop: spacing.sm },
-  sectionTitle: { color: colors.text, fontWeight: "800", marginBottom: spacing.sm },
-  muted: { color: colors.textFaint, fontSize: 13 },
-  linkButton: { marginTop: spacing.sm },
-  linkButtonText: { color: colors.accent, fontWeight: "700", fontSize: 12 },
-  pmRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  pmRowSelected: { borderColor: colors.accent },
-  pmText: { color: colors.text, fontWeight: "700" },
-  pmCheck: { color: colors.accent, fontWeight: "900" },
-  error: { color: colors.danger, fontSize: 12, marginBottom: spacing.md },
-  warningCard: { backgroundColor: colors.warningBg, borderColor: colors.warningBorder, borderWidth: 1, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md },
-  warningTitle: { color: colors.warning, fontWeight: "900", marginBottom: spacing.sm },
-  warningText: { color: colors.text, fontSize: 12, lineHeight: 18, marginBottom: 4 },
-  button: { backgroundColor: colors.accent, borderRadius: radius.lg, height: 54, alignItems: "center", justifyContent: "center" },
-  buttonDisabled: { opacity: 0.4 },
-  buttonText: { color: colors.onAccent, fontWeight: "900", fontSize: 15 },
-  resultBox: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
-  resultIcon: { fontSize: 40 },
-  resultTitle: { color: colors.text, fontWeight: "900", fontSize: 20, marginTop: spacing.md },
-  resultSub: { color: colors.textMuted, fontSize: 12, textAlign: "center", marginTop: spacing.sm }
+const s = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: send.bg },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
+  headerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
+  content: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 20 },
+  label: { color: send.text, fontFamily: fonts.bold, fontSize: 15, marginBottom: 10 },
+  moneyCard: { flexDirection: "row", alignItems: "center", gap: 14, height: 70, borderRadius: 16, borderWidth: 1.5, borderColor: send.border, paddingHorizontal: 16 },
+  flag: { fontSize: 30 },
+  moneyValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 24 },
+  moneyCode: { color: send.muted, fontFamily: fonts.semibold, fontSize: 15, marginTop: 6 },
+  toRow: { flexDirection: "row", alignItems: "center", gap: 14 },
+  toName: { color: send.text, fontFamily: fonts.bold, fontSize: 17 },
+  toMeta: { color: send.muted, fontFamily: fonts.regular, fontSize: 14, marginTop: 4 },
+  divider: { height: 1, backgroundColor: send.border, marginVertical: 20 },
+  line: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
+  lineLabel: { color: send.muted, fontFamily: fonts.medium, fontSize: 15 },
+  lineValue: { color: send.text, fontFamily: fonts.semibold, fontSize: 15 },
+  totalLabel: { color: send.text, fontFamily: fonts.bold, fontSize: 16 },
+  totalValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
+  lock: { color: send.primary, fontFamily: fonts.semibold, fontSize: 13, marginBottom: 14 },
+  banner: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#ECFDF3", borderWidth: 1, borderColor: "#BFEBD0", borderRadius: 14, padding: 14, marginTop: 4 },
+  bannerIcon: { width: 36, height: 36, borderRadius: 10, borderWidth: 1.5, borderColor: send.success, alignItems: "center", justifyContent: "center" },
+  bannerText: { flex: 1, color: "#067647", fontFamily: fonts.semibold, fontSize: 14 },
+  error: { color: send.danger, fontFamily: fonts.medium, fontSize: 14, marginTop: 14 },
+  warningCard: { backgroundColor: "#FFFAEB", borderColor: "#F5C451", borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 14 },
+  warningTitle: { color: send.warning, fontFamily: fonts.extrabold, fontSize: 15, marginBottom: 6 },
+  warningText: { color: send.text, fontFamily: fonts.regular, fontSize: 13, lineHeight: 19, marginBottom: 4 },
+  footer: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 14, backgroundColor: send.bg },
+  confirm: { height: 56, borderRadius: 16, backgroundColor: send.primary, alignItems: "center", justifyContent: "center" },
+  confirmText: { color: "#FFFFFF", fontFamily: fonts.bold, fontSize: 17 },
+  link: { color: send.primary, fontFamily: fonts.bold, fontSize: 15 },
+  resultBox: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28 },
+  resultIcon: { width: 96, height: 96, borderRadius: 48, alignItems: "center", justifyContent: "center" },
+  resultTitle: { color: send.text, fontFamily: fonts.extrabold, fontSize: 24, marginTop: 20 },
+  resultSub: { color: send.muted, fontFamily: fonts.regular, fontSize: 14, lineHeight: 21, textAlign: "center", marginTop: 10 }
 });

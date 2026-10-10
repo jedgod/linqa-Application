@@ -1,12 +1,12 @@
 {
   "CL1": {
     "detail": "real CountryLinqa backend present",
-    "recordedAt": "2026-10-06T01:30:55.894995+00:00",
+    "recordedAt": "2026-10-06T07:45:49.889754+00:00",
     "status": "PASS"
   },
   "CL2": {
     "detail": "Android and Expo CountryLinqa clients share the real mode enum and world-surface terms",
-    "recordedAt": "2026-10-06T01:30:56.155853+00:00",
+    "recordedAt": "2026-10-06T08:16:52.331704+00:00",
     "status": "PASS"
   },
   "CL3": {

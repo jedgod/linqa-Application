@@ -5,6 +5,7 @@ import type { Database } from "../db/pool.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
 import { simpleRateLimit } from "../services/countrylinqa/final/rate-limit.js";
 import type { CallService } from "../services/call.service.js";
+import type { RealtimeHub } from "../realtime/hub.js";
 import { CallTokenService, redactJoinToken } from "./call-token.service.js";
 
 /**
@@ -61,7 +62,8 @@ export async function registerCallsV2Routes(
   app: FastifyInstance,
   config: AppConfig,
   db: Database,
-  calls: CallService
+  calls: CallService,
+  hub?: RealtimeHub
 ) {
   const authenticate = createAuthenticator(config);
   const tokens = new CallTokenService(config);
@@ -253,8 +255,23 @@ export async function registerCallsV2Routes(
         { callId, token: redactJoinToken(issued.joinToken) },
         "call join token issued"
       );
+      // Ring the callee's device. The caller's name comes from their profile, never from the request.
+      const caller = await db.query(
+        `SELECT COALESCE(display_name, 'Linqa user') AS name FROM user_profiles WHERE user_id = $1`,
+        [principal.userId]
+      );
+      hub?.sendToDevice(peerDeviceId, {
+        type: "call.incoming",
+        callId,
+        callType: body.media,
+        privacyMode: body.privacyMode,
+        callerUserId: principal.userId,
+        callerName: (caller.rows[0] as { name?: string } | undefined)?.name ?? "Linqa user",
+        callerDeviceId: principal.deviceId
+      });
       return reply.code(201).send({
         callId,
+        calleeDeviceId: peerDeviceId,
         joinToken: issued.joinToken,
         expiresAt: issued.expiresAt,
         callType: body.media,
@@ -265,6 +282,84 @@ export async function registerCallsV2Routes(
       if (message.includes("inactive call participant")) {
         return reply.code(409).send({ error: { code: "PEER_UNAVAILABLE", requestId: request.id } });
       }
+      return fail(request, reply, error);
+    }
+  });
+
+  /**
+   * One call, for either of its two participants: its kind, privacy mode, state, and who the other person is. The other person's
+   * country is their own verified jurisdiction (the only country fact the server holds), never an IP guess.
+   */
+  app.get("/v1/calls/:callId", async (request, reply) => {
+    const principal = await principalOf(request, reply, "calls:read");
+    if (!principal) return reply;
+    try {
+      const { callId } = z.object({ callId: z.string().uuid() }).parse(request.params);
+      const result = await db.query(
+        `SELECT c.id AS "callId", c.call_type AS "callType", c.privacy_mode AS "privacyMode", c.status,
+                me.role AS "role",
+                peer.user_id AS "peerUserId",
+                COALESCE(p.display_name, 'Linqa user') AS "peerName",
+                u.verified_country_code AS "peerCountryCode",
+                co.name AS "peerCountryName"
+           FROM call_sessions c
+           JOIN call_participants me ON me.call_id = c.id AND me.user_id = $2
+           JOIN call_participants peer ON peer.call_id = c.id AND peer.user_id <> $2
+           LEFT JOIN user_profiles p ON p.user_id = peer.user_id
+           LEFT JOIN users u ON u.id = peer.user_id
+           LEFT JOIN countries co ON co.code = u.verified_country_code
+          WHERE c.id = $1`,
+        [callId, principal.userId]
+      );
+      // Same answer for "no such call" and "not your call", so ids cannot be probed.
+      if (result.rowCount !== 1) return reply.code(404).send({ error: { code: "CALL_NOT_FOUND", requestId: request.id } });
+      void reply.header("Cache-Control", "private, no-store");
+      return reply.code(200).send(result.rows[0]);
+    } catch (error) {
+      return fail(request, reply, error);
+    }
+  });
+
+  /**
+   * Calls ringing this device right now (placed in the last minute, not yet answered). Backs the ring screen when the realtime
+   * frame was missed, e.g. the app was opened after the call was placed.
+   */
+  app.get("/v1/calls/incoming", async (request, reply) => {
+    const principal = await principalOf(request, reply, "calls:read");
+    if (!principal) return reply;
+    if (!principal.deviceId) return reply.code(200).send({ items: [] });
+    const result = await db.query(
+      `SELECT c.id AS "callId", c.call_type AS "callType", c.privacy_mode AS "privacyMode",
+              caller.user_id AS "callerUserId", caller.device_id AS "callerDeviceId",
+              COALESCE(p.display_name, 'Linqa user') AS "callerName"
+         FROM call_sessions c
+         JOIN call_participants me ON me.call_id = c.id AND me.device_id = $1 AND me.role = 'CALLEE'
+         JOIN call_participants caller ON caller.call_id = c.id AND caller.role = 'CALLER'
+         LEFT JOIN user_profiles p ON p.user_id = caller.user_id
+        WHERE c.status = 'CREATED' AND c.created_at > now() - interval '60 seconds'
+        ORDER BY c.created_at DESC LIMIT 3`,
+      [principal.deviceId]
+    );
+    void reply.header("Cache-Control", "private, no-store");
+    return reply.code(200).send({ items: result.rows });
+  });
+
+  /** The callee answers: the call becomes ACTIVE, and only the callee's own device can do this. */
+  app.post("/v1/calls/:callId/accept", async (request, reply) => {
+    const principal = await principalOf(request, reply, "calls:write");
+    if (!principal) return reply;
+    try {
+      const { callId } = z.object({ callId: z.string().uuid() }).parse(request.params);
+      const result = await db.query(
+        `UPDATE call_sessions c SET status = 'ACTIVE', started_at = now()
+          WHERE c.id = $1 AND c.status = 'CREATED'
+            AND EXISTS (SELECT 1 FROM call_participants p WHERE p.call_id = c.id AND p.device_id = $2 AND p.role = 'CALLEE')
+        RETURNING c.id`,
+        [callId, principal.deviceId ?? null]
+      );
+      if (result.rowCount !== 1) return reply.code(409).send({ error: { code: "CALL_NOT_RINGING", requestId: request.id } });
+      return reply.code(204).send();
+    } catch (error) {
       return fail(request, reply, error);
     }
   });

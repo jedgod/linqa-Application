@@ -1,0 +1,20 @@
+{
+  "gitSha": "REPLACE_AT_EXECUTION",
+  "serverSha256": "REPLACE_AT_EXECUTION",
+  "mobileSha256": "REPLACE_AT_EXECUTION",
+  "deviceA": "REPLACE_AT_EXECUTION",
+  "deviceB": "REPLACE_AT_EXECUTION",
+  "countryA": "REPLACE_AT_EXECUTION",
+  "countryB": "REPLACE_AT_EXECUTION",
+  "myCountry": "PENDING",
+  "selectedCountries": "PENDING",
+  "region": "PENDING",
+  "worldwide": "PENDING",
+  "inboundRestriction": "PENDING",
+  "block": "PENDING",
+  "pauseDiscovery": "PENDING",
+  "filters": "PENDING",
+  "savedSearch": "PENDING",
+  "pagination": "PENDING",
+  "cacheInvalidation": "PENDING"
+}

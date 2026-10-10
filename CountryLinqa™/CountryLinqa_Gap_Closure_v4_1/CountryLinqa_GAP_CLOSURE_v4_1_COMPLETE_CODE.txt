@@ -1,0 +1,563 @@
+COUNTRYLINQA™ REPO-NATIVE GAP CLOSURE v4.1
+==============================================================================================================
+
+
+==============================================================================================================
+FILE: .github/workflows/countrylinqa-certification.yml
+==============================================================================================================
+
+name: CountryLinqa Certification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "server/src/services/countrylinqa/**"
+      - "server/src/routes/countrylinqa/**"
+      - "server/src/tests/countrylinqa*"
+      - "clients/mobile/app/countrylinqa/**"
+      - "clients/mobile/services/countrylinqa*"
+      - "scripts/countrylinqa*"
+      - ".github/workflows/countrylinqa-certification.yml"
+
+jobs:
+  db-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: linqa
+          POSTGRES_DB: linqa_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://linqa:linqa@127.0.0.1:5432/linqa_test
+      REDIS_URL: redis://127.0.0.1:6379
+      LINQA_REQUIRE_DB_TESTS: "1"
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        working-directory: server
+      - name: Require database
+        run: node scripts/require-db-tests.mjs
+      - name: Reject explicit skips/only
+        run: node scripts/audit-vitest-skips.mjs
+      - name: Apply migrations
+        run: npm run db:migrate
+        working-directory: server
+      - name: Server typecheck
+        run: npm run typecheck
+        working-directory: server
+      - name: CountryLinqa DB integration tests
+        run: node scripts/countrylinqa-db-test-gate.mjs
+      - name: Full server tests
+        run: npm test
+        working-directory: server
+
+
+==============================================================================================================
+FILE: FINAL_GAP_STATUS.md
+==============================================================================================================
+
+# Gap status after v4.1
+
+CLOSED IN SOFTWARE / CI:
+- Shared multi-server cache adapter
+- Policy-versioned cache keys
+- Privacy recheck after cache hit
+- Configurable bounded candidate pool
+- Hard candidate maximum
+- Required PostgreSQL test gate
+- Explicit skip/.only audit
+- CI PostgreSQL + Redis services
+- Exact-SHA/artifact manifest
+- Physical evidence validator
+- Isolated CountryLinqa Git commit workflow
+
+INTENTIONALLY NOT ADDED:
+- Online-now filter/presence exposure
+- Duplicate moderation subsystem
+
+REMAINS EXECUTION-DEPENDENT:
+- Physical two-country certification
+- iOS project/build/signing and iPhone certification
+
+Therefore, after this patch there should be no reason to invent another architecture pack.
+The remaining red gates should represent actual execution evidence or failures found while
+applying this patch to the live repository.
+
+
+==============================================================================================================
+FILE: INTEGRATION_PATCH_GUIDE.md
+==============================================================================================================
+
+# Integration patch guide
+
+## 1. Keep rejected features rejected
+Do not add `onlineOnly`, last-seen exposure, presence ranking, or stranger presence APIs.
+Do not create another moderation service. Call the existing block and restricted-user checks.
+
+## 2. Replace only the cache layer
+Locate the current in-process CountryLinqa cache in the live discovery service.
+Replace storage with `CountryLinqaDistributedCache`.
+Keep the existing post-fetch authorization loop and make it explicit:
+cache hit -> block check -> restricted-user check -> mutual discovery/privacy check -> return.
+
+If Redis is unavailable, execute uncached. Never fail open on privacy.
+
+## 3. Preserve bounded ranking but make it operationally tunable
+Replace literal `300` candidate fetch limits with:
+`countryLinqaCandidatePoolLimit()`.
+Default stays 300. Hard maximum is 1000.
+This closes the hard-coded scaling gap without allowing an unbounded query.
+
+## 4. Database tests
+The 41 skipped tests are not a product failure when DATABASE_URL is absent locally.
+For certification/CI, skipping is unacceptable.
+Use `LINQA_REQUIRE_DB_TESTS=1` + DATABASE_URL and run both the existing chat integration
+suite and the 13 CountryLinqa integration tests through the repository's real test scripts.
+
+Do not run an unreviewed destructive suite against a shared dev database.
+Use a dedicated CI/test PostgreSQL database.
+
+## 5. Commit isolation
+Because unrelated Copilot edits are present, do NOT `git add -A`.
+Use `scripts/commit-countrylinqa-only.ps1`, inspect the staged list, then commit.
+If a shared file contains both Copilot and CountryLinqa hunks, use `git add -p <file>` manually.
+
+## 6. Physical certification
+CI can verify manifests and evidence shape, but it cannot create physical evidence.
+Use two physical devices/accounts whose verified countries differ.
+Bind evidence to exact Git SHA + server/mobile SHA-256.
+Keep iOS blocked until a real iOS target/artifact exists.
+
+
+==============================================================================================================
+FILE: README.md
+==============================================================================================================
+
+# CountryLinqa™ Repo-Native Gap Closure v4.1
+
+This patch closes the software/CI gaps that remain after the repo-native integration.
+
+Decisions intentionally preserved:
+- NO "online now" stranger filter. Presence stays private.
+- NO duplicate moderation service. Reuse existing block/restricted-user enforcement.
+- Ranking remains bounded, but the candidate window is configurable and hard-capped.
+- Physical two-country certification remains an execution gate, not something CI can fabricate.
+- iOS remains blocked until a real iOS project/build target exists.
+
+What this patch changes:
+1. Replaces process-local discovery cache with a shared Redis-compatible cache adapter.
+2. Keeps privacy independent from cache: every cached page is re-authorized before response.
+3. Adds policy-versioned keys and invalidation.
+4. Makes candidate pool limit configurable (default 300, hard maximum 1000).
+5. Adds DB-required test gate so CI cannot silently skip PostgreSQL integration tests.
+6. Adds skipped-test audit/reporting.
+7. Adds CountryLinqa exact-SHA certification manifest and physical evidence verifier.
+8. Adds an isolated Git commit helper so CountryLinqa changes can be committed without
+   sweeping unrelated Copilot edits into the same commit.
+
+Adapt imports to the live Linqa Redis/config/logger primitives if equivalent helpers already exist.
+
+
+==============================================================================================================
+FILE: certification/countrylinqa/physical-evidence.example.json
+==============================================================================================================
+
+{
+  "gitSha": "TBD",
+  "serverSha256": "TBD",
+  "androidSha256": "TBD",
+  "iosSha256": "TBD",
+  "countryA": "TBD",
+  "countryB": "TBD",
+  "deviceA": "TBD",
+  "deviceB": "TBD",
+  "myCountry": "PENDING",
+  "selectedCountries": "PENDING",
+  "region": "PENDING",
+  "worldwide": "PENDING",
+  "inboundPrivacy": "PENDING",
+  "block": "PENDING",
+  "restrictedUser": "PENDING",
+  "savedSearch": "PENDING",
+  "pagination": "PENDING",
+  "cachePolicyChange": "PENDING",
+  "iosRequired": false,
+  "iosPhysical": "BLOCKED_NO_IOS_PROJECT"
+}
+
+
+==============================================================================================================
+FILE: scripts/audit-vitest-skips.mjs
+==============================================================================================================
+
+import fs from "node:fs";
+import path from "node:path";
+
+const roots=["server/src/tests","clients/mobile"];
+const offenders=[];
+function walk(p){
+  if(!fs.existsSync(p)) return;
+  for(const e of fs.readdirSync(p,{withFileTypes:true})){
+    const f=path.join(p,e.name);
+    if(e.isDirectory()) walk(f);
+    else if(/\.(test|spec)\.(ts|tsx|js|mjs)$/.test(e.name)){
+      const s=fs.readFileSync(f,"utf8");
+      const lines=s.split(/\r?\n/);
+      lines.forEach((line,i)=>{
+        if(/\b(it|test|describe)\.skip\s*\(/.test(line))
+          offenders.push(`${f}:${i+1}: explicit skip`);
+        if(/\b(it|test|describe)\.only\s*\(/.test(line))
+          offenders.push(`${f}:${i+1}: .only`);
+      });
+    }
+  }
+}
+roots.forEach(walk);
+if(offenders.length){
+  console.error(offenders.join("\n"));
+  process.exit(3);
+}
+console.log("No explicit .skip/.only found.");
+
+
+==============================================================================================================
+FILE: scripts/commit-countrylinqa-only.ps1
+==============================================================================================================
+
+$ErrorActionPreference = "Stop"
+
+# Never use `git add -A` here. Stage only CountryLinqa-owned paths.
+git add -- `
+  "server/src/services/countrylinqa" `
+  "server/src/routes/countrylinqa" `
+  "server/src/tests/countrylinqa*" `
+  "clients/mobile/app/countrylinqa" `
+  "clients/mobile/app/settings/countrylinqa.tsx" `
+  "clients/mobile/services/countrylinqa*" `
+  "scripts/countrylinqa*" `
+  "scripts/require-db-tests.mjs" `
+  "scripts/audit-vitest-skips.mjs" `
+  ".github/workflows/countrylinqa-certification.yml" `
+  "certification/countrylinqa"
+
+Write-Host "`n--- STAGED COUNTRYLINQA DIFF ---"
+git diff --cached --stat
+git diff --cached --name-only
+
+$answer = Read-Host "Commit ONLY these staged CountryLinqa files? (yes/no)"
+if ($answer -ne "yes") {
+  Write-Host "Commit cancelled. Staged files were not discarded."
+  exit 1
+}
+
+git commit -m "feat(countrylinqa): close repo-native discovery certification gaps"
+
+
+==============================================================================================================
+FILE: scripts/countrylinqa-certification-manifest.mjs
+==============================================================================================================
+
+import fs from "node:fs";
+import crypto from "node:crypto";
+import {execFileSync} from "node:child_process";
+
+const sha=execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim();
+const dirty=execFileSync("git",["status","--porcelain"],{encoding:"utf8"}).trim();
+if(dirty) throw new Error("CLEAN_WORKTREE_REQUIRED");
+
+const digest=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+const server=process.env.COUNTRYLINQA_SERVER_ARTIFACT;
+const android=process.env.COUNTRYLINQA_ANDROID_ARTIFACT;
+const ios=process.env.COUNTRYLINQA_IOS_ARTIFACT;
+
+if(!server||!android) throw new Error("SERVER_AND_ANDROID_ARTIFACTS_REQUIRED");
+
+const manifest={
+ schemaVersion:1,
+ gitSha:sha,
+ generatedAt:new Date().toISOString(),
+ server:{path:server,sha256:digest(server)},
+ android:{path:android,sha256:digest(android)},
+ ios:ios?{path:ios,sha256:digest(ios)}:null,
+ physicalCertification:{
+   countryA:"PENDING",
+   countryB:"PENDING",
+   android:"PENDING",
+   ios:ios?"PENDING":"BLOCKED_NO_IOS_ARTIFACT"
+ }
+};
+fs.writeFileSync("countrylinqa-certification-manifest.json",JSON.stringify(manifest,null,2));
+console.log(JSON.stringify(manifest,null,2));
+
+
+==============================================================================================================
+FILE: scripts/countrylinqa-db-test-gate.mjs
+==============================================================================================================
+
+import {spawnSync} from "node:child_process";
+
+if(!process.env.DATABASE_URL){
+  console.error("DATABASE_URL is required for CountryLinqa certification.");
+  process.exit(2);
+}
+process.env.LINQA_REQUIRE_DB_TESTS="1";
+
+const args=[
+  "vitest","run",
+  "server/src/tests/countrylinqa-engine.integration.test.ts",
+  "--reporter=verbose"
+];
+const r=spawnSync("npx",args,{stdio:"inherit",shell:process.platform==="win32",env:process.env});
+process.exit(r.status ?? 1);
+
+
+==============================================================================================================
+FILE: scripts/countrylinqa-physical-gate.mjs
+==============================================================================================================
+
+import fs from "node:fs";
+const p=process.argv[2] ?? "certification/countrylinqa/physical-evidence.json";
+if(!fs.existsSync(p)) throw new Error("PHYSICAL_EVIDENCE_MISSING");
+const e=JSON.parse(fs.readFileSync(p,"utf8"));
+
+const required=[
+ "gitSha","serverSha256","androidSha256","countryA","countryB",
+ "deviceA","deviceB","myCountry","selectedCountries","region","worldwide",
+ "inboundPrivacy","block","restrictedUser","savedSearch","pagination","cachePolicyChange"
+];
+for(const k of required) if(!e[k]) throw new Error(`MISSING:${k}`);
+
+for(const k of [
+ "myCountry","selectedCountries","region","worldwide","inboundPrivacy",
+ "block","restrictedUser","savedSearch","pagination","cachePolicyChange"
+]) if(e[k]!=="PASS") throw new Error(`NOT_PASS:${k}`);
+
+if(e.countryA===e.countryB) throw new Error("TWO_DISTINCT_COUNTRIES_REQUIRED");
+
+if(e.iosRequired===true && e.iosPhysical!=="PASS")
+  throw new Error("IOS_PHYSICAL_PENDING");
+
+console.log("COUNTRYLINQA_PHYSICAL_GATE=PASS");
+
+
+==============================================================================================================
+FILE: scripts/require-db-tests.mjs
+==============================================================================================================
+
+if(process.env.LINQA_REQUIRE_DB_TESTS==="1" && !process.env.DATABASE_URL){
+  console.error("FAIL: LINQA_REQUIRE_DB_TESTS=1 but DATABASE_URL is missing.");
+  process.exit(2);
+}
+console.log(process.env.DATABASE_URL
+  ? "DB integration tests enabled."
+  : "DB integration tests may skip outside CI.");
+
+
+==============================================================================================================
+FILE: server/src/services/countrylinqa/candidate-window.ts
+==============================================================================================================
+
+const DEFAULT_POOL=300;
+const HARD_MAX=1000;
+
+export function countryLinqaCandidatePoolLimit(env=process.env){
+  const raw=Number(env.COUNTRYLINQA_CANDIDATE_POOL_LIMIT ?? DEFAULT_POOL);
+  if(!Number.isFinite(raw)) return DEFAULT_POOL;
+  return Math.max(50,Math.min(HARD_MAX,Math.trunc(raw)));
+}
+
+export const COUNTRYLINQA_CANDIDATE_POOL_HARD_MAX=HARD_MAX;
+
+
+==============================================================================================================
+FILE: server/src/services/countrylinqa/distributed-cache.ts
+==============================================================================================================
+
+import crypto from "node:crypto";
+
+export interface CountryLinqaRedis {
+  get(key:string):Promise<string|null>;
+  set(key:string,value:string,...args:any[]):Promise<unknown>;
+  del(...keys:string[]):Promise<unknown>;
+}
+
+export type CacheEnvelope<T>={
+  policyVersion:number;
+  generatedAt:string;
+  value:T;
+};
+
+const stable=(x:unknown)=>JSON.stringify(x,Object.keys((x ?? {}) as any).sort());
+
+export function discoveryCacheKey(input:{
+  userId:string;
+  policyVersion:number;
+  surface:string;
+  filters:unknown;
+  cursor?:string|null;
+}){
+  const digest=crypto.createHash("sha256")
+    .update(stable({filters:input.filters,cursor:input.cursor ?? null}))
+    .digest("hex").slice(0,24);
+  return `countrylinqa:v4:${input.userId}:p${input.policyVersion}:${input.surface}:${digest}`;
+}
+
+export class CountryLinqaDistributedCache {
+  constructor(
+    private redis:CountryLinqaRedis|null,
+    private ttlSeconds=45
+  ){}
+
+  async get<T>(key:string,policyVersion:number):Promise<T|null>{
+    if(!this.redis) return null; // fail open for performance, never for authorization
+    const raw=await this.redis.get(key);
+    if(!raw) return null;
+    try{
+      const env=JSON.parse(raw) as CacheEnvelope<T>;
+      if(env.policyVersion!==policyVersion) return null;
+      return env.value;
+    }catch{
+      return null;
+    }
+  }
+
+  async set<T>(key:string,policyVersion:number,value:T){
+    if(!this.redis) return;
+    const env:CacheEnvelope<T>={
+      policyVersion,
+      generatedAt:new Date().toISOString(),
+      value
+    };
+    await this.redis.set(key,JSON.stringify(env),"EX",this.ttlSeconds);
+  }
+}
+
+/**
+ * CRITICAL:
+ * Cached rows are only candidate/result material.
+ * The caller MUST run the existing block/restricted-user/privacy eligibility
+ * checks again before returning the page. Redis never grants authorization.
+ */
+
+
+==============================================================================================================
+FILE: server/src/services/countrylinqa/privacy-recheck.ts
+==============================================================================================================
+
+/**
+ * Wire these callbacks to the existing repo-native eligibility functions.
+ * This file intentionally does NOT create a second moderation implementation.
+ */
+export async function recheckCachedCandidates<T extends {userId:string}>(
+  rows:T[],
+  checks:{
+    blocked:(candidateUserId:string)=>Promise<boolean>;
+    restricted:(candidateUserId:string)=>Promise<boolean>;
+    mutuallyEligible:(candidateUserId:string)=>Promise<boolean>;
+  }
+){
+  const out:T[]=[];
+  for(const row of rows){
+    if(await checks.blocked(row.userId)) continue;
+    if(await checks.restricted(row.userId)) continue;
+    if(!(await checks.mutuallyEligible(row.userId))) continue;
+    out.push(row);
+  }
+  return out;
+}
+
+
+==============================================================================================================
+FILE: server/src/services/countrylinqa/redis-factory.example.ts
+==============================================================================================================
+
+/**
+ * Example adapter only.
+ * Prefer the repository's existing Redis client if one already exists.
+ *
+ * With ioredis:
+ *
+ * import Redis from "ioredis";
+ * export const countryLinqaRedis =
+ *   process.env.REDIS_URL ? new Redis(process.env.REDIS_URL,{
+ *     enableOfflineQueue:false,
+ *     maxRetriesPerRequest:1,
+ *     connectTimeout:2000
+ *   }) : null;
+ *
+ * The CountryLinqa service must continue to work without cache if Redis is down.
+ * Privacy/safety checks remain mandatory on every response.
+ */
+export {};
+
+
+==============================================================================================================
+FILE: server/src/tests/countrylinqa-cache.test.ts
+==============================================================================================================
+
+import {describe,it,expect} from "vitest";
+import {
+  CountryLinqaDistributedCache,
+  discoveryCacheKey
+} from "../services/countrylinqa/distributed-cache";
+import {recheckCachedCandidates} from "../services/countrylinqa/privacy-recheck";
+import {countryLinqaCandidatePoolLimit} from "../services/countrylinqa/candidate-window";
+
+class FakeRedis{
+  m=new Map<string,string>();
+  async get(k:string){return this.m.get(k) ?? null;}
+  async set(k:string,v:string){this.m.set(k,v);return "OK";}
+  async del(...ks:string[]){for(const k of ks)this.m.delete(k);return ks.length;}
+}
+
+describe("CountryLinqa shared cache contract",()=>{
+  it("versions cache by policy",async()=>{
+    const r=new FakeRedis();
+    const c=new CountryLinqaDistributedCache(r as any,30);
+    const k=discoveryCacheKey({
+      userId:"u1",policyVersion:7,surface:"PEOPLE",filters:{language:"en"}
+    });
+    await c.set(k,7,[{userId:"u2"}]);
+    expect(await c.get(k,7)).toEqual([{userId:"u2"}]);
+    expect(await c.get(k,8)).toBeNull();
+  });
+
+  it("rechecks privacy after a cache hit",async()=>{
+    const rows=[{userId:"ok"},{userId:"blocked"},{userId:"restricted"}];
+    const out=await recheckCachedCandidates(rows,{
+      blocked:async id=>id==="blocked",
+      restricted:async id=>id==="restricted",
+      mutuallyEligible:async()=>true
+    });
+    expect(out.map(x=>x.userId)).toEqual(["ok"]);
+  });
+
+  it("hard caps candidate pool",()=>{
+    expect(countryLinqaCandidatePoolLimit({COUNTRYLINQA_CANDIDATE_POOL_LIMIT:"5000"} as any))
+      .toBe(1000);
+  });
+});

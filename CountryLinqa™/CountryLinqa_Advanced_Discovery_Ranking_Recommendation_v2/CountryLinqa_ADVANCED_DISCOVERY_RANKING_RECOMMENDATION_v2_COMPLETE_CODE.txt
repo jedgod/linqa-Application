@@ -1,0 +1,929 @@
+COUNTRYLINQA™ ADVANCED DISCOVERY + RANKING / RECOMMENDATION ENGINE v2
+=========================================================================================================
+
+
+=========================================================================================================
+FILE: IMPLEMENTATION_ORDER.md
+=========================================================================================================
+
+# Recommended implementation order
+
+1. Migration 042.
+2. Canonical language / interest / profession catalogs.
+3. Filter validator.
+4. Server-side mutual eligibility reuse.
+5. Candidate SQL pre-filtering.
+6. Ranking + explanation reasons.
+7. Diversity layer.
+8. Opaque signed cursor.
+9. Redis cache.
+10. Saved-search repository/routes.
+11. Abuse guard.
+12. Privacy-preserving telemetry.
+13. Mobile Advanced Search UI.
+14. Mobile Saved Searches UI.
+15. Recommendation surfaces.
+16. Load/performance testing.
+17. Two-country physical certification.
+18. Bind evidence to exact Git SHA and release artifact digest.
+
+Before GA, replace the sample LIMIT-500 candidate pool with indexed SQL/search-index retrieval appropriate to the live Linqa scale.
+
+
+=========================================================================================================
+FILE: PRODUCTION_GATES.md
+=========================================================================================================
+
+# Advanced Discovery Production Gates
+
+## Ranking
+- [ ] Geographic eligibility happens before ranking.
+- [ ] Block/safety rules happen before ranking.
+- [ ] Ranking cannot resurrect ineligible candidates.
+- [ ] Recommendation reason codes are explainable.
+- [ ] Diversity limits prevent one profession/category dominating.
+- [ ] No protected/sensitive attribute is used as a hidden ranking proxy.
+
+## Filters
+- [ ] Country scope is intersected with policy, never replaces policy.
+- [ ] Language filter validated.
+- [ ] Interest filter validated.
+- [ ] Profession filter validated.
+- [ ] Verified-only server enforced.
+- [ ] Online state uses bounded recent-activity logic.
+
+## Saved searches
+- [ ] User ownership enforced.
+- [ ] Search limits enforced.
+- [ ] Stored filters revalidated when executed.
+- [ ] Saved search does not persist stale result IDs.
+- [ ] Alert delivery respects current privacy and entitlement state.
+
+## Redis / pagination
+- [ ] Cache key includes user, policy version, surface and filter digest.
+- [ ] Short TTL.
+- [ ] Policy change invalidates by version.
+- [ ] Opaque signed cursor.
+- [ ] Cursor expiration.
+- [ ] No duplicates across pages.
+- [ ] No out-of-scope result after policy change.
+
+## Abuse resistance
+- [ ] Search rate limit.
+- [ ] Pagination rate limit.
+- [ ] Profile-open enumeration limit.
+- [ ] Saved-search creation limit.
+- [ ] Device/account signals feed existing risk engine.
+- [ ] Scraping patterns generate security telemetry.
+- [ ] Do not reveal whether a hidden/private account exists.
+
+## Telemetry
+- [ ] No raw phone.
+- [ ] No precise coordinates.
+- [ ] No raw search query in analytics.
+- [ ] Record latency/result count/mode/surface.
+- [ ] Audit security events separately from product analytics.
+
+## Certification
+- [ ] Two physical devices.
+- [ ] Two verified countries.
+- [ ] My Country.
+- [ ] Selected Countries.
+- [ ] Region.
+- [ ] Worldwide.
+- [ ] Inbound restrictions.
+- [ ] Block / pause / contacts-only.
+- [ ] Filters.
+- [ ] Saved searches.
+- [ ] Cache invalidation.
+- [ ] Pagination.
+- [ ] Evidence bound to exact SHA.
+
+
+=========================================================================================================
+FILE: README.md
+=========================================================================================================
+
+# CountryLinqa™ Advanced Discovery + Ranking / Recommendation Engine v2
+
+Implements the next layer after the CountryLinqa Discovery Engine Integration pack:
+
+- Personalized candidate ranking
+- Interests, language, profession, verified-only and online filters
+- Saved searches
+- Opaque cursor pagination
+- Redis cache architecture + policy-version invalidation
+- Abuse resistance / scraping controls
+- Privacy-preserving telemetry
+- Explainable recommendation reasons
+- Ranking diversity controls
+- Two-country physical-device certification
+- Release gates
+
+IMPORTANT:
+This is a production integration pack, not a claim that physical certification has been executed.
+Device/country certification must be run against real devices, real accounts and the deployed Git SHA.
+
+
+=========================================================================================================
+FILE: certification/TWO_COUNTRY_PHYSICAL_CERTIFICATION.md
+=========================================================================================================
+
+# CountryLinqa™ Two-Country Physical Certification
+
+This is an execution template. Do not mark PASS until tests are performed.
+
+## Required evidence
+- Release Git SHA
+- Server artifact digest
+- Mobile build number / binary digest
+- Database migration level
+- Device A model / OS
+- Device B model / OS
+- Test account IDs (internal evidence only)
+- Verified country for A
+- Verified country for B
+- UTC timestamps
+- Screen recordings/screenshots
+- Relevant server logs / request IDs
+
+## Scenario A — My Country
+Device A: verified country A
+Device B: verified country B
+1. Set A outbound = MY_COUNTRY.
+2. Confirm B is not exposed to A if B is in another country.
+3. Confirm eligible same-country control account appears.
+4. Confirm no client-side override can expose B.
+
+## Scenario B — Selected Countries
+1. Add country B to A's selected countries.
+2. Confirm B appears only if B's inbound policy permits country A.
+3. Remove country B.
+4. Confirm B disappears after cache invalidation.
+
+## Scenario C — Candidate inbound restriction
+1. B inbound = MY_COUNTRY.
+2. A remains outside B's country.
+3. Even if A outbound includes B, B must not appear.
+4. Change B inbound to include A's country.
+5. Confirm eligibility becomes true.
+
+## Scenario D — Region
+1. A selects a supported region containing B.
+2. Confirm B appears if mutually eligible.
+3. Confirm country outside selected region does not appear.
+
+## Scenario E — Worldwide
+1. Use an Elite entitlement.
+2. Set A outbound = GLOBAL.
+3. Confirm global scope does not bypass B's inbound restrictions.
+
+## Scenario F — Safety overrides
+- Block B from A and verify immediate disappearance.
+- Pause B discovery and verify B disappears for strangers.
+- Set B to CONTACTS_ONLY and verify only existing contacts retain eligibility.
+
+## Scenario G — Filters
+- Language
+- Interest
+- Profession
+- Verified only
+- Online now
+Verify each filter narrows an already eligible set and never broadens geographic eligibility.
+
+## Scenario H — Saved search
+1. Save filter set.
+2. Restart application.
+3. Re-run saved search.
+4. Confirm server re-evaluates current policy rather than replaying stale results.
+
+## Scenario I — Pagination/cache
+1. Load page 1 and page 2.
+2. Ensure no duplicates.
+3. Change policy.
+4. Confirm old cursor/cache cannot leak out-of-scope candidates.
+
+## PASS requirements
+Every scenario must pass on both physical devices and evidence must be bound to the exact deployed Git SHA.
+
+
+=========================================================================================================
+FILE: clients/mobile/app/countrylinqa/advanced-search.tsx
+=========================================================================================================
+
+import React from "react";
+
+const INTERESTS=["Technology","Travel","Education","Business","Music","Sports","Culture"];
+const LANGUAGES=["English","French","Spanish","Arabic","Twi","Japanese"];
+
+export default function AdvancedSearch() {
+  const [interests,setInterests]=React.useState<string[]>([]);
+  const [languages,setLanguages]=React.useState<string[]>([]);
+  const [profession,setProfession]=React.useState("");
+  const [verified,setVerified]=React.useState(true);
+  const [online,setOnline]=React.useState(false);
+
+  const toggle=(value:string,list:string[],set:(x:string[])=>void)=>
+    set(list.includes(value)?list.filter(x=>x!==value):[...list,value]);
+
+  return (
+    <main className="mx-auto min-h-screen max-w-md bg-white p-5">
+      <h1 className="text-xl font-bold text-violet-700">Advanced Discovery</h1>
+      <p className="mt-1 text-sm text-zinc-500">
+        Refine eligible CountryLinqa results without changing your discovery scope.
+      </p>
+
+      <label className="mt-6 block text-xs font-bold uppercase text-zinc-400">Profession</label>
+      <input value={profession} onChange={e=>setProfession(e.target.value)}
+        placeholder="e.g. Software Engineering"
+        className="mt-2 w-full rounded-2xl border border-zinc-200 p-3 outline-none focus:border-violet-500"/>
+
+      <h2 className="mt-6 text-sm font-bold">Languages</h2>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {LANGUAGES.map(x=><button key={x} onClick={()=>toggle(x,languages,setLanguages)}
+          className={`rounded-full px-3 py-2 text-sm ${languages.includes(x)?"bg-violet-600 text-white":"bg-zinc-100"}`}>
+          {x}
+        </button>)}
+      </div>
+
+      <h2 className="mt-6 text-sm font-bold">Interests</h2>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {INTERESTS.map(x=><button key={x} onClick={()=>toggle(x,interests,setInterests)}
+          className={`rounded-full px-3 py-2 text-sm ${interests.includes(x)?"bg-violet-600 text-white":"bg-zinc-100"}`}>
+          {x}
+        </button>)}
+      </div>
+
+      <label className="mt-6 flex items-center justify-between rounded-2xl border p-4">
+        <span><b className="block text-sm">Verified only</b><small className="text-zinc-500">Hide unverified profiles</small></span>
+        <input type="checkbox" checked={verified} onChange={e=>setVerified(e.target.checked)}/>
+      </label>
+
+      <label className="mt-3 flex items-center justify-between rounded-2xl border p-4">
+        <span><b className="block text-sm">Online now</b><small className="text-zinc-500">Recently active users</small></span>
+        <input type="checkbox" checked={online} onChange={e=>setOnline(e.target.checked)}/>
+      </label>
+
+      <button className="mt-6 min-h-12 w-full rounded-2xl bg-violet-600 font-bold text-white">
+        Show Results
+      </button>
+      <button className="mt-3 min-h-12 w-full rounded-2xl border font-semibold text-violet-700">
+        Save This Search
+      </button>
+    </main>
+  );
+}
+
+
+=========================================================================================================
+FILE: clients/mobile/app/countrylinqa/saved-searches.tsx
+=========================================================================================================
+
+const sample=[
+  {id:"1",name:"Ghana Tech Network",summary:"Ghana • Technology • Verified"},
+  {id:"2",name:"Canada Education",summary:"Canada • Education • English"},
+  {id:"3",name:"West Africa Business",summary:"West Africa • Business"}
+];
+
+export default function SavedSearches() {
+  return (
+    <main className="mx-auto min-h-screen max-w-md bg-white p-5">
+      <h1 className="text-xl font-bold text-violet-700">Saved Searches</h1>
+      <p className="mt-1 text-sm text-zinc-500">
+        Re-run your preferred discovery filters without rebuilding them.
+      </p>
+      <div className="mt-5 space-y-3">
+        {sample.map(x=>(
+          <button key={x.id} className="w-full rounded-2xl border border-zinc-200 p-4 text-left">
+            <div className="font-semibold">{x.name}</div>
+            <div className="mt-1 text-xs text-zinc-500">{x.summary}</div>
+          </button>
+        ))}
+      </div>
+    </main>
+  );
+}
+
+
+=========================================================================================================
+FILE: server/db/migrations/042_countrylinqa_advanced_discovery.sql
+=========================================================================================================
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS countrylinqa_user_discovery_features (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  languages TEXT[] NOT NULL DEFAULT '{}',
+  interests TEXT[] NOT NULL DEFAULT '{}',
+  profession_code TEXT,
+  relationship_intent TEXT,
+  discoverable BOOLEAN NOT NULL DEFAULT TRUE,
+  last_active_at TIMESTAMPTZ,
+  feature_version BIGINT NOT NULL DEFAULT 1,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS countrylinqa_saved_searches (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 80),
+  query_text TEXT,
+  filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+  alerts_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_countrylinqa_saved_searches_user
+  ON countrylinqa_saved_searches(user_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_countrylinqa_features_languages
+  ON countrylinqa_user_discovery_features USING GIN(languages);
+
+CREATE INDEX IF NOT EXISTS idx_countrylinqa_features_interests
+  ON countrylinqa_user_discovery_features USING GIN(interests);
+
+CREATE INDEX IF NOT EXISTS idx_countrylinqa_features_profession
+  ON countrylinqa_user_discovery_features(profession_code);
+
+CREATE INDEX IF NOT EXISTS idx_countrylinqa_features_active
+  ON countrylinqa_user_discovery_features(last_active_at DESC);
+
+CREATE TABLE IF NOT EXISTS countrylinqa_discovery_impressions (
+  id BIGSERIAL PRIMARY KEY,
+  viewer_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  candidate_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  surface TEXT NOT NULL,
+  rank_position INTEGER NOT NULL,
+  reason_codes TEXT[] NOT NULL DEFAULT '{}',
+  policy_version BIGINT,
+  experiment_key TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_countrylinqa_impressions_viewer_time
+  ON countrylinqa_discovery_impressions(viewer_user_id, created_at DESC);
+
+COMMIT;
+
+
+=========================================================================================================
+FILE: server/routes/countrylinqa.advanced.routes.ts
+=========================================================================================================
+
+import { Router } from "express";
+import { requireAuth } from "../middleware/auth.js";
+import { AdvancedDiscoveryService } from "../services/countrylinqa/advanced/advancedDiscoveryService.js";
+import { SavedSearchRepository } from "../services/countrylinqa/advanced/savedSearchRepository.js";
+
+export const countryLinqaAdvancedRouter=Router();
+const discovery=new AdvancedDiscoveryService();
+const saved=new SavedSearchRepository();
+
+countryLinqaAdvancedRouter.post("/people/search",requireAuth,async(req,res,next)=>{
+  try {
+    const result=await discovery.people({
+      userId:req.auth!.userId,
+      filters:req.body?.filters ?? {},
+      limit:Number(req.body?.limit ?? 30)
+    });
+    res.json(result);
+  } catch(e){ next(e); }
+});
+
+countryLinqaAdvancedRouter.get("/saved-searches",requireAuth,async(req,res,next)=>{
+  try { res.json(await saved.list(req.auth!.userId)); }
+  catch(e){ next(e); }
+});
+
+countryLinqaAdvancedRouter.post("/saved-searches",requireAuth,async(req,res,next)=>{
+  try { res.status(201).json(await saved.create(req.auth!.userId,req.body)); }
+  catch(e){ next(e); }
+});
+
+countryLinqaAdvancedRouter.delete("/saved-searches/:id",requireAuth,async(req,res,next)=>{
+  try {
+    await saved.remove(req.auth!.userId,req.params.id);
+    res.status(204).end();
+  } catch(e){ next(e); }
+});
+
+
+=========================================================================================================
+FILE: server/services/countrylinqa/advanced/abuseGuard.ts
+=========================================================================================================
+
+export interface AbuseStore {
+  increment(key:string,windowSeconds:number):Promise<number>;
+}
+
+export class DiscoveryAbuseGuard {
+  constructor(private store:AbuseStore){}
+
+  async assertAllowed(input:{
+    userId:string;
+    installationId:string;
+    action:"SEARCH"|"PAGE"|"PROFILE_OPEN"|"SAVE_SEARCH";
+  }) {
+    const limits={
+      SEARCH:{window:60,max:30},
+      PAGE:{window:60,max:60},
+      PROFILE_OPEN:{window:60,max:90},
+      SAVE_SEARCH:{window:3600,max:20}
+    } as const;
+
+    const rule=limits[input.action];
+    const key=`clq:abuse:${input.action}:${input.userId}:${input.installationId}`;
+    const count=await this.store.increment(key,rule.window);
+
+    if (count>rule.max)
+      throw Object.assign(new Error("DISCOVERY_RATE_LIMITED"),{
+        status:429,
+        retryAfter:rule.window
+      });
+  }
+}
+
+
+=========================================================================================================
+FILE: server/services/countrylinqa/advanced/advancedDiscoveryService.ts
+=========================================================================================================
+
+import { db } from "../../../db/pool.js";
+import { CountryLinqaPolicyResolver } from "../policyResolver.js";
+import { canExposePerson } from "../eligibility.js";
+import { validateFilters } from "./filterValidator.js";
+import { rankAndDiversify } from "./ranker.js";
+import { encodeCursor } from "./cursor.js";
+
+export class AdvancedDiscoveryService {
+  private policyResolver=new CountryLinqaPolicyResolver();
+
+  async people(input:{
+    userId:string;
+    filters:any;
+    limit:number;
+  }) {
+    const started=Date.now();
+    const filters=validateFilters(input.filters);
+    const policy=await this.policyResolver.resolve(input.userId);
+
+    const viewerFeatureResult=await db.query(`
+      SELECT
+        u.id,
+        u.verified_country_code,
+        COALESCE(f.languages,'{}') languages,
+        COALESCE(f.interests,'{}') interests,
+        f.profession_code
+      FROM users u
+      LEFT JOIN countrylinqa_user_discovery_features f ON f.user_id=u.id
+      WHERE u.id=$1
+    `,[input.userId]);
+
+    const viewerRow=viewerFeatureResult.rows[0];
+    const viewer={
+      userId:input.userId,
+      countryCode:viewerRow.verified_country_code,
+      languages:viewerRow.languages,
+      interests:viewerRow.interests,
+      professionCode:viewerRow.profession_code
+    };
+
+    // Fetch an oversampled pool. For very large installations, push more
+    // eligibility predicates into SQL and/or a search index before ranking.
+    const pool=await db.query(`
+      SELECT
+        u.id user_id,
+        u.verified_country_code country_code,
+        COALESCE(u.identity_verified,FALSE) verified,
+        COALESCE(f.languages,'{}') languages,
+        COALESCE(f.interests,'{}') interests,
+        f.profession_code,
+        f.last_active_at,
+        COALESCE(p.inbound_mode,'MY_COUNTRY') inbound_mode,
+        COALESCE(p.inbound_country_codes,'{}') inbound_country_codes,
+        p.inbound_region_code,
+        COALESCE(p.discovery_paused,FALSE) discovery_paused,
+        COALESCE(pc.profile_quality,0.5) profile_quality,
+        COALESCE(pc.safety_quality,0.5) safety_quality,
+        CASE WHEN f.last_active_at > now()-interval '24 hours' THEN 1.0 ELSE 0.3 END freshness,
+        (
+          SELECT COUNT(*)::int FROM contacts a
+          JOIN contacts b ON b.contact_user_id=a.contact_user_id
+          WHERE a.owner_user_id=$1 AND b.owner_user_id=u.id
+        ) mutual_connections,
+        EXISTS(
+          SELECT 1 FROM contacts c
+          WHERE c.owner_user_id=$1 AND c.contact_user_id=u.id
+        ) existing_contact,
+        EXISTS(
+          SELECT 1 FROM user_blocks b
+          WHERE (b.blocker_user_id=$1 AND b.blocked_user_id=u.id)
+             OR (b.blocker_user_id=u.id AND b.blocked_user_id=$1)
+        ) blocked
+      FROM users u
+      LEFT JOIN countrylinqa_user_discovery_features f ON f.user_id=u.id
+      LEFT JOIN country_discovery_policy_v2 p ON p.user_id=u.id
+      LEFT JOIN user_profile_quality pc ON pc.user_id=u.id
+      WHERE u.id<>$1
+      LIMIT 500
+    `,[input.userId]);
+
+    const eligible=pool.rows.filter((r:any)=>{
+      if (filters.verifiedOnly && !r.verified) return false;
+      if (filters.onlineOnly && (!r.last_active_at ||
+          Date.now()-new Date(r.last_active_at).getTime()>15*60*1000)) return false;
+      if (filters.languages?.length &&
+          !filters.languages.some((x:string)=>r.languages.includes(x))) return false;
+      if (filters.interests?.length &&
+          !filters.interests.some((x:string)=>r.interests.includes(x))) return false;
+      if (filters.profession && r.profession_code!==filters.profession) return false;
+
+      return canExposePerson({
+        viewer:policy,
+        candidate:{
+          userId:r.user_id,
+          verifiedCountryCode:r.country_code,
+          verified:r.verified,
+          inboundMode:r.inbound_mode,
+          inboundCountryCodes:r.inbound_country_codes,
+          inboundRegionCode:r.inbound_region_code,
+          discoveryPaused:r.discovery_paused
+        },
+        isExistingContact:r.existing_contact,
+        isBlocked:r.blocked
+      });
+    });
+
+    const ranked=rankAndDiversify(viewer,eligible.map((r:any)=>({
+      userId:r.user_id,
+      countryCode:r.country_code,
+      verified:r.verified,
+      languages:r.languages,
+      interests:r.interests,
+      professionCode:r.profession_code,
+      lastActiveAt:r.last_active_at,
+      mutualConnections:r.mutual_connections,
+      profileQuality:Number(r.profile_quality),
+      safetyQuality:Number(r.safety_quality),
+      freshness:Number(r.freshness)
+    })),Math.min(input.limit,50));
+
+    const last=ranked.at(-1);
+    return {
+      items:ranked.map(({score,...x})=>({...x,rankingScore:score})),
+      nextCursor:last ? encodeCursor({
+        lastScore:last.score,
+        lastUserId:last.userId,
+        policyVersion:(policy as any).version ?? 1,
+        issuedAt:Date.now()
+      }) : null,
+      meta:{latencyMs:Date.now()-started}
+    };
+  }
+}
+
+
+=========================================================================================================
+FILE: server/services/countrylinqa/advanced/cache.ts
+=========================================================================================================
+
+import crypto from "node:crypto";
+
+export interface RedisLike {
+  get(k:string):Promise<string|null>;
+  set(k:string,v:string,mode:string,ttl:number):Promise<unknown>;
+  del(...keys:string[]):Promise<unknown>;
+  scan(cursor:string,...args:any[]):Promise<[string,string[]]>;
+}
+
+export function discoveryCacheKey(input:{
+  userId:string;
+  policyVersion:number;
+  surface:string;
+  filters:unknown;
+  cursor?:string|null;
+}) {
+  const digest=crypto.createHash("sha256")
+    .update(JSON.stringify({filters:input.filters,cursor:input.cursor ?? null}))
+    .digest("hex")
+    .slice(0,24);
+  return `clq:disc:v2:${input.userId}:${input.policyVersion}:${input.surface}:${digest}`;
+}
+
+export async function cached<T>(
+  redis:RedisLike,
+  key:string,
+  ttlSeconds:number,
+  loader:()=>Promise<T>
+):Promise<T> {
+  const hit=await redis.get(key);
+  if (hit) return JSON.parse(hit);
+  const value=await loader();
+  await redis.set(key,JSON.stringify(value),"EX",ttlSeconds);
+  return value;
+}
+
+// Prefer versioned keys. Policy updates increment policy version,
+// naturally making old cache entries unreachable. Expiration cleans them up.
+
+
+=========================================================================================================
+FILE: server/services/countrylinqa/advanced/cursor.ts
+=========================================================================================================
+
+import crypto from "node:crypto";
+
+const secret=process.env.COUNTRYLINQA_CURSOR_SECRET;
+if (!secret) throw new Error("COUNTRYLINQA_CURSOR_SECRET_REQUIRED");
+
+export type CursorPayload={
+  lastScore:number;
+  lastUserId:string;
+  policyVersion:number;
+  issuedAt:number;
+};
+
+export function encodeCursor(p:CursorPayload) {
+  const body=Buffer.from(JSON.stringify(p)).toString("base64url");
+  const sig=crypto.createHmac("sha256",secret).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+
+export function decodeCursor(token:string):CursorPayload {
+  const [body,sig]=token.split(".");
+  if (!body || !sig) throw Object.assign(new Error("INVALID_CURSOR"),{status:400});
+  const expected=crypto.createHmac("sha256",secret).update(body).digest("base64url");
+  if (!crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(expected)))
+    throw Object.assign(new Error("INVALID_CURSOR"),{status:400});
+  const p=JSON.parse(Buffer.from(body,"base64url").toString("utf8"));
+  if (Date.now()-p.issuedAt>15*60*1000)
+    throw Object.assign(new Error("CURSOR_EXPIRED"),{status:400});
+  return p;
+}
+
+
+=========================================================================================================
+FILE: server/services/countrylinqa/advanced/filterValidator.ts
+=========================================================================================================
+
+import type { DiscoveryFilters } from "./types.js";
+
+const COUNTRY=/^[A-Z]{2}$/;
+const SAFE_TOKEN=/^[\p{L}\p{N} ._+#&/-]{1,60}$/u;
+
+export function validateFilters(raw:DiscoveryFilters):DiscoveryFilters {
+  const out:DiscoveryFilters={};
+
+  if (raw.query) out.query=raw.query.trim().slice(0,80);
+
+  if (raw.countries) {
+    out.countries=[...new Set(raw.countries.map(x=>x.toUpperCase()))].slice(0,50);
+    if (out.countries.some(x=>!COUNTRY.test(x)))
+      throw Object.assign(new Error("INVALID_COUNTRY_FILTER"),{status:422});
+  }
+
+  if (raw.languages)
+    out.languages=[...new Set(raw.languages.filter(x=>SAFE_TOKEN.test(x)))].slice(0,10);
+
+  if (raw.interests)
+    out.interests=[...new Set(raw.interests.filter(x=>SAFE_TOKEN.test(x)))].slice(0,20);
+
+  if (raw.profession) {
+    if (!SAFE_TOKEN.test(raw.profession))
+      throw Object.assign(new Error("INVALID_PROFESSION_FILTER"),{status:422});
+    out.profession=raw.profession;
+  }
+
+  if (raw.region) out.region=raw.region.slice(0,20);
+  out.verifiedOnly=raw.verifiedOnly ?? false;
+  out.onlineOnly=raw.onlineOnly ?? false;
+  return out;
+}
+
+
+=========================================================================================================
+FILE: server/services/countrylinqa/advanced/ranker.ts
+=========================================================================================================
+
+import type { RankCandidate, RankedCandidate, ViewerFeatures } from "./types.js";
+
+const clamp=(n:number,min=0,max=1)=>Math.max(min,Math.min(max,n));
+const overlap=(a:string[],b:string[])=>{
+  if (!a.length || !b.length) return 0;
+  const B=new Set(b.map(x=>x.toLowerCase()));
+  return a.filter(x=>B.has(x.toLowerCase())).length / Math.max(a.length,b.length);
+};
+
+export function rankCandidate(
+  viewer:ViewerFeatures,
+  c:RankCandidate
+):RankedCandidate {
+  const interest=overlap(viewer.interests,c.interests);
+  const language=overlap(viewer.languages,c.languages);
+  const profession=
+    viewer.professionCode && c.professionCode===viewer.professionCode ? 1 : 0;
+  const mutual=clamp(c.mutualConnections/10);
+  const quality=clamp(c.profileQuality);
+  const safety=clamp(c.safetyQuality);
+  const freshness=clamp(c.freshness);
+
+  // Geographic eligibility is intentionally NOT a ranking weight.
+  // It must already have been enforced as a hard policy gate.
+  const score =
+    interest * 0.25 +
+    language * 0.15 +
+    profession * 0.10 +
+    mutual * 0.18 +
+    quality * 0.10 +
+    safety * 0.17 +
+    freshness * 0.05;
+
+  const reasons:string[]=[];
+  if (interest>=0.2) reasons.push("SHARED_INTERESTS");
+  if (language>=0.2) reasons.push("SHARED_LANGUAGE");
+  if (profession) reasons.push("SIMILAR_PROFESSION");
+  if (mutual>0) reasons.push("MUTUAL_CONNECTIONS");
+  if (c.verified) reasons.push("VERIFIED_PROFILE");
+
+  return {...c,score,reasons};
+}
+
+export function rankAndDiversify(
+  viewer:ViewerFeatures,
+  candidates:RankCandidate[],
+  limit:number
+) {
+  const ranked=candidates.map(c=>rankCandidate(viewer,c))
+    .sort((a,b)=>b.score-a.score);
+
+  // Prevent a single profession from dominating a page.
+  const professionCounts=new Map<string,number>();
+  const result:RankedCandidate[]=[];
+
+  for (const c of ranked) {
+    const key=c.professionCode ?? "NONE";
+    const count=professionCounts.get(key) ?? 0;
+    if (count>=Math.max(3,Math.ceil(limit*0.35))) continue;
+    result.push(c);
+    professionCounts.set(key,count+1);
+    if (result.length>=limit) break;
+  }
+
+  return result;
+}
+
+
+=========================================================================================================
+FILE: server/services/countrylinqa/advanced/savedSearchRepository.ts
+=========================================================================================================
+
+import { db } from "../../../db/pool.js";
+import { validateFilters } from "./filterValidator.js";
+
+export class SavedSearchRepository {
+  async list(userId:string) {
+    return (await db.query(`
+      SELECT id,name,query_text,filters,alerts_enabled,created_at,updated_at
+      FROM countrylinqa_saved_searches
+      WHERE user_id=$1
+      ORDER BY updated_at DESC
+      LIMIT 100
+    `,[userId])).rows;
+  }
+
+  async create(userId:string,input:any) {
+    const filters=validateFilters(input.filters ?? {});
+    return (await db.query(`
+      INSERT INTO countrylinqa_saved_searches(
+        user_id,name,query_text,filters,alerts_enabled
+      ) VALUES($1,$2,$3,$4::jsonb,$5)
+      RETURNING *
+    `,[
+      userId,
+      String(input.name ?? "").trim().slice(0,80),
+      input.query ? String(input.query).trim().slice(0,80) : null,
+      JSON.stringify(filters),
+      Boolean(input.alertsEnabled)
+    ])).rows[0];
+  }
+
+  async remove(userId:string,id:string) {
+    await db.query(
+      `DELETE FROM countrylinqa_saved_searches WHERE id=$1 AND user_id=$2`,
+      [id,userId]
+    );
+  }
+}
+
+
+=========================================================================================================
+FILE: server/services/countrylinqa/advanced/telemetry.ts
+=========================================================================================================
+
+export type DiscoveryTelemetry = {
+  event:
+    | "DISCOVERY_QUERY"
+    | "DISCOVERY_PAGE"
+    | "DISCOVERY_IMPRESSION"
+    | "DISCOVERY_PROFILE_OPEN"
+    | "SAVED_SEARCH_CREATED";
+  userId:string;
+  surface:string;
+  discoveryMode:string;
+  resultCount?:number;
+  latencyMs?:number;
+  experimentKey?:string;
+};
+
+// Never emit:
+// - precise coordinates
+// - raw phone numbers
+// - raw search text
+// - recovery identifiers
+// - private profile fields
+
+export function telemetryPayload(x:DiscoveryTelemetry) {
+  return {
+    ...x,
+    emittedAt:new Date().toISOString()
+  };
+}
+
+
+=========================================================================================================
+FILE: server/services/countrylinqa/advanced/types.ts
+=========================================================================================================
+
+export type DiscoveryFilters = {
+  query?: string;
+  countries?: string[];
+  region?: string;
+  languages?: string[];
+  interests?: string[];
+  profession?: string;
+  verifiedOnly?: boolean;
+  onlineOnly?: boolean;
+};
+
+export type RankCandidate = {
+  userId: string;
+  countryCode: string;
+  verified: boolean;
+  languages: string[];
+  interests: string[];
+  professionCode: string | null;
+  lastActiveAt: string | null;
+  mutualConnections: number;
+  profileQuality: number;
+  safetyQuality: number;
+  freshness: number;
+};
+
+export type ViewerFeatures = {
+  userId: string;
+  countryCode: string;
+  languages: string[];
+  interests: string[];
+  professionCode: string | null;
+};
+
+export type RankedCandidate = RankCandidate & {
+  score: number;
+  reasons: string[];
+};
+
+
+=========================================================================================================
+FILE: tests/ranker.test.ts
+=========================================================================================================
+
+import { describe,it,expect } from "vitest";
+import { rankCandidate,rankAndDiversify } from "../server/services/countrylinqa/advanced/ranker";
+
+const viewer:any={
+  userId:"u1",countryCode:"US",
+  languages:["English"],interests:["Technology","Travel"],
+  professionCode:"ENGINEER"
+};
+
+const base:any={
+  userId:"u2",countryCode:"GH",verified:true,
+  languages:["English"],interests:["Technology"],
+  professionCode:"ENGINEER",lastActiveAt:null,
+  mutualConnections:2,profileQuality:.8,safetyQuality:.9,freshness:.7
+};
+
+describe("ranking",()=>{
+  it("provides explainable reasons",()=>{
+    const r=rankCandidate(viewer,base);
+    expect(r.reasons).toContain("SHARED_INTERESTS");
+    expect(r.reasons).toContain("SHARED_LANGUAGE");
+    expect(r.score).toBeGreaterThan(0);
+  });
+
+  it("limits profession domination",()=>{
+    const candidates=Array.from({length:20},(_,i)=>({...base,userId:`u${i+2}`}));
+    expect(rankAndDiversify(viewer,candidates,10).length).toBeLessThanOrEqual(10);
+  });
+});

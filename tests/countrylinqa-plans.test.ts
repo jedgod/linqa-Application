@@ -86,3 +86,9 @@ test("inline messages use the same words", () => {
   assert.equal(chatStartError("CONTACTS_ONLY"), GENERAL);
   assert.equal(chatStartError("BLOCKED"), "You can't start this conversation.");
 });
+
+test("only plain https payment pages are opened", async () => {
+  const { isSafeCheckoutUrl } = await import("../clients/mobile/services/countrylinqa-plans.ts");
+  assert.equal(isSafeCheckoutUrl("https://pay.example.com/c/abc"), true);
+  for (const bad of ["http://pay.example.com/c", "javascript:alert(1)", "intent://x#Intent;scheme=http;end", "linqa://vault", "https://user:pw@pay.example.com/", "https://localhost/", "", null, undefined, "not a url"]) assert.equal(isSafeCheckoutUrl(bad as string), false, String(bad));
+});

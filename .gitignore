@@ -68,3 +68,7 @@ linqa-device-screen.png
 __pycache__/
 *.pyc
 .venv/
+server/.local-vault/
+
+# Speech model for on-device transcripts: fetched by clients/mobile/scripts/fetch-vosk-model.sh, not committed
+clients/mobile/android/app/src/main/assets/vosk-model-en/

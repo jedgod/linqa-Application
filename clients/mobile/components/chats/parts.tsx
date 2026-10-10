@@ -1,6 +1,6 @@
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
+import { LinearGradient } from "../LinearGradient";
 import { chatTimeLabel, scheduledCallLabel, scheduledCallWhen, type ChatFilter, type ChatInboxPayload, type ChatSummary, type PresenceContact } from "../../services/chat-inbox.service";
 import { C, s } from "./styles";
 
@@ -217,7 +217,7 @@ export function ConversationRow({
 }: {
   item: ChatSummary;
   onOpen: () => void;
-  onCall: (peerUserId: string, callType: "AUDIO" | "VIDEO") => void;
+  onCall: (peerUserId: string, callType: "AUDIO" | "VIDEO", peerName: string) => void;
 }) {
   const previewIcon =
     item.previewKind === "voice" ? "mic-outline" : item.missedCall ? "call-outline" : null;
@@ -302,7 +302,7 @@ export function ConversationRow({
               accessibilityRole="button"
               accessibilityLabel={`Audio call ${item.title}`}
               hitSlop={6}
-              onPress={() => onCall(item.peerUserId!, "AUDIO")}
+              onPress={() => onCall(item.peerUserId!, "AUDIO", item.title)}
               style={({ pressed }) => [s.rowAction, pressed && s.pressed]}
             >
               <Ionicons name="call-outline" size={15} color={C.teal} />
@@ -311,7 +311,7 @@ export function ConversationRow({
               accessibilityRole="button"
               accessibilityLabel={`Video call ${item.title}`}
               hitSlop={6}
-              onPress={() => onCall(item.peerUserId!, "VIDEO")}
+              onPress={() => onCall(item.peerUserId!, "VIDEO", item.title)}
               style={({ pressed }) => [s.rowAction, pressed && s.pressed]}
             >
               <Ionicons name="videocam-outline" size={15} color={C.cyan} />

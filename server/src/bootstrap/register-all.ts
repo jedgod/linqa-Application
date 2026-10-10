@@ -15,6 +15,7 @@ import { registerCountryLinqaRoutes } from "../routes/countrylinqa/routes.js";
 import { registerCountryLinqaGoLiveRoutes } from "../routes/countrylinqa/golive-routes.js";
 import { registerCountryLinqaFinalRoutes } from "../routes/countrylinqa/final-routes.js";
 import { registerCountryLinqaEngineRoutes } from "../routes/countrylinqa/engine-routes.js";
+import { registerCountryLinqaPlanRoutes } from "../routes/countrylinqa/plan-routes.js";
 import { registerCountryLinqaAdminRoutes } from "../routes/countrylinqa/admin-routes.js";
 import { registerCountryLinqaSecurityRoutes } from "../routes/countrylinqa/security-routes.js";
 import { registerEnrollmentRoutes } from "../routes/enrollment.js";
@@ -22,11 +23,18 @@ import { registerEntitlementRoutes } from "../routes/entitlements.js";
 import { registerExecutionLaunchRoutes } from "../routes/execution-launch.js";
 import { registerFeatureFlagRoutes } from "../routes/feature-flags.js";
 import { registerFileVaultRoutes } from "../routes/file-vault.js";
+import { registerBiometricRoutes } from "../routes/biometrics.js";
+import { BiometricAuthorizationService } from "../security/biometrics/service.js";
+import { biometricAttestation } from "../security/biometrics/attestation.js";
+import { registerVaultIntakeRoutes } from "../routes/vault-intake.js";
 import { registerFinalUnwiredRoutes } from "../routes/final-unwired.js";
 import { registerGaHardeningRoutes } from "../routes/ga-hardening.routes.js";
 import { createHomeModule } from "../home/home.module.js";
 import { registerChatRoutes } from "../routes/chats.js";
 import { registerChatV2Routes } from "../chat/chat-v2.routes.js";
+import { registerThreadAttachmentRoutes } from "../chat/thread-attachment.routes.js";
+import { registerChatFeatureRoutes } from "../chat/chat-feature.routes.js";
+import { registerLiveScreenRoutes } from "../chat/live-screen.routes.js";
 import { createChatBus } from "../chat/chat-redis-bus.js";
 import { startChatBusSubscriber } from "../chat/chat-outbox.service.js";
 import { registerHomeRoutes } from "../home/home.routes.js";
@@ -52,10 +60,11 @@ import { registerRuntimeRoutes } from "../routes/runtime.js";
 import { registerSafetyRoutes } from "../routes/safety.js";
 import { registerSyncRoutes } from "../routes/sync.js";
 import { registerUsernameRoutes } from "../routes/usernames.js";
+import { registerLocalVaultBlobRoutes } from "../services/storage/local-vault-object-storage.js";
+import { registerAssistantRoutes } from "../ai/assistant.routes.js";
 import { registerVertical2Routes } from "../routes/vertical-2.routes.js";
 import type { MetricsRegistry } from "../observability/metrics-registry.js";
 import type { ServiceContainer } from "./service-container.js";
-import { registerCountryLinqaPlanRoutes } from "../routes/countrylinqa/plan-routes.js";
 
 export async function registerAll(
   app: FastifyInstance,
@@ -65,6 +74,8 @@ export async function registerAll(
   metrics?: MetricsRegistry
 ) {
   const hub = new RealtimeHub();
+  const biometrics = new BiometricAuthorizationService(db,config.NODE_ENV === "production",biometricAttestation(config));
+  await registerBiometricRoutes(app,config,biometrics);
 
   await registerRelayRoutes(app, config, db, hub);
   await registerKeyPackageRoutes(app, config, db);
@@ -94,7 +105,7 @@ export async function registerAll(
   await registerSyncRoutes(app, config, db, services.sync);
   await registerAccountDeletionRoutes(app, config, services.accountDeletion, services.stepUp);
   await registerCallRoutes(app, config, services.calls, services.location);
-  await registerCallsV2Routes(app, config, db, services.calls);
+  await registerCallsV2Routes(app, config, db, services.calls, hub);
   await registerRecordedVideoRoutes(app, config, services.recordedVideos);
   await registerPushRoutes(app, config, services.push);
   await registerContactDiscoveryRoutes(app, config, services.contactDiscovery);
@@ -110,6 +121,7 @@ export async function registerAll(
   await registerFeatureFlagRoutes(app, config, services.featureFlags);
   await registerRuntimeRoutes(app, config, db, services.runtimeCapabilities);
   await registerFinalUnwiredRoutes(app, config, services);
+  await registerAssistantRoutes(app, config, db);
   await registerMilestonePlatformRoutes(app, config, {
     milestones: services.milestones,
     collaboration: services.collaboration,
@@ -129,8 +141,11 @@ export async function registerAll(
     gap: services.gap
   });
   await registerPasskeyRoutes(app, config, services.passkeys, services.stepUp);
-  await registerFileVaultRoutes(app, config, services.fileVault);
-  await registerCountryLinqaPlanRoutes(app, config, db);
+  await registerFileVaultRoutes(app, config, services.fileVault, undefined, biometrics);
+  if (config.NODE_ENV !== "production" && !(config.OBJECT_STORAGE_REGION && config.OBJECT_STORAGE_BUCKET && config.OBJECT_STORAGE_KMS_KEY_ID)) {
+    await registerLocalVaultBlobRoutes(app, config.JWT_HS256_SECRET);
+  }
+  await registerVaultIntakeRoutes(app, config, db, { stepUp: services.stepUp, biometrics });
   await registerMobileFeatureRoutes(app, config, db);
   await registerNextMobileFeatureRoutes(app, config, db);
   await registerVertical2Routes(app, config, {
@@ -172,9 +187,10 @@ export async function registerAll(
   await registerCountryLinqaGoLiveRoutes(app, config, db);
   await registerCountryLinqaFinalRoutes(app, config, db);
   await registerCountryLinqaEngineRoutes(app, config, db, metrics);
+  await registerCountryLinqaPlanRoutes(app, config, db);
   await registerCountryLinqaAdminRoutes(app, config, db);
   await registerCountryLinqaSecurityRoutes(app, config, db, services.countryReverification);
-  await registerLinqaSendRoutes(app, config, db);
+  await registerLinqaSendRoutes(app, config, db, undefined, biometrics);
   await registerOperationsRoutes(app, config, db, hub);
 
   // Home (Production Closure Pack v1.0 + Implementation Completion Pack
@@ -209,6 +225,9 @@ export async function registerAll(
   startChatBusSubscriber(hub, chatBus);
   await registerChatRoutes(app, config, db);
   await registerChatV2Routes(app, config, db, hub, chatBus);
+  await registerThreadAttachmentRoutes(app, config, db);
+  await registerChatFeatureRoutes(app, config, db);
+  await registerLiveScreenRoutes(app, config, db);
   app.addHook("onClose", async () => {
     await chatBus.close();
   });

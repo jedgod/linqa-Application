@@ -99,3 +99,16 @@ test("business categories are the ones that exist, most common first", () => {
   assert.deepEqual(categoryChips(["restaurant", "hotel", "restaurant", undefined, "shop", "hotel", "restaurant"]), ["restaurant", "hotel", "shop"]);
   assert.deepEqual(categoryChips([]), []);
 });
+
+test("a chat only starts after an in-app tap: outside links, other people, stale taps and repeats do not", async () => {
+  const { armChatStart, consumeChatStart } = await import("../clients/mobile/services/countrylinqa-world.ts");
+  assert.equal(consumeChatStart("u1", 0), false);             // an outside link, nothing armed
+  armChatStart("u1", 1000);
+  assert.equal(consumeChatStart("u2", 2000), false);          // armed for someone else
+  armChatStart("u1", 1000);
+  assert.equal(consumeChatStart("u1", 2000), true);           // the real tap
+  assert.equal(consumeChatStart("u1", 2001), false);          // only once
+  armChatStart("u1", 1000);
+  assert.equal(consumeChatStart("u1", 1000 + 16_000), false); // too old
+  assert.equal(consumeChatStart(undefined, 0), false);
+});

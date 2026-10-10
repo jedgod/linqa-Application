@@ -1,0 +1,12 @@
+export type Principal={userId:string;deviceId:string;sessionId:string;scopes:string[]};
+export interface StepUpAdapter{verifyAndConsume(i:{userId:string;deviceId:string;proof:string;purpose:string;resourceDigest?:string}):Promise<{grantId:string;assurance:number;securityEpoch:number}>}
+export interface PlatformSecurityAdapter{getTwoFactor(userId:string):Promise<{enabled:boolean;methods:string[]}>;getTrustedDevices(userId:string):Promise<Array<{id:string;name:string;platform:string;trusted:boolean;lastSeenAt:string}>>;getLoginAlertPreference(userId:string):Promise<{enabled:boolean}>;setLoginAlertPreference(userId:string,enabled:boolean):Promise<void>}
+export interface SourceObject{bytes:Buffer;filename:string;mediaType:string;size:number;sourceOwnerId?:string}
+export interface IntakeSourceAdapter{fetch(i:{principal:Principal;sourceRef:string}):Promise<SourceObject>}
+export interface QuarantineStore{put(i:{key:string;bytes:Buffer;mediaType:string}):Promise<{sha256:string;size:number}>;get(key:string):Promise<Buffer>;delete(key:string):Promise<void>}
+export interface ContentScanner{scan(i:{bytes:Buffer;filename:string;mediaType:string}):Promise<{malware:'CLEAN'|'BLOCK'|'ERROR';dlp:'CLEAR'|'REVIEW'|'BLOCK';engine:string;details?:unknown}>}
+export interface CiphertextStore{createUpload(i:{workspaceId:string;objectId:string;size:number;mediaType:string}):Promise<{uploadUrl:string;storageKey:string}>;head(storageKey:string):Promise<{size:number;sha256?:string}>;delete(storageKey:string):Promise<void>}
+export interface SocialCopyAdapter{createCopy(i:{userId:string;objectId:string;grantId:string;destinationRef?:string}):Promise<{socialObjectId:string}>}
+export interface UserDirectory{resolve(handle:string):Promise<{userId:string}|null>}
+export interface Mailer{sendSecureVaultLink(i:{to:string;url:string;displayName?:string;expiresAt:string}):Promise<{providerRef:string}>}
+export interface BillingProvider{createCheckout(i:{customerRef?:string;userId:string;planCode:string;successUrl:string;cancelUrl:string;idempotencyKey:string}):Promise<{sessionRef:string;checkoutUrl:string;customerRef?:string}>;verifyWebhook(raw:Buffer,signature:string):Promise<{eventId:string;type:string;userId?:string;planCode?:string;sessionRef?:string}>}

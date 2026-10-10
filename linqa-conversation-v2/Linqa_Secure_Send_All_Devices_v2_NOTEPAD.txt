@@ -1,0 +1,618 @@
+LINQA SECURE SEND ALL DEVICES V2 — INTEGRATION CODE
+Status: not activated in the live app. Read README.md for mandatory adapters.
+
+========================================================================
+FILE: README.md
+========================================================================
+# Linqa Secure Send v2 — activation integration
+
+Status: tested source pack; not deployed or activated in your live application.
+This package replaces the supplied three-file pack. It supports the same shared
+send interface on Android/iOS, browser and desktop once platform adapters are
+connected. Compatibility is an architecture target, not a device certification.
+
+## Findings in the supplied attachment
+
+1. Files in clients/shared import ../../shared/secure-send even though the ZIP
+   contains only clients/shared/secure-send.ts. Imports therefore target a file
+   absent from the archive. v2 uses colocated imports.
+2. Each device independently creates a random conversation AES key on first
+   send. No authenticated agreement/provisioning mechanism is included; another
+   device cannot decrypt that message just because it is registered.
+3. AES-GCM does not bind conversation/message IDs as AAD; no sender device
+   signature, native ratchet protocol or revocation mechanism is supplied.
+4. btoa(plaintext) is not an encryption test and fails for many Unicode strings.
+5. The transport captures one token forever and assumes a /v2/chats contract.
+6. There is no backend, durable encrypted outbox, key bootstrap or device tests.
+
+Do not roll out the attached AES key-generation path as all-device messaging.
+v2 removes that crypto implementation and delegates encryption/decryption to
+your existing verified Linqa protocol, including DeviceIdentity, NativeCore,
+KeyPackageApi and trusted device-link bootstrap. Their actual interfaces were
+not supplied, so this pack specifies a strict bridge rather than inventing APIs.
+
+## Included implementation
+
+- Shared TypeScript send/read activation factory, correctly resolved imports.
+- Verified device fan-out including sender's linked devices and recipient's
+  devices; refuses missing keys or inactive sender devices.
+- Durable encrypted outbox abstraction and actual browser IndexedDB adapter.
+  A SQLite schema and parameterized native storage mappings are included.
+- Exact-byte retries with stable client IDs and relay-acceptance semantics.
+- HTTPS transport, fresh session token per request, timeouts and encoded IDs.
+- Authenticated Express relay, parameterized PostgreSQL schema/repository,
+  membership/policy checks, active device checks and idempotent transactions.
+- Required transactional append authorization hook for live block/device checks.
+- Unit tests. No test-only crypto or memory storage is imported by production code.
+
+## Connect the backend
+
+Use the host's existing Express and pg versions. Apply server/schema.sql through
+your migration runner in staging. The lc2 prefix avoids overwriting existing
+chat tables; add user FKs against the actual canonical accounts table after
+schema review. For existing history prefer mapping the repository to the
+canonical relay tables rather than starting a second history store.
+
+```js
+import {createConversationRouter} from './server/router.mjs';
+app.use('/v2/conversations',createConversationRouter({
+ express,pool,
+ authenticate: existingDeviceBoundSessionMiddleware,
+ authorizeMutation: existingCsrfOrBearerMutationGuard,
+ rateLimit: existingAccountDeviceRateLimiter,
+ policy: {canChat: canonicalChatPolicy},
+ devices: {isActive: canonicalDeviceActive,listForUsers: canonicalDeviceList},
+ authorizeAppend: transactionalChatAuthorization
+}));
+```
+
+authenticate must validate the account session AND its bound device and set
+req.actor={userId,deviceId}. Never trust a body/header user ID. canChat must
+enforce active registered accounts, chat-request/discovery rules and blocks in
+both directions. Device lists must exclude pending/revoked devices.
+
+The mandatory authorizeAppend(pgTransaction,{conversationId,actor,envelopes})
+must revalidate membership, block policy and exact active target devices inside
+the SAME transaction, using locks/version checks coordinated with revocation
+and block writes. Throw on denial. The source cannot implement canonical-table
+locking without your real schema. This hook is not optional or an allow-all
+placeholder; the repository refuses construction without it.
+
+Endpoints match deviceTransport:
+GET /v2/conversations; POST /v2/conversations/direct {peerId};
+GET /v2/conversations/:id/events?after=cursor;
+POST /v2/conversations/:id/events {clientId,envelopes}.
+
+## Connect each client
+
+```ts
+import {activateSecureSend} from './clients/shared/activateSecureSend.ts';
+import {deviceTransport} from './clients/shared/deviceTransport.ts';
+import {durableOutbox} from './clients/shared/durableOutbox.ts';
+const secureSend=activateSecureSend({
+ actor:{userId:session.userId,deviceId:session.boundDeviceId},
+ protocol: verifiedLinqaProtocolBridge,
+ outbox:durableOutbox(existingTransactionalSqliteStore),
+ transport:deviceTransport({baseUrl:configuredHttpsApi,
+   getToken:getCurrentSessionToken,fetchImpl:fetch}),
+ uuid:cryptographicallySecureUuid
+});
+// Browser: use (await browserOutbox(indexedDB)).outbox instead of SQLite.
+// Build a fresh instance on account/device changes, close the previous instance.
+```
+
+The protocol bridge implements assertReady, verifiedSnapshot, seal and open
+from clients/shared/secure-send.ts. No automatic conversation-key creation is
+performed. assertReady must check actual native/browser protocol availability,
+production key-store readiness and a valid registered device. verifiedSnapshot
+must authenticate key package signatures and account/device bindings, not just
+trust an API response. seal must bind the conversation, sender account/device,
+message ID and target device within the signed native protocol. open must verify
+that context and sender key binding before returning plaintext. Ratchet state,
+replay counters and send-state crash consistency belong in the native adapter.
+
+Use OS-protected key storage on native platforms and the existing approved
+browser key-storage implementation. This pack stores no raw conversation keys.
+Do not copy Android app-signing keys into the messaging store: APK signing and
+message encryption use different keys for different purposes.
+
+## Connect the conversation screen
+
+```ts
+async function onSend(text:string){
+ const queued=await secureSend.send(conversationId,text);
+ // Clear composer only after durable queue commit; show queued, not delivered.
+ updateMessageState(queued.clientId,'queued');
+ try{
+  for(const result of await secureSend.flush())
+   updateMessageState(result.clientId,result.state);
+ }catch(error){showRetryForQueuedMessage(error);}
+}
+```
+
+Run flush at authenticated app startup, foreground and network recovery using
+the host's lifecycle hooks. Serialize polling too: await read(id,cursor), store
+decrypted records in the approved encrypted local inbox, THEN commit cursor.
+Do not advance the cursor on authenticated-decryption failures. Persist the
+inbox/cursor consistently with native replay counters. Never log plaintext,
+session tokens, key packages or encryption secrets.
+
+The relay acknowledges storage, not recipient delivery/read status. Add those
+statuses only through the existing authenticated receipt mechanism. Queued
+messages are already encrypted; exact retry bytes are preserved after restart.
+The client has no background execution guarantee when the OS/browser suspends it.
+
+If server returns 409 because device eligibility changed, retain the batch and
+stop automatic retries until a host rekey/revocation flow resolves it. Do not
+silently drop devices. Check canonical relay acceptance by client ID before
+replacing a pending encryption batch; automatic rekeying after an uncertain
+network outcome is not implemented here. This avoids duplicate sends and
+unintended key downgrade.
+
+## Linked devices and history
+
+Future messages target every authorized device. Old messages do not magically
+become available on newly linked devices. Connect your authenticated device-link
+bootstrap for consented encrypted history transfer, key rotation and recipient
+identity verification. Existing /v1/relay/envelopes history needs an explicit
+repository mapping or migration. This pack does not silently migrate old AES
+messages or invent a shared key for them.
+
+## Verification and activation boundary
+
+All 24 delivered unit tests passed. Run npm test with Node 24+; Node strips the TypeScript syntax for these tests.
+Use your host TypeScript/bundler config for actual clients (.ts extension imports
+may require allowImportingTsExtensions or rewriting import suffixes during build).
+The tests use fake protocol/network/store adapters to verify orchestration.
+They do NOT certify the native crypto, IndexedDB browser behavior, SQLite,
+PostgreSQL, physical Android/iOS devices, browser or desktop runtime.
+
+Before setting the real app's send feature active: connect all mandatory
+adapters; run app/server typechecks and actual DB tests; verify A→B and B→A on
+two physical devices plus sender/recipient desktop/web; test restart retries,
+revocation, block changes, account switch, offline recovery and secure history
+bootstrap. Use the original matching Android APK signing key to update the
+Samsung installation without uninstalling; that key is not supplied in this pack.
+
+To activate rather than just deliver code, the current Linqa repository and
+deployment/device build access are required. They were not included with these
+attachments. No live configuration, app installation or server deployment was
+changed by producing this pack.
+
+
+========================================================================
+FILE: clients/shared/activateSecureSend.ts
+========================================================================
+export {activateSecureSend} from './secure-send.ts';
+export type {SecureProtocol,Outbox,Actor,Transport,Options} from './secure-send.ts';
+
+
+========================================================================
+FILE: clients/shared/browserOutbox.ts
+========================================================================
+import {durableOutbox} from './durableOutbox.ts';
+import type {AtomicStore} from './durableOutbox.ts';
+// Actual browser durable store; Electron renderer can use this only inside its
+// trusted origin. Do not load remote content in a privileged Electron renderer.
+export async function browserOutbox(indexedDB:IDBFactory){
+ if(!indexedDB)throw Error('INDEXEDDB_REQUIRED');
+ const db=await new Promise<IDBDatabase>((resolve,reject)=>{
+  const req=indexedDB.open('linqa-encrypted-outbox-v2',1);
+  req.onupgradeneeded=()=>{req.result.createObjectStore('queue');};
+  req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+  req.onblocked=()=>reject(Error('OUTBOX_UPGRADE_BLOCKED'));
+ });
+ function tx<T>(mode:IDBTransactionMode,fn:(s:IDBObjectStore,done:(v:T)=>void)=>void){return new Promise<T>((resolve,reject)=>{
+  const t=db.transaction('queue',mode);let value:T;
+  t.oncomplete=()=>resolve(value);t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error||Error('OUTBOX_ABORTED'));
+  try{fn(t.objectStore('queue'),v=>{value=v;});}catch(e){t.abort();reject(e);}
+ });}
+ const store:AtomicStore={
+  insertIfAbsent:(key,value)=>tx<void>('readwrite',(s,done)=>{const r=s.get(key);r.onsuccess=()=>{if(r.result===undefined)s.add(value,key);done(undefined);};}),
+  scanPrefix:prefix=>tx('readonly',(s,done)=>{const rows:{key:string;value:string}[]=[];const r=s.openCursor();r.onsuccess=()=>{const cursor=r.result;if(!cursor){done(rows);return;}if(typeof cursor.key==='string'&&cursor.key.startsWith(prefix))rows.push({key:cursor.key,value:String(cursor.value)});cursor.continue();};}),
+  delete:key=>tx<void>('readwrite',(s,done)=>{s.delete(key);done(undefined);})
+ };
+ return {outbox:durableOutbox(store),close:()=>db.close()};
+}
+
+
+========================================================================
+FILE: clients/shared/deviceTransport.ts
+========================================================================
+import type {Batch,Transport} from './secure-send.ts';
+export function deviceTransport(config:{baseUrl:string;getToken:()=>Promise<string>;fetchImpl:typeof fetch;getCsrfToken?:()=>Promise<string>}):Transport {
+ const origin=new URL(config.baseUrl);if(origin.protocol!=='https:'||origin.search||origin.hash||origin.username||origin.password)throw Error('HTTPS_API_REQUIRED');
+ const root=config.baseUrl.replace(/\/$/,'')+'/v2/conversations';
+ async function request(path:string,method:string,body?:Batch){
+  const token=await config.getToken();if(!token)throw Error('SESSION_REQUIRED');
+  const headers:Record<string,string>={authorization:`Bearer ${token}`};
+  if(body)headers['content-type']='application/json';
+  if(body&&config.getCsrfToken)headers['x-csrf-token']=await config.getCsrfToken();
+  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),15000);
+  try{
+   const response=await config.fetchImpl(root+path,{method,headers,body:body?JSON.stringify(body):undefined,signal:controller.signal});
+   if(!response.ok)throw Object.assign(Error(`RELAY_HTTP_${response.status}`),{status:response.status});
+   return await response.json();
+  }finally{clearTimeout(timer);}
+ }
+ return {
+  post:(id,batch)=>request(`/${encodeURIComponent(id)}/events`,'POST',batch),
+  page:(id,cursor)=>request(`/${encodeURIComponent(id)}/events?after=${encodeURIComponent(cursor)}`,'GET')
+ };
+}
+
+
+========================================================================
+FILE: clients/shared/durableOutbox.ts
+========================================================================
+import type {Outbox,Queued} from './secure-send.ts';
+// Universal storage contract for SQLite (mobile/desktop) or IndexedDB (web).
+// The host must implement atomic durable transactions, not localStorage.
+export interface AtomicStore {
+ insertIfAbsent(key:string,value:string):Promise<void>;
+ scanPrefix(prefix:string):Promise<{key:string;value:string}[]>;
+ delete(key:string):Promise<void>;
+}
+export function durableOutbox(store:AtomicStore):Outbox {
+ if(!store?.insertIfAbsent||!store?.scanPrefix||!store?.delete)throw Error('DURABLE_STORE_REQUIRED');
+ const prefix=(a:string,d:string)=>`linqa-send:${encodeURIComponent(a)}:${encodeURIComponent(d)}:`;
+ return {
+  put:row=>store.insertIfAbsent(prefix(row.accountId,row.deviceId)+row.batch.clientId,JSON.stringify(row)),
+  list:async(a,d)=>(await store.scanPrefix(prefix(a,d))).map(r=>JSON.parse(r.value) as Queued),
+  remove:(a,d,id)=>store.delete(prefix(a,d)+id)
+ };
+}
+
+
+========================================================================
+FILE: clients/shared/nativeOutbox.sql
+========================================================================
+-- Run in the existing account-isolated mobile/desktop SQLite store.
+CREATE TABLE IF NOT EXISTS linqa_secure_outbox_v2 (
+ key TEXT PRIMARY KEY NOT NULL,
+ value TEXT NOT NULL
+);
+-- AtomicStore mappings (parameterized values only):
+-- insertIfAbsent: INSERT OR IGNORE INTO linqa_secure_outbox_v2(key,value) VALUES(?,?);
+-- scanPrefix: SELECT key,value FROM linqa_secure_outbox_v2 WHERE key>=? ORDER BY key;
+-- Filter returned keys using startsWith(prefix); do not use interpolated LIKE.
+-- delete: DELETE FROM linqa_secure_outbox_v2 WHERE key=?;
+-- Resolve write promises only after committing the host SQLite transaction.
+
+
+========================================================================
+FILE: clients/shared/secure-send.ts
+========================================================================
+// Shared orchestration only. Cryptography is supplied by the existing audited
+// Linqa native/browser protocol adapter, never by a plaintext fallback.
+export type Actor = {userId:string;deviceId:string};
+export type Device = Actor & {keyPackage:unknown};
+export type Snapshot = {members:string[];devices:Device[]};
+export type Context = {conversationId:string;senderId:string;senderDeviceId:string;clientId:string};
+export type Envelope = {userId:string;deviceId:string;ciphertext:string};
+export type Batch = {clientId:string;envelopes:Envelope[]};
+export type Queued = {accountId:string;deviceId:string;conversationId:string;batch:Batch};
+export interface SecureProtocol {
+ assertReady():Promise<void>;
+ // Verify ALL key-package signatures and account/device trust bindings.
+ verifiedSnapshot(conversationId:string):Promise<Snapshot>;
+ // Authenticate context and target IDs inside the native signed protocol.
+ // Native adapter must protect ratchet state against concurrent/crashed sends.
+ seal(text:string,context:Context,device:Device):Promise<string>;
+ // Verify sender device/account/signature, AAD and replay protection BEFORE
+ // returning text. Receiving device is specified by the signed-in actor.
+ open(ciphertext:string,context:Omit<Context,'senderDeviceId'>,actor:Actor):Promise<string>;
+}
+export interface Outbox {
+ // Durable put-if-absent keyed by accountId/deviceId/clientId.
+ put(row:Queued):Promise<void>;
+ list(accountId:string,deviceId:string):Promise<Queued[]>;
+ remove(accountId:string,deviceId:string,clientId:string):Promise<void>;
+}
+export interface Transport {
+ post(conversationId:string,batch:Batch):Promise<{id:string;seq:string}>;
+ page(conversationId:string,cursor:string):Promise<{events:WireEvent[];cursor:string;hasMore:boolean}>;
+}
+export type WireEvent = {id:string;seq:string;client_id:string;sender_id:string;ciphertext:string;created_at:string};
+export type Options = {actor:Actor;protocol:SecureProtocol;outbox:Outbox;transport:Transport;uuid:()=>string};
+export function ensure(value:unknown,message:string):asserts value {if(!value)throw Error(message);}
+export function validateBatch(b:Batch){
+ ensure(b && typeof b.clientId==='string' && /^[0-9a-f-]{36}$/i.test(b.clientId),'INVALID_CLIENT_ID');
+ ensure(Array.isArray(b.envelopes)&&b.envelopes.length>0&&b.envelopes.length<=32,'DEVICE_LIMIT');
+ const seen=new Set<string>();let size=0;
+ for(const e of b.envelopes){
+  ensure(typeof e.userId==='string'&&e.userId.length>0&&typeof e.deviceId==='string'&&e.deviceId.length>0,'INVALID_DEVICE');
+  const k=JSON.stringify([e.userId,e.deviceId]);ensure(!seen.has(k),'DUPLICATE_DEVICE');seen.add(k);
+  ensure(typeof e.ciphertext==='string'&&e.ciphertext.length>=16&&e.ciphertext.length<=131072&&/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(e.ciphertext),'INVALID_CIPHERTEXT');size+=e.ciphertext.length;
+ }
+ ensure(size<=1048576,'BATCH_TOO_LARGE');
+}
+export function activateSecureSend(options:Options){
+ const {actor,protocol,outbox,transport,uuid}=options;
+ ensure(actor?.userId&&actor?.deviceId,'SESSION_REQUIRED');
+ ensure(protocol?.assertReady&&protocol?.verifiedSnapshot&&protocol?.seal&&protocol?.open&&outbox?.put&&outbox?.list&&outbox?.remove&&transport?.post&&transport?.page&&uuid,'ADAPTERS_REQUIRED');
+ let stopped=false;let queue:Promise<unknown>=Promise.resolve();
+ function serial<T>(fn:()=>Promise<T>):Promise<T>{const p=queue.then(fn);queue=p.catch(()=>{});return p;}
+ async function ready(){ensure(!stopped,'SESSION_CLOSED');await protocol.assertReady();ensure(!stopped,'SESSION_CLOSED');}
+ return {
+  async send(conversationId:string,text:string){return serial(async()=>{
+   await ready();ensure(typeof text==='string'&&!!text.trim()&&text.length<=8000,'INVALID_TEXT');
+   const snapshot=await protocol.verifiedSnapshot(conversationId);
+   ensure(snapshot.members.length===2&&new Set(snapshot.members).size===2&&snapshot.members.includes(actor.userId),'MEMBERSHIP_REQUIRED');
+   ensure(snapshot.devices.length<=32&&snapshot.devices.every(d=>snapshot.members.includes(d.userId))&&snapshot.members.every(u=>snapshot.devices.some(d=>d.userId===u)),'RECIPIENT_DEVICE_UNAVAILABLE');
+   ensure(snapshot.devices.some(d=>d.userId===actor.userId&&d.deviceId===actor.deviceId),'DEVICE_INACTIVE');
+   const clientId=uuid();const context={conversationId,senderId:actor.userId,senderDeviceId:actor.deviceId,clientId};
+   const envelopes:Envelope[]=[];
+   for(const device of snapshot.devices){await ready();envelopes.push({userId:device.userId,deviceId:device.deviceId,ciphertext:await protocol.seal(text,context,device)});}
+   const batch={clientId,envelopes};validateBatch(batch);await ready();
+   // Store exact encrypted bytes BEFORE network activity. Retry never creates
+   // a second encryption operation or changes the message ID.
+   await outbox.put({accountId:actor.userId,deviceId:actor.deviceId,conversationId,batch});
+   return {clientId,state:'queued' as const};
+  });},
+  async flush(){return serial(async()=>{
+   await ready();const result:{clientId:string;state:string}[]=[];
+   for(const row of await outbox.list(actor.userId,actor.deviceId)){
+    await ready();ensure(row.accountId===actor.userId&&row.deviceId===actor.deviceId,'OUTBOX_ACCOUNT_MISMATCH');validateBatch(row.batch);
+    try{
+     await transport.post(row.conversationId,row.batch);await ready();
+     await outbox.remove(actor.userId,actor.deviceId,row.batch.clientId);
+     result.push({clientId:row.batch.clientId,state:'relay_accepted'});
+    }catch(e){
+     // Retain exact batch for network failures; policy/device errors require
+     // an explicit rekey/revocation resolution, never silently drop targets.
+     throw Object.assign(e instanceof Error?e:Error('SEND_FAILED'),{clientId:row.batch.clientId});
+    }
+   }return result;
+  });},
+  async read(conversationId:string,cursor='0'){
+   await ready();const page=await transport.page(conversationId,cursor);const events=[];
+   for(const row of page.events){await ready();const text=await protocol.open(row.ciphertext,{conversationId,senderId:row.sender_id,clientId:row.client_id},actor);events.push({...row,text});}
+   return {...page,events};
+  },
+  // On logout/account switch stop wake-ups first, then close this instance.
+  close(){stopped=true;}
+ };
+}
+
+
+========================================================================
+FILE: package.json
+========================================================================
+{"name":"linqa-secure-send-v2-integration","private":true,"type":"module","scripts":{"test":"node --test tests/*.test.mjs"},"engines":{"node":">=24"}}
+
+
+========================================================================
+FILE: server/postgres.mjs
+========================================================================
+import {randomUUID} from 'node:crypto';
+export function createPostgresRepository(pool,authorizeAppend) {
+ if(typeof authorizeAppend!=='function')throw new Error('Transactional append authorization adapter required');
+ async function transaction(fn) {
+  const c = await pool.connect();
+  try { await c.query('BEGIN'); const result = await fn(c); await c.query('COMMIT'); return result; }
+  catch(e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+ }
+ return {
+  async members(id) { const r=await pool.query('SELECT user_id FROM lc2_members WHERE conversation_id=$1',[id]); return r.rows.map(x=>x.user_id); },
+  open(pair,members) { return transaction(async c=>{
+   const r = await c.query('INSERT INTO lc2_conversations(id,pair_key) VALUES($1,$2) ON CONFLICT(pair_key) DO UPDATE SET pair_key=excluded.pair_key RETURNING id',[randomUUID(),pair]);
+   const id=r.rows[0].id;
+   for (const user of members) await c.query('INSERT INTO lc2_members VALUES($1,$2) ON CONFLICT DO NOTHING',[id,user]);
+   return {id};
+  }); },
+  async list(user) {
+   const r = await pool.query(`SELECT c.id,c.created_at,
+    (SELECT m.user_id FROM lc2_members m WHERE m.conversation_id=c.id AND m.user_id<>$1 LIMIT 1) AS peer_id
+    FROM lc2_conversations c JOIN lc2_members own ON own.conversation_id=c.id AND own.user_id=$1
+    ORDER BY c.created_at DESC LIMIT 100`,[user]);
+   return r.rows;
+  },
+  async history(id,actor,after) {
+   const r = await pool.query(`SELECT e.seq::text,e.id,e.client_id,e.sender_id,e.created_at,x.ciphertext
+    FROM lc2_events e JOIN lc2_envelopes x ON x.event_id=e.id
+    WHERE e.conversation_id=$1 AND e.seq>$2::bigint AND x.user_id=$3 AND x.device_id=$4
+    ORDER BY e.seq ASC LIMIT 100`,[id,after,actor.userId,actor.deviceId]);
+   return {events:r.rows,cursor:r.rows.at(-1)?.seq ?? after,hasMore:r.rows.length===100};
+  },
+  append(id,actor,input,eventId) { return transaction(async c=>{
+   await authorizeAppend(c,{conversationId:id,actor,envelopes:input.envelopes});
+   const r = await c.query(`INSERT INTO lc2_events(id,conversation_id,sender_id,client_id) VALUES($1,$2,$3,$4)
+    ON CONFLICT(conversation_id,sender_id,client_id) DO NOTHING RETURNING id,seq::text`,[eventId,id,actor.userId,input.clientId]);
+   if (!r.rows.length) {
+    const existing=await c.query('SELECT id,seq::text FROM lc2_events WHERE conversation_id=$1 AND sender_id=$2 AND client_id=$3',[id,actor.userId,input.clientId]);
+    return {...existing.rows[0],duplicate:true};
+   }
+   for (const e of input.envelopes) await c.query('INSERT INTO lc2_envelopes VALUES($1,$2,$3,$4)',[eventId,e.userId,e.deviceId,e.ciphertext]);
+   return {...r.rows[0],duplicate:false};
+  }); }
+ };
+}
+
+
+========================================================================
+FILE: server/router.mjs
+========================================================================
+import {createChatService, requireValue, isUuid} from './service.mjs';
+import {createPostgresRepository} from './postgres.mjs';
+// Express passed by host; no second auth system or permissive dev fallback.
+export function createConversationRouter({express,pool,authenticate,policy,devices,rateLimit,authorizeMutation,authorizeAppend}) {
+ for (const [name,value] of Object.entries({authenticate,rateLimit,authorizeMutation,authorizeAppend})) if(typeof value!=='function') throw new Error(`Missing ${name} adapter`);
+ if(typeof policy?.canChat!=='function' || typeof devices?.listForUsers!=='function' || typeof devices?.isActive!=='function') throw new Error('Missing policy/device adapters');
+ const router=express.Router(); const service=createChatService({repo:createPostgresRepository(pool,authorizeAppend),policy,devices});
+ const route=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
+ router.use(authenticate,rateLimit,express.json({limit:'2mb'}));
+ router.use((req,res,next)=>Promise.resolve().then(async()=>{
+  requireValue(isUuid(req.actor?.userId) && typeof req.actor?.deviceId==='string',401,'Authentication required');
+  requireValue(await devices.isActive(req.actor.userId,req.actor.deviceId),401,'Device inactive');
+ }).then(()=>next(),next));
+ router.get('/',route(async(req,res)=>res.json({conversations:await service.list(req.actor)})));
+ router.post('/direct',authorizeMutation,route(async(req,res)=>res.json(await service.open(req.actor,req.body?.peerId))));
+ router.get('/:id/events',route(async(req,res)=>res.json(await service.history(req.actor,req.params.id,req.query.after??'0'))));
+ router.post('/:id/events',authorizeMutation,route(async(req,res)=>res.status(202).json(await service.send(req.actor,req.params.id,req.body))));
+ router.use((error,req,res,next)=>{
+  // Do not log request bodies, ciphertext, keys or session tokens.
+  res.status(error.status ?? 500).json({error:error.status?error.message:'Conversation service unavailable'});
+ });
+ return router;
+}
+
+
+========================================================================
+FILE: server/schema.sql
+========================================================================
+BEGIN;
+-- Separate names avoid overwriting existing Linqa chat tables. Bind user UUIDs
+-- to your canonical account table after checking the actual live schema.
+CREATE TABLE IF NOT EXISTS lc2_conversations (
+ id uuid PRIMARY KEY, pair_key text UNIQUE NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS lc2_members (
+ conversation_id uuid REFERENCES lc2_conversations(id) ON DELETE CASCADE,
+ user_id uuid NOT NULL, PRIMARY KEY(conversation_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS lc2_events (
+ seq bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ id uuid UNIQUE NOT NULL, conversation_id uuid NOT NULL REFERENCES lc2_conversations(id),
+ sender_id uuid NOT NULL, client_id uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(conversation_id,sender_id,client_id),
+ FOREIGN KEY(conversation_id,sender_id) REFERENCES lc2_members(conversation_id,user_id)
+);
+-- One ciphertext envelope per authorized device, including sender's devices.
+-- User/device keys are opaque canonical IDs from the device directory adapter.
+CREATE TABLE IF NOT EXISTS lc2_envelopes (
+ event_id uuid REFERENCES lc2_events(id) ON DELETE CASCADE,
+ user_id uuid NOT NULL, device_id text NOT NULL, ciphertext text NOT NULL,
+ PRIMARY KEY(event_id,user_id,device_id)
+);
+CREATE INDEX IF NOT EXISTS lc2_events_history ON lc2_events(conversation_id,seq);
+CREATE INDEX IF NOT EXISTS lc2_envelopes_recipient ON lc2_envelopes(user_id,device_id,event_id);
+COMMIT;
+
+
+========================================================================
+FILE: server/service.mjs
+========================================================================
+import {randomUUID, createHash} from 'node:crypto';
+export class ChatError extends Error {
+ constructor(status, message) { super(message); this.status = status; }
+}
+export const requireValue = (ok, status, message) => { if (!ok) throw new ChatError(status, message); };
+export const isUuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+export function validateSend(input) {
+ requireValue(input && isUuid(input.clientId),400,'Invalid clientId');
+ requireValue(Array.isArray(input.envelopes) && input.envelopes.length > 0 && input.envelopes.length <= 32,400,'Invalid envelopes');
+ const seen = new Set(); let total = 0;
+ for (const e of input.envelopes) {
+  requireValue(isUuid(e.userId) && typeof e.deviceId === 'string' && e.deviceId.length > 0 && e.deviceId.length <= 128,400,'Invalid device');
+  requireValue(typeof e.ciphertext === 'string' && e.ciphertext.length >= 16 && e.ciphertext.length <= 131072 && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(e.ciphertext),400,'Invalid ciphertext');
+  const k = JSON.stringify([e.userId,e.deviceId]); requireValue(!seen.has(k),400,'Duplicate device'); seen.add(k); total += e.ciphertext.length;
+ }
+ requireValue(total <= 1048576,413,'Envelope batch too large');
+ return input;
+}
+export function createChatService({repo, policy, devices}) {
+ // policy must consult canonical accounts, blocks, chat requests and discovery.
+ async function authorize(actor, id) {
+  requireValue(isUuid(id),400,'Invalid conversation');
+  const members = await repo.members(id);
+  requireValue(members.includes(actor.userId),404,'Conversation unavailable');
+  const other = members.find(x => x !== actor.userId);
+  requireValue(other && await policy.canChat(actor.userId,other),403,'Chat is not permitted');
+  return members;
+ }
+ return {
+  async open(actor, peerId) {
+   requireValue(isUuid(peerId) && peerId !== actor.userId,400,'Invalid recipient');
+   requireValue(await policy.canChat(actor.userId,peerId),403,'Chat is not permitted');
+   const pair = [actor.userId,peerId].sort();
+   return repo.open(createHash('sha256').update(pair.join(':')).digest('hex'),pair);
+  },
+  async list(actor) { return repo.list(actor.userId); },
+  async history(actor,id,after='0') {
+   await authorize(actor,id);
+   requireValue(typeof after === 'string' && /^\d{1,20}$/.test(after) && BigInt(after) <= 9223372036854775807n,400,'Invalid cursor');
+   return repo.history(id,actor,after);
+  },
+  async send(actor,id,input) {
+   const members = await authorize(actor,id); validateSend(input);
+   const eligible = await devices.listForUsers(members);
+   requireValue(eligible.every(e=>members.includes(e.userId)) && members.every(u=>eligible.some(e=>e.userId===u)),409,'Recipient device unavailable');
+   const wanted = new Set(eligible.map(x=>JSON.stringify([x.userId,x.deviceId])));
+   requireValue(wanted.size > 0 && wanted.has(JSON.stringify([actor.userId,actor.deviceId])),409,'Device not active');
+   requireValue(input.envelopes.length === wanted.size && input.envelopes.every(e=>wanted.has(JSON.stringify([e.userId,e.deviceId]))),409,'Device set changed; refresh keys and retry');
+   // Caller encryption must authenticate conversation ID, sender and client ID as AAD.
+   return repo.append(id,actor,input,randomUUID());
+  }
+ };
+}
+
+
+========================================================================
+FILE: tests/relay.test.mjs
+========================================================================
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createChatService,validateSend} from '../server/service.mjs';
+const a='00000000-0000-4000-8000-000000000001',b='00000000-0000-4000-8000-000000000002',id='00000000-0000-4000-8000-000000000003',clientId='00000000-0000-4000-8000-000000000004';
+const actor={userId:a,deviceId:'A'};const ciphertext=Buffer.alloc(32).toString('base64');
+const envelopes=[{userId:a,deviceId:'A',ciphertext},{userId:b,deviceId:'B',ciphertext}];
+function service({members=[a,b],allowed=true,eligible=envelopes}={}){
+ return createChatService({repo:{members:async()=>members,append:async()=>({id}),open:async()=>({id})},policy:{canChat:async()=>allowed},devices:{listForUsers:async()=>eligible}});
+}
+test('nonmember cannot read history',async()=>{await assert.rejects(service({members:[b]}).history(actor,id),/unavailable/);});
+test('block policy rejects sends and conversation initiation',async()=>{const s=service({allowed:false});await assert.rejects(s.send(actor,id,{clientId,envelopes}),/not permitted/);await assert.rejects(s.open(actor,b),/not permitted/);});
+test('self chat rejected',async()=>{await assert.rejects(service().open(actor,a),/recipient/);});
+test('duplicate envelope rejected',()=>assert.throws(()=>validateSend({clientId,envelopes:[envelopes[0],envelopes[0]]}),/Duplicate/));
+test('missing recipient envelope fails closed',async()=>{await assert.rejects(service().send(actor,id,{clientId,envelopes:[envelopes[0]]}),/Device set changed/);});
+test('unauthorized target device rejected',async()=>{await assert.rejects(service().send(actor,id,{clientId,envelopes:[envelopes[0],{...envelopes[1],deviceId:'C'}]}),/Device set changed/);});
+test('valid encrypted device batch accepted',async()=>assert.equal((await service().send(actor,id,{clientId,envelopes})).id,id));
+test('invalid cursor rejected',async()=>{await assert.rejects(service().history(actor,id,'-1'),/cursor/);});
+test('plaintext field is not accepted as ciphertext',()=>assert.throws(()=>validateSend({clientId,envelopes:[{...envelopes[0],ciphertext:'hello world!'}]}),/ciphertext/));
+
+
+========================================================================
+FILE: tests/secure-send.test.mjs
+========================================================================
+import test from 'node:test';import assert from 'node:assert/strict';
+import {activateSecureSend} from '../clients/shared/secure-send.ts';
+import {deviceTransport} from '../clients/shared/deviceTransport.ts';
+import {durableOutbox} from '../clients/shared/durableOutbox.ts';
+const a='00000000-0000-4000-8000-000000000001',b='00000000-0000-4000-8000-000000000002',id='00000000-0000-4000-8000-000000000003';
+const actor={userId:a,deviceId:'phone'};
+const devices=[actor,{userId:a,deviceId:'desktop'},{userId:b,deviceId:'phone'},{userId:b,deviceId:'web'}].map(x=>({...x,keyPackage:{}}));
+function fixture(overrides={}){
+ const disk=new Map();const posted=[];let failed=false;let seals=0;
+ const outbox=durableOutbox({insertIfAbsent:async(k,v)=>{if(!disk.has(k))disk.set(k,v);},scanPrefix:async p=>[...disk].filter(([k])=>k.startsWith(p)).map(([key,value])=>({key,value})),delete:async k=>{disk.delete(k);}});
+ const protocol={assertReady:async()=>{},verifiedSnapshot:async()=>({members:[a,b],devices}),seal:async()=>{seals++;return Buffer.alloc(32,seals).toString('base64');},open:async()=> 'verified text',...overrides.protocol};
+ const client=activateSecureSend({actor,protocol,outbox,uuid:()=>id,transport:{post:async(cid,batch)=>{posted.push(JSON.parse(JSON.stringify(batch)));if(failed)throw Error('offline');return {id,seq:'1'};},page:async()=>({events:[],cursor:'0',hasMore:false})},...overrides.options});
+ return {client,disk,posted,outbox,get seals(){return seals;},fail(v){failed=v;}};
+}
+test('fanout includes sender and recipient linked devices',async()=>{const f=fixture();await f.client.send(id,'Hello 🌍');await f.client.flush();assert.equal(f.posted[0].envelopes.length,4);assert.equal(f.disk.size,0);});
+test('durable queue contains no message text',async()=>{const f=fixture();await f.client.send(id,'Private phrase');assert.equal(JSON.stringify([...f.disk.values()]).includes('Private phrase'),false);assert.equal(f.posted.length,0);});
+test('retry keeps exact ciphertext and ID; no additional encryption',async()=>{const f=fixture();await f.client.send(id,'Hi');f.fail(true);await assert.rejects(f.client.flush(),/offline/);assert.equal(f.disk.size,1);f.fail(false);await f.client.flush();assert.deepEqual(f.posted[0],f.posted[1]);assert.equal(f.seals,4);});
+test('restored outbox can be flushed by a new activated instance',async()=>{const f=fixture();await f.client.send(id,'Hi');const reopened=fixture({options:{outbox:f.outbox}});await reopened.client.flush();assert.equal(reopened.posted.length,1);assert.equal(reopened.seals,0);assert.equal(f.disk.size,0);});
+test('missing recipient keys stop sending',async()=>{const f=fixture({protocol:{verifiedSnapshot:async()=>({members:[a,b],devices:devices.filter(d=>d.userId===a)})}});await assert.rejects(f.client.send(id,'Hi'),/UNAVAILABLE/);assert.equal(f.disk.size,0);});
+test('unverified key package failure stops sending',async()=>{const f=fixture({protocol:{verifiedSnapshot:async()=>{throw Error('KEY_SIGNATURE_INVALID');}}});await assert.rejects(f.client.send(id,'Hi'),/KEY_SIGNATURE/);assert.equal(f.posted.length,0);});
+test('missing active sender device stops sending',async()=>{const f=fixture({protocol:{verifiedSnapshot:async()=>({members:[a,b],devices:devices.filter(d=>!(d.userId===a&&d.deviceId==='phone'))})}});await assert.rejects(f.client.send(id,'Hi'),/INACTIVE/);});
+test('logout closes existing instance',async()=>{const f=fixture();f.client.close();await assert.rejects(f.client.send(id,'Hi'),/CLOSED/);await assert.rejects(f.client.flush(),/CLOSED/);});
+test('native backend failure never downgrades encryption',async()=>{const f=fixture({protocol:{assertReady:async()=>{throw Error('NATIVE_CORE_UNAVAILABLE');}}});await assert.rejects(f.client.send(id,'Hi'),/UNAVAILABLE/);assert.equal(f.disk.size,0);});
+test('empty and oversized messages rejected',async()=>{const f=fixture();await assert.rejects(f.client.send(id,''),/TEXT/);await assert.rejects(f.client.send(id,'x'.repeat(8001)),/TEXT/);});
+test('HTTPS required',()=>assert.throws(()=>deviceTransport({baseUrl:'http://example.test',getToken:async()=>'',fetchImpl:fetch}),/HTTPS/));
+test('fresh session token fetched for each request',async()=>{let n=0;const tokens=[];const t=deviceTransport({baseUrl:'https://example.test',getToken:async()=>String(++n),fetchImpl:async(url,init)=>{tokens.push(init.headers.authorization);return new Response(JSON.stringify({events:[],cursor:'0',hasMore:false}),{status:200});}});await t.page(id,'0');await t.page(id,'0');assert.deepEqual(tokens,['Bearer 1','Bearer 2']);});
+test('durable store is mandatory',()=>assert.throws(()=>durableOutbox({}),/REQUIRED/));
+
+
+========================================================================
+FILE: tests/transaction.test.mjs
+========================================================================
+import test from 'node:test';import assert from 'node:assert/strict';
+import {createPostgresRepository} from '../server/postgres.mjs';
+test('repository refuses missing atomic authorization hook',()=>assert.throws(()=>createPostgresRepository({}),/authorization/));
+test('transactional rejection rolls back before envelope persistence',async()=>{
+ const calls=[];const c={query:async sql=>{calls.push(sql);return{rows:[]};},release:()=>{calls.push('RELEASE');}};
+ const repo=createPostgresRepository({connect:async()=>c},async tx=>{assert.equal(tx,c);throw Error('DEVICE_REVOKED');});
+ await assert.rejects(repo.append('conversation',{userId:'a'}, {clientId:'client',envelopes:[]},'event'),/REVOKED/);
+ assert.deepEqual(calls,['BEGIN','ROLLBACK','RELEASE']);
+});
+

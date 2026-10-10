@@ -1,0 +1,120 @@
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+
+export type CallPrivacy = "End-to-end" | "Relay only";
+export type CallNetwork = "Good" | "Weak" | "Reconnecting";
+
+export function LinqaVoiceCallPage(props: {
+  name: string;
+  elapsed: string;
+  privacy: CallPrivacy;
+  network: CallNetwork;
+  avatarUri?: string;
+  initials?: string;
+  muted: boolean;
+  speakerOn: boolean;
+  onMinimize: () => void;
+  onVideo: () => void;
+  onSpeaker: () => void;
+  onMute: () => void;
+  onMore: () => void;
+  onShareScreen: () => void;
+  onEnd: () => void;
+}) {
+  return (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <Pressable onPress={props.onMinimize} hitSlop={12} style={styles.minimize}>
+          <Text style={styles.chevron}>⌄</Text>
+        </Pressable>
+        <View style={styles.identity}>
+          <Text style={styles.name}>{props.name}</Text>
+          <Text style={styles.status}>🔒  {props.privacy}  ·  {props.elapsed}</Text>
+        </View>
+        <View style={styles.network}>
+          <Text style={styles.networkText}>{props.network}</Text>
+        </View>
+      </View>
+
+      <View style={styles.avatarWrap}>
+        {props.avatarUri ? (
+          <Image source={{ uri: props.avatarUri }} style={styles.avatar} />
+        ) : (
+          <View style={styles.avatar}>
+            <Text style={styles.initials}>{props.initials ?? props.name.slice(0, 1)}</Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.row}>
+          <CallKey label="Video" onPress={props.onVideo} />
+          <CallKey label="Speaker" active={props.speakerOn} onPress={props.onSpeaker} />
+          <CallKey label="Mute" active={props.muted} onPress={props.onMute} />
+        </View>
+        <View style={styles.row}>
+          <CallKey label="More" onPress={props.onMore} />
+          <Pressable onPress={props.onEnd} style={styles.end}>
+            <Text style={styles.endIcon}>☎</Text>
+          </Pressable>
+          <CallKey label={"Share\nscreen"} onPress={props.onShareScreen} />
+        </View>
+        <Text style={styles.endLabel}>End</Text>
+      </View>
+    </View>
+  );
+}
+
+function CallKey(props: { label: string; active?: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={props.onPress} style={styles.key}>
+      <View style={[styles.keyFace, props.active && styles.keyOn]} />
+      <Text style={styles.keyLabel}>{props.label}</Text>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: "#111214", paddingTop: 54 },
+  header: { flexDirection: "row", alignItems: "flex-start", paddingHorizontal: 16 },
+  minimize: { width: 36, height: 36, alignItems: "center" },
+  chevron: { color: "#fff", fontSize: 22 },
+  identity: { flex: 1, alignItems: "center" },
+  name: { color: "#fff", fontSize: 28, fontWeight: "700" },
+  status: { color: "#3dce7a", marginTop: 4, fontSize: 14 },
+  network: { backgroundColor: "#2a2d33", borderRadius: 16, paddingHorizontal: 10, paddingVertical: 6 },
+  networkText: { color: "#fff", fontSize: 13 },
+  avatarWrap: { alignItems: "center", marginTop: 36 },
+  avatar: {
+    width: 168,
+    height: 168,
+    borderRadius: 84,
+    backgroundColor: "#d9d9d9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  initials: { fontSize: 48, color: "#243041", fontWeight: "700" },
+  card: {
+    marginTop: "auto",
+    marginHorizontal: 18,
+    marginBottom: 28,
+    backgroundColor: "#232428",
+    borderRadius: 28,
+    paddingTop: 18,
+    paddingBottom: 8,
+  },
+  row: { flexDirection: "row", justifyContent: "space-evenly", marginBottom: 8 },
+  key: { width: 88, alignItems: "center" },
+  keyFace: { width: 54, height: 54, borderRadius: 27, backgroundColor: "#111214" },
+  keyOn: { backgroundColor: "#3a3d44" },
+  keyLabel: { color: "#ececec", textAlign: "center", marginTop: 6, fontSize: 13 },
+  end: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#ff3b30",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  endIcon: { color: "#fff", fontSize: 22 },
+  endLabel: { color: "#ff3b30", textAlign: "center", marginTop: -4, marginBottom: 8, fontWeight: "600" },
+});

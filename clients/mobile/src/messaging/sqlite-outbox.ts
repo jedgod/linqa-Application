@@ -1,5 +1,13 @@
 import * as SQLite from "expo-sqlite";
-import type { MobileOutboxDb, MobileOutboxRow } from "./outbox";
+import type { MobileOutboxDb, MobileOutboxRow, MediaOutboxRow } from "./outbox";
+
+const toRow = (row: any): MobileOutboxRow => ({
+  messageId: row.message_id, accountId: row.account_id,
+  conversationId: row.conversation_id, recipientDeviceId: row.recipient_device_id,
+  encryptedEnvelopeB64: row.encrypted_envelope_b64, state: row.state,
+  attempts: row.attempts, nextAttemptAt: row.next_attempt_at,
+  createdAt: row.created_at ?? row.next_attempt_at, errorCode: row.error_code ?? null
+});
 
 /** Stores only Rust-core encrypted envelopes and partitions every operation by account. */
 export class ExpoSqliteMobileOutboxDb implements MobileOutboxDb {
@@ -22,7 +30,20 @@ export class ExpoSqliteMobileOutboxDb implements MobileOutboxDb {
       );
       CREATE INDEX IF NOT EXISTS encrypted_mobile_outbox_due_idx
         ON encrypted_mobile_outbox(account_id, state, next_attempt_at);
+      CREATE TABLE IF NOT EXISTS encrypted_media_uploads_v1 (
+        message_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        media_id TEXT NOT NULL,
+        envelope_b64 TEXT NOT NULL,
+        ciphertext TEXT NOT NULL
+      );
     `);
+    // Older installs have the table without these two columns.
+    const columns = (await db.getAllAsync<{ name: string }>("PRAGMA table_info(encrypted_mobile_outbox)")).map((c) => c.name);
+    if (!columns.includes("created_at")) await db.execAsync("ALTER TABLE encrypted_mobile_outbox ADD COLUMN created_at INTEGER");
+    if (!columns.includes("error_code")) await db.execAsync("ALTER TABLE encrypted_mobile_outbox ADD COLUMN error_code TEXT");
     return new ExpoSqliteMobileOutboxDb(accountId, db);
   }
 
@@ -37,10 +58,10 @@ export class ExpoSqliteMobileOutboxDb implements MobileOutboxDb {
     await this.db.runAsync(
       `INSERT INTO encrypted_mobile_outbox(
          message_id,account_id,conversation_id,recipient_device_id,
-         encrypted_envelope_b64,state,attempts,next_attempt_at
-       ) VALUES(?,?,?,?,?,?,?,?)`,
+         encrypted_envelope_b64,state,attempts,next_attempt_at,created_at
+       ) VALUES(?,?,?,?,?,?,?,?,?)`,
       row.messageId, row.accountId, row.conversationId, row.recipientDeviceId,
-      row.encryptedEnvelopeB64, row.state, row.attempts, row.nextAttemptAt
+      row.encryptedEnvelopeB64, row.state, row.attempts, row.nextAttemptAt, row.createdAt ?? Date.now()
     );
   }
 
@@ -52,12 +73,29 @@ export class ExpoSqliteMobileOutboxDb implements MobileOutboxDb {
        ORDER BY next_attempt_at ASC LIMIT ?`,
       this.accountId, Date.now(), Math.max(1, Math.min(limit, 100))
     );
-    return rows.map((row) => ({
-      messageId: row.message_id, accountId: row.account_id,
-      conversationId: row.conversation_id, recipientDeviceId: row.recipient_device_id,
-      encryptedEnvelopeB64: row.encrypted_envelope_b64, state: row.state,
-      attempts: row.attempts, nextAttemptAt: row.next_attempt_at
-    }));
+    return rows.map(toRow);
+  }
+
+  async find(messageId: string): Promise<MobileOutboxRow | null> {
+    const row = await this.db.getFirstAsync<any>(
+      "SELECT * FROM encrypted_mobile_outbox WHERE message_id=? AND account_id=?", messageId, this.accountId
+    );
+    return row ? toRow(row) : null;
+  }
+
+  async pending(limit: number): Promise<MobileOutboxRow[]> {
+    const rows = await this.db.getAllAsync<any>(
+      `SELECT * FROM encrypted_mobile_outbox
+       WHERE account_id=? AND state IN ('CREATED','ENCRYPTED','QUEUED','SENDING','FAILED_RETRYABLE')
+       ORDER BY next_attempt_at ASC LIMIT ?`,
+      this.accountId, Math.max(1, Math.min(limit, 100))
+    );
+    return rows.map(toRow);
+  }
+
+  async remove(messageId: string): Promise<void> {
+    await this.db.runAsync("DELETE FROM encrypted_media_uploads_v1 WHERE message_id=? AND account_id=?", messageId, this.accountId);
+    await this.db.runAsync("DELETE FROM encrypted_mobile_outbox WHERE message_id=? AND account_id=?", messageId, this.accountId);
   }
 
   async update(messageId: string, patch: Partial<MobileOutboxRow>): Promise<void> {
@@ -74,5 +112,56 @@ export class ExpoSqliteMobileOutboxDb implements MobileOutboxDb {
       ...selected.map(([key]) => patch[key] as string | number), messageId, this.accountId
     );
     if (result.changes !== 1) throw new Error("OUTBOX_MESSAGE_NOT_FOUND");
+  }
+  async markPermanent(conversationId: string, messageId: string, errorCode: string): Promise<void> {
+    // Only a row this account still holds unresolved can be refused; an already-refused row is left as it is.
+    const result = await this.db.runAsync(
+      `UPDATE encrypted_mobile_outbox SET state='FAILED_PERMANENT', error_code=?
+       WHERE message_id=? AND account_id=? AND conversation_id=? AND state IN ('CREATED','ENCRYPTED','QUEUED','SENDING','FAILED_RETRYABLE')`,
+      errorCode, messageId, this.accountId, conversationId
+    );
+    if (result.changes === 1) return;
+    const row = await this.find(messageId);
+    if (!row || row.conversationId !== conversationId || row.state !== "FAILED_PERMANENT") throw new Error("OUTBOX_MESSAGE_NOT_FOUND");
+  }
+
+  async listPermanent(conversationId: string) {
+    const rows = await this.db.getAllAsync<any>(
+      `SELECT message_id, conversation_id, created_at, next_attempt_at, error_code FROM encrypted_mobile_outbox
+       WHERE account_id=? AND conversation_id=? AND state='FAILED_PERMANENT' ORDER BY created_at ASC, message_id ASC`,
+      this.accountId, conversationId
+    );
+    return rows.map((r) => ({ messageId: r.message_id as string, conversationId: r.conversation_id as string, createdAt: (r.created_at ?? r.next_attempt_at) as number, errorCode: (r.error_code ?? "RELAY_REJECTED") as string }));
+  }
+
+  async deletePermanent(conversationId: string, messageId: string): Promise<void> {
+    await this.db.runAsync(`DELETE FROM encrypted_media_uploads_v1 WHERE message_id=? AND account_id=?
+      AND EXISTS(SELECT 1 FROM encrypted_mobile_outbox o WHERE o.message_id=? AND o.account_id=? AND o.conversation_id=? AND o.state='FAILED_PERMANENT')`,
+      messageId, this.accountId, messageId, this.accountId, conversationId);
+    await this.db.runAsync(
+      "DELETE FROM encrypted_mobile_outbox WHERE message_id=? AND account_id=? AND conversation_id=? AND state='FAILED_PERMANENT'",
+      messageId, this.accountId, conversationId
+    );
+  }
+
+  async findMedia(messageId: string): Promise<MediaOutboxRow | null> {
+    const row = await this.db.getFirstAsync<any>("SELECT * FROM encrypted_media_uploads_v1 WHERE message_id=? AND account_id=?", messageId, this.accountId);
+    return row ? { messageId: row.message_id, conversationId: row.conversation_id, deviceId: row.device_id, mediaId: row.media_id, envelope: row.envelope_b64, ciphertext: row.ciphertext } : null;
+  }
+
+  async putMedia(row: MediaOutboxRow): Promise<void> {
+    if (!row.deviceId || !row.envelope || !row.ciphertext) throw new Error("SEALED_MEDIA_REQUIRED");
+    await this.db.withExclusiveTransactionAsync(async tx => {
+      const existing = await tx.getFirstAsync<any>("SELECT * FROM encrypted_media_uploads_v1 WHERE message_id=?", row.messageId);
+      if (existing) {
+        if (existing.account_id !== this.accountId || existing.device_id !== row.deviceId || existing.conversation_id !== row.conversationId || existing.media_id !== row.mediaId || existing.envelope_b64 !== row.envelope || existing.ciphertext !== row.ciphertext) throw new Error("MEDIA_ID_REUSE");
+        return;
+      }
+      const usage = await tx.getFirstAsync<{ bytes: number }>("SELECT COALESCE(sum(length(envelope_b64)),0) AS bytes FROM encrypted_media_uploads_v1 WHERE account_id=?", this.accountId);
+      if ((usage?.bytes ?? 0) + row.envelope.length > 180_000_000) throw new Error("MEDIA_QUEUE_FULL");
+      await tx.runAsync("INSERT INTO encrypted_media_uploads_v1 VALUES(?,?,?,?,?,?,?)", row.messageId, this.accountId, row.conversationId, row.deviceId, row.mediaId, row.envelope, row.ciphertext);
+      await tx.runAsync(`INSERT INTO encrypted_mobile_outbox(message_id,account_id,conversation_id,recipient_device_id,encrypted_envelope_b64,state,attempts,next_attempt_at,created_at)
+        VALUES(?,?,?,?,?,'QUEUED',0,?,?)`, row.messageId, this.accountId, row.conversationId, "*", row.ciphertext, Date.now(), Date.now());
+    });
   }
 }

@@ -1,0 +1,10 @@
+{
+  "name": "linqa-secure-core",
+  "platforms": ["android", "ios"],
+  "android": {
+    "modules": ["expo.modules.linqasecure.LinqaSecureCoreModule"]
+  },
+  "ios": {
+    "modules": ["LinqaSecureCoreModule"]
+  }
+}

@@ -30,6 +30,8 @@ export type ScheduledCall = {
 
 export type PlacedCall = {
   callId: string;
+  /** The device that is ringing; signaling events are addressed to it. */
+  calleeDeviceId: string;
   createdAt: string;
   mode: string;
   privacyMode: PrivacyMode;
@@ -180,8 +182,23 @@ export class CallsService {
     });
   }
 
-  endCall(callId: string): Promise<void> {
-    return this.request<void>(`/v1/calls/${callId}/end`, { method: "POST" });
+  acceptCall(callId: string): Promise<void> {
+    return this.request<void>(`/v1/calls/${callId}/accept`, { method: "POST" });
+  }
+
+  async incoming(): Promise<Array<{ callId: string; callType: "AUDIO" | "VIDEO"; privacyMode: PrivacyMode; callerUserId: string; callerDeviceId: string; callerName: string }>> {
+    const payload = await this.request<{ items?: unknown[] }>("/v1/calls/incoming");
+    return (payload.items ?? []) as never;
+  }
+
+  /** `reason` only matters before the call is answered: REJECTED when the callee declines, FAILED when the connection never came up. */
+  endCall(callId: string, reason?: "REJECTED" | "FAILED"): Promise<void> {
+    return this.request<void>(`/v1/calls/${callId}/end`, { method: "POST", ...(reason ? { body: JSON.stringify({ reason }) } : {}) });
+  }
+
+  /** The other person on a call: name and their own verified country (never an IP-based guess). */
+  details(callId: string): Promise<{ callId: string; callType: CallType; privacyMode: PrivacyMode; status: string; role: "CALLER" | "CALLEE"; peerName: string; peerCountryCode: string | null; peerCountryName: string | null }> {
+    return this.request(`/v1/calls/${callId}`);
   }
 
   async listScheduled(limit = 50): Promise<ScheduledCall[]> {

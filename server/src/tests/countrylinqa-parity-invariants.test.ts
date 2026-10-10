@@ -53,7 +53,7 @@ describe("CountryLinqa risk-scoring invariants", () => {
   });
 
   it("a disposable/VOIP line type alone crosses the REVIEW_REQUIRED threshold", () => {
-    const result = evaluateCountryRisk({ phoneVerified: true, lineType: "VOIP" });
+    const result = evaluateCountryRisk({ phoneVerified: true, phoneCountryCode: "US", lineType: "VOIP" });
     expect(result.score).toBeGreaterThanOrEqual(40);
     expect(result.state).toBe("REVIEW_REQUIRED");
   });

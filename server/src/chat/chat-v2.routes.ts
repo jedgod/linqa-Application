@@ -1,3 +1,4 @@
+import { findChatContact } from "./chat-contacts.service.js";
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -13,6 +14,10 @@ import {
   issueContactQrToken,
   listMessages,
   markConversationRead,
+  setConversationMuted,
+  setConversationPinned,
+  setDisappearAfter,
+  getConversationSettings,
   redeemContactQrToken,
   resolveDirectConversation,
   sendMessage,
@@ -63,6 +68,7 @@ const BroadcastBody = z
 
 /** Rate limits from the pack's security checklist, enforced rather than documented. */
 const limits = {
+  contactFind: simpleRateLimit({ windowMs: 60_000, max: 10, keyPrefix: "chat-contact-find" }),
   messages: simpleRateLimit({ windowMs: 60_000, max: 60, keyPrefix: "chat-messages" }),
   read: simpleRateLimit({ windowMs: 60_000, max: 240, keyPrefix: "chat-read" }),
   direct: simpleRateLimit({ windowMs: 60_000, max: 20, keyPrefix: "chat-direct" }),
@@ -159,6 +165,23 @@ export async function registerChatV2Routes(
   // Conversations and messages
   // -------------------------------------------------------------------------
 
+  app.post("/v1/chats/contacts/find", { bodyLimit: 1024 }, async (request, reply) => {
+    const principal = await principalOf(request, reply, "messages:send");
+    if (!principal) return reply;
+    try {
+      if (!principal.deviceId) throw new ChatError(401, "DEVICE_REQUIRED");
+      limits.contactFind(principal.userId, request);
+      const body = z.object({ phone: z.string().min(1).max(40) }).strict().parse(request.body ?? {});
+      const device = await db.query("SELECT 1 FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE'", [principal.deviceId, principal.userId]);
+      if (!device.rowCount) throw new ChatError(401, "DEVICE_REQUIRED");
+      const contact = await findChatContact(db, principal.userId, body.phone);
+      return reply.header("Cache-Control", "private, no-store").send({ contact });
+    } catch (error) {
+      if (error instanceof z.ZodError) return reply.code(422).send({ error: { code: "INVALID_PHONE_NUMBER", requestId: request.id } });
+      return fail(request, reply, error);
+    }
+  });
+
   app.post("/v1/chats/direct", async (request, reply) => {
     const principal = await principalOf(request, reply, "messages:send");
     if (!principal) return reply;
@@ -169,6 +192,7 @@ export async function registerChatV2Routes(
       await audit(request, principal.userId, "chat.direct.resolve", "conversation", result.conversationId, {
         created: result.created
       });
+      for (const userId of [principal.userId, body.userId]) hub.sendToUser(userId, { type: "conversation.created", conversationId: result.conversationId });
       return reply.code(result.created ? 201 : 200).send({ conversationId: result.conversationId });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -232,6 +256,65 @@ export async function registerChatV2Routes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return reply.code(422).send({ error: { code: "INVALID_QUERY", requestId: request.id } });
+      }
+      return fail(request, reply, error);
+    }
+  });
+
+  app.get("/v1/chats/:conversationId/settings", async (request, reply) => {
+    const principal = await principalOf(request, reply, "messages:read");
+    if (!principal) return reply;
+    try {
+      limits.read(principal.userId, request);
+      const params = z.object({ conversationId: z.string().uuid() }).parse(request.params);
+      void reply.header("Cache-Control", "private, no-store");
+      return reply.code(200).send(await getConversationSettings(db, principal.userId, params.conversationId));
+    } catch (error) {
+      if (error instanceof z.ZodError) return reply.code(422).send({ error: { code: "INVALID_CONVERSATION_ID", requestId: request.id } });
+      return fail(request, reply, error);
+    }
+  });
+
+  app.post("/v1/chats/:conversationId/pin", async (request, reply) => {
+    const principal = await principalOf(request, reply, "messages:read");
+    if (!principal) return reply;
+    try {
+      limits.read(principal.userId, request);
+      const params = z.object({ conversationId: z.string().uuid() }).parse(request.params);
+      const body = z.object({ pinned: z.boolean() }).strict().parse(request.body ?? {});
+      return reply.code(200).send(await setConversationPinned(db, principal.userId, params.conversationId, body.pinned));
+    } catch (error) {
+      if (error instanceof z.ZodError) return reply.code(422).send({ error: { code: "INVALID_BODY", requestId: request.id } });
+      return fail(request, reply, error);
+    }
+  });
+
+  app.post("/v1/chats/:conversationId/disappearing", async (request, reply) => {
+    const principal = await principalOf(request, reply, "messages:read");
+    if (!principal) return reply;
+    try {
+      limits.read(principal.userId, request);
+      const params = z.object({ conversationId: z.string().uuid() }).parse(request.params);
+      const body = z.object({ seconds: z.union([z.literal(86400), z.literal(604800), z.literal(2419200), z.null()]) }).strict().parse(request.body ?? {});
+      return reply.code(200).send(await setDisappearAfter(db, principal.userId, params.conversationId, body.seconds));
+    } catch (error) {
+      if (error instanceof z.ZodError) return reply.code(422).send({ error: { code: "INVALID_BODY", requestId: request.id } });
+      return fail(request, reply, error);
+    }
+  });
+
+  app.post("/v1/chats/:conversationId/mute", async (request, reply) => {
+    const principal = await principalOf(request, reply, "messages:read");
+    if (!principal) return reply;
+    try {
+      limits.read(principal.userId, request);
+      const params = z.object({ conversationId: z.string().uuid() }).parse(request.params);
+      const body = z.object({ muted: z.boolean() }).strict().parse(request.body ?? {});
+      const result = await setConversationMuted(db, principal.userId, params.conversationId, body.muted);
+      return reply.code(200).send(result);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return reply.code(422).send({ error: { code: "INVALID_BODY", requestId: request.id } });
       }
       return fail(request, reply, error);
     }

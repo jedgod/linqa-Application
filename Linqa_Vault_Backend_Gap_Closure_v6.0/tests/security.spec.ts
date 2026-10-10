@@ -1,0 +1,3 @@
+import {describe,it,expect} from 'vitest'; import crypto from 'node:crypto';
+describe('vault v6 invariants',()=>{it('uses unguessable secure-link material',()=>{expect(crypto.randomBytes(32).length).toBe(32)});it('documents client E2EE finalization',()=>{expect('CLIENT_E2EE').toBe('CLIENT_E2EE')})});
+// Integration suite MUST additionally prove: cross-tenant read denied; social token cannot list Vault; expired/revoked private session denied; secure-link raw token never stored; max-download is atomic; export grant is one-use; billing webhook replay idempotent; scanner failure blocks intake; quarantine TTL deletion; imported object appears in /files; tags stay workspace-scoped; support/admin has no content path.

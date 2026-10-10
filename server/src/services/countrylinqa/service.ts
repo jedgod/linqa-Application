@@ -345,6 +345,10 @@ export class CountryLinqaService {
       `SELECT verified_country_code,country_verification_state FROM users WHERE id=$1`, [userId]
     );
     const currentCountry = current.rows[0]?.verified_country_code as string | null | undefined;
+    if (["REVIEW_REQUIRED", "RESTRICTED"].includes(current.rows[0]?.country_verification_state)) {
+      const error: any = new Error("Country verification requires server review.");
+      error.status = 403; error.code = "COUNTRY_REVIEW_REQUIRED"; throw error;
+    }
     if (currentCountry && currentCountry !== input.claimedCountryCode.toUpperCase()) {
       const error: any = new Error("Verified-country migration requires step-up authentication.");
       error.status = 403; error.code = "COUNTRY_CHANGE_STEP_UP_REQUIRED"; throw error;
@@ -359,10 +363,7 @@ export class CountryLinqaService {
     const risk = evaluateCountryRisk({
       phoneCountryCode: trusted.phoneCountryCode,
       carrierCountryCode: trusted.carrierCountryCode ?? null,
-      simCountryCode: input.simCountryCode ?? null,
       ipCountryCode: ipCountryCode ?? null,
-      localeCountryCode: input.localeCountryCode ?? null,
-      claimedCountryCode: input.claimedCountryCode,
       lineType: trusted.lineType ?? null,
       phoneVerified: trusted.phoneVerified
     });
@@ -370,6 +371,18 @@ export class CountryLinqaService {
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
+      // Serialize authorization against concurrent confirmation/review changes.
+      const locked = await client.query("SELECT verified_country_code,country_verification_state FROM users WHERE id=$1 FOR UPDATE", [userId]);
+      const state = locked.rows[0]?.country_verification_state;
+      const country = locked.rows[0]?.verified_country_code;
+      if (!locked.rowCount || ["REVIEW_REQUIRED", "RESTRICTED"].includes(state) || (country && country !== input.claimedCountryCode.toUpperCase())) {
+        const error: any = new Error("Country verification requires server review.");
+        error.status = 403; error.code = "COUNTRY_REVIEW_REQUIRED"; throw error;
+      }
+      if (state === "VERIFIED" && country) {
+        await client.query("COMMIT");
+        return { verifiedCountryCode: country, claimedCountryCode: input.claimedCountryCode, verificationState: "VERIFIED", riskScore: 0, reviewRequired: false, idempotent: true };
+      }
 
       await client.query(
         `INSERT INTO country_verification_evidence (

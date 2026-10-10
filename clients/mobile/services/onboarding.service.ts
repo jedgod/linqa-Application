@@ -1,10 +1,10 @@
 import type { AccessTokenProvider } from "./session";
 import { startupRequest } from "./startup-request";
 
-export type OnboardingNextStep = "AUTH_REQUIRED" | "DEVICE_ENROLLMENT" | "RECOVERY_SETUP" |
+export type OnboardingNextStep = "AUTH_REQUIRED" | "DEVICE_ENROLLMENT" | "PROFILE_SETUP" | "RECOVERY_SETUP" |
   "COUNTRY_CONFIRMATION" | "COUNTRY_DISCOVERY" | "SECURITY_REVIEW" | "COMPLETION" | "COMPLETE";
 export type OnboardingStatus = {
-  phoneVerified: boolean; deviceEnrollmentRequired: boolean; recoveryReady: boolean;
+  profileReady: boolean; phoneVerified: boolean; deviceEnrollmentRequired: boolean; recoveryReady: boolean;
   recoveryRequired: boolean; countryInitialized: boolean; countryVerificationState: string;
   discoveryConfigured: boolean; blockers: string[];
   detectedCountry: { code: string; name: string; callingCode: string | null } | null;

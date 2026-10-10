@@ -1,0 +1,68 @@
+name: CountryLinqa Certification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "server/src/services/countrylinqa/**"
+      - "server/src/routes/countrylinqa/**"
+      - "server/src/tests/countrylinqa*"
+      - "clients/mobile/app/countrylinqa/**"
+      - "clients/mobile/services/countrylinqa*"
+      - "scripts/countrylinqa*"
+      - ".github/workflows/countrylinqa-certification.yml"
+
+jobs:
+  db-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: linqa
+          POSTGRES_DB: linqa_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://linqa:linqa@127.0.0.1:5432/linqa_test
+      REDIS_URL: redis://127.0.0.1:6379
+      LINQA_REQUIRE_DB_TESTS: "1"
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        working-directory: server
+      - name: Require database
+        run: node scripts/require-db-tests.mjs
+      - name: Reject explicit skips/only
+        run: node scripts/audit-vitest-skips.mjs
+      - name: Apply migrations
+        run: npm run db:migrate
+        working-directory: server
+      - name: Server typecheck
+        run: npm run typecheck
+        working-directory: server
+      - name: CountryLinqa DB integration tests
+        run: node scripts/countrylinqa-db-test-gate.mjs
+      - name: Full server tests
+        run: npm test
+        working-directory: server

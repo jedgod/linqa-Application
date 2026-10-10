@@ -6,6 +6,8 @@ import type { VaultAdapters } from "../integrations/vault/contracts.js";
 import { currentVaultIntegrationStatus, safeDefaultVaultAdapters } from "../integrations/vault/safe-default.adapters.js";
 import { beginUploadWithIntegrations } from "../integrations/vault/close-existing-upload.js";
 import type { FileVaultService } from "../services/file-vault.service.js";
+import type { BiometricAuthorizationService } from "../security/biometrics/service.js";
+import { biometricPrincipal } from "./biometrics.js";
 
 const base64Bytes = () =>
   z.string().base64().transform((value) => Buffer.from(value, "base64"));
@@ -14,7 +16,8 @@ export async function registerFileVaultRoutes(
   app: FastifyInstance,
   config: AppConfig,
   fileVault: FileVaultService,
-  vaultAdapters: VaultAdapters = safeDefaultVaultAdapters()
+  vaultAdapters: VaultAdapters = safeDefaultVaultAdapters(),
+  biometrics?: BiometricAuthorizationService
 ) {
   const authenticate = createAuthenticator(config);
 
@@ -79,6 +82,16 @@ export async function registerFileVaultRoutes(
     }
   });
 
+  app.get("/v1/vault/private/items", async (request,reply) => {
+    try {
+      const p = await authenticate(request); requireScope(p,"vault:read");
+      const token = z.string().regex(/^[A-Za-z0-9_-]{43}$/).parse(request.headers["x-vault-unlock-token"]);
+      if (!biometrics) throw new Error("BIOMETRIC_NOT_CONFIGURED");
+      await biometrics.assertVaultSession(biometricPrincipal(p,request),token);
+      return { items: await fileVault.list(p.userId,true) };
+    } catch { return reply.code(403).send({ error: "PRIVATE_VAULT_UNLOCK_REQUIRED" }); }
+  });
+
   app.get("/v1/vault/items/:itemId/download", async (request, reply) => {
     try {
       const principal = await authenticate(request);
@@ -87,6 +100,12 @@ export async function registerFileVaultRoutes(
       const params = z.object({
         itemId: z.string().uuid()
       }).parse(request.params);
+
+      if (await fileVault.isPrivateItem(principal.userId,params.itemId)) {
+        if (!biometrics) throw new Error("BIOMETRIC_NOT_CONFIGURED");
+        const token = z.string().regex(/^[A-Za-z0-9_-]{43}$/).parse(request.headers["x-vault-unlock-token"]);
+        await biometrics.assertVaultSession(biometricPrincipal(principal,request),token);
+      }
 
       const download = await fileVault.download(principal.userId, params.itemId);
       return reply.code(200).send(download);

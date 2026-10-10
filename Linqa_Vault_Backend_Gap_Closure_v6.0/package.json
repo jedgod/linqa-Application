@@ -1,0 +1,19 @@
+{
+  "name": "linqa-vault-gap-closure-v6",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "certify": "node scripts/certify-v6.mjs ."
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0"
+  }
+}

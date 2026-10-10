@@ -1,0 +1,173 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Relay stores ciphertext only. Poll totals, RSVP, and meeting status are
+/// the few fields the server may see, because the thread cards render them
+/// for every member. Media bytes stay sealed.
+
+model Thread {
+  id           String       @id
+  attachments  Attachment[]
+  screenShares ScreenShare[]
+}
+
+model Attachment {
+  id            String   @id @default(cuid())
+  threadId      String
+  thread        Thread   @relation(fields: [threadId], references: [id])
+  senderId      String
+  kind          String
+  createdAt     DateTime @default(now())
+  sealedPayload String
+  /// Set only when kind = ai_image. Prompt was sent to the image service.
+  cleartextException String?
+  caption       String?
+  media         MediaObject[]
+  poll          Poll?
+  event         Event?
+  meeting       Meeting?
+  location      LocationPin?
+  contact       SharedContact?
+  document      DocumentMeta?
+  screenShare   ScreenShare?
+
+  @@index([threadId, createdAt])
+}
+
+model MediaObject {
+  id           String     @id @default(cuid())
+  attachmentId String
+  attachment   Attachment @relation(fields: [attachmentId], references: [id])
+  mime         String
+  byteLength   Int
+  storageKey   String
+  role         String     @default("primary")
+  durationSec  Int?
+  waveform     Json?
+}
+
+model Poll {
+  id             String       @id @default(cuid())
+  attachmentId   String       @unique
+  attachment     Attachment   @relation(fields: [attachmentId], references: [id])
+  question       String
+  options        Json
+  allowMultiple  Boolean      @default(false)
+  hideVoters     Boolean      @default(false)
+  closeVoting    String
+  closesAt       DateTime?
+  votes          PollVote[]
+}
+
+model PollVote {
+  id      String   @id @default(cuid())
+  pollId  String
+  poll    Poll     @relation(fields: [pollId], references: [id])
+  voterId String
+  picks   Json
+  votedAt DateTime @default(now())
+
+  @@unique([pollId, voterId])
+}
+
+model Event {
+  id           String    @id @default(cuid())
+  attachmentId String    @unique
+  attachment   Attachment @relation(fields: [attachmentId], references: [id])
+  title        String
+  dateLabel    String
+  start        String
+  end          String
+  place        String?
+  rsvps        Rsvp[]
+}
+
+model Rsvp {
+  id      String   @id @default(cuid())
+  eventId String
+  event   Event    @relation(fields: [eventId], references: [id])
+  userId  String
+  value   String
+  at      DateTime @default(now())
+
+  @@unique([eventId, userId])
+}
+
+model Meeting {
+  id                 String   @id @default(cuid())
+  attachmentId       String   @unique
+  attachment         Attachment @relation(fields: [attachmentId], references: [id])
+  title              String
+  dateLabel          String
+  starts             String
+  lengthMin          Int
+  note               String?
+  remind             Boolean  @default(true)
+  remindLeadMin      Int      @default(15)
+  joinOpensMinBefore Int      @default(10)
+  callId             String   @unique
+  status             String   @default("pending")
+  responses          MeetingResponse[]
+}
+
+model MeetingResponse {
+  id        String   @id @default(cuid())
+  meetingId String
+  meeting   Meeting  @relation(fields: [meetingId], references: [id])
+  userId    String
+  value     String
+  suggested DateTime?
+  at        DateTime @default(now())
+
+  @@unique([meetingId, userId])
+}
+
+model LocationPin {
+  id           String     @id @default(cuid())
+  attachmentId String     @unique
+  attachment   Attachment @relation(fields: [attachmentId], references: [id])
+  label        String
+  address      String
+  lat          Float
+  lng          Float
+}
+
+model SharedContact {
+  id           String     @id @default(cuid())
+  attachmentId String     @unique
+  attachment   Attachment @relation(fields: [attachmentId], references: [id])
+  name         String
+  role         String?
+  initials     String
+  phone        String?
+  handle       String?
+}
+
+model DocumentMeta {
+  id           String     @id @default(cuid())
+  attachmentId String     @unique
+  attachment   Attachment @relation(fields: [attachmentId], references: [id])
+  name         String
+  mime         String
+  pageCount    Int?
+}
+
+model ScreenShare {
+  id            String     @id @default(cuid())
+  threadId      String
+  thread        Thread     @relation(fields: [threadId], references: [id])
+  attachmentId  String?    @unique
+  attachment    Attachment? @relation(fields: [attachmentId], references: [id])
+  presenterId   String
+  presenterName String
+  sharedTitle   String?
+  live          Boolean    @default(true)
+  startedAt     DateTime   @default(now())
+  endedAt       DateTime?
+}

@@ -2,13 +2,19 @@ import { loadConfig } from "./config.js";
 import { createPool } from "./db/pool.js";
 import { buildApp } from "./app.js";
 import { resolveLocalPorts } from "./config/ports.js";
+import { assertVaultProductionReady } from "./services/vault-operations.js";
+import { startVaultWorkers } from "./vault-workers.js";
 
 const config = loadConfig();
 const db = createPool(config);
+// With Vault production switched on, refuse to start unless every machine-checkable gate passes.
+await assertVaultProductionReady(db, process.env, async () => { await db.query("SELECT 1"); return true; });
 const app = await buildApp(config, db);
+const stopVaultWorkers = startVaultWorkers(db, process.env, app.log);
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, "shutting down");
+  stopVaultWorkers();
   await app.close();
   await db.end();
   process.exit(0);

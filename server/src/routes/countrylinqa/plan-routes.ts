@@ -1,3 +1,4 @@
+import { publicCountryError } from "./public-error.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../../config.js";
@@ -20,18 +21,19 @@ export async function registerCountryLinqaPlanRoutes(app: FastifyInstance, confi
 
   function guarded(scope: "countrylinqa:read" | "countrylinqa:write", limit: typeof readLimit, handler: (request: FastifyRequest, userId: string) => Promise<unknown>) {
     return async (request: FastifyRequest, reply: FastifyReply) => {
+      let p;
+      try { p = await auth(request); }
+      catch { return reply.code(401).send({ error: "unauthorized" }); }
       try {
-        const p = await auth(request);
         requireScope(p, scope);
         limit(p.userId, request);
         return await handler(request, p.userId);
       } catch (error) {
         if (error instanceof z.ZodError) return reply.code(422).send({ error: "validation_error" });
         if (error instanceof PlanError) return reply.code(error.status).send({ error: error.code });
-        const status = typeof (error as { status?: number })?.status === "number" ? (error as { status: number }).status : 401;
-        if (status === 429) return reply.code(429).send({ error: "RATE_LIMITED" });
+        const { status, code } = publicCountryError(error);
         request.log.warn({ err: error }, "countrylinqa plan request rejected");
-        return reply.code(status === 401 ? 401 : 500).send({ error: status === 401 ? "unauthorized" : "internal_error" });
+        return reply.code(status).send({ error: code });
       }
     };
   }

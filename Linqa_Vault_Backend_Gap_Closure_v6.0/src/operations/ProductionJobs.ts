@@ -1,0 +1,3 @@
+export interface OutboxPublisher{runBatch(limit:number):Promise<number>} export interface Reconciler{run():Promise<{ok:boolean;differences:number}>}
+export class ProductionJobs{constructor(private outbox:OutboxPublisher,private reconciliation:Reconciler){}async tick(){const published=await this.outbox.runBatch(100);const rec=await this.reconciliation.run();return {published,reconciliation:rec}}}
+export function health(config:{db:boolean;objectStore:boolean;scanner:boolean;billing:boolean;mailer:boolean}){const ready=Object.values(config).every(Boolean);return {status:ready?'ready':'degraded',dependencies:config}}

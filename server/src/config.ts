@@ -1,7 +1,13 @@
+import { isIP } from "node:net";
 import { z } from "zod";
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  TRUSTED_PROXY_CIDRS: z.string().optional().refine(value => !value || value.split(",").every(entry => {
+    const [ip, bits, extra] = entry.trim().split("/");
+    const version = isIP(ip ?? "");
+    return !extra && !!version && (bits === undefined || (/^\d+$/.test(bits) && Number(bits) <= (version === 4 ? 32 : 128)));
+  })),
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   DATABASE_URL: z.string().min(1),
@@ -15,6 +21,10 @@ const EnvSchema = z.object({
   IP_HASH_SECRET: z.string().min(32).optional(),
   TOKEN_VAULT_KEY_BASE64: z.string().min(44),
   TURN_SHARED_SECRET: z.string().min(32),
+  CHAT_AI_IMAGE_URL: z.string().url().refine(value => value.startsWith("https://"), "AI image provider must use HTTPS").optional(),
+  CHAT_AI_IMAGE_TOKEN: z.string().min(16).optional(),
+  GEMINI_API_KEY: z.string().min(20).optional(),
+  GEMINI_MODEL: z.string().optional(),
   TURN_URLS: z.string()
     .default("turn:127.0.0.1:3478?transport=udp,turn:127.0.0.1:3478?transport=tcp")
     .transform((value) => value.split(",").map((item) => item.trim()).filter(Boolean)),
@@ -44,6 +54,8 @@ const EnvSchema = z.object({
   PASSKEY_ORIGINS: z.string()
     .default("http://127.0.0.1:5173")
     .transform((value) => value.split(",").map((item) => item.trim()).filter(Boolean)),
+  BIOMETRIC_ATTESTATION_URL: z.string().url().optional(),
+  BIOMETRIC_ATTESTATION_TOKEN: z.string().min(16).optional(),
 
   // Real-when-configured providers (2026-08-07, restored 2026-08-08 after a
   // concurrent-edit collision with a separate agent's CountryLinqa work
@@ -136,6 +148,11 @@ const EnvSchema = z.object({
       });
     }
   };
+
+  requireAllOrNone([
+    ["BIOMETRIC_ATTESTATION_URL", value.BIOMETRIC_ATTESTATION_URL],
+    ["BIOMETRIC_ATTESTATION_TOKEN", value.BIOMETRIC_ATTESTATION_TOKEN]
+  ]);
 
   requireAllOrNone([
     ["JWT_SIGNING_PRIVATE_KEY_PEM", value.JWT_SIGNING_PRIVATE_KEY_PEM],

@@ -1,12 +1,237 @@
-import { useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { LinqaSendService } from "../../services/linqasend.service";
-import { accessTokenProvider } from "../../services/session";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { LinqaSendStatusBar, countryName, currencyFlag, formatMinor, send } from "../../components/linqasend/ui";
 import { getApiBaseUrl } from "../../config/api";
+import { LinqaSendService, type LinqaSendQuote } from "../../services/linqasend.service";
+import { accessTokenProvider } from "../../services/session";
+import { fonts } from "../../theme/tokens";
 
-const API=getApiBaseUrl();
-export default function LinqaSendAmount(){const router=useRouter();const p=useLocalSearchParams<{recipientId:string;recipientName:string;recipientCountry?:string;recipientCurrency:string;initialAmount?:string;purposeCode?:string}>();const client=useMemo(()=>new LinqaSendService(API,()=>accessTokenProvider.getAccessToken()),[]);const [amount,setAmount]=useState(p.initialAmount??"");const [busy,setBusy]=useState(false);const [error,setError]=useState<string|null>(null);
- async function quote(){const numeric=Number(amount);if(!Number.isFinite(numeric)||numeric<=0){setError("Enter an amount greater than zero.");return}setBusy(true);setError(null);try{const q=await client.createQuote({recipientId:p.recipientId,sourceCurrency:"USD",destinationCurrency:p.recipientCurrency,sendAmountMinor:String(Math.round(numeric*100))});router.push({pathname:"/linqasend/review",params:{quote:JSON.stringify(q),recipientName:p.recipientName,...(p.purposeCode?{purposeCode:p.purposeCode}:{})}})}catch(e){setError(e instanceof Error?e.message:"A live quote is unavailable.")}finally{setBusy(false)}}
- return <SafeAreaView style={s.screen}><View style={s.header}><Pressable onPress={()=>router.back()}><Text style={s.back}>‹</Text></Pressable><Text style={s.title}>Enter Amount</Text></View><View style={s.content}><Text style={s.to}>To {p.recipientName}</Text><Text style={s.label}>You send</Text><View style={s.box}><Text style={s.currency}>USD</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="0.00" style={s.amount}/></View><Text style={s.label}>They receive</Text><View style={s.receive}><Text style={s.receiveText}>Calculated from the live provider rate</Text><Text style={s.currency}>{p.recipientCurrency}</Text></View><View style={s.notice}><Text style={s.noticeText}>The exact rate, spread, receive amount, and expiration appear on the review screen before authorization.</Text></View>{error&&<Text style={s.error}>{error.replace(/_/g," ")}</Text>}<Pressable style={[s.button,busy&&{opacity:.5}]} onPress={quote} disabled={busy}>{busy?<ActivityIndicator color="white"/>:<Text style={s.buttonText}>Get Live Quote</Text>}</Pressable></View></SafeAreaView>}
-const s=StyleSheet.create({screen:{flex:1,backgroundColor:"#F6F7FB"},header:{flexDirection:"row",alignItems:"center",padding:18,gap:12},back:{fontSize:34,color:"#101828"},title:{fontSize:22,fontWeight:"900",color:"#101828"},content:{padding:18},to:{color:"#5146E5",fontWeight:"800",marginBottom:20},label:{color:"#475467",fontWeight:"700",fontSize:13,marginBottom:8,marginTop:10},box:{height:68,backgroundColor:"white",borderWidth:1,borderColor:"#DDE3EC",borderRadius:16,flexDirection:"row",alignItems:"center",paddingHorizontal:16},currency:{fontWeight:"900",color:"#101828"},amount:{flex:1,textAlign:"right",fontSize:25,fontWeight:"900",color:"#101828"},receive:{height:68,backgroundColor:"white",borderWidth:1,borderColor:"#DDE3EC",borderRadius:16,flexDirection:"row",alignItems:"center",paddingHorizontal:16,gap:10},receiveText:{flex:1,color:"#667085",fontSize:12},notice:{backgroundColor:"#ECFDF3",padding:14,borderRadius:14,marginTop:18},noticeText:{color:"#166534",fontSize:12,lineHeight:18},error:{color:"#B42318",marginTop:16},button:{height:54,backgroundColor:"#5146E5",borderRadius:14,alignItems:"center",justifyContent:"center",marginTop:20},buttonText:{color:"white",fontWeight:"900",fontSize:16}});
+const API = getApiBaseUrl();
+/** Wait for the person to stop typing before asking the server for a live rate. */
+const QUOTE_DEBOUNCE_MS = 650;
+const SOURCE_CURRENCY = "USD";
+
+const secondsLeft = (iso: string) => Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 1000));
+
+/** Decimal string to minor units, or null if it is not a positive amount with at most 2 decimals. */
+function toMinor(text: string): string | null {
+  if (!/^\d{1,9}(\.\d{0,2})?$/.test(text)) return null;
+  const minor = Math.round(Number(text) * 100);
+  return minor > 0 ? String(minor) : null;
+}
+
+export default function LinqaSendAmount() {
+  const router = useRouter();
+  const p = useLocalSearchParams<{ recipientId: string; recipientName: string; recipientCountry?: string; recipientType?: string; recipientCurrency: string; initialAmount?: string; purposeCode?: string }>();
+  const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
+
+  const [amount, setAmount] = useState(p.initialAmount ?? "");
+  const [quote, setQuote] = useState<LinqaSendQuote | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [remaining, setRemaining] = useState(0);
+  const requestId = useRef(0);
+
+  const minor = toMinor(amount.trim());
+  const invalid = amount.trim().length > 0 && minor === null;
+
+  const fetchQuote = useCallback(async (sendMinor: string) => {
+    const id = ++requestId.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await client.createQuote({ recipientId: p.recipientId, sourceCurrency: SOURCE_CURRENCY, destinationCurrency: p.recipientCurrency, sendAmountMinor: sendMinor });
+      if (id !== requestId.current) return; // a newer request superseded this one
+      setQuote(next);
+      setRemaining(secondsLeft(next.expiresAt));
+    } catch (cause) {
+      if (id !== requestId.current) return;
+      setQuote(null);
+      setError(cause instanceof Error ? cause.message : "A live quote is unavailable.");
+    } finally {
+      if (id === requestId.current) setLoading(false);
+    }
+  }, [client, p.recipientId, p.recipientCurrency]);
+
+  // A new amount: drop the old quote immediately (its receive amount no longer applies) and fetch after a pause.
+  useEffect(() => {
+    requestId.current++;
+    setQuote(null);
+    setError(null);
+    if (!minor) { setLoading(false); return; }
+    setLoading(true);
+    const timer = setTimeout(() => void fetchQuote(minor), QUOTE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [minor, fetchQuote]);
+
+  // Count down the guarantee and refresh the rate when it lapses.
+  useEffect(() => {
+    if (!quote) return;
+    const timer = setInterval(() => {
+      const left = secondsLeft(quote.expiresAt);
+      setRemaining(left);
+      if (left === 0 && minor) void fetchQuote(minor);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [quote, minor, fetchQuote]);
+
+  function explain() {
+    Alert.alert(
+      "About this rate",
+      quote
+        ? `The market rate is 1 ${quote.sendCurrency} = ${Number(quote.marketReferenceRate).toFixed(4)} ${quote.receiveCurrency}. Your rate includes a disclosed margin of ${(quote.marginBps / 100).toFixed(2)}%, so there is no separate fee. It is guaranteed until the countdown ends.`
+        : "Enter an amount to see the live rate. It is guaranteed for a short time once shown."
+    );
+  }
+
+  function next() {
+    if (!quote || remaining === 0) return;
+    router.push({
+      pathname: "/linqasend/select-payment",
+      params: { quote: JSON.stringify(quote), recipientName: p.recipientName, ...(p.recipientCountry ? { recipientCountry: p.recipientCountry } : {}), ...(p.recipientType ? { recipientType: p.recipientType } : {}), ...(p.purposeCode ? { purposeCode: p.purposeCode } : {}) }
+    });
+  }
+
+  const ready = Boolean(quote) && remaining > 0 && !loading;
+  const missingRecipient = !p.recipientId || !p.recipientCurrency;
+  const receive = quote ? formatMinor(quote.receiveAmountMinor) : "";
+  const fee = (value?: string) => `$${formatMinor(value ?? "0")}`;
+
+  // Opened without a recipient (a stale link or a restored session): send the person back to choose one
+  // instead of rendering with undefined values.
+  if (missingRecipient) {
+    return (
+      <SafeAreaView style={s.screen}>
+        <LinqaSendStatusBar />
+        <View style={s.content}>
+          <Text style={s.title}>Choose a recipient first</Text>
+          <Pressable accessibilityRole="button" style={[s.continue, { marginTop: 20 }]} onPress={() => router.replace("/linqasend/recipients")}>
+            <Text style={s.continueText}>Select recipient</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={s.screen}>
+      <LinqaSendStatusBar />
+      <View style={s.header}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Back" style={s.headerButton} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={26} color={send.text} />
+        </Pressable>
+        <Text accessibilityRole="header" style={s.title}>Enter Amount</Text>
+        <View style={s.headerButton} />
+      </View>
+
+      <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
+        <Text style={s.to}>To {p.recipientName}{p.recipientCountry ? ` • ${countryName(p.recipientCountry)}` : ""}</Text>
+
+        <Text style={s.label}>You send</Text>
+        <View style={[s.field, invalid && s.fieldInvalid]}>
+          <View style={s.currency}>
+            <Text style={s.flag}>{currencyFlag(SOURCE_CURRENCY)}</Text>
+            <Text style={s.code}>{SOURCE_CURRENCY}</Text>
+          </View>
+          <TextInput
+            accessibilityLabel="Amount to send"
+            value={amount}
+            onChangeText={(text) => setAmount(text.replace(",", "."))}
+            keyboardType="decimal-pad"
+            placeholder="0.00"
+            placeholderTextColor={send.faint}
+            style={s.amountInput}
+            autoFocus
+          />
+        </View>
+        {invalid ? <Text style={s.hint}>Enter an amount with up to two decimals.</Text> : null}
+
+        <Text style={[s.label, { marginTop: 18 }]}>They receive</Text>
+        <View style={s.field}>
+          <View style={s.currency}>
+            <Text style={s.flag}>{currencyFlag(p.recipientCurrency)}</Text>
+            <Text style={s.code}>{p.recipientCurrency}</Text>
+          </View>
+          <View style={s.receiveBox}>
+            {loading ? <ActivityIndicator color={send.primary} /> : <Text style={[s.amountText, !receive && { color: send.faint }]}>{receive || "0.00"}</Text>}
+          </View>
+        </View>
+
+        <View style={s.rateCard}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.rateTitle}>Exchange rate{quote && remaining > 0 ? ` (Guaranteed ${remaining}s)` : ""}</Text>
+            <Text style={s.rateValue}>
+              {quote ? `1 ${quote.sendCurrency} = ${Number(quote.customerRate).toFixed(4)} ${quote.receiveCurrency}` : loading ? "Getting live rate…" : error ? "Rate unavailable" : "Enter an amount"}
+            </Text>
+          </View>
+          <Pressable accessibilityRole="button" accessibilityLabel="About this rate" style={s.info} onPress={explain}>
+            <Ionicons name="information-circle-outline" size={26} color={send.primary} />
+          </Pressable>
+        </View>
+
+        <View style={s.feeRow}><Text style={s.feeLabel}>Transfer fee</Text><Text style={s.feeValue}>{quote ? fee(quote.senderFeeMinor) : "—"}</Text></View>
+        <View style={s.feeRow}><Text style={s.feeLabel}>Recipient fee</Text><Text style={s.feeValue}>{quote ? fee(quote.recipientFeeMinor) : "—"}</Text></View>
+
+        <View style={s.banner}>
+          <View style={s.bannerIcon}><Ionicons name="shield-checkmark-outline" size={26} color={send.success} /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.bannerTitle}>No separate fees. See the rate first.</Text>
+            <Text style={s.bannerText}>The exchange rate includes our disclosed margin, and you see exactly what your recipient gets.</Text>
+          </View>
+        </View>
+
+        {error ? <Text style={s.error}>{error.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase())}</Text> : null}
+      </ScrollView>
+
+      <View style={s.footer}>
+        <Pressable accessibilityRole="button" accessibilityState={{ disabled: !ready }} disabled={!ready} style={[s.continue, !ready && s.continueDisabled]} onPress={next}>
+          <Text style={s.continueText}>Continue</Text>
+        </Pressable>
+        <View style={s.footNote}>
+          <Ionicons name="time-outline" size={16} color={send.muted} />
+          <Text style={s.footNoteText}>Rate updates in real-time</Text>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const s = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: send.bg },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
+  headerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
+  content: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 20 },
+  to: { color: send.primary, fontFamily: fonts.semibold, fontSize: 14, marginBottom: 14 },
+  label: { color: send.text, fontFamily: fonts.bold, fontSize: 15, marginBottom: 10 },
+  field: { flexDirection: "row", alignItems: "stretch", height: 70, borderRadius: 16, borderWidth: 1.5, borderColor: send.border, backgroundColor: send.bg, overflow: "hidden" },
+  fieldInvalid: { borderColor: send.danger },
+  currency: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, borderRightWidth: 1, borderRightColor: send.border, minWidth: 124 },
+  flag: { fontSize: 26 },
+  code: { color: send.text, fontFamily: fonts.bold, fontSize: 17 },
+  amountInput: { flex: 1, textAlign: "right", paddingHorizontal: 18, color: send.text, fontFamily: fonts.extrabold, fontSize: 24 },
+  receiveBox: { flex: 1, alignItems: "flex-end", justifyContent: "center", paddingHorizontal: 18 },
+  amountText: { color: send.text, fontFamily: fonts.extrabold, fontSize: 24 },
+  hint: { color: send.danger, fontFamily: fonts.medium, fontSize: 13, marginTop: 6 },
+  rateCard: { flexDirection: "row", alignItems: "center", backgroundColor: send.primarySoft, borderWidth: 1, borderColor: "#D9DDFB", borderRadius: 16, padding: 16, marginTop: 20 },
+  rateTitle: { color: send.muted, fontFamily: fonts.medium, fontSize: 13 },
+  rateValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 20, marginTop: 6 },
+  info: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  feeRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 16 },
+  feeLabel: { color: send.text, fontFamily: fonts.medium, fontSize: 15 },
+  feeValue: { color: send.text, fontFamily: fonts.bold, fontSize: 15 },
+  banner: { flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: "#ECFDF3", borderWidth: 1, borderColor: "#BFEBD0", borderRadius: 16, padding: 16, marginTop: 22 },
+  bannerIcon: { width: 44, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: send.success, alignItems: "center", justifyContent: "center" },
+  bannerTitle: { color: "#067647", fontFamily: fonts.extrabold, fontSize: 16 },
+  bannerText: { color: "#067647", fontFamily: fonts.regular, fontSize: 13, lineHeight: 19, marginTop: 3 },
+  error: { color: send.danger, fontFamily: fonts.medium, fontSize: 14, marginTop: 16 },
+  footer: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 14, backgroundColor: send.bg },
+  continue: { height: 56, borderRadius: 16, backgroundColor: send.primary, alignItems: "center", justifyContent: "center" },
+  continueDisabled: { opacity: 0.45 },
+  continueText: { color: "#FFFFFF", fontFamily: fonts.bold, fontSize: 17 },
+  footNote: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 14 },
+  footNoteText: { color: send.muted, fontFamily: fonts.medium, fontSize: 14 }
+});

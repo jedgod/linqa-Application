@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { resolveDirectConversation } from "../chat/chat.service.js";
 import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
@@ -246,21 +247,9 @@ export async function registerMobileHubRoutes(
       requireScope(principal, "messages:send");
       const body = z.object({ recipientUserId: z.string().uuid() }).parse(request.body);
       if (body.recipientUserId === principal.userId) return reply.code(400).send({ error: "invalid_recipient" });
-      const recipient = await db.query(`SELECT display_name FROM user_profiles WHERE user_id=$1`, [body.recipientUserId]);
-      if (recipient.rowCount !== 1) return reply.code(404).send({ error: "recipient_not_found" });
-      const client = await db.connect();
-      try {
-        await client.query("BEGIN");
-        const created = await client.query(`INSERT INTO conversations
-          (conversation_type,created_by_user_id,display_title,last_message_preview,last_message_at)
-          VALUES ('DIRECT',$1,$2,'New conversation',now()) RETURNING id`,
-          [principal.userId, recipient.rows[0].display_name]);
-        await client.query(`INSERT INTO conversation_members (conversation_id,user_id,role) VALUES
-          ($1,$2,'OWNER'),($1,$3,'MEMBER')`, [created.rows[0].id, principal.userId, body.recipientUserId]);
-        await client.query("COMMIT");
-        hub.sendToUser(principal.userId, { type: "mobile-hub.changed", resource: "conversation" });
-        return reply.code(201).send({ id: created.rows[0].id });
-      } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+      const result = await resolveDirectConversation(db, principal.userId, body.recipientUserId);
+      for (const userId of [principal.userId, body.recipientUserId]) hub.sendToUser(userId, { type: "conversation.created", conversationId: result.conversationId });
+      return reply.code(result.created ? 201 : 200).send({ id: result.conversationId });
     } catch (error) {
       request.log.warn({ err: error }, "mobile conversation creation rejected");
       return reply.code(400).send({ error: "invalid_conversation" });

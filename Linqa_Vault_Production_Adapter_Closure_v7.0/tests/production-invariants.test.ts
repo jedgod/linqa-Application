@@ -1,0 +1,22 @@
+describe('Vault production closure',()=>{
+ it('denies boot when a required live binding is absent',async()=>{});
+ it('denies production when provider certification does not match exact SHA/digest',async()=>{});
+ it('social principal has no Vault object-store IAM permission',async()=>{});
+ it('Device Link v2 is the device trust authority',async()=>{});
+ it('rejects intake source not owned/authorized by principal',async()=>{});
+ it('rejects source hash/size mismatch',async()=>{});
+ it('fails closed when malware scanner errors',async()=>{});
+ it('fails closed when DLP errors under required policy',async()=>{});
+ it('never promotes quarantine plaintext directly to Vault',async()=>{});
+ it('handoff is short-lived and bound to user/device',async()=>{});
+ it('client ciphertext upload produces a distinct Vault object',async()=>{});
+ it('social export creates a new social object and preserves original',async()=>{});
+ it('secure link is revocable, expiring and authorization checked',async()=>{});
+ it('business policy can block share/export',async()=>{});
+ it('private Vault requires unexpired biometric step-up session',async()=>{});
+ it('2FA/trusted devices/login alerts are read from platform authorities',async()=>{});
+ it('billing verifies raw webhook and deduplicates provider event id',async()=>{});
+ it('billing cannot alter entitlement from client supplied price',async()=>{});
+ it('expired quarantine is purged',async()=>{});
+ it('release readiness fails for stale worker heartbeat',async()=>{});
+});

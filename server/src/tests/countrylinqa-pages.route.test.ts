@@ -24,7 +24,12 @@ describe("CountryLinqa page API contracts", () => {
   let headers: { authorization: string };
   beforeEach(async () => {
     query.mockReset().mockResolvedValue({ rows: [], rowCount: 0 });
-    app = Fastify(); const db = { query } as unknown as Database;
+    app = Fastify(); const db = { query, connect: async () => ({ release: () => {}, query: async (sql: string, params?: unknown[]) => {
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+      if (sql.includes("FROM users WHERE id=$1 FOR UPDATE")) return { rows: [{ id: userId }], rowCount: 1 };
+      if (sql.startsWith("SELECT count(*)")) return { rows: [{ count: 0 }], rowCount: 1 };
+      return query(sql, params);
+    } }) } as unknown as Database;
     await registerCountryLinqaRoutes(app, config, db, {} as CountryLinqaService);
     await registerCountryLinqaFinalRoutes(app, config, db);
     await registerCountryLinqaGoLiveRoutes(app, config, db);
@@ -138,7 +143,7 @@ describe("CountryLinqa page API contracts", () => {
   it("rejects missing authorization and missing scopes before database access", async () => {
     const noToken = await app.inject({ url: "/v1/countrylinqa/connections" }); expect(noToken.statusCode).toBeGreaterThanOrEqual(400);
     const token = await issueAccessToken(config, { userId,subject: "test-user",sessionId: "test-session",scopes: [] });
-    const noScope = await app.inject({ url: "/v1/countrylinqa/connections", headers: { authorization: `Bearer ${token}` } }); expect(noScope.statusCode).toBeGreaterThanOrEqual(400);
+    const noScope = await app.inject({ url: "/v1/countrylinqa/connections", headers: { authorization: `Bearer ${token}` } }); expect(noScope.statusCode).toBe(403);
     expect(query).not.toHaveBeenCalled();
   });
 });

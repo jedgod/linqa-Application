@@ -9,7 +9,7 @@ import { getApiBaseUrl } from "../../config/api";
 const API = getApiBaseUrl();
 const routes: Record<OnboardingNextStep, string> = {
   AUTH_REQUIRED: "/welcome", DEVICE_ENROLLMENT: "/account/sign-up?purpose=LOGIN",
-  RECOVERY_SETUP: "/onboarding/recovery", COUNTRY_CONFIRMATION: "/onboarding/country-confirmation",
+  PROFILE_SETUP: "/onboarding/profile", RECOVERY_SETUP: "/onboarding/recovery", COUNTRY_CONFIRMATION: "/onboarding/country-confirmation",
   COUNTRY_DISCOVERY: "/onboarding/country-discovery", SECURITY_REVIEW: "/onboarding/security-review",
   COMPLETION: "/onboarding/complete", COMPLETE: "/(tabs)/home"
 };
@@ -26,8 +26,8 @@ export default function OnboardingResolver() {
     const timer = setTimeout(() => client.status().then((status) => {
       if (!routes[status.nextStep]) throw new Error("Linqa could not resume your account. Please try again.");
       if (!cancelled) {
-        if (status.nextStep === "RECOVERY_SETUP" && params.flow === "ADD_ACCOUNT") {
-          router.replace({ pathname: "/onboarding/recovery", params: { flow: "ADD_ACCOUNT" } });
+        if (["PROFILE_SETUP", "RECOVERY_SETUP"].includes(status.nextStep) && params.flow === "ADD_ACCOUNT") {
+          router.replace({ pathname: routes[status.nextStep] as never, params: { flow: "ADD_ACCOUNT" } });
         } else {
           router.replace(routes[status.nextStep] as never);
         }

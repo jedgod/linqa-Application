@@ -94,6 +94,7 @@ import { SessionService } from "../services/session.service.js";
 import { SignalingService } from "../services/signaling.service.js";
 import { FailClosedObjectStorage } from "../services/storage/fail-closed-object-storage.js";
 import { S3ObjectStorage } from "../services/storage/s3-object-storage.js";
+import { LocalVaultObjectStorage } from "../services/storage/local-vault-object-storage.js";
 import {
   FailClosedVaultObjectStorage,
   S3VaultObjectStorage
@@ -149,7 +150,10 @@ export function createServiceContainer(config: AppConfig, db: Database) {
             ? {}
             : { forcePathStyle: config.OBJECT_STORAGE_FORCE_PATH_STYLE })
         })
-      : new FailClosedVaultObjectStorage();
+      // Development only: without a bucket, encrypted objects go to a local folder. Production keeps failing closed.
+      : config.NODE_ENV !== "production"
+        ? new LocalVaultObjectStorage(config.JWT_HS256_SECRET)
+        : new FailClosedVaultObjectStorage();
 
   const sessions = new SessionService(db, config);
   // Envelope encryption for the multi-account pack's phone-number and

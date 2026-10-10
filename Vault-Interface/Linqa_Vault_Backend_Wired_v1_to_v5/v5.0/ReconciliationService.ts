@@ -1,0 +1,3 @@
+import {Pool} from 'pg';
+export class ReconciliationService{constructor(private db:Pool){}
+ async reconcileQuota(){const run=await this.db.query(`INSERT INTO vault_reconciliation_runs(kind,state) VALUES('QUOTA','RUNNING') RETURNING id`);const id=run.rows[0].id;const diffs=await this.db.query(`WITH actual AS (SELECT workspace_id,COALESCE(sum(size_bytes),0)::bigint bytes FROM vault_objects WHERE state='AVAILABLE' GROUP BY workspace_id) SELECT w.id,w.used_bytes,COALESCE(a.bytes,0) actual FROM vault_workspaces w LEFT JOIN actual a ON a.workspace_id=w.id WHERE w.used_bytes<>COALESCE(a.bytes,0)`);await this.db.query(`UPDATE vault_reconciliation_runs SET state='DONE',completed_at=now(),summary=$2 WHERE id=$1`,[id,JSON.stringify({differences:diffs.rows})]);return diffs.rows}}

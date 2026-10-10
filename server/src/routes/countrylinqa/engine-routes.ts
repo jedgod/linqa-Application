@@ -1,3 +1,4 @@
+import { publicCountryError } from "./public-error.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../../config.js";
@@ -12,6 +13,7 @@ import { discoveryFeaturesSchema, getDiscoveryFeatures, saveDiscoveryFeatures } 
 import { AdvancedDiscoveryService } from "../../services/countrylinqa/engine/people.js";
 import { SEARCH_TYPES, unifiedSearch } from "../../services/countrylinqa/engine/unified-search.js";
 import { savedFiltersToDiscovery } from "../../services/countrylinqa/engine/jobs.js";
+import { TrustSafetyService } from "../../services/trust-safety.service.js";
 import { MAX_DETAIL_IDS, blockedAccounts, countryHub, personDetails, setEventInterest, subscriptionSummary, unblockAccount, worldCountries, worldHome } from "../../services/countrylinqa/world.js";
 
 function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) => Promise<T>, metrics?: MetricsSink) {
@@ -22,8 +24,7 @@ function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) =
       if (error instanceof z.ZodError) {
         return reply.code(422).send({ error: "validation_error", details: error.flatten() });
       }
-      const status = typeof error?.status === "number" ? error.status : 400;
-      const code = typeof error?.code === "string" ? error.code : "invalid_request";
+      const { status, code } = publicCountryError(error);
       request.log.warn({ code, status }, "countrylinqa engine request rejected");
       // 4xx are caller mistakes, not service faults; only 5xx and rate-limit/unavailable count toward the error SLO.
       if (status >= 500 || status === 429) metrics?.increment("countrylinqa_discovery_errors_total", { status });
@@ -172,6 +173,16 @@ export async function registerCountryLinqaEngineRoutes(
   app.get("/v1/countrylinqa/blocked", withErrors(async (request) => {
     const p = await auth(request); requireScope(p, "countrylinqa:read"); pageLimit(p.userId, request);
     return { items: await blockedAccounts(db, p.userId) };
+  }, metrics));
+
+  // Block from a profile. The device token carries countrylinqa:write, not safety:write, so this is the
+  // CountryLinqa-scoped way in; it uses the same block behaviour (and ends calls) as /v1/safety/blocks.
+  app.post("/v1/countrylinqa/blocked", withErrors(async (request, reply) => {
+    const p = await auth(request); requireScope(p, "countrylinqa:write"); writeLimit(p.userId, request);
+    const { userId } = z.object({ userId: z.string().uuid() }).strict().parse(request.body);
+    try { await new TrustSafetyService(db).block({ blockerUserId: p.userId, blockedUserId: userId }); }
+    catch { return reply.code(404).send({ error: "USER_NOT_FOUND" }); }
+    return { blocked: true };
   }, metrics));
 
   app.delete("/v1/countrylinqa/blocked/:userId", withErrors(async (request) => {

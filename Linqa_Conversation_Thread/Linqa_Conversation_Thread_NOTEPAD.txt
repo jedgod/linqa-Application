@@ -1,0 +1,355 @@
+LINQA CONVERSATION THREAD PACK
+Composer sheet and settings features.
+
+
+========================================================================================
+FILE: clients/mobile/src/conversation/thread-actions.ts
+========================================================================================
+/**
+ * Composer actions for the conversation thread.
+ * Media bytes never sit in the page model. The sheet hands a vault id
+ * or a structured payload to the core, which seals it before send.
+ */
+
+export type ThreadAction =
+  | "PHOTO"
+  | "LOCATION"
+  | "CONTACT"
+  | "DOCUMENT"
+  | "POLL"
+  | "EVENT"
+  | "AI_IMAGE"
+  | "DESIGN"
+  | "LIVE_SCREEN"
+  | "VOICE"
+  | "VIDEO"
+  | "MEETING";
+
+export interface ThreadActionSpec {
+  id: ThreadAction;
+  label: string;
+  group: "MEDIA" | "SHARE" | "CREATE" | "LIVE";
+  needsConsent: boolean;
+}
+
+export const THREAD_ACTIONS: ThreadActionSpec[] = [
+  { id: "PHOTO", label: "Photos", group: "MEDIA", needsConsent: false },
+  { id: "VIDEO", label: "Record video", group: "MEDIA", needsConsent: true },
+  { id: "VOICE", label: "Record voice", group: "MEDIA", needsConsent: true },
+  { id: "DOCUMENT", label: "Document", group: "MEDIA", needsConsent: false },
+  { id: "DESIGN", label: "Design / crop", group: "MEDIA", needsConsent: false },
+  { id: "AI_IMAGE", label: "AI image", group: "CREATE", needsConsent: false },
+  { id: "LOCATION", label: "Location", group: "SHARE", needsConsent: true },
+  { id: "CONTACT", label: "Contact", group: "SHARE", needsConsent: true },
+  { id: "POLL", label: "Poll", group: "CREATE", needsConsent: false },
+  { id: "EVENT", label: "Event", group: "CREATE", needsConsent: false },
+  { id: "MEETING", label: "Schedule meeting", group: "LIVE", needsConsent: false },
+  { id: "LIVE_SCREEN", label: "Share live screen", group: "LIVE", needsConsent: true },
+];
+
+export interface PhotoAttachment {
+  kind: "PHOTO";
+  vaultId: string;
+  width: number;
+  height: number;
+}
+
+export interface DocumentAttachment {
+  kind: "DOCUMENT";
+  vaultId: string;
+  fileName: string;
+  byteLength: number;
+}
+
+export interface LocationShare {
+  kind: "LOCATION";
+  label: string;
+  latitude: number;
+  longitude: number;
+  liveMinutes?: number;
+}
+
+export interface ContactShare {
+  kind: "CONTACT";
+  displayName: string;
+  handle: string;
+}
+
+export interface PollDraft {
+  kind: "POLL";
+  question: string;
+  options: string[];
+  allowsMultiple: boolean;
+}
+
+export interface EventDraft {
+  kind: "EVENT";
+  title: string;
+  startsAt: string;
+  place?: string;
+}
+
+export interface MeetingDraft {
+  kind: "MEETING";
+  title: string;
+  startsAt: string;
+  durationMinutes: number;
+}
+
+export interface VoiceNote {
+  kind: "VOICE";
+  vaultId: string;
+  durationMs: number;
+}
+
+export interface VideoNote {
+  kind: "VIDEO";
+  vaultId: string;
+  durationMs: number;
+}
+
+export interface DesignDraft {
+  kind: "DESIGN";
+  vaultId: string;
+  crop: { x: number; y: number; width: number; height: number };
+}
+
+export interface AiImageDraft {
+  kind: "AI_IMAGE";
+  prompt: string;
+  vaultId?: string;
+}
+
+export interface LiveScreenShare {
+  kind: "LIVE_SCREEN";
+  sessionId: string;
+}
+
+export type ThreadPayload =
+  | PhotoAttachment
+  | DocumentAttachment
+  | LocationShare
+  | ContactShare
+  | PollDraft
+  | EventDraft
+  | MeetingDraft
+  | VoiceNote
+  | VideoNote
+  | DesignDraft
+  | AiImageDraft
+  | LiveScreenShare;
+
+export function assertPayload(action: ThreadAction, payload: ThreadPayload): void {
+  if (payload.kind !== action && !(action === "PHOTO" && payload.kind === "PHOTO")) {
+    if (payload.kind !== action) throw new Error("THREAD_PAYLOAD_MISMATCH");
+  }
+  if (payload.kind === "POLL" && payload.options.filter((o) => o.trim()).length < 2) {
+    throw new Error("POLL_NEEDS_TWO_OPTIONS");
+  }
+  if (payload.kind === "LOCATION") {
+    if (payload.latitude < -90 || payload.latitude > 90) throw new Error("LOCATION_INVALID");
+    if (payload.longitude < -180 || payload.longitude > 180) throw new Error("LOCATION_INVALID");
+  }
+  if ((payload.kind === "PHOTO" || payload.kind === "DOCUMENT" || payload.kind === "VOICE" || payload.kind === "VIDEO" || payload.kind === "DESIGN") && !payload.vaultId) {
+    throw new Error("VAULT_ID_REQUIRED");
+  }
+}
+
+========================================================================================
+FILE: clients/mobile/src/conversation/ThreadSheet.tsx
+========================================================================================
+/**
+ * Thread sheet + settings extensions.
+ * Attachment sheet opens from the composer. Settings owns feature toggles,
+ * background, and block/unblock.
+ */
+import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { THREAD_ACTIONS, type ThreadAction } from "./thread-actions";
+import { firstName } from "./settings-model";
+
+export type ChatBackground = "CANVAS" | "MIST" | "FOREST" | "INK";
+
+export const BACKGROUNDS: Record<ChatBackground, string> = {
+  CANVAS: "#e7edf1",
+  MIST: "#f4f1ea",
+  FOREST: "#e5f0ec",
+  INK: "#121820",
+};
+
+export function AttachmentSheet(props: {
+  enabled: ThreadAction[];
+  onPick: (action: ThreadAction) => void;
+  onClose: () => void;
+}) {
+  const items = THREAD_ACTIONS.filter((item) => props.enabled.includes(item.id));
+  return (
+    <View style={styles.sheet}>
+      <View style={styles.handle} />
+      <Text style={styles.sheetTitle}>Add to chat</Text>
+      <View style={styles.grid}>
+        {items.map((item) => (
+          <Pressable key={item.id} style={styles.cell} onPress={() => props.onPick(item.id)}>
+            <View style={styles.icon}><Text style={styles.iconText}>{item.label.slice(0, 1)}</Text></View>
+            <Text style={styles.cellLabel}>{item.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Pressable onPress={props.onClose}><Text style={styles.close}>Close</Text></Pressable>
+    </View>
+  );
+}
+
+export function ThreadSettingsScreen(props: {
+  displayName: string;
+  enabled: ThreadAction[];
+  background: ChatBackground;
+  blocked: boolean;
+  onToggleFeature: (action: ThreadAction, on: boolean) => void;
+  onBackground: (background: ChatBackground) => void;
+  onBlock: () => void;
+  onUnblock: () => void;
+  onBack: () => void;
+}) {
+  const name = firstName(props.displayName);
+  return (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <Pressable onPress={props.onBack} hitSlop={12}><Text style={styles.back}>‹</Text></Pressable>
+        <Text style={styles.title}>Chat features</Text>
+      </View>
+      <ScrollView contentContainerStyle={styles.body}>
+        <Text style={styles.section}>Add features</Text>
+        <View style={styles.card}>
+          {THREAD_ACTIONS.map((item) => (
+            <View key={item.id} style={styles.row}>
+              <View style={styles.copy}>
+                <Text style={styles.rowTitle}>{item.label}</Text>
+                <Text style={styles.hint}>{item.needsConsent ? "Asks before sharing" : "Available in the composer"}</Text>
+              </View>
+              <Switch
+                value={props.enabled.includes(item.id)}
+                onValueChange={(on) => props.onToggleFeature(item.id, on)}
+              />
+            </View>
+          ))}
+        </View>
+
+        <Text style={styles.section}>Change background</Text>
+        <View style={styles.bgRow}>
+          {(Object.keys(BACKGROUNDS) as ChatBackground[]).map((id) => (
+            <Pressable
+              key={id}
+              onPress={() => props.onBackground(id)}
+              style={[styles.bg, { backgroundColor: BACKGROUNDS[id] }, props.background === id && styles.bgOn]}
+            >
+              <Text style={styles.bgLabel}>{id === "CANVAS" ? "Canvas" : id === "MIST" ? "Mist" : id === "FOREST" ? "Forest" : "Ink"}</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        <View style={styles.card}>
+          {props.blocked ? (
+            <Pressable onPress={props.onUnblock}><Text style={styles.unblock}>Unblock {name}</Text></Pressable>
+          ) : (
+            <Pressable onPress={props.onBlock}><Text style={styles.danger}>Block {name}</Text></Pressable>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+export function PollComposer(props: {
+  question: string;
+  options: string[];
+  onQuestion: (value: string) => void;
+  onOption: (index: number, value: string) => void;
+  onSend: () => void;
+}) {
+  return (
+    <View style={styles.card}>
+      <Text style={styles.rowTitle}>Poll</Text>
+      <TextInput value={props.question} onChangeText={props.onQuestion} placeholder="Ask a question" style={styles.input} />
+      {props.options.map((option, index) => (
+        <TextInput
+          key={index}
+          value={option}
+          onChangeText={(value) => props.onOption(index, value)}
+          placeholder={`Option ${index + 1}`}
+          style={styles.input}
+        />
+      ))}
+      <Pressable style={styles.send} onPress={props.onSend}><Text style={styles.sendText}>Send poll</Text></Pressable>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  sheet: { backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16 },
+  handle: { alignSelf: "center", width: 40, height: 4, borderRadius: 2, backgroundColor: "#d5dde5", marginBottom: 10 },
+  sheetTitle: { fontSize: 16, fontWeight: "700", color: "#1c2430", marginBottom: 12 },
+  grid: { flexDirection: "row", flexWrap: "wrap" },
+  cell: { width: "25%", alignItems: "center", marginBottom: 14 },
+  icon: { width: 48, height: 48, borderRadius: 16, backgroundColor: "#e7f3ef", alignItems: "center", justifyContent: "center" },
+  iconText: { color: "#1f6b52", fontWeight: "700" },
+  cellLabel: { marginTop: 6, fontSize: 11, color: "#1c2430", textAlign: "center" },
+  close: { textAlign: "center", color: "#5f6b76", padding: 8 },
+  screen: { flex: 1, backgroundColor: "#eef2f5" },
+  header: { flexDirection: "row", alignItems: "center", gap: 8, padding: 14, backgroundColor: "#fff" },
+  back: { fontSize: 28, color: "#243041" },
+  title: { fontSize: 20, fontWeight: "700", color: "#1c2430" },
+  body: { padding: 16, paddingBottom: 32 },
+  section: { color: "#5f6b76", marginBottom: 8 },
+  card: { backgroundColor: "#fff", borderRadius: 16, padding: 14, marginBottom: 14 },
+  row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 8 },
+  copy: { flex: 1, paddingRight: 8 },
+  rowTitle: { fontSize: 16, fontWeight: "600", color: "#1c2430" },
+  hint: { color: "#6d7c8a", fontSize: 12, marginTop: 2 },
+  bgRow: { flexDirection: "row", gap: 8, marginBottom: 14 },
+  bg: { flex: 1, height: 64, borderRadius: 14, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#e1e7ee" },
+  bgOn: { borderColor: "#1f6b52", borderWidth: 2 },
+  bgLabel: { fontSize: 12, color: "#1c2430" },
+  danger: { color: "#b42318", fontWeight: "700", fontSize: 16 },
+  unblock: { color: "#1f6b52", fontWeight: "700", fontSize: 16 },
+  input: { borderWidth: 1, borderColor: "#e1e7ee", borderRadius: 12, padding: 10, marginTop: 8 },
+  send: { marginTop: 12, backgroundColor: "#1f6b52", borderRadius: 20, alignItems: "center", paddingVertical: 10 },
+  sendText: { color: "#fff", fontWeight: "700" },
+});
+
+========================================================================================
+FILE: clients/mobile/src/conversation/thread-actions.test.ts
+========================================================================================
+import { assertPayload, THREAD_ACTIONS, type ThreadAction, type ThreadPayload } from "../conversation/thread-actions";
+
+describe("conversation thread actions", () => {
+  it("lists the composer actions from the thread sheet", () => {
+    const labels = THREAD_ACTIONS.map((item) => item.label);
+    expect(labels).toEqual(expect.arrayContaining([
+      "Photos", "Location", "Contact", "Document", "Poll", "Event",
+      "AI image", "Design / crop", "Share live screen", "Record voice",
+      "Record video", "Schedule meeting",
+    ]));
+  });
+
+  it("requires consent for location, contact, voice, video, and live screen", () => {
+    const consent = THREAD_ACTIONS.filter((item) => item.needsConsent).map((item) => item.id);
+    expect(consent).toEqual(["VIDEO", "VOICE", "LOCATION", "CONTACT", "LIVE_SCREEN"]);
+  });
+
+  it("rejects a poll with one option and a location off the map", () => {
+    expect(() => assertPayload("POLL", { kind: "POLL", question: "When?", options: ["Now"], allowsMultiple: false })).toThrow("POLL_NEEDS_TWO_OPTIONS");
+    expect(() => assertPayload("LOCATION", { kind: "LOCATION", label: "Site", latitude: 120, longitude: 0 })).toThrow("LOCATION_INVALID");
+  });
+
+  it("accepts a vault photo and a meeting draft", () => {
+    const photo: ThreadPayload = { kind: "PHOTO", vaultId: "vault_1", width: 1000, height: 800 };
+    const meeting: ThreadPayload = { kind: "MEETING", title: "Walkthrough", startsAt: "2026-10-09T14:00:00.000Z", durationMinutes: 45 };
+    expect(() => assertPayload("PHOTO", photo)).not.toThrow();
+    expect(() => assertPayload("MEETING", meeting)).not.toThrow();
+  });
+
+  it("keeps a disabled feature out of the sheet", () => {
+    const enabled: ThreadAction[] = ["PHOTO", "POLL", "MEETING"];
+    expect(THREAD_ACTIONS.filter((item) => enabled.includes(item.id)).map((item) => item.id)).toEqual(enabled);
+  });
+});

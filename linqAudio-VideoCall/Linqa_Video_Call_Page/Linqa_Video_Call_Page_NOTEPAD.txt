@@ -1,0 +1,140 @@
+LINQA VIDEO CALL PAGE
+Matches the Keona image. Middle is the caller location: country flag and area.
+
+================================================================================
+FILE: clients/mobile/src/calls/LinqaVideoCallPage.tsx
+================================================================================
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+
+export function LinqaVideoCallPage(props: {
+  name: string;
+  elapsed: string;
+  privacy: "End-to-end" | "Relay only";
+  signal: "Good" | "Weak" | "Reconnecting";
+  location?: string;
+  remoteUri?: string;
+  selfUri?: string;
+  videoOn: boolean;
+  speakerOn: boolean;
+  muted: boolean;
+  onToggleVideo: () => void;
+  onSpeaker: () => void;
+  onMute: () => void;
+  onMore: () => void;
+  onFlip: () => void;
+  onEnd: () => void;
+}) {
+  return (
+    <View style={styles.screen}>
+      {props.remoteUri ? (
+        <Image source={{ uri: props.remoteUri }} style={styles.remote} />
+      ) : (
+        <View style={styles.remote} />
+      )}
+
+      <View style={styles.top}>
+        <View style={styles.meta}>
+          <Text style={styles.metaLabel}>SIGNAL</Text>
+          <View style={styles.pill}><Text style={styles.pillText}>{props.signal}</Text></View>
+        </View>
+        <View style={styles.meta}>
+          <Text style={styles.metaLabel}>LOCATION</Text>
+          <Text style={styles.location}>{props.location ?? "—"}</Text>
+        </View>
+        <View style={styles.identity}>
+          <Text style={styles.name}>{props.name}</Text>
+          <Text style={styles.status}>🔒  {props.privacy}  ·  {props.elapsed}</Text>
+        </View>
+      </View>
+
+      <View style={styles.self}>
+        {props.selfUri ? <Image source={{ uri: props.selfUri }} style={styles.selfImage} /> : null}
+        <Pressable onPress={props.onFlip} style={styles.flip}>
+          <Text style={styles.flipText}>↻</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.bar}>
+        <CallKey label={props.videoOn ? "Video on" : "Video off"} on={props.videoOn} onPress={props.onToggleVideo} />
+        <CallKey label="Speaker" on={props.speakerOn} onPress={props.onSpeaker} />
+        <Pressable onPress={props.onEnd} style={styles.end}><Text style={styles.endIcon}>☎</Text></Pressable>
+        <CallKey label="Mute" on={props.muted} onPress={props.onMute} />
+        <CallKey label="More" onPress={props.onMore} />
+      </View>
+      <Text style={styles.endCaption}>End</Text>
+    </View>
+  );
+}
+
+function CallKey(props: { label: string; on?: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={props.onPress} style={styles.key}>
+      <Text style={[styles.keyIcon, props.on && styles.keyOn]}>●</Text>
+      <Text style={styles.keyLabel}>{props.label}</Text>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: "#000" },
+  remote: { ...StyleSheet.absoluteFillObject, backgroundColor: "#1b1b1b" },
+  top: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    paddingTop: 54,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: "#000",
+  },
+  meta: { width: 110 },
+  metaLabel: { color: "#fff", fontSize: 11, letterSpacing: 1, marginBottom: 6 },
+  pill: { alignSelf: "flex-start", backgroundColor: "#e9e9e9", borderRadius: 14, paddingHorizontal: 12, paddingVertical: 4 },
+  pillText: { color: "#222", fontWeight: "600" },
+  location: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  identity: { alignItems: "flex-end" },
+  name: { color: "#fff", fontSize: 28, fontWeight: "700" },
+  status: { color: "#3dce7a", marginTop: 2, fontSize: 13 },
+  self: {
+    position: "absolute",
+    right: 16,
+    bottom: 132,
+    width: 132,
+    height: 168,
+    borderRadius: 18,
+    overflow: "hidden",
+    backgroundColor: "#333",
+  },
+  selfImage: { width: "100%", height: "100%" },
+  flip: {
+    position: "absolute",
+    right: 8,
+    bottom: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#111",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  flipText: { color: "#fff" },
+  bar: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 28,
+    height: 86,
+    borderRadius: 28,
+    backgroundColor: "#1c1e22",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-evenly",
+  },
+  key: { alignItems: "center", width: 64 },
+  keyIcon: { color: "#fff", fontSize: 18 },
+  keyOn: { color: "#3dce7a" },
+  keyLabel: { color: "#fff", fontSize: 12, marginTop: 4 },
+  end: { width: 62, height: 62, borderRadius: 31, backgroundColor: "#ff3b30", alignItems: "center", justifyContent: "center" },
+  endIcon: { color: "#fff", fontSize: 22 },
+  endCaption: { position: "absolute", bottom: 34, alignSelf: "center", color: "#fff", fontSize: 12 },
+});

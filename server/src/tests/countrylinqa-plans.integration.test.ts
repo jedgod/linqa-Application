@@ -69,12 +69,20 @@ run("CountryLinqa plans and payments against the database", () => {
     calls.length = 0;
     const k = key();
     const first = await plans.createCheckout(user, { planCode: "PREMIUM", method: "CARD", idempotencyKey: k });
-    expect(first).toMatchObject({ state: "CREATED", amountMinor: 499, currency: "USD", method: "CARD", checkoutUrl: `https://pay.test/${k}` });
+    expect(first).toMatchObject({ state: "CREATED", amountMinor: 499, currency: "USD", method: "CARD", checkoutUrl: `https://pay.test/${user}:${k}` });
     const again = await plans.createCheckout(user, { planCode: "PREMIUM", method: "CARD", idempotencyKey: k });
     expect(again.id).toBe(first.id);
     expect(calls).toEqual([{ planCode: "PREMIUM", amountMinor: 499, method: "CARD" }]); // the provider was asked once
     await expect(plans.createCheckout(user, { planCode: "ELITE", method: "CARD", idempotencyKey: k })).rejects.toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
-    await expect(plans.createCheckout(await makeUser(), { planCode: "PREMIUM", method: "CARD", idempotencyKey: k })).rejects.toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
+    const other = await plans.createCheckout(await makeUser(), { planCode: "PREMIUM", method: "CARD", idempotencyKey: k });
+    expect(other.id).not.toBe(first.id);
+  });
+
+  it("concurrent retries create one provider checkout and one owned attempt", async () => {
+    const user = await makeUser(); const k = key(); calls.length = 0;
+    const results = await Promise.all(Array.from({ length: 8 }, () => plans.createCheckout(user, { planCode: "PREMIUM", method: "CARD", idempotencyKey: k })));
+    expect(new Set(results.map(result => result.id)).size).toBe(1);
+    expect(calls).toHaveLength(1);
   });
 
   it("refuses a plan that is not a step up, an unknown plan, and a method the provider does not take", async () => {

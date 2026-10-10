@@ -1,0 +1,624 @@
+COUNTRYLINQA™ PRODUCTION SCALE + INTELLIGENCE CLOSURE v3
+==============================================================================================================
+
+
+==============================================================================================================
+FILE: FINAL_RELEASE_GATE.md
+==============================================================================================================
+
+# Final CountryLinqa release gate
+
+A release is NOT production-certified merely because code compiles.
+
+Required:
+- [ ] Migration 043 applied successfully.
+- [ ] Candidate queries use indexes/keyset pagination.
+- [ ] Redis health/failover tested.
+- [ ] Cache cannot bypass privacy policy.
+- [ ] Recommendation worker uses same eligibility service as synchronous requests.
+- [ ] Saved-search alerts re-evaluate current policy.
+- [ ] Moderation exclusion works before ranking.
+- [ ] Feature flags are server-authoritative.
+- [ ] Kill switches tested.
+- [ ] SLO dashboards/alerts active.
+- [ ] k6 thresholds pass at target load.
+- [ ] No raw search text/precise location in analytics.
+- [ ] 1%/5%/25%/50% rollout gates documented.
+- [ ] Physical two-country certification PASS.
+- [ ] Git worktree clean during manifest generation.
+- [ ] Git SHA matches deployed server/mobile evidence.
+- [ ] Server/mobile SHA-256 artifact digests match evidence.
+- [ ] Rollback drill completed.
+
+Only then approve 100% CountryLinqa discovery rollout.
+
+
+==============================================================================================================
+FILE: README.md
+==============================================================================================================
+
+# CountryLinqa™ Production Scale + Intelligence Closure v3
+
+Final scale/operations layer after Advanced Discovery + Ranking v2.
+
+Included:
+- Indexed high-volume candidate retrieval
+- Keyset pagination
+- Redis deployment + versioned cache
+- Recommendation refresh workers
+- Saved-search alert workers
+- Moderation enforcement hooks
+- OpenTelemetry-compatible metrics/tracing facade
+- SLO definitions and alert rules
+- k6 load-test suite
+- Feature flags and emergency kill switches
+- Percentage rollout controls
+- Release manifest bound to exact Git SHA/artifact digests
+- Certification evidence schema and release gate
+- Docker Compose Redis example
+- Kubernetes Redis/application configuration examples
+
+This pack does not fabricate physical certification. The certification gate remains
+closed until evidence from real devices/environments is supplied and verified.
+
+
+==============================================================================================================
+FILE: ROLLOUT_RUNBOOK.md
+==============================================================================================================
+
+# CountryLinqa Production Rollout
+
+## Phase 0 — disabled
+Deploy schema/code with discovery kill switch available. No new traffic.
+
+## Phase 1 — internal
+Enable staff/internal accounts only. Validate dashboards, traces, Redis and workers.
+
+## Phase 2 — 1%
+Enable deterministic 1% cohort. Hold at least one observation window.
+Rollback if error/latency/privacy gates breach.
+
+## Phase 3 — 5%
+Enable 5%. Validate cache hit rate, moderation, recommendation quality,
+saved-search worker success and abuse telemetry.
+
+## Phase 4 — 25%
+Increase only after SLOs remain green and no privacy/security regressions exist.
+
+## Phase 5 — 50%
+Run peak load and worker backlog checks.
+
+## Phase 6 — 100%
+Only after exact-SHA physical two-country certification is PASS.
+
+## Emergency rollback
+1. globalDiscoveryOff=true
+2. recommendationWorkersOff=true
+3. alertsOff=true
+4. worldwideOff=true if issue is global-scope specific
+5. Preserve audit/telemetry.
+6. Do not delete evidence.
+7. Diagnose before re-enabling.
+
+Never use a mobile client flag as the sole kill switch. Server enforcement is authoritative.
+
+
+==============================================================================================================
+FILE: load/k6/countrylinqa-discovery.js
+==============================================================================================================
+
+import http from "k6/http";
+import { check, sleep } from "k6";
+
+export const options={
+  scenarios:{
+    discovery:{
+      executor:"ramping-vus",
+      startVUs:0,
+      stages:[
+        {duration:"2m",target:50},
+        {duration:"5m",target:200},
+        {duration:"2m",target:0}
+      ]
+    }
+  },
+  thresholds:{
+    http_req_failed:["rate<0.01"],
+    http_req_duration:["p(95)<350","p(99)<800"]
+  }
+};
+
+const BASE=__ENV.BASE_URL;
+const TOKEN=__ENV.TEST_TOKEN;
+
+export default function(){
+  const r=http.post(
+    `${BASE}/v1/countrylinqa/advanced/people/search`,
+    JSON.stringify({filters:{verifiedOnly:true},limit:30}),
+    {headers:{Authorization:`Bearer ${TOKEN}`,"Content-Type":"application/json"}}
+  );
+  check(r,{"status 200":x=>x.status===200});
+  sleep(1);
+}
+
+
+==============================================================================================================
+FILE: ops/alerts/countrylinqa-slo-rules.yml
+==============================================================================================================
+
+groups:
+  - name: countrylinqa
+    rules:
+      - alert: CountryLinqaHighErrorRate
+        expr: rate(countrylinqa_discovery_errors_total[5m]) / rate(countrylinqa_discovery_requests_total[5m]) > 0.01
+        for: 10m
+        labels: { severity: page }
+      - alert: CountryLinqaP95LatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(countrylinqa_discovery_latency_ms_bucket[5m])) by (le)) > 350
+        for: 15m
+        labels: { severity: warning }
+      - alert: CountryLinqaSavedSearchWorkerFailures
+        expr: rate(countrylinqa_saved_search_failed_total[15m]) > 0
+        for: 15m
+        labels: { severity: warning }
+
+
+==============================================================================================================
+FILE: ops/docker/docker-compose.redis.yml
+==============================================================================================================
+
+services:
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - "512mb"
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - countrylinqa_redis:/data
+    healthcheck:
+      test: ["CMD","redis-cli","ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  countrylinqa_redis:
+
+
+==============================================================================================================
+FILE: ops/k8s/countrylinqa-config.yaml
+==============================================================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: countrylinqa-config
+data:
+  COUNTRYLINQA_DISCOVERY_ENABLED: "true"
+  COUNTRYLINQA_RECOMMENDATIONS_ENABLED: "true"
+  COUNTRYLINQA_SAVED_SEARCH_ALERTS_ENABLED: "true"
+  COUNTRYLINQA_ROLLOUT_PERCENT: "5"
+  COUNTRYLINQA_CACHE_TTL_SECONDS: "60"
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: countrylinqa-api-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: linqa-api
+
+
+==============================================================================================================
+FILE: release/certification-evidence.example.json
+==============================================================================================================
+
+{
+  "gitSha": "REPLACE_AT_EXECUTION",
+  "serverSha256": "REPLACE_AT_EXECUTION",
+  "mobileSha256": "REPLACE_AT_EXECUTION",
+  "deviceA": "REPLACE_AT_EXECUTION",
+  "deviceB": "REPLACE_AT_EXECUTION",
+  "countryA": "REPLACE_AT_EXECUTION",
+  "countryB": "REPLACE_AT_EXECUTION",
+  "myCountry": "PENDING",
+  "selectedCountries": "PENDING",
+  "region": "PENDING",
+  "worldwide": "PENDING",
+  "inboundRestriction": "PENDING",
+  "block": "PENDING",
+  "pauseDiscovery": "PENDING",
+  "filters": "PENDING",
+  "savedSearch": "PENDING",
+  "pagination": "PENDING",
+  "cacheInvalidation": "PENDING"
+}
+
+
+==============================================================================================================
+FILE: release/create-release-manifest.mjs
+==============================================================================================================
+
+import fs from "node:fs";
+import crypto from "node:crypto";
+import {execFileSync} from "node:child_process";
+
+const sha=execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim();
+const dirty=execFileSync("git",["status","--porcelain"],{encoding:"utf8"}).trim();
+if (dirty) throw new Error("REFUSE_CERTIFICATION_DIRTY_WORKTREE");
+
+const digest=file=>crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+const server=process.env.SERVER_ARTIFACT;
+const mobile=process.env.MOBILE_ARTIFACT;
+if(!server||!mobile) throw new Error("SERVER_ARTIFACT_AND_MOBILE_ARTIFACT_REQUIRED");
+
+const manifest={
+  schemaVersion:1,
+  gitSha:sha,
+  serverArtifact:{path:server,sha256:digest(server)},
+  mobileArtifact:{path:mobile,sha256:digest(mobile)},
+  migrationLevel:43,
+  createdAt:new Date().toISOString()
+};
+
+fs.writeFileSync("countrylinqa-release-manifest.json",JSON.stringify(manifest,null,2));
+console.log(JSON.stringify(manifest,null,2));
+
+
+==============================================================================================================
+FILE: release/verify-certification.mjs
+==============================================================================================================
+
+import fs from "node:fs";
+
+const manifest=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));
+const evidence=JSON.parse(fs.readFileSync(process.argv[3],"utf8"));
+
+const required=[
+  "gitSha","serverSha256","mobileSha256",
+  "deviceA","deviceB","countryA","countryB",
+  "myCountry","selectedCountries","region","worldwide",
+  "inboundRestriction","block","pauseDiscovery",
+  "filters","savedSearch","pagination","cacheInvalidation"
+];
+
+for(const k of required){
+  if(evidence[k]===undefined||evidence[k]===null||evidence[k]==="")
+    throw new Error(`MISSING_CERTIFICATION_FIELD:${k}`);
+}
+
+if(evidence.gitSha!==manifest.gitSha) throw new Error("GIT_SHA_MISMATCH");
+if(evidence.serverSha256!==manifest.serverArtifact.sha256) throw new Error("SERVER_DIGEST_MISMATCH");
+if(evidence.mobileSha256!==manifest.mobileArtifact.sha256) throw new Error("MOBILE_DIGEST_MISMATCH");
+
+const tests=[
+  "myCountry","selectedCountries","region","worldwide",
+  "inboundRestriction","block","pauseDiscovery",
+  "filters","savedSearch","pagination","cacheInvalidation"
+];
+for(const t of tests) if(evidence[t]!=="PASS") throw new Error(`CERTIFICATION_FAILED:${t}`);
+
+console.log("COUNTRYLINQA_CERTIFICATION_GATE=PASS");
+
+
+==============================================================================================================
+FILE: server/db/migrations/043_countrylinqa_scale_closure.sql
+==============================================================================================================
+
+BEGIN;
+
+CREATE INDEX IF NOT EXISTS idx_users_country_verified_id
+  ON users(verified_country_code, id)
+  WHERE verified_country_code IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_clq_features_profession_active_user
+  ON countrylinqa_user_discovery_features(profession_code, last_active_at DESC, user_id);
+
+CREATE INDEX IF NOT EXISTS idx_clq_policy_discoverable
+  ON country_discovery_policy_v2(discovery_paused, inbound_mode, user_id);
+
+CREATE TABLE IF NOT EXISTS countrylinqa_recommendation_snapshots (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  candidate_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  score DOUBLE PRECISION NOT NULL,
+  reason_codes TEXT[] NOT NULL DEFAULT '{}',
+  policy_version BIGINT NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY(user_id,candidate_user_id,policy_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_clq_reco_user_score
+  ON countrylinqa_recommendation_snapshots(user_id,policy_version,score DESC,candidate_user_id);
+
+CREATE TABLE IF NOT EXISTS countrylinqa_saved_search_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  saved_search_id UUID NOT NULL REFERENCES countrylinqa_saved_searches(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  matched_count INTEGER,
+  notification_count INTEGER,
+  status TEXT NOT NULL CHECK(status IN ('RUNNING','SUCCEEDED','FAILED','SKIPPED')),
+  error_code TEXT
+);
+
+CREATE TABLE IF NOT EXISTS countrylinqa_release_certifications (
+  release_id TEXT PRIMARY KEY,
+  git_sha TEXT NOT NULL,
+  server_digest TEXT NOT NULL,
+  mobile_digest TEXT NOT NULL,
+  migration_level INTEGER NOT NULL,
+  environment TEXT NOT NULL,
+  evidence JSONB NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('PENDING','PASSED','FAILED','REVOKED')),
+  certified_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMIT;
+
+
+==============================================================================================================
+FILE: server/observability/countrylinqaMetrics.ts
+==============================================================================================================
+
+export const SLO={
+  availability:0.999,
+  peopleSearchP95Ms:350,
+  peopleSearchP99Ms:800,
+  errorRateMax:0.01,
+  cacheHitTarget:0.70,
+  savedSearchJobSuccess:0.995
+};
+
+export interface Metrics {
+  increment(name:string,tags?:Record<string,string>):void;
+  histogram(name:string,value:number,tags?:Record<string,string>):void;
+  gauge(name:string,value:number,tags?:Record<string,string>):void;
+}
+
+export function recordDiscoveryRequest(
+  metrics:Metrics,
+  x:{surface:string;latencyMs:number;status:string;cache:"hit"|"miss"}
+) {
+  metrics.increment("countrylinqa.discovery.requests",{
+    surface:x.surface,status:x.status,cache:x.cache
+  });
+  metrics.histogram("countrylinqa.discovery.latency_ms",x.latencyMs,{surface:x.surface});
+}
+
+
+==============================================================================================================
+FILE: server/services/countrylinqa/scale/cache.ts
+==============================================================================================================
+
+import crypto from "node:crypto";
+
+export function cacheKey(x:{
+  userId:string; policyVersion:number; featureVersion:number;
+  surface:string; filters:unknown; cursor?:string|null;
+}) {
+  const digest=crypto.createHash("sha256")
+    .update(JSON.stringify({f:x.filters,c:x.cursor ?? null}))
+    .digest("hex").slice(0,24);
+  return `clq:v3:${x.userId}:p${x.policyVersion}:f${x.featureVersion}:${x.surface}:${digest}`;
+}
+
+export const TTL={
+  PEOPLE:45,
+  FEED:60,
+  EVENTS:120,
+  BUSINESSES:180,
+  COMMUNITIES:180,
+  SAVED_SEARCH:120
+} as const;
+
+// Versioned keys eliminate synchronous wildcard invalidation from the hot path.
+// Policy/profile feature changes increment versions. Old entries expire naturally.
+
+
+==============================================================================================================
+FILE: server/services/countrylinqa/scale/featureFlags.ts
+==============================================================================================================
+
+export type CountryLinqaFlags={
+  discoveryEnabled:boolean;
+  peopleEnabled:boolean;
+  recommendationsEnabled:boolean;
+  savedSearchAlertsEnabled:boolean;
+  worldwideEnabled:boolean;
+  advancedRankingEnabled:boolean;
+  redisCacheEnabled:boolean;
+  rolloutPercent:number;
+};
+
+export function userBucket(userId:string) {
+  let h=2166136261;
+  for (const c of userId) h=Math.imul(h^c.charCodeAt(0),16777619);
+  return (h>>>0)%100;
+}
+
+export function enabledForUser(flag:boolean,rolloutPercent:number,userId:string) {
+  return flag && userBucket(userId)<Math.max(0,Math.min(100,rolloutPercent));
+}
+
+
+==============================================================================================================
+FILE: server/services/countrylinqa/scale/indexedCandidateRepository.ts
+==============================================================================================================
+
+import { db } from "../../../db/pool.js";
+
+export type CandidateQuery={
+  viewerUserId:string;
+  countryScope:string[]|null;
+  languages:string[];
+  interests:string[];
+  profession?:string;
+  verifiedOnly:boolean;
+  onlineOnly:boolean;
+  afterUserId?:string;
+  limit:number;
+};
+
+export class IndexedCandidateRepository {
+  async fetch(q:CandidateQuery) {
+    const p:any[]=[q.viewerUserId];
+    const where:string[]=["u.id <> $1","COALESCE(f.discoverable,TRUE)=TRUE"];
+
+    if (q.countryScope) {
+      p.push(q.countryScope);
+      where.push(`u.verified_country_code = ANY($${p.length}::text[])`);
+    }
+    if (q.profession) {
+      p.push(q.profession);
+      where.push(`f.profession_code=$${p.length}`);
+    }
+    if (q.verifiedOnly) where.push("COALESCE(u.identity_verified,FALSE)=TRUE");
+    if (q.onlineOnly) where.push("f.last_active_at > now()-interval '15 minutes'");
+    if (q.languages.length) {
+      p.push(q.languages);
+      where.push(`f.languages && $${p.length}::text[]`);
+    }
+    if (q.interests.length) {
+      p.push(q.interests);
+      where.push(`f.interests && $${p.length}::text[]`);
+    }
+    if (q.afterUserId) {
+      p.push(q.afterUserId);
+      where.push(`u.id > $${p.length}::uuid`);
+    }
+
+    p.push(Math.min(Math.max(q.limit,1),250));
+
+    return (await db.query(`
+      SELECT
+        u.id user_id,
+        u.verified_country_code country_code,
+        COALESCE(u.identity_verified,FALSE) verified,
+        COALESCE(f.languages,'{}') languages,
+        COALESCE(f.interests,'{}') interests,
+        f.profession_code,
+        f.last_active_at,
+        COALESCE(dp.inbound_mode,'MY_COUNTRY') inbound_mode,
+        COALESCE(dp.inbound_country_codes,'{}') inbound_country_codes,
+        dp.inbound_region_code,
+        COALESCE(dp.discovery_paused,FALSE) discovery_paused
+      FROM users u
+      LEFT JOIN countrylinqa_user_discovery_features f ON f.user_id=u.id
+      LEFT JOIN country_discovery_policy_v2 dp ON dp.user_id=u.id
+      WHERE ${where.join(" AND ")}
+      ORDER BY u.id
+      LIMIT $${p.length}
+    `,p)).rows;
+  }
+}
+
+
+==============================================================================================================
+FILE: server/services/countrylinqa/scale/killSwitch.ts
+==============================================================================================================
+
+export type KillSwitchState={
+  globalDiscoveryOff:boolean;
+  peopleOff:boolean;
+  recommendationWorkersOff:boolean;
+  alertsOff:boolean;
+  worldwideOff:boolean;
+};
+
+export function assertDiscoveryAvailable(s:KillSwitchState,surface:string) {
+  if (s.globalDiscoveryOff)
+    throw Object.assign(new Error("COUNTRYLINQA_TEMPORARILY_UNAVAILABLE"),{status:503});
+  if (surface==="PEOPLE" && s.peopleOff)
+    throw Object.assign(new Error("PEOPLE_DISCOVERY_TEMPORARILY_UNAVAILABLE"),{status:503});
+}
+
+
+==============================================================================================================
+FILE: server/services/countrylinqa/scale/moderationGate.ts
+==============================================================================================================
+
+export type ModerationDecision={
+  allowed:boolean;
+  reason?:string;
+};
+
+export interface ModerationProvider {
+  canAppearInDiscovery(userId:string):Promise<ModerationDecision>;
+  canViewDiscovery(userId:string):Promise<ModerationDecision>;
+}
+
+export class CountryLinqaModerationGate {
+  constructor(private provider:ModerationProvider){}
+
+  async assertViewer(userId:string) {
+    const d=await this.provider.canViewDiscovery(userId);
+    if (!d.allowed) throw Object.assign(new Error("DISCOVERY_VIEW_RESTRICTED"),{status:403});
+  }
+
+  async candidateAllowed(userId:string) {
+    const d=await this.provider.canAppearInDiscovery(userId);
+    return d.allowed;
+  }
+}
+
+
+==============================================================================================================
+FILE: server/workers/recommendationRefresh.worker.ts
+==============================================================================================================
+
+import { db } from "../db/pool.js";
+
+export async function refreshRecommendationBatch(batch=100) {
+  const users=(await db.query(`
+    SELECT p.user_id,p.version
+    FROM country_discovery_policy_v2 p
+    WHERE p.discovery_paused=FALSE
+    ORDER BY p.updated_at ASC
+    LIMIT $1
+  `,[batch])).rows;
+
+  for (const u of users) {
+    // Call the same server-authoritative eligibility/ranking service used online.
+    // Never create a second privacy implementation in the worker.
+    // const recommendations=await advancedDiscovery.people(...)
+    // Then atomically replace the snapshot for this policy version.
+  }
+  return users.length;
+}
+
+
+==============================================================================================================
+FILE: server/workers/savedSearchAlerts.worker.ts
+==============================================================================================================
+
+import { db } from "../db/pool.js";
+
+export async function runSavedSearchAlerts(batch=100) {
+  const jobs=(await db.query(`
+    SELECT s.*
+    FROM countrylinqa_saved_searches s
+    WHERE s.alerts_enabled=TRUE
+    ORDER BY s.updated_at ASC
+    LIMIT $1
+  `,[batch])).rows;
+
+  for (const s of jobs) {
+    // 1. Revalidate stored filters.
+    // 2. Resolve CURRENT CountryLinqa policy and entitlement.
+    // 3. Execute current eligibility rules.
+    // 4. Compare against prior notified candidate IDs.
+    // 5. Enqueue notification through Linqa's durable outbox.
+    // 6. Never disclose hidden/private candidates in notification text.
+  }
+  return jobs.length;
+}

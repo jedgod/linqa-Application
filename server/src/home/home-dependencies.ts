@@ -382,6 +382,7 @@ export function createHomeDependencies(db: Database, repository: HomeRepository)
                 updated_at AS "updatedAt"
          FROM vault_items
          WHERE user_id=$1 AND deleted_at IS NULL
+           AND item_type NOT IN ('IDENTITY','RECOVERY')
          ORDER BY updated_at DESC
          LIMIT $2`,
         [userId, homeProductionConfig.feed.maxVaultItems]

@@ -1,0 +1,28 @@
+name: Dependency security
+on:
+  pull_request:
+    paths: ["server/package*.json", "clients/mobile/package*.json", ".github/workflows/dependency-security.yml"]
+  push:
+    branches: [main]
+    paths: ["server/package*.json", "clients/mobile/package*.json", ".github/workflows/dependency-security.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: [server, clients/mobile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: ${{ matrix.directory }}
+      - run: npm audit --audit-level=high
+        working-directory: ${{ matrix.directory }}

@@ -1,0 +1,1 @@
+{"name":"linqa-secure-send-v2-integration","private":true,"type":"module","scripts":{"test":"node --test tests/*.test.mjs"},"engines":{"node":">=24"}}

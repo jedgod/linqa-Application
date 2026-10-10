@@ -20,14 +20,24 @@ allprojects {
   }
 }
 
+// Keep native staging paths short on Windows. This survives npm reinstalls,
+// unlike edits inside dependency build.gradle files. The staging root sits outside the repo because the autolinked
+// codegen object paths embed the full source path and overflow MAX_PATH even from <repo>/.runtime.
+if (System.getProperty('os.name').toLowerCase().contains('windows')) {
+  subprojects { nativeProject ->
+    def shortName = ['react-native-reanimated': 'rea', 'react-native-worklets': 'work', 'app': 'app'][nativeProject.name]
+    if (shortName != null) {
+      ['com.android.library', 'com.android.application'].each { pluginId ->
+        nativeProject.plugins.withId(pluginId) {
+          nativeProject.extensions.getByName('androidComponents').finalizeDsl { androidDsl ->
+            androidDsl.externalNativeBuild.cmake.buildStagingDirectory = new File(System.getenv('LINQA_CXX_ROOT') ?: 'C:/lq/cxx', shortName).canonicalFile
+          }
+        }
+      }
+    }
+  }
+}
+
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
 
-// Windows + OneDrive fix, take 2: a blanket rootProject/subprojects buildDir
-// redirect (tried first) broke `generateAutolinkingNewArchitectureFiles`,
-// which has an internal hardcoded expectation about the default build
-// path. The correct, narrower fix lives in the two native modules that
-// actually hit the OneDrive/Ninja race — see `buildStagingDirectory` in
-// node_modules/react-native-reanimated/android/build.gradle.kts and
-// node_modules/react-native-worklets/android/build.gradle.kts, which use
-// the CMake option Android Gradle Plugin explicitly supports for this.

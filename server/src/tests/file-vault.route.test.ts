@@ -52,6 +52,49 @@ describe("file vault routes", () => {
     expect(app.hasRoute({ method: "POST", url: "/v1/vault/items" })).toBe(true);
     expect(app.hasRoute({ method: "GET", url: "/v1/vault/items" })).toBe(true);
     expect(app.hasRoute({ method: "GET", url: "/v1/vault/items/:itemId/download" })).toBe(true);
+    expect(app.hasRoute({ method: "GET", url: "/v1/vault/plans" })).toBe(true);
+    expect(app.hasRoute({ method: "GET", url: "/v1/vault/folders" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/folders" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/imports/social" })).toBe(true);
+    expect(app.hasRoute({ method: "GET", url: "/v1/vault/imports/:id/status" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/imports/:id/confirm" })).toBe(true);
+    expect(app.hasRoute({ method: "GET", url: "/v1/vault/files" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/imports/:kind" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/imports/:id/handoff" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/imports/:id/ciphertext-upload" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/imports/:id/finalize-ciphertext" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/share/linqa-user" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/share/vault-to-vault" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/share/secure-links" })).toBe(true);
+    expect(app.hasRoute({ method: "DELETE", url: "/v1/vault/share/secure-links/:id" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/share/email" })).toBe(true);
+    expect(app.hasRoute({ method: "GET", url: "/v1/vault/share/links/:token" })).toBe(true);
+    expect(app.hasRoute({ method: "GET", url: "/v1/vault/share/transfers/incoming" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/share/transfers/:id/respond" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/exports/social/authorize" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/exports/social/:grantId/execute" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/private/unlock" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/private/lock" })).toBe(true);
+    expect(app.hasRoute({ method: "GET", url: "/v1/vault/security-center" })).toBe(true);
+    expect(app.hasRoute({ method: "PUT", url: "/v1/vault/security-center/login-alerts" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/billing/checkout" })).toBe(true);
+    expect(app.hasRoute({ method: "POST", url: "/v1/vault/billing/webhook" })).toBe(true);
+    expect(app.hasRoute({ method: "GET", url: "/internal/ready/vault" })).toBe(true);
+  });
+
+  it("vault gap routes reject callers with no token", async () => {
+    app = await buildApp(config, database);
+    for (const [method, url] of [["GET", "/v1/vault/files"], ["POST", "/v1/vault/share/secure-links"], ["GET", "/v1/vault/security-center"], ["POST", "/v1/vault/billing/checkout"], ["POST", "/v1/vault/imports/message"]] as const) {
+      const response = await app.inject({ method, url, ...(method === "POST" ? { payload: {} } : {}) });
+      expect(response.statusCode, `${method} ${url}`).toBe(401);
+    }
+  });
+
+  it("the billing webhook takes the raw body and fails closed with no billing provider", async () => {
+    app = await buildApp(config, database);
+    const response = await app.inject({ method: "POST", url: "/v1/vault/billing/webhook", headers: { "content-type": "application/json", "x-provider-signature": "x" }, payload: JSON.stringify({ id: "evt_1" }) });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "BILLING_NOT_CONFIGURED" });
   });
 
   it("fail closed on upload when object storage is not configured", async () => {

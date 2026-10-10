@@ -1,3 +1,5 @@
+import { limitedOwnedWrite } from "./limited-write.js";
+import { publicCountryError } from "./public-error.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../../config.js";
@@ -60,8 +62,7 @@ function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) =
       if (error instanceof z.ZodError) {
         return reply.code(422).send({ error: "validation_error", details: error.flatten() });
       }
-      const status = typeof error?.status === "number" ? error.status : 400;
-      const code = typeof error?.code === "string" ? error.code : "invalid_request";
+      const { status, code } = publicCountryError(error);
       request.log.warn({ err: error }, "countrylinqa request rejected");
       return reply.code(status).send({ error: code });
     }
@@ -105,15 +106,15 @@ export async function registerCountryLinqaRoutes(
   app.post("/v1/countrylinqa/discover/users/:id/connect", withErrors(async (request, reply) => {
     const p = await auth(request); requireScope(p, "countrylinqa:write"); connectionLimit(p.userId, request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const result = await db.query(`WITH ${viewerScopeCte(1)}
+    const result = await limitedOwnedWrite(db, p.userId, "contact_requests", `WITH ${viewerScopeCte(1)}
       INSERT INTO contact_requests(sender_user_id,recipient_user_id)
       SELECT $1,author.id FROM users author CROSS JOIN viewer_scope vs
       WHERE author.id=$2 AND author.id<>$1 AND ${authorScopePredicate("author")} AND ${safetyPredicate("author", 1)}
       ON CONFLICT(sender_user_id,recipient_user_id) DO UPDATE SET
         status=CASE WHEN contact_requests.status IN ('CANCELLED','DECLINED') OR (contact_requests.status='PENDING' AND contact_requests.expires_at<=now()) THEN 'PENDING' ELSE contact_requests.status END,
         expires_at=CASE WHEN contact_requests.status IN ('CANCELLED','DECLINED') OR contact_requests.expires_at<=now() THEN now()+interval '30 days' ELSE contact_requests.expires_at END,
-        updated_at=now()
-      WHERE contact_requests.status<>'BLOCKED'
+        updated_at=CASE WHEN contact_requests.status='PENDING' AND contact_requests.expires_at>now() THEN contact_requests.updated_at ELSE now() END
+      WHERE contact_requests.status<>'BLOCKED' AND (contact_requests.status NOT IN ('DECLINED','CANCELLED') OR contact_requests.updated_at < now()-interval '30 days')
       RETURNING id,status`, [p.userId,id]);
     if (result.rowCount !== 1) return reply.code(404).send({ error: "PERSON_UNAVAILABLE" });
     return result.rows[0];

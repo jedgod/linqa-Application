@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Modal, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { CHAT_FILTERS, ChatInboxService, deduplicateConversations, type ChatFilter, type ChatInboxPayload, type ChatSummary } from "../../services/chat-inbox.service";
+import { callController } from "../../services/call-controller";
 import { CallsService } from "../../services/calls.service";
 import { ChatRealtimeClient, TypingRegistry } from "../../services/chat-realtime.client";
 import { MobileHubService, type HubContact } from "../../services/mobile-hub.service";
@@ -18,6 +19,11 @@ import { ACCOUNT_SWITCH_LANDING_ROUTE } from "../../account/landing";
 const API = getApiBaseUrl();
 
 export default function ChatsScreen() {
+  const { active } = useAccounts();
+  return <ChatsInbox key={active?.userId ?? "signed-out"} />;
+}
+
+function ChatsInbox() {
   const router = useRouter();
   const { accounts, active, activate } = useAccounts();
   const inbox = useMemo(
@@ -42,8 +48,18 @@ export default function ChatsScreen() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [contacts, setContacts] = useState<HubContact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [composeError, setComposeError] = useState<string | null>(null);
+  const [phone, setPhone] = useState("");
+  const [foundContact, setFoundContact] = useState<HubContact | null>(null);
+  const [findingPhone, setFindingPhone] = useState(false);
+  const [lookupNotice, setLookupNotice] = useState<string | null>(null);
+  const lookupVersion = useRef(0);
+  const [startingContact, setStartingContact] = useState<string | null>(null);
+  const creatingConversation = useRef(false);
   const [typingIn, setTypingIn] = useState<Set<string>>(new Set());
   const mounted = useRef(true);
+  const loadVersion = useRef(0);
 
   const realtime = useMemo(
     () => new ChatRealtimeClient(API, () => accessTokenProvider.getAccessToken()),
@@ -52,17 +68,18 @@ export default function ChatsScreen() {
 
   const load = useCallback(
     async (signal?: AbortSignal, quiet = false) => {
+      const request = ++loadVersion.current;
       if (!quiet) setError(null);
       try {
         const result = await inbox.inbox(filter, signal);
-        if (!mounted.current || signal?.aborted) return;
+        if (!mounted.current || signal?.aborted || request !== loadVersion.current) return;
         setData({ ...result, conversations: deduplicateConversations(result.conversations) });
         setError(null);
       } catch (cause) {
-        if (signal?.aborted || !mounted.current) return;
+        if (signal?.aborted || !mounted.current || request !== loadVersion.current) return;
         setError(cause instanceof Error ? cause.message : "Unable to load chats.");
       } finally {
-        if (mounted.current && !signal?.aborted) {
+        if (mounted.current && !signal?.aborted && request === loadVersion.current) {
           setLoading(false);
           setRefreshing(false);
         }
@@ -71,7 +88,7 @@ export default function ChatsScreen() {
     [inbox, filter]
   );
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     mounted.current = true;
     // Changing filter aborts the previous request, so a slow "All" response
     // cannot land after the user has already switched to "Unread".
@@ -80,9 +97,10 @@ export default function ChatsScreen() {
     void load(controller.signal);
     return () => {
       mounted.current = false;
+      loadVersion.current++;
       controller.abort();
     };
-  }, [load]);
+  }, [load]));
 
   /**
    * Live inbox.
@@ -99,7 +117,7 @@ export default function ChatsScreen() {
 
     const unsubscribe = realtime.onEvent((event) => {
       if (!mounted.current) return;
-      if (event.type === "message.created" || event.type === "conversation.read") {
+      if (event.type === "message.created" || event.type === "conversation.read" || event.type === "conversation.created") {
         void load(undefined, true);
         return;
       }
@@ -121,59 +139,70 @@ export default function ChatsScreen() {
   // Watch exactly the conversations currently on screen.
   useEffect(() => {
     const ids = (data?.conversations ?? []).map((row) => row.conversationId);
-    if (ids.length) realtime.setConversations(ids);
+    realtime.setConversations(ids);
   }, [realtime, data?.conversations]);
 
   const counts = data?.counts ?? { all: 0, unread: 0, groups: 0, pinned: 0 };
   const conversations = data?.conversations ?? [];
   const scheduledCall = data?.scheduledCall ?? null;
 
-  async function openConversation(item: ChatSummary) {
-    // Revalidate membership before navigating. A row can be stale after a
-    // block/removal event; navigating after this request fails would reopen a
-    // conversation the server has already withdrawn.
+  function openConversation(item: ChatSummary) {
+    // The thread checks access when loading and marks messages read only after encryption is available.
+    router.push({ pathname: "/modules/conversation", params: { conversationId: item.conversationId, name: item.title, ...(item.peerUserId ? { peerId: item.peerUserId } : {}) } });
+  }
+
+  function closeCompose() {
+    lookupVersion.current++;
+    setFindingPhone(false);
+    setComposeOpen(false);
+  }
+
+  async function findPhone() {
+    if (findingPhone || startingContact) return;
+    const ticket = ++lookupVersion.current;
+    setFindingPhone(true); setFoundContact(null); setLookupNotice(null);
     try {
-      await inbox.markRead(item.conversationId);
-      if (item.unreadCount > 0) {
-        setData((current) =>
-          current
-            ? {
-                ...current,
-                unreadTotal: Math.max(0, current.unreadTotal - item.unreadCount),
-                counts: { ...current.counts, unread: Math.max(0, current.counts.unread - 1) },
-                conversations: current.conversations.map((row) =>
-                  row.conversationId === item.conversationId ? { ...row, unreadCount: 0 } : row
-                )
-              }
-            : current
-        );
-      }
+      const contact = await hub.findChatContact(phone);
+      if (!mounted.current || ticket !== lookupVersion.current) return;
+      setFoundContact(contact);
+      if (!contact) setLookupNotice("No available Linqa contact found. Check the full number and country code.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "That conversation is no longer available.");
-      void load(undefined, true);
-      return;
-    }
-    router.push({ pathname: "/modules/conversation", params: { conversationId: item.conversationId } });
+      if (mounted.current && ticket === lookupVersion.current) setLookupNotice(cause instanceof Error ? cause.message : "Unable to search. Try again.");
+    } finally { if (mounted.current && ticket === lookupVersion.current) setFindingPhone(false); }
   }
 
   async function openCompose() {
+    lookupVersion.current++; setPhone(""); setFoundContact(null); setLookupNotice(null); setFindingPhone(false);
     setHubOpen(false);
     setComposeOpen(true);
+    setContacts([]);
+    setComposeError(null);
+    setContactsLoading(true);
     try {
       const snapshot = await hub.loadHub();
       if (mounted.current) setContacts(snapshot.contacts);
-    } catch {
-      if (mounted.current) setContacts([]);
+    } catch (cause) {
+      if (mounted.current) setComposeError(cause instanceof Error ? cause.message : "Unable to load contacts.");
+    } finally {
+      if (mounted.current) setContactsLoading(false);
     }
   }
 
   async function startConversation(contact: HubContact) {
+    if (creatingConversation.current) return;
+    creatingConversation.current = true;
+    setStartingContact(contact.id);
+    setComposeError(null);
     try {
-      await hub.createConversation(contact.id);
+      const conversation = await hub.createConversation(contact.id);
+      if (!mounted.current) return;
       setComposeOpen(false);
-      void load();
+      router.push({ pathname: "/modules/conversation", params: { conversationId: conversation.id, name: contact.displayName, peerId: contact.id } });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to start that conversation.");
+      if (mounted.current) setComposeError(cause instanceof Error ? cause.message : "Unable to start that conversation.");
+    } finally {
+      creatingConversation.current = false;
+      if (mounted.current) setStartingContact(null);
     }
   }
 
@@ -187,14 +216,9 @@ export default function ChatsScreen() {
     }
   }
 
-  async function startPeerCall(peerUserId: string, callType: "AUDIO" | "VIDEO") {
-    try {
-      await calls.placeCall({ recipientUserId: peerUserId, callType });
-      setError(null);
-      go("/(tabs)/calls");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to start that call.");
-    }
+  function startPeerCall(peerUserId: string, callType: "AUDIO" | "VIDEO", peerName: string) {
+    setError(null);
+    void callController.start({ peerUserId, peerName, callType }).then((problem) => { if (problem) setError(problem); });
   }
 
   function go(route: string) {
@@ -331,7 +355,7 @@ export default function ChatsScreen() {
                 : item
             }
             onOpen={() => void openConversation(item)}
-            onCall={(peerUserId, callType) => void startPeerCall(peerUserId, callType)}
+            onCall={(peerUserId, callType, peerName) => startPeerCall(peerUserId, callType, peerName)}
           />
         )}
         ListEmptyComponent={
@@ -354,16 +378,26 @@ export default function ChatsScreen() {
         visible={composeOpen}
         transparent
         animationType="slide"
-        onRequestClose={() => setComposeOpen(false)}
+        onRequestClose={closeCompose}
       >
         <View style={s.modalBackdrop}>
           <View style={s.modalCard}>
             <Text style={s.modalTitle}>New chat</Text>
-            <ScrollView style={s.modalScroll}>
+            <ScrollView style={s.modalScroll} keyboardShouldPersistTaps="handled">
+              <Text style={s.modalHint}>Find someone by their full phone number</Text>
+              <TextInput accessibilityLabel="Find contact by phone number" value={phone} maxLength={40} keyboardType="phone-pad" autoCorrect={false} placeholder="+1 202 555 0123" placeholderTextColor={C.muted} editable={startingContact === null} onChangeText={value => { lookupVersion.current++; setPhone(value); setFoundContact(null); setLookupNotice(null); setFindingPhone(false); }} style={{ color: C.white, borderColor: C.border, borderWidth: 1, borderRadius: 12, padding: 12, minHeight: 48 }} />
+              <Pressable accessibilityRole="button" accessibilityLabel="Find Linqa contact" disabled={!phone.trim() || findingPhone || startingContact !== null} onPress={() => void findPhone()} style={{ padding: 12, minHeight: 44, alignItems: "center", opacity: !phone.trim() || findingPhone ? 0.5 : 1 }}><Text style={{ color: C.teal }}>{findingPhone ? "Searching…" : "Find contact"}</Text></Pressable>
+              {lookupNotice ? <Text accessibilityRole="alert" style={s.modalHint}>{lookupNotice}</Text> : null}
+              {foundContact ? <Pressable accessibilityRole="button" accessibilityLabel={`Start chat with ${foundContact.displayName}`} disabled={startingContact !== null} onPress={() => void startConversation(foundContact)} style={s.contactRow}><Avatar seed={foundContact.id} initials={foundContact.initials} size={38} /><View style={{ flex: 1 }}><Text style={s.contactName}>{foundContact.displayName}</Text><Text style={s.modalHint}>{phone}</Text></View><Text style={{ color: C.teal }}>{startingContact === foundContact.id ? "Opening…" : "Chat"}</Text></Pressable> : null}
+              <Text style={s.modalHint}>Recent contacts</Text>
               {contacts.map((contact) => (
                 <Pressable
                   key={contact.id}
                   style={s.contactRow}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Start chat with ${contact.displayName}`}
+                  accessibilityState={{ disabled: startingContact !== null }}
+                  disabled={startingContact !== null}
                   onPress={() => void startConversation(contact)}
                 >
                   <Avatar
@@ -375,11 +409,14 @@ export default function ChatsScreen() {
                   <Ionicons name="chevron-forward" size={16} color={C.muted} />
                 </Pressable>
               ))}
-              {contacts.length === 0 ? (
+              {contactsLoading ? <ActivityIndicator accessibilityLabel="Loading contacts" color={C.teal} /> : null}
+              {composeError ? <Text accessibilityRole="alert" style={s.modalHint}>{composeError}</Text> : null}
+              {composeError && contacts.length === 0 ? <Pressable accessibilityRole="button" onPress={() => void openCompose()}><Text style={s.modalHint}>Try again</Text></Pressable> : null}
+              {!contactsLoading && !composeError && contacts.length === 0 ? (
                 <Text style={s.modalHint}>No contacts are available to message yet.</Text>
               ) : null}
             </ScrollView>
-            <Pressable onPress={() => setComposeOpen(false)} style={s.modalCancel}>
+            <Pressable onPress={closeCompose} style={s.modalCancel}>
               <Text style={s.modalCancelText}>Cancel</Text>
             </Pressable>
           </View>

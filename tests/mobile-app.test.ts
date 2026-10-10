@@ -161,3 +161,28 @@ test("switching accounts never routes by the account's display label", async () 
     assert.match(fs.readFileSync(path.join(mobile, name), "utf8"), /ACCOUNT_SWITCH_LANDING_ROUTE/, `${name} should use the shared landing route`);
   }
 });
+
+// --- Native-module safety ------------------------------------------------------
+
+test("screens use the native-free LinearGradient, not expo-linear-gradient directly", () => {
+  // The installed development build has no native ExpoLinearGradient view, so importing it in a
+  // screen produces a red "Can't find ViewManager" error. Use components/LinearGradient instead.
+  const offenders = [...routeFiles, ...walk(path.join(mobile, "components"))]
+    .filter((file) => !file.endsWith(`${path.sep}LinearGradient.tsx`))
+    .filter((file) => /\.tsx?$/.test(file) && /from\s+["']expo-linear-gradient["']/.test(fs.readFileSync(file, "utf8")));
+  assert.deepEqual(offenders.map((f) => path.relative(mobile, f)), []);
+});
+
+test("blendColors averages hex colors and falls back safely", async () => {
+  const { blendColors } = await import("../clients/mobile/components/blendColors.ts");
+  assert.equal(blendColors(["#000000", "#FFFFFF"]), "#808080");
+  assert.equal(blendColors(["#102030"]), "#102030");
+  assert.equal(blendColors(["rgba(0,0,0,0.5)", "#FFFFFF"]), "rgba(0,0,0,0.5)");
+  assert.equal(blendColors([]), "transparent");
+});
+
+test("LinqaSend screens and components do not draw with react-native-svg (the installed build cannot render it)", () => {
+  const files = [...routeFiles.filter((f) => f.includes(`${path.sep}linqasend${path.sep}`)), ...walk(path.join(mobile, "components", "linqasend"))];
+  const offenders = files.filter((f) => /\.tsx?$/.test(f) && /from\s+["']react-native-svg["']/.test(fs.readFileSync(f, "utf8")));
+  assert.deepEqual(offenders.map((f) => path.relative(mobile, f)), []);
+});

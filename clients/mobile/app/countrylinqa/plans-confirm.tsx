@@ -1,13 +1,14 @@
+import { randomUUID } from "expo-crypto";
 import { useCallback, useRef, useState } from "react";
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCountryClient } from "../../components/CountryLinqaUI";
 import { Empty, Spinner, WorldHeader, WorldScreen, world } from "../../components/countrylinqa/WorldUI";
-import { METHODS, formatPrice, safeReturn, type PaymentMethod, type PlanCard, type PlansResponse } from "../../services/countrylinqa-plans";
+import { METHODS, formatPrice, isSafeCheckoutUrl, safeReturn, type PaymentMethod, type PlanCard, type PlansResponse } from "../../services/countrylinqa-plans";
 import { fonts } from "../../theme/tokens";
 
-const newKey = () => `clq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+const newKey = () => `clq-${randomUUID()}`;
 
 /** 6.3 Confirm Payment. The price shown is the server's; Pay starts the payment and goes to the result. */
 export default function CountryLinqaConfirmPayment() {
@@ -38,8 +39,8 @@ export default function CountryLinqaConfirmPayment() {
     setBusy(true); setError(null);
     try {
       const checkout = await client.createCheckout(card.code as "PREMIUM" | "ELITE", method as PaymentMethod, key.current);
-      if (checkout.state === "CREATED" && checkout.checkoutUrl) {
-        try { await Linking.openURL(checkout.checkoutUrl); } catch { /* the result screen offers to open it again */ }
+      if (checkout.state === "CREATED" && isSafeCheckoutUrl(checkout.checkoutUrl)) {
+        try { await Linking.openURL(checkout.checkoutUrl!); } catch { /* the result screen offers to open it again */ }
       }
       router.replace({ pathname: "/countrylinqa/plans-result", params: { id: checkout.id, plan: card.code, method: method ?? "", from: origin } });
     } catch (cause) {

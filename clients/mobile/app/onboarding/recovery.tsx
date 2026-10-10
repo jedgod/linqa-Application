@@ -13,13 +13,21 @@ export default function RecoverySetup() {
   const router = useRouter(); const params = useLocalSearchParams<{ flow?: string }>(); const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
   async function next() {
+    if (busy) return;
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      setError("Enter a valid recovery email address, such as you@example.com. Phone numbers cannot be used here.");
+      return;
+    }
     setBusy(true); setError(null);
     try {
       const response = await fetch(`${API}/v1/account/recovery-email`, { method: "POST", headers: {
         authorization: `Bearer ${await accessTokenProvider.getAccessToken()}`, "content-type": "application/json"
-      }, body: JSON.stringify({ email }) });
+      }, body: JSON.stringify({ email: normalizedEmail }) });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Unable to start recovery setup");
+      if (!response.ok) throw new Error(data.error === "invalid_request"
+        ? "Check your recovery email address and try again."
+        : "Unable to send the recovery code. Please try again.");
       router.replace({
         pathname: "/onboarding/recovery-verify",
         params: { challengeId: data.challengeId, ...(params.flow ? { flow: params.flow } : {}) }
@@ -31,7 +39,7 @@ export default function RecoverySetup() {
     <ScreenHeader
       eyebrow={params.flow === "ADD_ACCOUNT" ? "STEP 13 OF 15 · SECOND ACCOUNT EMAIL" : "STEP 6 OF 15 · ACCOUNT RECOVERY"}
       title="Add a recovery email"
-      copy="Required when this account has not completed recovery setup. Existing configured accounts skip this step automatically."
+      copy="Enter an email address you can access, not a phone number. We will send a code to verify it for account recovery."
     />
     <TextInput style={s.input} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" placeholder="you@example.com" />
     <ErrorBanner message={error} /><PrimaryButton label="Send recovery code" onPress={next} disabled={!email} busy={busy} />

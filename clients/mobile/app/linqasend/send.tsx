@@ -1,12 +1,50 @@
-import { Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { LinqaSendStatusBar, LinqaSendTabBar, send } from "../../components/linqasend/ui";
+import { fonts } from "../../theme/tokens";
 
+type Option = { label: string; hint: string; icon: keyof typeof Ionicons.glyphMap; route: string };
+const OPTIONS: Option[] = [
+  { label: "To Linqa User", hint: "Find a verified Linqa account by phone or email", icon: "people-outline", route: "/linqasend/recipients" },
+  { label: "Outside Linqa", hint: "Bank, card or mobile-money payout", icon: "business-outline", route: "/linqasend/add-recipient" },
+  { label: "Global Contacts", hint: "Recipients you saved before", icon: "person-outline", route: "/linqasend/global-contacts" },
+  { label: "Recent Recipients", hint: "People you sent to lately", icon: "time-outline", route: "/linqasend/recipients" }
+];
+
+/** Send: who the money goes to. Each choice leads to picking a recipient, then the amount. */
 export default function LinqaSendMode() {
   const router = useRouter();
-  return <SafeAreaView style={s.screen}><View style={s.header}><Pressable onPress={() => router.back()}><Text style={s.back}>‹</Text></Pressable><Text style={s.title}>Send Money</Text></View><View style={s.content}>
-    <Text style={s.copy}>Choose how your recipient will receive funds.</Text>
-    <Pressable style={[s.card,s.primary]} onPress={() => router.push("/linqasend/recipients")}><Text style={s.cardTitle}>To a Linqa user</Text><Text style={s.cardCopy}>Find a verified Linqa account by phone or email.</Text></Pressable>
-    <Pressable style={s.card} onPress={() => router.push("/linqasend/external-recipient")}><Text style={s.cardTitle}>Outside Linqa</Text><Text style={s.cardCopy}>Use a certified bank, card, mobile-money, phone-claim, or email-claim payout endpoint.</Text></Pressable>
-  </View></SafeAreaView>;
+  return (
+    <SafeAreaView style={s.screen}>
+      <LinqaSendStatusBar />
+      <Text accessibilityRole="header" style={s.title}>Send Money</Text>
+      <ScrollView contentContainerStyle={s.content}>
+        <Text style={s.copy}>Choose who you want to send to.</Text>
+        {OPTIONS.map((option) => (
+          <Pressable key={option.label} accessibilityRole="button" accessibilityLabel={option.label} style={s.card} onPress={() => router.push(option.route as never)}>
+            <View style={s.icon}><Ionicons name={option.icon} size={24} color={send.primary} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.cardTitle}>{option.label}</Text>
+              <Text style={s.cardHint}>{option.hint}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={send.faint} />
+          </Pressable>
+        ))}
+      </ScrollView>
+      <LinqaSendTabBar active="send" />
+    </SafeAreaView>
+  );
 }
-const s=StyleSheet.create({screen:{flex:1,backgroundColor:"#F6F7FB"},header:{flexDirection:"row",alignItems:"center",padding:18,gap:12},back:{fontSize:34,color:"#101828"},title:{fontSize:22,fontWeight:"900",color:"#101828"},content:{padding:18},copy:{color:"#667085",marginBottom:20},card:{backgroundColor:"white",borderWidth:1,borderColor:"#DDE3EC",borderRadius:18,padding:20,marginBottom:14},primary:{backgroundColor:"#EEEDFF",borderColor:"#8B83F6"},cardTitle:{fontSize:17,fontWeight:"900",color:"#101828"},cardCopy:{fontSize:13,lineHeight:19,color:"#667085",marginTop:6}});
+
+const s = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: send.bg },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 24, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 6 },
+  content: { paddingHorizontal: 20, paddingBottom: 24 },
+  copy: { color: send.muted, fontFamily: fonts.regular, fontSize: 15, marginBottom: 16 },
+  card: { flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: send.surface, borderRadius: 18, padding: 16, marginBottom: 12 },
+  icon: { width: 50, height: 50, borderRadius: 16, backgroundColor: send.primarySoft, alignItems: "center", justifyContent: "center" },
+  cardTitle: { color: send.text, fontFamily: fonts.bold, fontSize: 16 },
+  cardHint: { color: send.muted, fontFamily: fonts.regular, fontSize: 13, marginTop: 3 }
+});

@@ -17,8 +17,24 @@ type Row = { id: string; detail: PersonDetail };
 export default function CountryLinqaPeople() {
   const router = useRouter();
   const client = useCountryClient();
-  const params = useLocalSearchParams<{ country?: string; region?: string; interest?: string; title?: string }>();
+  const routeParams = useLocalSearchParams<{ country?: string; region?: string; interest?: string; title?: string }>();
+  const params = {
+    country: typeof routeParams.country === "string" && /^[a-z]{2}$/i.test(routeParams.country) ? routeParams.country.toUpperCase() : undefined,
+    region: typeof routeParams.region === "string" && /^[a-z0-9-]{1,16}$/i.test(routeParams.region) ? routeParams.region.toUpperCase() : undefined,
+    interest: typeof routeParams.interest === "string" && /^[a-z0-9 _-]{1,80}$/i.test(routeParams.interest) ? routeParams.interest : undefined
+  };
   const place = !!(params.country || params.region || params.interest);
+  const [placeName, setPlaceName] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    setPlaceName(null);
+    void client.catalog().then(catalog => {
+      const label = catalog.countries.find(country => country.code === params.country)?.name
+        ?? catalog.regions.find(region => region.code === params.region)?.name;
+      if (live) setPlaceName(label ?? null);
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [client, params.country, params.region]);
   const [tab, setTab] = useState<PeopleTab>("FOR_YOU");
   const [rows, setRows] = useState<Row[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -69,7 +85,7 @@ export default function CountryLinqaPeople() {
   useFocusEffect(useCallback(() => { void load(false); return () => { generation.current++; }; // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, term, params.country, params.region, params.interest, client]));
 
-  const title = params.title ?? "People";
+  const title = "People";
   const subtitle = place ? undefined : me?.countryName ?? undefined;
   return (
     <WorldScreen>
@@ -88,7 +104,7 @@ export default function CountryLinqaPeople() {
           ))}
         </View>
       ) : (
-        <Text style={s.place}>{params.country ? `${flagOf(params.country)} ` : ""}{params.title ?? ""}</Text>
+        <Text style={s.place}>{params.country ? `${flagOf(params.country)} ` : ""}{placeName ?? "Selected location"}</Text>
       )}
       <ScrollView contentContainerStyle={s.list} keyboardShouldPersistTaps="handled">
         {chat.error ? <View style={s.error}><Text style={s.errorText} accessibilityLiveRegion="polite">{chat.error}</Text></View> : null}

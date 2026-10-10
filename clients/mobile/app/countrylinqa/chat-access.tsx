@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { WorldScreen, world } from "../../components/countrylinqa/WorldUI";
 import { getApiBaseUrl } from "../../config/api";
 import { confirmCountryRoute, chatAccessOutcome, type ChatAccessOutcome } from "../../services/countrylinqa-activation";
-import { ChatStartError, startDirectChat } from "../../services/countrylinqa-world";
+import { ChatStartError, consumeChatStart, startDirectChat } from "../../services/countrylinqa-world";
 import { accessTokenProvider } from "../../services/session";
 import { fonts } from "../../theme/tokens";
 
@@ -19,7 +19,7 @@ const CHECKS = ["Existing conversation?", "Blocked / restricted?", "Country allo
  */
 export default function CountryLinqaChatAccess() {
   const router = useRouter();
-  const { userId, name } = useLocalSearchParams<{ userId?: string; name?: string }>();
+  const { userId } = useLocalSearchParams<{ userId?: string; name?: string }>();
   const [state, setState] = useState<{ kind: "CHECKING" } | { kind: "ALLOWED"; conversationId: string } | ChatAccessOutcome>({ kind: "CHECKING" });
   const started = useRef(false);
 
@@ -33,7 +33,12 @@ export default function CountryLinqaChatAccess() {
       setState(chatAccessOutcome(cause instanceof ChatStartError ? cause.code : "NETWORK"));
     }
   }, [userId]);
-  useEffect(() => { if (started.current) return; started.current = true; void run(); }, [run]);
+  useEffect(() => {
+    if (started.current) return; started.current = true;
+    // No tap inside the app (an outside link): do not start a chat, just show the person.
+    if (!consumeChatStart(userId)) { router.replace(userId ? { pathname: "/countrylinqa/person", params: { id: userId } } : "/countrylinqa/world"); return; }
+    void run();
+  }, [run, router, userId]);
 
   const open = useCallback((conversationId: string) => router.replace({ pathname: "/modules/conversation", params: { conversationId } }), [router]);
   // Allowed: show the checks passing for a moment, then open the conversation.
@@ -64,10 +69,10 @@ export default function CountryLinqaChatAccess() {
               <>
                 <View style={[s.icon, { backgroundColor: "#E3F0FF" }]}><Ionicons name="chatbubble-ellipses" size={48} color="#2F7BEA" /></View>
                 <Text style={s.title}>Opening conversation…</Text>
-                <Text style={s.text}>{name ? `With ${name}` : "In your main Linqa chats"}</Text>
+                <Text style={s.text}>{"In your main Linqa chats"}</Text>
                 <Pressable accessibilityRole="button" style={s.btn} onPress={() => open((state as { conversationId: string }).conversationId)}><Text style={s.btnText}>Go to Chat</Text></Pressable>
               </>
-            ) : <Text style={s.text}>Checking whether you can message {name || "this person"}…</Text>}
+            ) : <Text style={s.text}>Checking whether you can message {"this person"}…</Text>}
           </>
         ) : (
           <>

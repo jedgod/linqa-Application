@@ -159,3 +159,13 @@ export function categoryChips(categories: Array<string | undefined>): string[] {
   for (const c of categories) if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name);
 }
+
+// A conversation is only started after a tap inside the app. A link from outside (a message, a web page)
+// can open the Chat Access screen, but it carries no tap, so it must not start a chat by itself.
+let armed: { userId: string; until: number } | null = null;
+export function armChatStart(userId: string, now = Date.now()): void { armed = { userId, until: now + 15_000 }; }
+export function consumeChatStart(userId: string | undefined, now = Date.now()): boolean {
+  const ok = !!userId && !!armed && armed.userId === userId && armed.until >= now;
+  armed = null;
+  return ok;
+}

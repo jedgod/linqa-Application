@@ -1,0 +1,162 @@
+COUNTRYLINQA CHAT ACCESS CONTROL v5
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# CountryLinqa Chat Access Control v5
+CountryLinqa controls who may START a new chat by country. All conversations remain in the main Linqa Chats inbox.
+
+Preserve:
+- GET /v1/chats/inbox
+- POST /v1/chats/direct { userId }
+- existing block/restricted-user/abuse checks
+- existing direct conversations
+- no stranger Online Now exposure
+- no second moderation or chat system
+
+Enforce server-side at BOTH direct-conversation creation and message-request creation so the rule cannot be bypassed by a client.
+
+
+====================================================================================================
+FILE: clients/mobile/services/countrylinqa-chat-policy.ts
+====================================================================================================
+export type ChatReachMode="MY_COUNTRY"|"SELECTED_COUNTRIES"|"REGION"|"WORLDWIDE"|"EXISTING_CONTACTS_ONLY"|"NOBODY";
+export type CountryLinqaChatPolicy={mode:ChatReachMode;countryCodes:string[];regionCode:string|null;existingContactsBypass:boolean;version:number};
+export function chatStartError(code?:string){
+ if(code==="COUNTRY_NOT_ALLOWED")return"This person is not accepting new chats from your country.";
+ if(code==="CONTACTS_ONLY")return"This person accepts new chats from existing contacts only.";
+ if(code==="CHAT_REQUESTS_DISABLED")return"This person is not accepting new chat requests.";
+ if(code==="COUNTRY_UNVERIFIED")return"Country verification is required before starting this chat.";
+ return"You can't start this conversation.";
+}
+
+
+====================================================================================================
+FILE: docs/countrylinqa/CHAT_ACCESS_IMPLEMENTATION.md
+====================================================================================================
+# Implementation
+1. Rename migration to next free live number; adapt to migration 027's real table/columns.
+2. Extend existing CountryLinqa service/settings with chat reach; do not create a second policy store.
+3. Wire `Deps` to EXISTING block, restricted-user, conversation, contact, verified-country and region helpers.
+4. Patch existing POST /v1/chats/direct.
+5. Patch existing message-request creation with the SAME authorization function.
+6. Add settings UI under existing `clients/mobile/app/settings/countrylinqa.tsx`:
+   - My Country
+   - Selected Countries
+   - My Region
+   - Worldwide
+   - Existing Contacts Only
+   - Nobody
+7. Existing chats continue unless normal block/restriction rules stop them.
+8. Add DB integration cases proving direct-route and message-request bypass attempts get the same denial.
+9. Run migration twice, server build/tests, mobile typecheck and CountryLinqa certification.
+10. Extend physical evidence with: denied country, selected-country allow, block-over-worldwide, existing-conversation preservation, and account-switch policy isolation.
+
+
+====================================================================================================
+FILE: docs/countrylinqa/PRODUCT_RULE.md
+====================================================================================================
+# Product rule
+Linqa Chats = communication.
+CountryLinqa = geographic discovery and NEW-contact access control.
+
+Separate controls:
+- Countries I discover
+- Countries that can discover me
+- Countries that can chat me
+
+The third control applies only to initiating a new direct conversation/message request.
+It does not create CountryLinqa chats and does not delete existing conversations.
+
+
+====================================================================================================
+FILE: server/src/db/migrations/NEXT_countrylinqa_chat_access.sql
+====================================================================================================
+-- Rename NEXT to the next free live migration number.
+-- Map table name to the actual table created/extended by migration 027.
+ALTER TABLE countrylinqa_discovery_controls
+ ADD COLUMN IF NOT EXISTS chat_reach_mode text NOT NULL DEFAULT 'MY_COUNTRY',
+ ADD COLUMN IF NOT EXISTS chat_country_codes text[] NOT NULL DEFAULT '{}',
+ ADD COLUMN IF NOT EXISTS chat_region_code text,
+ ADD COLUMN IF NOT EXISTS existing_contacts_bypass_chat_reach boolean NOT NULL DEFAULT true;
+ALTER TABLE countrylinqa_discovery_controls DROP CONSTRAINT IF EXISTS countrylinqa_chat_reach_mode_chk;
+ALTER TABLE countrylinqa_discovery_controls ADD CONSTRAINT countrylinqa_chat_reach_mode_chk
+ CHECK(chat_reach_mode IN ('MY_COUNTRY','SELECTED_COUNTRIES','REGION','WORLDWIDE','EXISTING_CONTACTS_ONLY','NOBODY'));
+
+
+====================================================================================================
+FILE: server/src/routes/chats-direct.patch.ts
+====================================================================================================
+// PATCH the EXISTING POST /v1/chats/direct handler. Do not register another route.
+import {authorizeNewDirectChat} from "../services/countrylinqa/chat-access";
+
+/*
+const sender=req.auth.userId;
+const recipient=req.body.userId;
+await existingAbuseChecks(...);
+
+const decision=await authorizeNewDirectChat(sender,recipient,repoNativeChatAccessDeps);
+if(!decision.allowed)
+ return res.status(403).json({error:{code:decision.code,message:decision.reason}});
+
+const conversation=await directConversationRepo.findOrCreateAtomic(sender,recipient);
+return res.json({conversationId:conversation.id});
+*/
+
+// IMPORTANT: call the same authorizeNewDirectChat() at the EXISTING
+// message-request creation boundary. Otherwise a caller could bypass /v1/chats/direct.
+
+
+====================================================================================================
+FILE: server/src/services/countrylinqa/chat-access.ts
+====================================================================================================
+export type ChatReachMode="MY_COUNTRY"|"SELECTED_COUNTRIES"|"REGION"|"WORLDWIDE"|"EXISTING_CONTACTS_ONLY"|"NOBODY";
+export type Decision={allowed:true;reason:string}|{allowed:false;code:string;reason:string};
+export interface Deps{
+ getVerifiedCountry(id:string):Promise<string|null>;
+ getChatPolicy(id:string):Promise<{mode:ChatReachMode;countryCodes:string[];regionCode:string|null;existingContactsBypass:boolean}>;
+ isBlockedEitherDirection(a:string,b:string):Promise<boolean>;
+ isRestricted(id:string):Promise<boolean>;
+ hasExistingDirectConversation(a:string,b:string):Promise<boolean>;
+ isExistingContact(a:string,b:string):Promise<boolean>;
+ countryInRegion(country:string,region:string):boolean;
+}
+const n=(x:string)=>x.trim().toUpperCase();
+export async function authorizeNewDirectChat(sender:string,recipient:string,d:Deps):Promise<Decision>{
+ if(sender===recipient)return{allowed:false,code:"INVALID_RECIPIENT",reason:"Cannot chat with self."};
+ if(await d.isBlockedEitherDirection(sender,recipient))return{allowed:false,code:"BLOCKED",reason:"Direct chat unavailable."};
+ if(await d.isRestricted(sender)||await d.isRestricted(recipient))return{allowed:false,code:"RESTRICTED_USER",reason:"Direct chat unavailable."};
+
+ // Country reach changes never destroy an already-established conversation.
+ if(await d.hasExistingDirectConversation(sender,recipient))return{allowed:true,reason:"EXISTING_CONVERSATION"};
+
+ const p=await d.getChatPolicy(recipient);
+ if(p.existingContactsBypass && await d.isExistingContact(sender,recipient))return{allowed:true,reason:"EXISTING_CONTACT"};
+ if(p.mode==="NOBODY")return{allowed:false,code:"CHAT_REQUESTS_DISABLED",reason:"Recipient is not accepting new chats."};
+ if(p.mode==="EXISTING_CONTACTS_ONLY")return{allowed:false,code:"CONTACTS_ONLY",reason:"Recipient accepts existing contacts only."};
+
+ const sc=await d.getVerifiedCountry(sender), rc=await d.getVerifiedCountry(recipient);
+ if(!sc||!rc)return{allowed:false,code:"COUNTRY_UNVERIFIED",reason:"Verified country required."};
+ if(p.mode==="WORLDWIDE")return{allowed:true,reason:"COUNTRY_ALLOWED"};
+ if(p.mode==="MY_COUNTRY")return n(sc)===n(rc)?{allowed:true,reason:"COUNTRY_ALLOWED"}:{allowed:false,code:"COUNTRY_NOT_ALLOWED",reason:"Recipient accepts new chats from their country only."};
+ if(p.mode==="SELECTED_COUNTRIES")return p.countryCodes.map(n).includes(n(sc))?{allowed:true,reason:"COUNTRY_ALLOWED"}:{allowed:false,code:"COUNTRY_NOT_ALLOWED",reason:"Your country is outside recipient chat reach."};
+ if(p.mode==="REGION"&&p.regionCode)return d.countryInRegion(n(sc),p.regionCode)?{allowed:true,reason:"COUNTRY_ALLOWED"}:{allowed:false,code:"COUNTRY_NOT_ALLOWED",reason:"Your country is outside recipient chat region."};
+ return{allowed:false,code:"CHAT_REQUESTS_DISABLED",reason:"New chat unavailable."};
+}
+
+
+====================================================================================================
+FILE: server/src/tests/countrylinqa-chat-access.test.ts
+====================================================================================================
+import{describe,it,expect}from"vitest";
+import{authorizeNewDirectChat}from"../services/countrylinqa/chat-access";
+const d=(o:any={})=>({getVerifiedCountry:async(id:string)=>id==="s"?"GH":"US",getChatPolicy:async()=>({mode:"MY_COUNTRY",countryCodes:[],regionCode:null,existingContactsBypass:true}),isBlockedEitherDirection:async()=>false,isRestricted:async()=>false,hasExistingDirectConversation:async()=>false,isExistingContact:async()=>false,countryInRegion:(c:string,r:string)=>r==="WEST_AFRICA"&&["GH","NG"].includes(c),...o});
+describe("CountryLinqa chat initiation",()=>{
+ it("denies foreign country under MY_COUNTRY",async()=>expect((await authorizeNewDirectChat("s","r",d())).allowed).toBe(false));
+ it("allows selected country",async()=>expect((await authorizeNewDirectChat("s","r",d({getChatPolicy:async()=>({mode:"SELECTED_COUNTRIES",countryCodes:["GH"],regionCode:null,existingContactsBypass:true})}))).allowed).toBe(true));
+ it("block overrides worldwide",async()=>expect((await authorizeNewDirectChat("s","r",d({isBlockedEitherDirection:async()=>true,getChatPolicy:async()=>({mode:"WORLDWIDE",countryCodes:[],regionCode:null,existingContactsBypass:true})}))).allowed).toBe(false));
+ it("preserves existing conversation",async()=>expect((await authorizeNewDirectChat("s","r",d({hasExistingDirectConversation:async()=>true}))).allowed).toBe(true));
+ it("contacts-only denies stranger",async()=>expect((await authorizeNewDirectChat("s","r",d({getChatPolicy:async()=>({mode:"EXISTING_CONTACTS_ONLY",countryCodes:[],regionCode:null,existingContactsBypass:true})}))).allowed).toBe(false));
+ it("region permits member",async()=>expect((await authorizeNewDirectChat("s","r",d({getChatPolicy:async()=>({mode:"REGION",countryCodes:[],regionCode:"WEST_AFRICA",existingContactsBypass:false})}))).allowed).toBe(true));
+});

@@ -1,0 +1,11 @@
+{
+  "name": "linqa-durable-receive-closure-v3",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/closure.test.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

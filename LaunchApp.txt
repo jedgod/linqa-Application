@@ -26,3 +26,10 @@ menu: Change Bundle Location -> localhost:8081 -> Apply Changes -> Reload.
 
 Setup, dependency and build instructions: clients/mobile/README.md
 The Kotlin client in clients/android (com.linqa.app) is a separate app.
+
+
+The key
+- Keystore: C:\Users\cj_wo\.linqa-signing\linqa-dev.keystore. It's outside the repo, so it can't be committed.
+- Details: RSA 4096, alias linqa-dev, valid until 2126.
+- SHA-256: EF:51:4E:2C:E3:36:FB:C3:15:FD:8C:CA:C3:B0:D3:9C:56:CC:B4:C1:E0:C1:EB:D5:63:AA:39:07:FA:6D:99:A2.
+- The passwords are in C:\Users\cj_wo\.linqa-signing\signing.properties, which I generated randomly. I did not print them here. The same four values are in ~/.gradle/gradle.properties, which Gradle reads on this PC.

@@ -2,6 +2,7 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { AccountSecureStorage } from "../account/AccountSecureStorage";
 import { getCachedInstallationServerId } from "../account/InstallationRegistry";
 import { base64ToBytes, bytesToBase64 } from "../crypto/device-enrollment-proof";
+import { createBiometricClient } from "./biometric-session";
 
 export type LinqaSendRecipient = {
   id: string;
@@ -9,6 +10,8 @@ export type LinqaSendRecipient = {
   country: string;
   preferredCurrency: string;
   isFavorite: boolean;
+  /** LINQA_USER, or the external payout kind (BANK_ACCOUNT, MOBILE_WALLET, CARD, ...). */
+  recipientType?: string;
   createdAt: string;
 };
 
@@ -32,8 +35,34 @@ export type LinqaSendQuote = {
   providerExecutionRate: string;
   customerRate: string;
   marginBps: number;
+  senderFeeMinor?: string;
+  recipientFeeMinor?: string;
   provider: string;
   expiresAt: string;
+};
+
+export type LinqaSendPaymentMethod = {
+  id: string;
+  type: string;
+  last4: string | null;
+  verificationStatus: string;
+  isDefault?: boolean;
+  /** Reported by the payment provider; null until a provider supplies them. */
+  brand?: string | null;
+  expMonth?: number | null;
+  expYear?: number | null;
+};
+
+export type LinqaSendLimits = {
+  jurisdiction: string;
+  countryCapability: Record<string, unknown> | null;
+  corridors: Array<Record<string, unknown>>;
+  rolling24Hours: { usedMinor: string; transferCount: number };
+  currency?: string;
+  /** Null limits mean "no fixed limit on this account", not unknown. */
+  perTransferLimitMinor?: string | null;
+  daily?: { limitMinor: string | null; usedMinor: string; remainingMinor: string | null };
+  monthly?: { limitMinor: string | null; usedMinor: string; remainingMinor: string | null };
 };
 
 export type LinqaSendTransferSummary = {
@@ -43,12 +72,19 @@ export type LinqaSendTransferSummary = {
   sendCurrency: string;
   receiveAmountMinor: string;
   receiveCurrency: string;
+  /** The other person: who you sent to, or who sent to you. */
   recipientName: string;
+  direction?: "SENT" | "RECEIVED";
   createdAt: string;
   completedAt: string | null;
 };
 
 export type LinqaSendTransferDetail = LinqaSendTransferSummary & {
+  recipientCountry?: string | null;
+  recipientType?: string | null;
+  customerRate?: string | null;
+  senderFeeMinor?: string | null;
+  recipientFeeMinor?: string | null;
   failureCode: string | null;
   failureMessage: string | null;
   timeline: Array<{ phase: string; status: string; errorCode: string | null; at: string }>;
@@ -105,9 +141,7 @@ export class LinqaSendService {
   }
 
   listPaymentMethods() {
-    return this.request<{ items: Array<{ id: string; type: string; last4: string | null; verificationStatus: string }> }>(
-      "/v1/linqasend/payment-methods"
-    );
+    return this.request<{ items: LinqaSendPaymentMethod[] }>("/v1/linqasend/payment-methods");
   }
 
   addPaymentMethod(input: { type: "BANK_ACCOUNT" | "MOBILE_WALLET"; reference: string; last4?: string }) {
@@ -172,6 +206,13 @@ export class LinqaSendService {
     const challenge = await this.request<{ id: string; nonce: string; transactionHash: string }>("/v1/linqasend/security/challenges", {
       method: "POST", headers: { "x-installation-id": installationId }, body: JSON.stringify({ quoteId: input.quoteId, paymentMethodId: input.paymentMethodId, idempotencyKey })
     });
+    const biometric = createBiometricClient(async () => token);
+    if ((await biometric.available()).strong) {
+      const grant = await biometric.stepUp("SEND_TRANSFER_AUTHORIZE",{ paymentChallengeId: challenge.id },"Authorize this LinqaSend transfer");
+      const authorization = await this.request<{ authorizationId: string; transactionHash: string }>("/v1/linqasend/security/authorizations",{ method: "POST",headers: { "x-installation-id": installationId },body: JSON.stringify({ challengeId: challenge.id,biometricGrantId: grant.grantId }) });
+      return { input,idempotencyKey,installationId,transactionHash: authorization.transactionHash,securityAuthorizationId: authorization.authorizationId };
+    }
+    if (!__DEV__) throw new Error("Strong biometric signing is required for LinqaSend. Rebuild the app and enroll device biometrics.");
     const privateKey = await new AccountSecureStorage().get(userId, "device.signingPrivateKey");
     if (!privateKey) throw new Error("This device has no secure signing key. Re-enroll the device.");
     const message = new TextEncoder().encode(`${challenge.nonce}|${challenge.transactionHash}`);
@@ -193,8 +234,13 @@ export class LinqaSendService {
     return this.submitPreparedTransfer(await this.prepareTransferConfirmation(input));
   }
 
-  listTransfers(limit = 30) {
-    return this.request<{ items: LinqaSendTransferSummary[] }>(`/v1/linqasend/transfers?limit=${limit}`);
+  listTransfers(limit = 30, options: { offset?: number; direction?: "all" | "sent" | "received" } = {}) {
+    const query = `limit=${limit}${options.offset ? `&offset=${options.offset}` : ""}${options.direction && options.direction !== "all" ? `&direction=${options.direction}` : ""}`;
+    return this.request<{ items: LinqaSendTransferSummary[]; nextOffset?: number | null }>(`/v1/linqasend/transfers?${query}`);
+  }
+
+  getDashboard() {
+    return this.request<{ currency: string; totalSentMinor: string; thisMonthMinor: string; thisWeekMinor: string; transferCount: number }>("/v1/linqasend/dashboard");
   }
 
   getTransfer(id: string) {
@@ -209,7 +255,11 @@ export class LinqaSendService {
     return this.request<{ displayName: string | null; identifiers: Array<{ type: string; display_value: string }>; defaultCurrency: string | null; preferredFundingSource: { type: string; last4: string | null } | null }>("/v1/linqasend/receive-profile");
   }
 
-  addExternalRecipient(input: { recipientKind: "EXTERNAL_PERSON" | "EXTERNAL_BUSINESS"; displayName: string; countryCode: string; currency: string; deliveryMethod: "BANK" | "CARD" | "MOBILE_MONEY" | "PHONE_CLAIM" | "EMAIL_CLAIM"; provider: string; providerToken: string; maskedDisplay: string }) {
+  payoutProviders() {
+    return this.request<{ items: Array<{ providerId: string }> }>("/v1/linqasend/payout-providers");
+  }
+
+  addExternalRecipient(input: { recipientKind: "EXTERNAL_PERSON" | "EXTERNAL_BUSINESS"; displayName: string; countryCode: string; currency: string; deliveryMethod: "BANK" | "CARD" | "MOBILE_MONEY" | "PHONE_CLAIM" | "EMAIL_CLAIM"; provider: string; providerToken: string; maskedDisplay: string; phone?: string; favorite?: boolean }) {
     return this.request<{ id: string; recipientId: string; endpointId: string }>("/v1/linqasend/external-recipients", { method: "POST", body: JSON.stringify(input) });
   }
 
@@ -230,7 +280,7 @@ export class LinqaSendService {
   }
 
   getLimits() {
-    return this.request<{ jurisdiction: string; countryCapability: Record<string, unknown> | null; corridors: Array<Record<string, unknown>>; rolling24Hours: { usedMinor: string; transferCount: number } }>("/v1/linqasend/limits");
+    return this.request<LinqaSendLimits>("/v1/linqasend/limits");
   }
 
   getSettings() {

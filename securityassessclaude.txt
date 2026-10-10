@@ -1,0 +1,256 @@
+LINQA / COUNTRYLINQA SECURITY ASSESSMENT
+=========================================
+Prepared by: Claude (code review of the repository, 2026-10-06)
+Branch:      agent/production-module-hardening
+Scope:       CountryLinqa ("Linqa World") end to end: the mobile screens under clients/mobile/app/countrylinqa,
+             clients/mobile/app/settings/countrylinqa*.tsx and clients/mobile/app/onboarding/country-confirmation.tsx,
+             the mobile services that call the API, and the server routes, services and migrations behind them
+             (server/src/routes/countrylinqa/*, server/src/services/countrylinqa/*, chat access in chat.service.ts,
+             plan checkout, and the shared pieces they depend on: auth, rate limiting, app bootstrap).
+NOT in scope: LinqaSend (money movement), Vault, biometrics, calls, status, and the web client. They need their own pass,
+             and LinqaSend and Vault deserve one first because they handle money and files.
+
+HOW THIS WAS DONE (and what it is not)
+--------------------------------------
+Method: reading the code path of every CountryLinqa screen from the tap, through the mobile service, the HTTP route,
+the authorization check, the SQL, to the response; running the existing and new tests; running "npm audit" on the
+server and mobile packages; and trying the screens on a real phone (Galaxy A03s) against a local API.
+This is a code review. It is NOT a penetration test: nothing was attacked over a network, no fuzzing was done,
+infrastructure (load balancer, TLS, secrets handling, database permissions, backups, logging pipeline) was not seen,
+and "npm audit" only reports known advisories. Absence of a finding is not proof of safety.
+
+SUMMARY
+-------
+Overall: the CountryLinqa data paths are in good shape. Every endpoint checks a token scope, every query that returns
+other people goes through one shared reach-and-safety filter, ownership is checked on every id-based write, prices
+come from the server, and payment success is only ever derived from billing records. The real problems are at the
+edges: the account country check can be talked into a better result, the rate limits are weak, a framework with known
+vulnerabilities is in use, and two defects in the code written during this session (already fixed, see below).
+
+  ID    Severity  Status     Title
+  ----  --------  ---------  --------------------------------------------------------------------------
+  S-01  HIGH      OPEN       Server framework (fastify <= 5.12.4) has 7 known advisories, incl. auth/validation bypass
+  S-02  HIGH      OPEN       Country verification result can be improved by changing what the client sends, and retried
+  S-03  MEDIUM    OPEN       Rate limits: in-memory, per process, keyed by IP; missing on several write routes
+  S-04  MEDIUM    OPEN       trustProxy is off: behind a proxy every user shares one IP (limits, geo evidence)
+  S-05  MEDIUM    OPEN       Connection requests can be re-sent after a decline with no cooldown or cap
+  S-06  MEDIUM    OPEN       /business/discover skips the shared safety and verification rules
+  S-07  LOW       OPEN       Raw internal error codes are returned to the client (database codes)
+  S-08  LOW       OPEN       Missing token scope returns HTTP 400 "invalid_request" instead of 403
+  S-09  LOW       OPEN       Payment idempotency key is built from Math.random and is unique across ALL users
+  S-10  LOW       OPEN       Saved searches have no per-user cap; preferences/confirm-country/join have no limiter
+  S-11  LOW       OPEN       Deep-link text parameters (name, title) are shown as typed
+  S-12  INFO      OPEN       Mobile dependencies: 23 audit findings, almost all build tooling (Expo/Metro)
+  F-01  MEDIUM    FIXED      Block button called an endpoint the device token cannot use (would always fail)
+  F-02  MEDIUM    FIXED      Any link could start a chat (deep link to chat-access ran the check on open)
+  F-03  LOW       FIXED      Payment page URL was opened without checking it is plain https
+
+"FIXED" means changed in the working tree in this session and covered by a new test; nothing is committed yet.
+
+WHAT IS SOLID (verified in code)
+--------------------------------
+  * Authorization: every CountryLinqa route I listed (about 60 across routes.ts, engine, final, golive, security, admin and plan routes) calls auth() and requireScope() (read / write / admin). The admin scope is not in
+    the scope list given to devices (routes/enrollment.ts), so ordinary tokens cannot reach admin routes.
+  * Reach and safety: person, hub, search, discovery, connect, and event queries all start from viewerScopeCte plus
+    authorScopePredicate and safetyPredicate (country reach, the other person's "who can discover me", blocks, restrictions).
+    A person outside reach is simply absent, not "forbidden", so existence is not revealed.
+  * Ownership (IDOR): saved searches, connection requests, checkouts and blocks are always filtered by the caller's user id in
+    SQL (WHERE id = $1 AND user_id = $2). Connection resolve also enforces who may accept versus cancel.
+  * Injection: all SQL uses parameters. Search text is escaped so % and _ are literal. Filters are validated by schemas.
+    Cursors are signed (HMAC key from config) so a client cannot forge a page position.
+  * Privacy: country, state and city are shown only as the person chose; the city filter cannot find people who hide their city.
+  * Chat: a new direct chat is only created in one place (resolveDirectConversation) and that place enforces the CountryLinqa chat
+    reach rule. Refusals are worded the same for blocked / restricted / not-found, so they do not reveal why.
+  * Payments: the price is read from the server catalog, the request cannot set it; a plan must be a step up; success appears only
+    when the subscription table says so (set by the billing webhook), never from the app. With no provider connected,
+    checkout fails closed and records a failed attempt.
+  * Mobile storage and transport: sign-in tokens live in expo-secure-store; release builds refuse a non-HTTPS API address;
+    the post-payment "Continue" target is restricted to in-app paths and rejects "..", "//" and other schemes.
+  * Country evidence: the verified country saved on the account comes from server-side phone evidence, not from the country the
+    app claims (service.ts confirmCountry stores trusted.phoneCountryCode).
+
+PAGE-BY-PAGE FLOW (frontend -> backend)
+---------------------------------------
+Format: SCREEN | what the user does | mobile call -> API route (scope, limiter) | server checks | findings
+
+1. First-time setup / Activate (app/countrylinqa/activate.tsx, 2.1-2.6)
+   Flow: Welcome -> Confirm Country -> Discovery Reach -> Discoverability -> Chat Access -> Completed.
+   Calls: GET /preferences, GET /catalog (read); PUT /preferences with activate=true (write, NO limiter).
+   Server: zod schema (strict enums, array caps 250/50), optimistic version check (expectedVersion), plan limits enforced
+           server-side (Premium country cap, Worldwide needs Elite), nothing in the body can widen reach beyond the plan.
+   Findings: S-02 (country check), S-10 (no limiter on PUT /preferences).
+
+2. Confirm Country (app/onboarding/country-confirmation.tsx; opened from the World banner, Countries, Settings, chat)
+   Calls: GET onboarding status (detected country), POST /countrylinqa/verification/confirm-country (write, NO limiter).
+   Server: stores the phone-evidence country; scores risk from phone verified, line type, carrier, plus optional
+           SIM / locale / claimed country sent BY THE CLIENT; score >= 40 review, >= 80 restricted, else VERIFIED.
+   Findings: S-02 (HIGH). Note: this screen used to be reached through the global onboarding resolver, which looked like an
+   app restart; links now go straight here and return to CountryLinqa (fixed earlier, UX not security).
+
+3. World Home (app/countrylinqa/world.tsx, 3.1)
+   Calls: GET /world/home, GET /preferences, GET /catalog, GET /recommendations/people, GET /people/details (read, 60/min).
+   Server: scope + safety predicates; "trending" counts only discoverable people in the viewer's own country.
+   Findings: none specific. S-03 applies to the limiter.
+
+4. People Discovery and Person Profile (people.tsx 3.2, person.tsx 3.3, PersonRow, report.tsx)
+   Calls: POST /discover/people/search, GET /people/details?ids= (max 50 uuids), POST /discover/users/:id/connect (write, 20/min),
+          GET /connections, POST /connections/:id/resolve, POST /blocked (new), POST /reports (limited).
+   Server: details/search are scope-filtered; connect inserts only for people in scope and not blocked/restricted.
+   Findings: S-05 (re-request after decline), F-01 (block, fixed), F-02 (chat via link, fixed), S-11.
+
+5. Message -> Chat Access Result (chat-access.tsx, 7.1 / 7.2)
+   Calls: direct-chat creation (existing chat service) which runs authorizeNewDirectChat.
+   Server: single creation point; checks block, restriction, the other person's chat setting, plan limits on their selection.
+   Findings: F-02 (fixed). Residual: the screen shows the "name" parameter it was given (S-11).
+
+6. Countries and Country Hub (countries.tsx 3.4, country.tsx 3.5, CountryMenu dropdown)
+   Calls: GET /world/countries, GET /world/countries/:code (code validated /^[A-Za-z]{2}$/), community join/leave (write, no limiter).
+   Server: hub for a country outside reach returns inScope=false and NO counts; community join requires a VERIFIED account.
+   Findings: S-10 (no limiter on join/leave). Positive: out-of-reach hub reveals nothing.
+
+7. Communities, Events, Businesses (communities.tsx, events.tsx, businesses.tsx; 3.6-3.8)
+   Calls: GET /communities/discover, GET /events..., POST /events/:id/interest, GET /business/discover.
+   Server: communities and events use the shared predicates; event interest refuses events out of reach, owner blocked,
+           unpublished or past.
+   Findings: S-06 (business discover does not use the shared rules).
+
+8. Search, Results, Filters, Saved Searches (search*.tsx, saved-searches.tsx; 4.1-4.4)
+   Calls: GET /search, POST /discover/people/search (30/min), saved searches CRUD, PATCH /saved-searches/:id/alerts.
+   Server: filters schema (city, interests, languages, profession capped), alerts capped at 10 per user,
+           saved-search id always matched to the caller.
+   Findings: S-10 (no cap on number of saved searches; POST has no limiter). Positive: wildcard characters are escaped.
+
+9. Settings Home, Manage Countries, More Settings, Blocked, Plan & Subscription (5.1-5.4)
+   Calls: GET/PUT /preferences, GET /subscription, GET /blocked, DELETE /blocked/:userId.
+   Server: version-checked writes; unblock only removes the caller's own block rows.
+   Findings: S-03, S-10. Payments & Receipts opens the store's own subscription page for store subscribers (no data passes).
+
+10. Plans and Payments (plans-compare / method / confirm / result; 6.1-6.6)
+    Calls: GET /plans, POST /checkouts (idempotency key), GET /checkouts/:id (polled), POST /checkouts/:id/cancel.
+    Server: price from catalog, upgrade-only, per-user ownership on read/cancel, generic errors, 429 mapped cleanly.
+    Findings: S-09 (idempotency key), F-03 (https check, fixed). Not testable end to end: no payment provider is connected, so
+    the provider call, webhook signature check and refund/chargeback handling were NOT reviewed here; they live in the
+    entitlement/webhook code and must be reviewed before any real provider is enabled.
+
+DETAILED FINDINGS
+-----------------
+
+S-01  HIGH  Server framework has known vulnerabilities
+  Evidence: "npm audit --omit=dev" in server/ reports fastify <= 5.12.4 with 7 advisories, including schema-validation bypass,
+  request-body replacement, header-validation bypass, boolean-false-schema bypass, a DoS on HTTP/2 trailers, X-Forwarded-*
+  spoofing, and authentication bypass via malformed URLs reaching encapsulated not-found handlers. npm reports a fix is available.
+  Impact: our routes validate with zod inside handlers (so the schema-bypass items matter less), but the URL/auth bypass and
+  X-Forwarded advisories are in code every request passes through, and this app uses encapsulated plugins.
+  Recommendation: upgrade fastify to the fixed release (npm audit fix, then run the full server test suite), and add "npm audit
+  --omit=dev --audit-level=high" to CI so a high advisory fails the build.
+
+S-02  HIGH  Country verification can be nudged by the client
+  Evidence: server/src/services/countrylinqa/service.ts confirmCountry() and risk.ts. The stored country is correct (it comes
+  from phone evidence), but the VERIFIED / REVIEW_REQUIRED decision uses values the client supplies: claimedCountryCode,
+  simCountryCode, localeCountryCode. They can only add risk, so omitting them (or sending the matching country) lowers the score,
+  and the route has no rate limit and allows re-submitting while the state is REVIEW_REQUIRED. Example: phone +1 with a
+  carrier mismatch (20) plus a wrong claim (25) = 45 -> REVIEW_REQUIRED; re-submitting with the claim equal to the phone
+  country = 20 -> VERIFIED. IP evidence is also weak while S-04 is open. VERIFIED unlocks verified-only discovery, the
+  country community, and messaging into other people's reach.
+  Recommendation: (a) once a user is REVIEW_REQUIRED or RESTRICTED, never let the same endpoint re-score them; move them only
+  through the review workflow; (b) decide VERIFIED only from server-side evidence (phone, carrier lookup, IP, device) and treat
+  client-supplied signals as informational; (c) rate limit confirm-country (for example 5 per hour per user); (d) log and alert on
+  repeated attempts; (e) require real step-up for any country change (today it returns an error but no step-up path was reviewed).
+
+S-03  MEDIUM  Rate limiting is weak
+  Evidence: services/countrylinqa/final/rate-limit.ts keeps counters in process memory, keyed by user AND IP. Consequences:
+  a restart resets them; with more than one API instance each has its own counter so the real limit is multiplied; an attacker
+  who rotates IPs gets a fresh counter every time. The global @fastify/rate-limit (120/min per IP) is also per process.
+  Routes with NO CountryLinqa limiter: PUT /preferences, POST /verification/confirm-country, community join/leave,
+  saved-searches (create, used, delete), connections/:id/resolve, notifications, discovery features GET.
+  Recommendation: move to a shared store (Redis, already optional via REDIS_URL) with the key = user id (and a separate coarse IP
+  limit), add limiters to the routes above, and add a stricter limit on anything that sends a notification or creates a row.
+
+S-04  MEDIUM  trustProxy is false
+  Evidence: server/src/app.ts sets trustProxy: false. Behind a load balancer or CDN, request.ip is the proxy's address.
+  Impact: every user shares the global 120/min bucket (a few clients can lock out everyone), the IP-based country evidence in S-02
+  is meaningless, and audit logs record the wrong source.
+  Recommendation: set trustProxy to the exact number of proxy hops (not true), then re-test IP-dependent code. Keep it false only if
+  the API is directly exposed. Note the fastify X-Forwarded advisory in S-01 when you do this: fix S-01 first.
+
+S-05  MEDIUM  Connection requests can be repeated after a decline
+  Evidence: routes/countrylinqa/routes.ts POST /discover/users/:id/connect resets a DECLINED or CANCELLED request back to PENDING
+  with a new 30-day expiry every time. Only a 20/min limiter (S-03) applies. A person who declined can be asked again immediately,
+  forever, and each ask can notify them.
+  Recommendation: keep the decline state and refuse a new request for a cooldown (for example 30 days) after a decline; cap pending
+  outgoing requests per user (for example 50); let the recipient's block/report feed back into a sender-level limit.
+
+S-06  MEDIUM  Business discovery skips shared rules
+  Evidence: routes/countrylinqa/final-routes.ts GET /business/discover builds its own query from the viewer's country code only:
+  no verification requirement, no safety predicate (blocks / suspended owners), STATE targets match the whole country, and no
+  paging. The newer events and businesses lists (golive/businessRanking) do apply the shared rules.
+  Recommendation: route this endpoint through discoverBusinesses (same rules as the Businesses page) or remove it if unused by
+  the app; add paging.
+
+S-07  LOW  Internal error codes leak
+  Evidence: the withErrors wrapper returns error.code for any thrown error. For database errors that is the PostgreSQL code
+  (this is how a bare "42P08" reached the onboarding screen earlier).
+  Recommendation: only return codes from an allow-list of our own error types; map everything else to a generic code and log it.
+
+S-08  LOW  Wrong status for missing scope
+  Evidence: requireScope throws a plain Error, which withErrors turns into HTTP 400 "invalid_request". Clients cannot tell
+  "you lack permission" from "bad input", and monitoring cannot see authorization failures.
+  Recommendation: throw an error with status 403 and a stable code, and count 403s in metrics.
+
+S-09  LOW  Idempotency key
+  Evidence: plans-confirm.tsx builds the key from Date.now and Math.random; the checkouts table enforces uniqueness of the key
+  across all users, and a clash with another user's key answers IDEMPOTENCY_KEY_REUSED.
+  Recommendation: generate a UUID with a secure random source (react-native-get-random-values is already loaded) and make the
+  unique index (user_id, idempotency_key) so one user cannot collide with, or probe, another's keys.
+
+S-10  LOW  Unbounded user-created data
+  Evidence: no cap on saved searches per user; join/leave and preferences writes have no limiter (see S-03).
+  Recommendation: cap saved searches (for example 50) and add limiters.
+
+S-11  LOW  Deep-link text
+  Evidence: the app has the linqa:// scheme, and several screens take display text from the link (chat-access "name", people
+  "title", search "state"). A hostile link can show attacker-chosen text inside a real Linqa screen.
+  Recommendation: look names up from the server by id instead of trusting the link; cap and strip titles; treat decodeSearch
+  input as untrusted (it is validated today, keep it that way).
+
+S-12  INFO  Mobile dependency advisories
+  Evidence: "npm audit --omit=dev" in clients/mobile: 23 findings (3 moderate, 20 high). The listed packages are mostly Expo, Metro
+  and React Native build tooling (metro, @expo/cli, micromatch, braces, node-forge, image-size), which do not ship in the app,
+  plus react-native-reanimated/worklets.
+  Recommendation: keep Expo and React Native on the latest supported release, review the reanimated and node-forge items for
+  runtime exposure, and run the audit in CI.
+
+FIXED IN THIS SESSION (not yet committed)
+-----------------------------------------
+F-01  Block from a profile. The new Block button called /v1/safety/blocks, which needs a "safety:write" scope that device tokens
+      do not carry, so it would always have failed. Added POST /v1/countrylinqa/blocked (countrylinqa:write, rate limited, same
+      block behaviour including ending calls) and pointed the app at it. Tests: route mount check and a database test
+      (blocking hides the person, self and unknown ids are refused).
+F-02  A link such as linqa:///countrylinqa/chat-access?userId=<id> started a conversation with no tap. The screen now only runs
+      the check when the in-app Message tap armed it (15 second window, once); an outside link is sent to the person's profile.
+      Test: armChatStart / consumeChatStart (outside link, other person, stale, repeat).
+F-03  The payment page address is only opened when it is a plain https URL without embedded credentials (never another app's
+      scheme or http). Test added.
+Files: server/src/routes/countrylinqa/engine-routes.ts; clients/mobile/{services/countrylinqa.service.ts,
+services/countrylinqa-world.ts, services/countrylinqa-plans.ts, components/countrylinqa/WorldUI.tsx,
+app/countrylinqa/{chat-access,plans-confirm,plans-result}.tsx}; tests in server/src/tests and tests/.
+
+RECOMMENDED ORDER OF WORK
+-------------------------
+  1. S-01 upgrade fastify and add the audit step to CI (a day or less; highest value for lowest effort).
+  2. S-02 stop client-controlled re-scoring, add limiter and alerting on country confirmation.
+  3. S-03 + S-04 shared rate limiting and correct proxy configuration (do together; needs deployment details).
+  4. S-05 and S-06 abuse controls on connections and the business endpoint.
+  5. S-07 to S-11 cleanup items in one hardening pass.
+  6. Before enabling any payment provider: review the webhook signature check, replay protection, amount/currency checks and
+     refund handling (not reviewed here).
+  7. Extend this assessment to LinqaSend, Vault and the biometric flow, then run an external penetration test and a
+     review of the production environment (TLS, secrets, database roles, backups, logs).
+
+WHAT WAS NOT VERIFIED
+---------------------
+  * Behaviour with real users: the dev account is unverified and has almost no other people, so populated screens and the
+    chat allowed/refused paths were checked by tests and code reading, not by hand on the phone.
+  * The new Block route and the deep-link guard were covered by automated tests but not tapped through on the phone.
+  * Production configuration, networking, secrets, database permissions and the payment provider integration.
+  * Any server code outside the CountryLinqa paths, except where they are called from them (auth, rate limit, app bootstrap).

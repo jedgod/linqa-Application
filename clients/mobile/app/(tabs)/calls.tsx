@@ -17,7 +17,8 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
+import { LinearGradient } from "../../components/LinearGradient";
+import { RecordingsSection } from "../../components/calls/RecordingsSection";
 
 type Filter = "All" | "Missed" | "Audio" | "Video";
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -179,6 +180,8 @@ export default function CallsScreen() {
               </View>
             )}
           </View>
+
+          <RecordingsSection />
 
           <View style={styles.encryptionRow}>
             <Ionicons name="lock-closed-outline" size={17} color={COLORS.blue} />

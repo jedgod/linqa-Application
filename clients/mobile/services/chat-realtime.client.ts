@@ -17,6 +17,7 @@
  */
 
 export type ChatRealtimeEvent =
+  | { type: "conversation.created"; conversationId: string }
   | { type: "message.created"; eventId: number; conversationId: string; payload: unknown }
   | { type: "conversation.read"; eventId: number; conversationId: string; payload: unknown }
   | { type: "typing.start"; conversationId: string; userId: string; expiresInSeconds: number }

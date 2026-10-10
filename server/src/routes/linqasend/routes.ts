@@ -23,6 +23,8 @@ import { JurisdictionV2Service } from "../../services/linqasend/jurisdiction-v2.
 import { AuthoritativeFraudSignalsService } from "../../services/linqasend/authoritative-fraud-signals.service.js";
 import { AwsProductionKmsProvider } from "../../security/kms/production-kms-provider.js";
 import { ProviderTokenVaultService } from "../../services/linqasend/provider-token-vault.service.js";
+import type { BiometricAuthorizationService } from "../../security/biometrics/service.js";
+import { biometricPrincipal } from "../biometrics.js";
 
 function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) => Promise<T>) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
@@ -52,6 +54,21 @@ const createQuoteSchema = z.object({
   sendAmountMinor: z.string().regex(/^\d+$/)
 });
 
+/**
+ * The money screens are shown when real money is enabled, and also in any non-production
+ * environment so the flow can be built and tested. Hiding them in development made the whole
+ * LinqaSend section vanish. This only controls visibility: the readiness gate still refuses
+ * every transfer (REAL_MONEY_DISABLED) until real money is enabled and certified.
+ */
+export function linqaSendAvailability(config: Pick<AppConfig, "NODE_ENV" | "LINQASEND_REAL_MONEY_ENABLED" | "LINQASEND_MODE">) {
+  const realMoneyEnabled = config.LINQASEND_REAL_MONEY_ENABLED === true;
+  return {
+    available: realMoneyEnabled || config.NODE_ENV !== "production",
+    realMoneyEnabled,
+    mode: config.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION"
+  };
+}
+
 export const createTransferSchema = z.object({
   quoteId: z.string().uuid(),
   paymentMethodId: z.string().uuid(),
@@ -78,9 +95,10 @@ export async function registerLinqaSendRoutes(
   app: FastifyInstance,
   config: AppConfig,
   db: Database,
-  providers: LinqaSendProviders = getLinqaSendProviders()
+  providers: LinqaSendProviders = getLinqaSendProviders(),
+  biometrics?: BiometricAuthorizationService
 ) {
-  await registerAdvancedLinqaSendRoutes(app, config, db);
+  await registerAdvancedLinqaSendRoutes(app, config, db, biometrics);
   await registerLinqaSendModuleSurfaceRoutes(app, config, db);
   const authenticate = createAuthenticator(config);
   const fxPricing = new FxPricingService();
@@ -111,10 +129,7 @@ export async function registerLinqaSendRoutes(
     withErrors(async (request) => {
       const p = await authenticate(request);
       requireScope(p, "linqasend:read");
-      return {
-        available: config.LINQASEND_REAL_MONEY_ENABLED === true,
-        mode: config.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION"
-      };
+      return linqaSendAvailability(config);
     })
   );
 
@@ -158,8 +173,8 @@ export async function registerLinqaSendRoutes(
       const p = await authenticate(request);
       requireScope(p, "linqasend:read");
       const { rows } = await db.query(
-        `SELECT id, type, last4, billing_country, verification_status, created_at
-         FROM linqasend_payment_methods WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`,
+        `SELECT id, type, last4, billing_country, verification_status, created_at, is_default, metadata
+         FROM linqasend_payment_methods WHERE user_id = $1 AND deleted_at IS NULL ORDER BY is_default DESC, created_at DESC`,
         [p.userId]
       );
       return {
@@ -169,6 +184,11 @@ export async function registerLinqaSendRoutes(
           last4: r.last4,
           billingCountry: r.billing_country,
           verificationStatus: r.verification_status,
+          isDefault: r.is_default === true,
+          // Card brand and expiry are non-sensitive details the payment provider reports at confirmation.
+          brand: typeof r.metadata?.brand === "string" ? r.metadata.brand : null,
+          expMonth: Number.isInteger(r.metadata?.expMonth) ? r.metadata.expMonth : null,
+          expYear: Number.isInteger(r.metadata?.expYear) ? r.metadata.expYear : null,
           createdAt: r.created_at
         }))
       };
@@ -210,7 +230,7 @@ export async function registerLinqaSendRoutes(
       const p = await authenticate(request);
       requireScope(p, "linqasend:read");
       const { rows } = await db.query(
-        `SELECT id, display_name, country, preferred_currency, is_favorite, created_at
+        `SELECT id, display_name, country, preferred_currency, is_favorite, created_at, recipient_type
          FROM linqasend_recipients WHERE owner_user_id = $1 ORDER BY is_favorite DESC, created_at DESC`,
         [p.userId]
       );
@@ -221,6 +241,7 @@ export async function registerLinqaSendRoutes(
           country: r.country,
           preferredCurrency: r.preferred_currency,
           isFavorite: r.is_favorite,
+          recipientType: r.recipient_type,
           createdAt: r.created_at
         }))
       };
@@ -373,7 +394,14 @@ export async function registerLinqaSendRoutes(
       if (securityDecision.blocked) return reply.code(409).send({ error: securityDecision.blockReason, securityIntentId: internalId, security: securityDecision });
       const missingWarnings = securityDecision.warnings.map((warning) => warning.code).filter((code) => !body.acknowledgedWarningCodes.includes(code));
       if (missingWarnings.length) return reply.code(409).send({ error: "scam_warning_acknowledgement_required", securityIntentId: internalId, warnings: securityDecision.warnings });
-      await securityV4.consumeAuthorization({ authorizationId: body.securityAuthorizationId, userId: p.userId, deviceId: p.deviceId, transferId: internalId, transactionHash: expectedHash });
+      const authorization = (await db.query(`SELECT auth_method FROM linqasend_transaction_authorizations_v4 WHERE id=$1 AND user_id=$2`,[body.securityAuthorizationId,p.userId])).rows[0];
+      if (authorization?.auth_method === "DEVICE_BIOMETRIC") {
+        if (!biometrics) return reply.code(503).send({ error: "BIOMETRIC_NOT_CONFIGURED" });
+        await biometrics.consumePaymentAuthorization(biometricPrincipal(p,request),{ authorizationId: body.securityAuthorizationId,transferId: internalId,transactionHash: expectedHash });
+      } else {
+        if (config.NODE_ENV === "production") return reply.code(403).send({ error: "BIOMETRIC_PAYMENT_AUTHORIZATION_REQUIRED" });
+        await securityV4.consumeAuthorization({ authorizationId: body.securityAuthorizationId, userId: p.userId, deviceId: p.deviceId, transferId: internalId, transactionHash: expectedHash });
+      }
 
       const result = await orchestrator.createTransfer({
         internalId,
@@ -423,30 +451,45 @@ export async function registerLinqaSendRoutes(
     withErrors(async (request) => {
       const p = await authenticate(request);
       requireScope(p, "linqasend:read");
-      const query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(30) }).parse(request.query);
+      const query = z.object({
+        limit: z.coerce.number().int().min(1).max(100).default(30),
+        offset: z.coerce.number().int().min(0).max(10_000).default(0),
+        direction: z.enum(["all", "sent", "received"]).default("all")
+      }).parse(request.query);
+      // SENT: this user's own transfers. RECEIVED: completed transfers that other Linqa users sent to this user.
       const { rows } = await db.query(
-        `SELECT t.public_id, t.status, t.send_amount_minor, t.send_currency,
-                t.receive_amount_minor, t.receive_currency, t.created_at, t.completed_at,
-                r.display_name AS recipient_name
-         FROM linqasend_transfers t
-         JOIN linqasend_recipients r ON r.id = t.recipient_id
-         WHERE t.user_id = $1
-         ORDER BY t.created_at DESC
-         LIMIT $2`,
-        [p.userId, query.limit]
+        `SELECT * FROM (
+           SELECT t.public_id, t.status, t.send_amount_minor, t.send_currency, t.receive_amount_minor, t.receive_currency,
+                  t.created_at, t.completed_at, 'SENT' AS direction, r.display_name AS counterpart_name
+           FROM linqasend_transfers t JOIN linqasend_recipients r ON r.id = t.recipient_id
+           WHERE t.user_id = $1
+           UNION ALL
+           SELECT t.public_id, t.status, t.send_amount_minor, t.send_currency, t.receive_amount_minor, t.receive_currency,
+                  t.created_at, t.completed_at, 'RECEIVED' AS direction, COALESCE(up.display_name, 'Linqa user') AS counterpart_name
+           FROM linqasend_transfers t JOIN linqasend_recipients r ON r.id = t.recipient_id
+           LEFT JOIN user_profiles up ON up.user_id = t.user_id
+           WHERE r.linqa_user_id = $1 AND t.user_id <> $1 AND t.status = 'COMPLETED'
+         ) x
+         WHERE $2::text = 'all' OR ($2::text = 'sent' AND direction = 'SENT') OR ($2::text = 'received' AND direction = 'RECEIVED')
+         ORDER BY created_at DESC, public_id DESC
+         LIMIT $3 OFFSET $4`,
+        [p.userId, query.direction, query.limit + 1, query.offset]
       );
+      const page = rows.slice(0, query.limit);
       return {
-        items: rows.map((r) => ({
+        items: page.map((r) => ({
           id: r.public_id,
           status: r.status,
           sendAmountMinor: String(r.send_amount_minor),
           sendCurrency: r.send_currency,
           receiveAmountMinor: String(r.receive_amount_minor),
           receiveCurrency: r.receive_currency,
-          recipientName: r.recipient_name,
+          recipientName: r.counterpart_name,
+          direction: r.direction as "SENT" | "RECEIVED",
           createdAt: r.created_at,
           completedAt: r.completed_at
-        }))
+        })),
+        nextOffset: rows.length > query.limit ? query.offset + query.limit : null
       };
     })
   );
@@ -459,16 +502,20 @@ export async function registerLinqaSendRoutes(
       const params = z.object({ id: z.string().min(1) }).parse(request.params);
 
       const { rows } = await db.query(
-        `SELECT t.*, r.display_name AS recipient_name
+        `SELECT t.*, r.display_name AS recipient_name, r.country AS recipient_country, r.recipient_type,
+                (t.user_id <> $2) AS received, COALESCE(up.display_name, 'Linqa user') AS sender_name
          FROM linqasend_transfers t
          JOIN linqasend_recipients r ON r.id = t.recipient_id
-         WHERE t.public_id = $1 AND t.user_id = $2`,
+         LEFT JOIN user_profiles up ON up.user_id = t.user_id
+         WHERE t.public_id = $1 AND (t.user_id = $2 OR (r.linqa_user_id = $2 AND t.status = 'COMPLETED'))`,
         [params.id, p.userId]
       );
       const row = rows[0];
       if (!row) return reply.code(404).send({ error: "transfer_not_found" });
 
-      const attempts = await db.query(
+      // The recipient of a completed transfer sees a receipt, not the sender's attempt history or failure details.
+      const received = row.received === true;
+      const attempts = received ? { rows: [] as any[] } : await db.query(
         `SELECT phase, status, error_code, created_at FROM linqasend_transfer_attempts
          WHERE transfer_id = $1 ORDER BY created_at ASC`,
         [row.id]
@@ -477,13 +524,19 @@ export async function registerLinqaSendRoutes(
       return {
         id: row.public_id,
         status: row.status,
+        direction: received ? "RECEIVED" : "SENT",
         sendAmountMinor: String(row.send_amount_minor),
         sendCurrency: row.send_currency,
         receiveAmountMinor: String(row.receive_amount_minor),
         receiveCurrency: row.receive_currency,
-        recipientName: row.recipient_name,
-        failureCode: row.failure_code,
-        failureMessage: row.failure_message,
+        recipientName: received ? row.sender_name : row.recipient_name,
+        recipientCountry: received ? null : row.recipient_country,
+        recipientType: received ? null : row.recipient_type,
+        customerRate: received ? null : String(row.customer_rate),
+        senderFeeMinor: received ? null : String(row.sender_fee_minor ?? 0),
+        recipientFeeMinor: received ? null : String(row.recipient_fee_minor ?? 0),
+        failureCode: received ? null : row.failure_code,
+        failureMessage: received ? null : row.failure_message,
         createdAt: row.created_at,
         completedAt: row.completed_at,
         timeline: attempts.rows.map((a) => ({
@@ -492,6 +545,35 @@ export async function registerLinqaSendRoutes(
           errorCode: a.error_code,
           at: a.created_at
         }))
+      };
+    })
+  );
+
+  /**
+   * Totals for the LinqaSend dashboard. Counts COMPLETED transfers the user sent, in USD (the only
+   * source currency today). "This week" starts Monday and "this month" on the 1st, both in UTC.
+   */
+  app.get(
+    "/v1/linqasend/dashboard",
+    withErrors(async (request) => {
+      const p = await authenticate(request);
+      requireScope(p, "linqasend:read");
+      const { rows } = await db.query(
+        `SELECT
+           coalesce(sum(send_amount_minor), 0)::bigint AS all_time,
+           coalesce(sum(send_amount_minor) FILTER (WHERE coalesce(completed_at, created_at) >= date_trunc('month', now())), 0)::bigint AS this_month,
+           coalesce(sum(send_amount_minor) FILTER (WHERE coalesce(completed_at, created_at) >= date_trunc('week', now())), 0)::bigint AS this_week,
+           count(*)::int AS transfer_count
+         FROM linqasend_transfers WHERE user_id = $1 AND status = 'COMPLETED' AND send_currency = 'USD'`,
+        [p.userId]
+      );
+      const row = rows[0] ?? {};
+      return {
+        currency: "USD",
+        totalSentMinor: String(row.all_time ?? 0),
+        thisMonthMinor: String(row.this_month ?? 0),
+        thisWeekMinor: String(row.this_week ?? 0),
+        transferCount: row.transfer_count ?? 0
       };
     })
   );

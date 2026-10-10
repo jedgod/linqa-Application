@@ -1,0 +1,142 @@
+LINQA CALL BACKEND
+Voice and video pages were UI only. This adds /v2/calls.
+Apply 030_calls.sql. Media is not stored.
+
+
+================================================================================
+FILE: server/migrations/030_calls.sql
+================================================================================
+-- Voice and video calls. Signaling state only. Media stays on the peer path.
+
+CREATE TABLE IF NOT EXISTS calls (
+  id            TEXT PRIMARY KEY,
+  caller_id     TEXT NOT NULL,
+  peer_user_id  TEXT NOT NULL,
+  call_type     TEXT NOT NULL CHECK (call_type IN ('AUDIO','VIDEO')),
+  privacy_mode  TEXT NOT NULL CHECK (privacy_mode IN ('STANDARD','RELAY_ONLY')),
+  state         TEXT NOT NULL CHECK (state IN ('RINGING','ACCEPTED','ACTIVE','REJECTED','ENDED','FAILED')),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS calls_peer_idx ON calls(peer_user_id, created_at DESC);
+
+================================================================================
+FILE: server/src/services/call-backend.service.ts
+================================================================================
+import type { Database } from "../db/pool.js";
+
+const NEXT: Record<string, string[]> = {
+  RINGING: ["ACCEPTED", "REJECTED", "ENDED", "FAILED"],
+  ACCEPTED: ["ACTIVE", "ENDED", "FAILED"],
+  ACTIVE: ["ENDED", "FAILED"],
+};
+
+export class CallBackend {
+  constructor(private readonly db: Database) {}
+
+  async create(input: {
+    id: string;
+    callerId: string;
+    peerUserId: string;
+    callType: "AUDIO" | "VIDEO";
+    privacyMode: "STANDARD" | "RELAY_ONLY";
+  }) {
+    await this.db.query(
+      `INSERT INTO calls(id,caller_id,peer_user_id,call_type,privacy_mode,state)
+       VALUES($1,$2,$3,$4,$5,'RINGING')`,
+      [input.id, input.callerId, input.peerUserId, input.callType, input.privacyMode],
+    );
+    return { id: input.id, state: "RINGING" };
+  }
+
+  async transition(callId: string, userId: string, state: string) {
+    const row = await this.db.query(
+      `SELECT caller_id,peer_user_id,state FROM calls WHERE id=$1`,
+      [callId],
+    );
+    if (row.rowCount !== 1) throw new Error("CALL_NOT_FOUND");
+    const call = row.rows[0];
+    if (call.caller_id !== userId && call.peer_user_id !== userId) throw new Error("CALL_ACCESS_DENIED");
+    if (!NEXT[call.state]?.includes(state)) throw new Error("CALL_STATE_INVALID");
+    await this.db.query(
+      `UPDATE calls SET state=$2, updated_at=now() WHERE id=$1`,
+      [callId, state],
+    );
+    return { id: callId, state };
+  }
+
+  async get(callId: string, userId: string) {
+    const row = await this.db.query(
+      `SELECT id,call_type,privacy_mode,state,caller_id,peer_user_id,created_at
+         FROM calls WHERE id=$1`,
+      [callId],
+    );
+    if (row.rowCount !== 1) throw new Error("CALL_NOT_FOUND");
+    const call = row.rows[0];
+    if (call.caller_id !== userId && call.peer_user_id !== userId) throw new Error("CALL_ACCESS_DENIED");
+    return call;
+  }
+}
+
+================================================================================
+FILE: server/src/routes/call.routes.ts
+================================================================================
+import { z } from "zod";
+import type { CallBackend } from "../services/call-backend.service.js";
+
+export function registerCallRoutes(
+  app: { post: Function; get: Function },
+  deps: {
+    calls: CallBackend;
+    authenticate: (request: any) => Promise<{ userId: string }>;
+  },
+) {
+  app.post("/v2/calls", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    const body = z.object({
+      id: z.string().min(8),
+      peerUserId: z.string().min(1),
+      callType: z.enum(["AUDIO", "VIDEO"]),
+      privacyMode: z.enum(["STANDARD", "RELAY_ONLY"]),
+    }).parse(request.body);
+    return deps.calls.create({ ...body, callerId: actor.userId });
+  });
+
+  app.post("/v2/calls/:id/state", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    const body = z.object({
+      state: z.enum(["ACCEPTED", "ACTIVE", "REJECTED", "ENDED", "FAILED"]),
+    }).parse(request.body);
+    return deps.calls.transition(request.params.id, actor.userId, body.state);
+  });
+
+  app.get("/v2/calls/:id", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    return deps.calls.get(request.params.id, actor.userId);
+  });
+}
+
+================================================================================
+FILE: clients/mobile/src/calls/startCallPage.ts
+================================================================================
+import type { CallService } from "../services/CallService";
+
+/** Opens the voice or video page only after the backend accepts the call. */
+export async function startCallPage(input: {
+  calls: CallService;
+  peerUserId: string;
+  callType: "AUDIO" | "VIDEO";
+  privacyMode: "STANDARD" | "RELAY_ONLY";
+}) {
+  const created = await input.calls.create({
+    peerUserId: input.peerUserId,
+    callType: input.callType,
+    privacyMode: input.privacyMode,
+  });
+  return {
+    callId: created.id,
+    page: input.callType === "AUDIO" ? "VOICE" : "VIDEO",
+    privacy: input.privacyMode === "RELAY_ONLY" ? "Relay only" : "End-to-end",
+  };
+}

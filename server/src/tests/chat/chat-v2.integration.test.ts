@@ -9,6 +9,10 @@ import {
   issueContactQrToken,
   listMessages,
   markConversationRead,
+  setConversationMuted,
+  setConversationPinned,
+  setDisappearAfter,
+  getConversationSettings,
   redeemContactQrToken,
   resolveDirectConversation,
   sendMessage,
@@ -254,6 +258,82 @@ suite("chat v2: read state", () => {
     expect((after.rows[0] as { lastRead: string }).lastRead).toBe(sent.id);
   });
 
+  it("mutes only the caller's own membership, and a non-member cannot", async () => {
+    const alice = await makeUser("Alice Mute");
+    const bob = await makeUser("Bob Mute");
+    const carol = await makeUser("Carol Mute");
+    const { conversationId } = await resolveDirectConversation(db, alice, bob);
+    expect(await setConversationMuted(db, bob, conversationId, true)).toEqual({ muted: true });
+    const rows = await db.query(`SELECT user_id AS "u", muted FROM conversation_members WHERE conversation_id=$1`, [conversationId]);
+    const byUser = Object.fromEntries((rows.rows as Array<{ u: string; muted: boolean }>).map((r) => [r.u, r.muted]));
+    expect(byUser[bob]).toBe(true);
+    expect(byUser[alice]).toBe(false);
+    await expect(setConversationMuted(db, carol, conversationId, true)).rejects.toBeInstanceOf(ChatError);
+    expect(await setConversationMuted(db, bob, conversationId, false)).toEqual({ muted: false });
+  });
+
+  it("pins per member, reports settings, and refuses non-members", async () => {
+    const alice = await makeUser("Alice Pin");
+    const bob = await makeUser("Bob Pin");
+    const carol = await makeUser("Carol Pin");
+    const { conversationId } = await resolveDirectConversation(db, alice, bob);
+    expect(await getConversationSettings(db, alice, conversationId)).toEqual({ muted: false, pinned: false, disappearAfterSeconds: null });
+    expect(await setConversationPinned(db, alice, conversationId, true)).toEqual({ pinned: true });
+    expect((await getConversationSettings(db, alice, conversationId)).pinned).toBe(true);
+    expect((await getConversationSettings(db, bob, conversationId)).pinned).toBe(false); // mine only
+    await expect(setConversationPinned(db, carol, conversationId, true)).rejects.toBeInstanceOf(ChatError);
+    await expect(getConversationSettings(db, carol, conversationId)).rejects.toBeInstanceOf(ChatError);
+  });
+
+  describe("disappearing messages", () => {
+    it("only allows 1 day, 1 week, 4 weeks or off, and only for members", async () => {
+      const alice = await makeUser("Alice Dis");
+      const bob = await makeUser("Bob Dis");
+      const carol = await makeUser("Carol Dis");
+      const { conversationId } = await resolveDirectConversation(db, alice, bob);
+      expect(await setDisappearAfter(db, alice, conversationId, 86_400)).toEqual({ disappearAfterSeconds: 86_400 });
+      expect((await getConversationSettings(db, bob, conversationId)).disappearAfterSeconds).toBe(86_400); // the whole conversation
+      for (const bad of [0, 60, 3600, -1, 999_999_999]) await expect(setDisappearAfter(db, alice, conversationId, bad)).rejects.toMatchObject({ code: "INVALID_DISAPPEAR_SETTING" });
+      await expect(setDisappearAfter(db, carol, conversationId, 86_400)).rejects.toBeInstanceOf(ChatError);
+      expect(await setDisappearAfter(db, bob, conversationId, null)).toEqual({ disappearAfterSeconds: null });
+    });
+
+    it("stamps each new message with its own expiry, and leaves older messages alone when the setting changes", async () => {
+      const alice = await makeUser("Alice Stamp");
+      const bob = await makeUser("Bob Stamp");
+      const { conversationId } = await resolveDirectConversation(db, alice, bob);
+      const before = await sendMessage(db, message(conversationId, alice));
+      await setDisappearAfter(db, alice, conversationId, 604_800);
+      const during = await sendMessage(db, message(conversationId, alice));
+      await setDisappearAfter(db, alice, conversationId, null);
+      const after = await sendMessage(db, message(conversationId, alice));
+      const rows = await db.query(`SELECT id, expires_at FROM chat_messages WHERE conversation_id = $1`, [conversationId]);
+      const byId = Object.fromEntries((rows.rows as Array<{ id: string; expires_at: Date | null }>).map((r) => [r.id, r.expires_at]));
+      expect(byId[before.id]).toBeNull();
+      expect(byId[after.id]).toBeNull();
+      const days = (new Date(byId[during.id]!).getTime() - Date.now()) / 86_400_000;
+      expect(days).toBeGreaterThan(6.99);
+      expect(days).toBeLessThan(7.01);
+    });
+
+    it("never returns an expired message, and deletes it the next time anyone sends", async () => {
+      const alice = await makeUser("Alice Expire");
+      const bob = await makeUser("Bob Expire");
+      const { conversationId } = await resolveDirectConversation(db, alice, bob);
+      await setDisappearAfter(db, alice, conversationId, 86_400);
+      const old = await sendMessage(db, message(conversationId, alice));
+      const kept = await sendMessage(db, message(conversationId, bob));
+      await db.query(`UPDATE chat_messages SET expires_at = now() - interval '1 minute' WHERE id = $1`, [old.id]);
+      const page = await listMessages(db, bob, conversationId, 50);
+      expect((page.messages as Array<{ id: string }>).map((m) => m.id)).toEqual([kept.id]);
+      // The read pointer only ever points at a message that still exists.
+      expect((await markConversationRead(db, bob, conversationId)).lastReadMessageId).toBe(kept.id);
+      expect((await db.query(`SELECT 1 FROM chat_messages WHERE id = $1`, [old.id])).rowCount).toBe(1); // still stored until someone sends
+      await sendMessage(db, message(conversationId, alice));
+      expect((await db.query(`SELECT 1 FROM chat_messages WHERE id = $1`, [old.id])).rowCount).toBe(0);
+    });
+  });
+
   it("does not wipe the read pointer for a conversation with no messages", async () => {
     const alice = await makeUser("Alice Empty");
     const bob = await makeUser("Bob Empty");
@@ -297,6 +377,21 @@ suite("chat v2: read state", () => {
 });
 
 suite("chat v2: message paging", () => {
+  it("returns a long ciphertext as one unbroken base64 string, exactly as it was sent", async () => {
+    const alice = await makeUser("Alice Long");
+    const bob = await makeUser("Bob Long");
+    const { conversationId } = await resolveDirectConversation(db, alice, bob);
+    // Longer than Postgres' 76-character base64 line wrap (a message sealed for two devices is several hundred).
+    const sent = ciphertext("x".repeat(600));
+    await sendMessage(db, { ...message(conversationId, alice), ciphertextBase64: sent });
+
+    const page = await listMessages(db, bob, conversationId, 10);
+    const returned = (page.messages[0] as { ciphertext: string }).ciphertext;
+
+    expect(returned).not.toMatch(/\s/);
+    expect(returned).toBe(sent);
+  });
+
   it("pages newest-first without repeating or skipping", async () => {
     const alice = await makeUser("Alice Page");
     const bob = await makeUser("Bob Page");

@@ -11,6 +11,8 @@ import { ProductionClosureV6Service } from "../../services/linqasend/closure-v6.
 import { RegulatedEntityResolverV7 } from "../../services/linqasend/regulatory-v7.js";
 import { deterministicTransferId, LinqaSendSecurityV4Service, TransactionSignatureService } from "../../services/linqasend/security-v4.js";
 import { LinqaSendLaunchControlService } from "../../services/linqasend/launch-control.service.js";
+import type { BiometricAuthorizationService } from "../../security/biometrics/service.js";
+import { biometricPrincipal } from "../biometrics.js";
 
 function guarded<T>(handler: (request: FastifyRequest, reply: FastifyReply) => Promise<T>) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
@@ -27,7 +29,7 @@ const money = z.string().regex(/^\d+$/).transform(BigInt);
 const country = z.string().length(2).transform((v) => v.toUpperCase());
 const currency = z.string().length(3).transform((v) => v.toUpperCase());
 
-export async function registerAdvancedLinqaSendRoutes(app: FastifyInstance, config: AppConfig, db: Database) {
+export async function registerAdvancedLinqaSendRoutes(app: FastifyInstance, config: AppConfig, db: Database, biometrics?: BiometricAuthorizationService) {
   const auth = createAuthenticator(config);
   const readiness = new LinqaSendReadinessService(db, config.LINQASEND_RELEASE_GIT_SHA && config.LINQASEND_ARTIFACT_SHA256 ? { gitSha: config.LINQASEND_RELEASE_GIT_SHA, artifactDigest: config.LINQASEND_ARTIFACT_SHA256 } : undefined, { realMoneyEnabled: config.LINQASEND_REAL_MONEY_ENABLED === true, mode: config.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION", ...(config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID ? { limitedCorridorId: config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID } : {}) });
   const jurisdiction = new JurisdictionV2Service(db);
@@ -67,13 +69,34 @@ export async function registerAdvancedLinqaSendRoutes(app: FastifyInstance, conf
     if (!ready.ready) return reply.code(409).send({ error: "real_money_not_ready", blockers: ready.blockers });
     const transfer = { id: deterministicTransferId(p.userId, body.idempotencyKey), senderUserId: p.userId, recipientId: quote.recipient_id, quoteId: quote.id, sourceAmountMinor: BigInt(quote.send_amount_minor), sourceCurrency: quote.send_currency, destinationAmountMinor: BigInt(quote.receive_amount_minor), destinationCurrency: quote.receive_currency, fundingSourceId: body.paymentMethodId, transferClass: ready.transferClass };
     const challenge = await security.createChallenge({ transfer, installationId, deviceId: p.deviceId });
+    await db.query(`UPDATE linqasend_transaction_challenges_v4 SET biometric_quote_id=$2,biometric_payment_method_id=$3 WHERE id=$1`,[challenge.id,quote.id,body.paymentMethodId]);
     return reply.code(201).send({ ...challenge, securityIntentId: transfer.id });
   }));
 
   app.post("/v1/linqasend/security/authorizations", guarded(async (request, reply) => {
     const p = await auth(request); requireScope(p, "linqasend:write");
     if (!p.deviceId) return reply.code(401).send({ error: "device_bound_token_required" });
-    const body = z.object({ challengeId: z.string().uuid(), signatureBase64: z.string().min(80).max(120) }).parse(request.body);
+    const body = z.union([
+      z.object({ challengeId: z.string().uuid(), biometricGrantId: z.string().uuid() }).strict(),
+      z.object({ challengeId: z.string().uuid(), signatureBase64: z.string().min(80).max(120) }).strict()
+    ]).parse(request.body);
+    if ("biometricGrantId" in body) {
+      if (!biometrics) return reply.code(503).send({ error: "BIOMETRIC_NOT_CONFIGURED" });
+      const principal = biometricPrincipal(p,request);
+      return reply.code(201).send(await biometrics.transaction(async client => {
+        await biometrics.guard(client,principal);
+        const resource = await biometrics.resource(client,principal,"SEND_TRANSFER_AUTHORIZE",{ paymentChallengeId: body.challengeId });
+        const grant = await biometrics.consume(client,principal,body.biometricGrantId,"SEND_TRANSFER_AUTHORIZE",resource);
+        const consumed = await client.query(`UPDATE linqasend_transaction_challenges_v4 SET consumed_at=now() WHERE id=$1 AND consumed_at IS NULL AND expires_at>now() RETURNING transfer_id,expected_transaction_hash`,[body.challengeId]);
+        const challenge = consumed.rows[0]; if (!challenge) throw new Error("BIOMETRIC_PAYMENT_CHALLENGE_EXPIRED");
+        const authorizationId = randomUUID(), expiresAt = new Date(Date.now()+90_000);
+        await client.query(`INSERT INTO linqasend_transaction_authorizations_v4(id,transfer_id,user_id,jti,transaction_hash,device_binding_key_id,auth_method,expires_at,biometric_credential_id,biometric_security_epoch,biometric_session_id,biometric_installation_id,biometric_payment_challenge_id,biometric_resource_hash)
+          VALUES($1,$2,$3,$4,$5,$6,'DEVICE_BIOMETRIC',$7,$8,$9,$10,$11,$12,$13)`,[authorizationId,challenge.transfer_id,p.userId,randomUUID(),challenge.expected_transaction_hash,p.deviceId,expiresAt,grant.credential_id,grant.security_epoch,principal.sessionId,principal.installationId,body.challengeId,grant.resource_hash]);
+        return { authorizationId,transactionHash: challenge.expected_transaction_hash,expiresAt: expiresAt.toISOString() };
+      }));
+    }
+    // Production transfers require a hardware-backed biometric assertion, never a software-key substitute.
+    if (config.NODE_ENV === "production") return reply.code(403).send({ error: "BIOMETRIC_PAYMENT_AUTHORIZATION_REQUIRED" });
     return reply.code(201).send(await security.authorizeChallenge({ ...body, userId: p.userId, deviceId: p.deviceId }));
   }));
 

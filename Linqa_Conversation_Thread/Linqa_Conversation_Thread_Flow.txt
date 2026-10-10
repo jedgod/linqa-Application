@@ -1,0 +1,23 @@
+LINQA CONVERSATION THREAD FLOW
+Date: 2026-10-06
+
+Composer
+  + opens Add to chat
+  Photos | Record video | Record voice | Document | Design / crop
+  AI image | Location | Contact | Poll | Event
+  Schedule meeting | Share live screen
+
+Each action seals through the core before send.
+Photos, documents, voice, video, and crops send a vault id, not raw bytes.
+Location, contact, voice, video, and live screen ask before sharing.
+
+Settings, from the same thread
+  Add features     turn each action on or off
+  Change background  Canvas, Mist, Forest, Ink
+  Block / Unblock  peer is not told
+  plus existing verify, disappearing, mute, delete chat
+
+Files
+  clients/mobile/src/conversation/thread-actions.ts
+  clients/mobile/src/conversation/ThreadSheet.tsx
+  clients/mobile/src/conversation/thread-actions.test.ts

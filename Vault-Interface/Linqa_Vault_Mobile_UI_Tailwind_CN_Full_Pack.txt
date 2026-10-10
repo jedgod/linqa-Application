@@ -1,28 +1,982 @@
-LINQA LIVE-SOURCE COMPATIBILITY MANIFEST
-Compatibility path: Vault-Interface/Linqa_Vault_Mobile_UI_Tailwind_CN_Full_Pack.txt
+LINQA VAULT™ — MOBILE UI TAILWIND/CN FULL PACK
+================================================
+Screens: Home → Files → Intake → Save from Social → Security Scan → Save →
+Private Vault → Share → Plans → Security
 
-STATUS
-This notebook is reference-only. It does not contain executable source and must
-not be copied over the repository. The running implementation and its tests are
-the sole source of truth. This unique manifest supersedes the former duplicated
-auth-only pointer that appeared under unrelated pack names.
+Stack:
+- React / Next.js
+- Tailwind CSS
+- clsx + tailwind-merge cn()
+- lucide-react
+- mobile-first
+- shadcn-style composition
 
-CANONICAL LIVE SOURCES
-- clients/mobile/app/modules/file-vault.tsx
-- clients/mobile/services/vault.service.ts
-- clients/web/src/vault/FileVaultClient.ts
-- server/src/routes/file-vault.ts
-- server/src/services/file-vault.service.ts
-- certification/vault/
+INSTALL
+-------
+npm install lucide-react clsx tailwind-merge
 
-AUTHENTICATION CONTRACT
-- Server normalization, challenge purpose enforcement, session rotation, scopes,
-  device enrollment, and production Ed25519 verification remain authoritative.
-- UI modules obtain the current access token from the shared account/session stack;
-  they do not implement parallel login, token, user, or database models.
+================================================
+FILE: lib/cn.ts
+================================================
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
 
-DUPLICATE POLICY
-- Do not create another backend, auth stack, model tree, migration history, or
-  generated UniFFI/JNA binding. Extend the canonical live sources additively.
-- Reference images describe layout and workflow; live capability/readiness APIs
-  determine whether provider-dependent controls are enabled.
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
+================================================
+FILE: app/globals.css
+================================================
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --vault-bg: 7 18 31;
+  --vault-card: 12 28 45;
+  --vault-border: 35 56 76;
+  --vault-text: 241 245 249;
+  --vault-muted: 148 163 184;
+  --vault-blue: 37 99 235;
+  --vault-green: 34 197 94;
+  --vault-purple: 139 92 246;
+}
+
+html,body {
+  margin:0;
+  min-height:100%;
+  background:rgb(var(--vault-bg));
+  color:rgb(var(--vault-text));
+}
+*{box-sizing:border-box}
+
+================================================
+FILE: tailwind.config.ts
+================================================
+import type { Config } from "tailwindcss";
+
+const config: Config = {
+  content:["./app/**/*.{ts,tsx}","./components/**/*.{ts,tsx}","./features/**/*.{ts,tsx}"],
+  theme:{
+    extend:{
+      colors:{
+        vault:{
+          bg:"rgb(var(--vault-bg) / <alpha-value>)",
+          card:"rgb(var(--vault-card) / <alpha-value>)",
+          border:"rgb(var(--vault-border) / <alpha-value>)",
+          text:"rgb(var(--vault-text) / <alpha-value>)",
+          muted:"rgb(var(--vault-muted) / <alpha-value>)",
+          blue:"rgb(var(--vault-blue) / <alpha-value>)",
+          green:"rgb(var(--vault-green) / <alpha-value>)",
+          purple:"rgb(var(--vault-purple) / <alpha-value>)",
+        }
+      },
+      boxShadow:{
+        phone:"0 30px 80px rgba(0,0,0,.45)",
+        glow:"0 0 35px rgba(37,99,235,.28)"
+      }
+    }
+  },
+  plugins:[]
+};
+export default config;
+
+================================================
+FILE: features/vault/mock.ts
+================================================
+export const recentFiles = [
+  {id:"1",name:"Q2 Financial Report.pdf",type:"pdf",size:"2.4 MB",modified:"Today"},
+  {id:"2",name:"Client Contract.docx",type:"doc",size:"1.1 MB",modified:"Today"},
+  {id:"3",name:"Project Plan.xlsx",type:"sheet",size:"1.8 MB",modified:"Yesterday"},
+];
+
+export const folders = [
+  {id:"f1",name:"Personal",items:12,modified:"Today"},
+  {id:"f2",name:"Business",items:24,modified:"Today"},
+  {id:"f3",name:"Reports",items:18,modified:"Yesterday"},
+  {id:"f4",name:"Documents",items:10,modified:"2 days ago"},
+  {id:"f5",name:"Photos & Videos",items:32,modified:"2 days ago"},
+  {id:"f6",name:"Certificates",items:6,modified:"3 days ago"},
+];
+
+export const plans = [
+  {id:"free",name:"5 GB",price:"$0.00"},
+  {id:"25",name:"25 GB",price:"$1.99/mo"},
+  {id:"40",name:"40 GB",price:"$2.99/mo"},
+  {id:"60",name:"60 GB",price:"$3.99/mo",current:true},
+  {id:"100",name:"100 GB",price:"$5.99/mo"},
+  {id:"250",name:"250 GB",price:"$9.99/mo"},
+  {id:"1tb",name:"1 TB",price:"$14.99/mo"},
+];
+================================================
+FILE: components/vault/ui.tsx
+================================================
+import React from "react";
+import {
+  Home, FolderClosed, Plus, Share2, MoreHorizontal, ArrowLeft, Search,
+  Menu, Info, Bell, FileText, FileSpreadsheet, Folder, LockKeyhole
+} from "lucide-react";
+import { cn } from "@/lib/cn";
+
+export function PhoneFrame({children}:{children:React.ReactNode}) {
+  return (
+    <div className="relative mx-auto flex h-[844px] w-full max-w-[390px] flex-col
+                    overflow-hidden rounded-[44px] border border-white/10
+                    bg-vault-bg shadow-phone">
+      <div className="flex h-11 items-center justify-between px-6 text-[12px] font-semibold">
+        <span>9:41</span><span>▮▮▮  ⌁  ▰</span>
+      </div>
+      <div className="min-h-0 flex-1">{children}</div>
+      <div className="pointer-events-none absolute bottom-2 left-1/2 h-1 w-32
+                      -translate-x-1/2 rounded-full bg-white/80"/>
+    </div>
+  );
+}
+
+export function Card({children,className}:{children:React.ReactNode,className?:string}) {
+  return (
+    <div className={cn("rounded-2xl border border-white/[0.06] bg-white/[0.045]",className)}>
+      {children}
+    </div>
+  );
+}
+
+export function PageHeader({
+  title,subtitle,back,search,menu,info,bell
+}:{
+  title:string;subtitle?:string;back?:boolean;search?:boolean;menu?:boolean;
+  info?:boolean;bell?:boolean
+}) {
+  return (
+    <div className="px-5 pt-3">
+      <div className="flex items-center gap-3">
+        {back && <button className="grid h-10 w-10 place-items-center rounded-full">
+          <ArrowLeft className="h-5 w-5"/>
+        </button>}
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-[22px] font-semibold">{title}</h1>
+          {subtitle && <p className="mt-1 text-xs text-slate-400">{subtitle}</p>}
+        </div>
+        {search && <Search className="h-5 w-5"/>}
+        {menu && <Menu className="h-5 w-5"/>}
+        {info && <Info className="h-5 w-5"/>}
+        {bell && <Bell className="h-5 w-5"/>}
+      </div>
+    </div>
+  );
+}
+
+export function ProgressBar({value}:{value:number}) {
+  return (
+    <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+      <div className="h-full rounded-full bg-blue-500"
+           style={{width:`${Math.max(0,Math.min(value,100))}%`}}/>
+    </div>
+  );
+}
+
+export function FileIcon({type}:{type:"pdf"|"doc"|"sheet"|"folder"}) {
+  if(type==="folder") {
+    return <Folder className="h-8 w-8 fill-amber-400 text-amber-400"/>;
+  }
+  if(type==="sheet") {
+    return <span className="grid h-10 w-9 place-items-center rounded-md bg-green-500">
+      <FileSpreadsheet className="h-5 w-5"/>
+    </span>;
+  }
+  return <span className={cn("grid h-10 w-9 place-items-center rounded-md",
+    type==="pdf"?"bg-red-500":"bg-blue-500")}>
+    <FileText className="h-5 w-5"/>
+  </span>;
+}
+
+export function BottomNav({active}:{active:"home"|"files"|"share"|"more"}) {
+  const items = [
+    ["home","Home",Home],["files","Files",FolderClosed],["plus","",Plus],
+    ["share","Share",Share2],["more","More",MoreHorizontal]
+  ] as const;
+  return (
+    <div className="absolute inset-x-0 bottom-0 border-t border-white/10
+                    bg-[#081523]/95 px-3 pb-5 pt-2 backdrop-blur">
+      <div className="grid grid-cols-5 items-end">
+        {items.map(([id,label,Icon])=>{
+          if(id==="plus") return <button key={id}
+            className="mx-auto grid h-14 w-14 -translate-y-4 place-items-center
+                       rounded-full bg-blue-600 ring-4 ring-[#081523] shadow-glow">
+            <Icon className="h-7 w-7"/>
+          </button>;
+          const on = id===active;
+          return <button key={id}
+            className={cn("flex flex-col items-center gap-1 text-[10px]",
+              on?"text-blue-400":"text-slate-400")}>
+            <Icon className="h-[18px] w-[18px]"/><span>{label}</span>
+          </button>
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function Screen({
+  children,active,bottomNav=true
+}:{
+  children:React.ReactNode;active:"home"|"files"|"share"|"more";bottomNav?:boolean
+}) {
+  return (
+    <div className="relative flex h-full flex-col">
+      <main className="flex-1 overflow-y-auto pb-24">{children}</main>
+      {bottomNav && <BottomNav active={active}/>}
+    </div>
+  );
+}
+
+export function VaultLogo() {
+  return <div className="grid h-9 w-9 place-items-center rounded-xl bg-blue-600/20
+                         ring-1 ring-blue-500/30">
+    <LockKeyhole className="h-5 w-5 text-blue-400"/>
+  </div>
+}
+================================================
+FILE: features/vault/screens/HomeScreen.tsx
+================================================
+import { Bell,Upload,Inbox,Share2,LockKeyhole,MoreVertical } from "lucide-react";
+import { Card,FileIcon,ProgressBar,Screen,VaultLogo } from "@/components/vault/ui";
+import { recentFiles } from "../mock";
+
+export function HomeScreen(){
+  const actions=[
+    [Upload,"Upload Files","text-blue-400"],
+    [Inbox,"Intake Center","text-green-400"],
+    [Share2,"Secure Share","text-blue-400"],
+    [LockKeyhole,"Private Vault","text-amber-400"]
+  ] as const;
+
+  return <Screen active="home">
+    <div className="px-5 pt-3">
+      <div className="flex items-center gap-3">
+        <VaultLogo/>
+        <div className="flex-1 text-[20px] font-semibold">Linqa Vault</div>
+        <button className="relative"><Bell className="h-5 w-5"/>
+          <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-500"/>
+        </button>
+      </div>
+
+      <div className="mt-5">
+        <h2 className="text-xl font-semibold">Hello, Alex 👋</h2>
+        <p className="mt-1 text-xs text-slate-400">Your secure digital vault</p>
+      </div>
+
+      <Card className="mt-5 p-4">
+        <div className="text-xs text-slate-400">Storage used</div>
+        <div className="mt-1 flex items-end justify-between">
+          <div><span className="text-2xl font-semibold">38.6 GB</span>
+          <span className="ml-1 text-sm text-slate-400">/ 60 GB</span></div>
+          <span className="text-xs font-semibold">64%</span>
+        </div>
+        <div className="mt-4"><ProgressBar value={64}/></div>
+        <button className="mt-2 block w-full text-right text-xs text-blue-400">
+          Upgrade Plan
+        </button>
+      </Card>
+
+      <div className="mt-5 text-sm font-semibold">Quick Actions</div>
+      <div className="mt-3 grid grid-cols-4 gap-2">
+        {actions.map(([Icon,label,tone])=>
+          <button key={label}
+            className="rounded-xl border border-white/[0.06] bg-white/[0.04] p-2.5">
+            <Icon className={`mx-auto h-5 w-5 ${tone}`}/>
+            <div className="mt-2 text-[10px] leading-tight">{label}</div>
+          </button>
+        )}
+      </div>
+
+      <div className="mt-5 flex items-center justify-between">
+        <span className="text-sm font-semibold">Recent Files</span>
+        <button className="text-xs text-blue-400">See All</button>
+      </div>
+      <Card className="mt-3 divide-y divide-white/[0.05] px-3">
+        {recentFiles.map(file=><div key={file.id} className="flex items-center gap-3 py-3">
+          <FileIcon type={file.type as any}/>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium">{file.name}</div>
+            <div className="text-[11px] text-slate-400">{file.size} • {file.modified}</div>
+          </div>
+          <MoreVertical className="h-4 w-4 text-slate-500"/>
+        </div>)}
+      </Card>
+    </div>
+  </Screen>
+}
+================================================
+FILE: features/vault/screens/MyFilesScreen.tsx
+================================================
+import { ChevronRight,MoreVertical } from "lucide-react";
+import { Card,FileIcon,PageHeader,Screen } from "@/components/vault/ui";
+import { folders,recentFiles } from "../mock";
+
+export function MyFilesScreen(){
+  return <Screen active="files">
+    <PageHeader title="My Files" search menu/>
+    <div className="px-5 pt-5">
+      <div className="mb-2 text-xs font-semibold text-slate-300">All Folders</div>
+      <Card className="divide-y divide-white/[0.05] px-3">
+        {folders.map(folder=><button key={folder.id}
+          className="flex w-full items-center gap-3 py-3 text-left">
+          <FileIcon type="folder"/>
+          <div className="flex-1">
+            <div className="text-sm font-medium">{folder.name}</div>
+            <div className="text-[11px] text-slate-400">{folder.items} items</div>
+          </div>
+          <span className="text-[10px] text-slate-500">{folder.modified}</span>
+          <ChevronRight className="h-4 w-4 text-slate-500"/>
+        </button>)}
+      </Card>
+
+      <div className="mb-2 mt-5 text-xs font-semibold text-slate-300">Files</div>
+      <Card className="divide-y divide-white/[0.05] px-3">
+        {recentFiles.map(file=><div key={file.id} className="flex items-center gap-3 py-3">
+          <FileIcon type={file.type as any}/>
+          <div className="flex-1">
+            <div className="text-sm font-medium">{file.name}</div>
+            <div className="text-[11px] text-slate-400">{file.size}</div>
+          </div>
+          <MoreVertical className="h-4 w-4 text-slate-500"/>
+        </div>)}
+      </Card>
+    </div>
+  </Screen>
+}
+
+================================================
+FILE: features/vault/screens/IntakeCenterScreen.tsx
+================================================
+import {
+  MessageCircle,MessagesSquare,BriefcaseBusiness,Smartphone,Link2,ScanLine,ChevronRight
+} from "lucide-react";
+import { Card,PageHeader,Screen } from "@/components/vault/ui";
+
+export function IntakeCenterScreen(){
+  const sources=[
+    [MessageCircle,"From Linqa Social","Save posts, attachments","bg-green-500"],
+    [MessagesSquare,"From Messages","Save message attachments","bg-blue-500"],
+    [BriefcaseBusiness,"From Client / Business","Save files from clients","bg-purple-500"],
+    [Smartphone,"From Device","Upload from this device","bg-green-500"],
+    [Link2,"From External Link","Secure link or shared file","bg-purple-500"],
+    [ScanLine,"Scan Document","Scan and save to vault","bg-orange-500"],
+  ] as const;
+
+  return <Screen active="files">
+    <PageHeader title="Intake Center" subtitle="Bring files into your secure vault" info/>
+    <div className="space-y-3 px-5 pt-6">
+      {sources.map(([Icon,title,subtitle,tone])=>
+        <Card key={title}>
+          <button className="flex w-full items-center gap-3 p-3.5 text-left">
+            <div className={`grid h-11 w-11 place-items-center rounded-xl ${tone}`}>
+              <Icon className="h-5 w-5"/>
+            </div>
+            <div className="flex-1">
+              <div className="text-sm font-semibold">{title}</div>
+              <div className="mt-1 text-[11px] text-slate-400">{subtitle}</div>
+            </div>
+            <ChevronRight className="h-4 w-4 text-slate-500"/>
+          </button>
+        </Card>
+      )}
+    </div>
+  </Screen>
+}
+================================================
+FILE: features/vault/screens/SaveFromSocialScreen.tsx
+================================================
+import { ChevronRight,ShieldCheck,UserRound } from "lucide-react";
+import { Card,FileIcon,PageHeader,Screen } from "@/components/vault/ui";
+
+export function SaveFromSocialScreen(){
+  return <Screen active="files">
+    <PageHeader title="Save from Social" back/>
+    <div className="px-5 pt-5">
+      <Card className="p-4">
+        <div className="flex items-center gap-3">
+          <div className="grid h-10 w-10 place-items-center rounded-full bg-slate-700">
+            <UserRound className="h-5 w-5"/>
+          </div>
+          <div>
+            <div className="text-sm font-semibold">Sarah Johnson</div>
+            <div className="text-[11px] text-slate-400">Today at 10:20 AM</div>
+          </div>
+        </div>
+        <p className="mt-4 text-sm">Here is the financial report for Q2.</p>
+        <div className="mt-3 flex items-center gap-3 rounded-xl border border-white/10 p-3">
+          <FileIcon type="pdf"/>
+          <div><div className="text-sm font-semibold">Q2 Financial Report.pdf</div>
+          <div className="text-[11px] text-slate-400">2.4 MB</div></div>
+        </div>
+      </Card>
+
+      <Card className="mt-4 p-4">
+        <label className="text-xs font-semibold">Save to</label>
+        <button className="mt-2 flex h-12 w-full items-center rounded-xl border
+                           border-white/10 bg-black/10 px-3 text-left">
+          <span className="flex-1 text-sm">Business / Reports / 2025</span>
+          <ChevronRight className="h-4 w-4"/>
+        </button>
+
+        <label className="mt-4 block text-xs font-semibold">File name</label>
+        <input defaultValue="Q2 Financial Report.pdf"
+          className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black/10
+                     px-3 text-sm outline-none focus:border-blue-500"/>
+
+        <div className="mt-4 flex gap-2 rounded-xl bg-blue-500/10 p-3 text-xs text-blue-200">
+          <ShieldCheck className="h-4 w-4 shrink-0 text-blue-400"/>
+          This file will be scanned for security before saving to your vault.
+        </div>
+
+        <button data-testid="vault-social-save-button"
+          className="mt-4 h-12 w-full rounded-xl bg-blue-600 text-sm font-semibold shadow-glow">
+          Save to Vault
+        </button>
+      </Card>
+    </div>
+  </Screen>
+}
+
+================================================
+FILE: features/vault/screens/SecurityScanScreen.tsx
+================================================
+import { Check,LoaderCircle,ShieldCheck } from "lucide-react";
+import { PageHeader,ProgressBar } from "@/components/vault/ui";
+
+export function SecurityScanScreen(){
+  const checks=["Checking file type","Scanning for malware","Deep content inspection","Verifying file integrity"];
+  return <div data-testid="vault-security-scan" className="h-full">
+    <PageHeader title="Security Scan" back/>
+    <div className="flex flex-col items-center px-7 pt-14">
+      <div className="grid h-40 w-40 place-items-center rounded-full border-[8px]
+                      border-blue-500/20 shadow-glow">
+        <div className="grid h-28 w-28 place-items-center rounded-full border-4 border-blue-500">
+          <ShieldCheck className="h-16 w-16 text-blue-400"/>
+        </div>
+      </div>
+      <div className="mt-8 text-lg font-semibold">Scanning file...</div>
+      <div className="mt-1 text-sm text-slate-300">Q2 Financial Report.pdf</div>
+
+      <div className="mt-7 w-full space-y-3">
+        {checks.map(c=><div key={c} className="flex items-center gap-3 text-sm">
+          <span className="grid h-5 w-5 place-items-center rounded-full bg-green-500">
+            <Check className="h-3.5 w-3.5"/>
+          </span>
+          <span className="flex-1">{c}</span>
+          <Check className="h-4 w-4 text-green-400"/>
+        </div>)}
+        <div className="flex items-center gap-3 text-sm text-slate-300">
+          <LoaderCircle className="h-5 w-5 animate-spin text-blue-400"/>
+          <span className="flex-1">Finalizing...</span>
+          <LoaderCircle className="h-4 w-4 animate-spin text-blue-400"/>
+        </div>
+      </div>
+      <div className="mt-8 w-full"><ProgressBar value={95}/></div>
+      <div className="mt-2 text-xs text-slate-400">
+        Please wait while we ensure this file is safe.
+      </div>
+    </div>
+  </div>
+}
+================================================
+FILE: features/vault/screens/SaveToVaultScreen.tsx
+================================================
+import { Check,ChevronRight,Plus } from "lucide-react";
+import { Card,FileIcon,PageHeader } from "@/components/vault/ui";
+
+export function SaveToVaultScreen(){
+  return <div className="h-full">
+    <PageHeader title="" back/>
+    <div className="px-5">
+      <div className="mt-4 text-center">
+        <div className="mx-auto grid h-24 w-24 place-items-center rounded-full
+                        border-4 border-green-500/70 bg-green-500/10">
+          <Check className="h-12 w-12 text-green-400"/>
+        </div>
+        <h1 className="mt-4 text-xl font-semibold">File is safe!</h1>
+        <p className="mt-1 text-xs text-slate-400">Ready to save to your vault.</p>
+      </div>
+
+      <Card className="mt-5 flex items-center gap-3 p-3">
+        <FileIcon type="pdf"/>
+        <div><div className="text-sm font-semibold">Q2 Financial Report.pdf</div>
+        <div className="text-[11px] text-slate-400">2.4 MB</div></div>
+      </Card>
+
+      <label className="mt-5 block text-xs font-semibold">Save to</label>
+      <button className="mt-2 flex h-12 w-full items-center rounded-xl border border-white/10
+                         bg-white/[0.04] px-3 text-left">
+        <span className="flex-1 text-sm">Business / Reports / 2025</span>
+        <ChevronRight className="h-4 w-4"/>
+      </button>
+
+      <label className="mt-5 block text-xs font-semibold">Add tags (optional)</label>
+      <div className="mt-2 flex gap-2">
+        {["Finance","Q2","2025"].map(x=><button key={x}
+          className="rounded-lg border border-white/10 px-3 py-2 text-xs">{x}</button>)}
+        <button className="grid h-8 w-8 place-items-center rounded-lg border border-white/10">
+          <Plus className="h-4 w-4"/>
+        </button>
+      </div>
+
+      <button data-testid="vault-save-now"
+        className="mt-7 h-12 w-full rounded-xl bg-blue-600 text-sm font-semibold">
+        Save Now
+      </button>
+      <button className="mt-3 w-full text-center text-sm text-blue-400">Cancel</button>
+    </div>
+  </div>
+}
+
+================================================
+FILE: features/vault/screens/PrivateVaultScreen.tsx
+================================================
+import { LockKeyhole } from "lucide-react";
+import { PageHeader } from "@/components/vault/ui";
+
+export function PrivateVaultScreen(){
+  return <div className="flex h-full flex-col">
+    <PageHeader title="Private Vault" back info/>
+    <div className="flex flex-1 flex-col items-center px-6 pt-20 text-center">
+      <div className="grid h-36 w-36 place-items-center rounded-full bg-purple-500/10
+                      shadow-[0_0_55px_rgba(139,92,246,.22)]">
+        <div className="grid h-24 w-24 place-items-center rounded-full border-4 border-purple-500">
+          <LockKeyhole className="h-12 w-12 text-purple-400"/>
+        </div>
+      </div>
+      <h2 className="mt-8 text-lg font-semibold">Protected by biometric</h2>
+      <p className="mt-2 text-sm text-slate-400">Unlock to view your private files</p>
+      <div className="mt-10 w-full space-y-3">
+        <button className="h-12 w-full rounded-xl border border-white/10 bg-white/[0.04]">
+          Use Face ID
+        </button>
+        <button className="h-12 w-full rounded-xl border border-blue-500/30 text-blue-400">
+          Enter PIN
+        </button>
+      </div>
+      <div className="mt-auto pb-8 text-xs text-slate-500">Auto-lock in 5 minutes</div>
+    </div>
+  </div>
+}
+================================================
+FILE: features/vault/screens/ShareScreen.tsx
+================================================
+import { ChevronRight,Link2,Mail,MessageSquareShare,Repeat2,Share2 } from "lucide-react";
+import { Card,FileIcon,PageHeader } from "@/components/vault/ui";
+
+export function ShareScreen(){
+  const options=[
+    [Share2,"Linqa User","Share securely with a Linqa user","bg-blue-500"],
+    [Repeat2,"Vault-to-Vault Transfer","Send directly to another vault","bg-blue-600"],
+    [Link2,"Secure Link","Create a secure share link","bg-purple-500"],
+    [Mail,"Email","Send via email","bg-blue-500"],
+    [MessageSquareShare,"Export to Social (Copy)","Share a copy to Linqa Social","bg-purple-500"],
+  ] as const;
+
+  return <div className="h-full">
+    <PageHeader title="Share" back/>
+    <div className="px-5 pt-5">
+      <Card className="flex items-center gap-3 p-3">
+        <FileIcon type="pdf"/>
+        <div><div className="text-sm font-semibold">Q2 Financial Report.pdf</div>
+        <div className="text-[11px] text-slate-400">2.4 MB</div></div>
+      </Card>
+      <div className="mt-5 text-sm font-semibold">Share to</div>
+      <div className="mt-3 space-y-2">
+        {options.map(([Icon,title,subtitle,tone])=>
+          <Card key={title}>
+            <button data-testid={title.startsWith("Export")?"vault-share-social-copy":undefined}
+              className="flex w-full items-center gap-3 p-3 text-left">
+              <div className={`grid h-10 w-10 place-items-center rounded-xl ${tone}`}>
+                <Icon className="h-5 w-5"/>
+              </div>
+              <div className="flex-1">
+                <div className="text-sm font-medium">{title}</div>
+                <div className="mt-1 text-[11px] text-slate-400">{subtitle}</div>
+              </div>
+              <ChevronRight className="h-4 w-4 text-slate-500"/>
+            </button>
+          </Card>
+        )}
+      </div>
+    </div>
+  </div>
+}
+
+================================================
+FILE: features/vault/screens/StoragePlansScreen.tsx
+================================================
+import { Check } from "lucide-react";
+import { Card,PageHeader,ProgressBar } from "@/components/vault/ui";
+import { plans } from "../mock";
+
+export function StoragePlansScreen(){
+  return <div className="h-full">
+    <PageHeader title="Storage Plans" subtitle="Choose the plan that fits you" back/>
+    <div className="px-5 pt-5">
+      <Card className="p-4">
+        <div className="text-[11px] text-slate-400">Current Plan</div>
+        <div className="mt-1 flex justify-between">
+          <div>
+            <div className="text-lg font-semibold">60 GB Plan</div>
+            <div className="text-[11px] text-slate-400">38.6 GB / 60 GB used</div>
+          </div>
+          <button className="text-xs text-blue-400">Upgrade</button>
+        </div>
+        <div className="mt-3"><ProgressBar value={64}/></div>
+      </Card>
+
+      <div className="mt-5 space-y-2">
+        {plans.map(plan=><button key={plan.id}
+          className="flex w-full items-center rounded-xl border border-white/[0.07]
+                     bg-white/[0.035] px-4 py-3 text-left">
+          <div className={`grid h-5 w-5 place-items-center rounded-full border
+              ${plan.current?"border-blue-500 bg-blue-500":"border-slate-600"}`}>
+            {plan.current && <Check className="h-3 w-3"/>}
+          </div>
+          <div className="ml-3 flex-1 text-sm font-medium">{plan.name}</div>
+          <div className="text-sm">{plan.price}</div>
+        </button>)}
+      </div>
+      <button className="mt-5 w-full text-sm text-blue-400">Compare All Plans</button>
+    </div>
+  </div>
+}
+
+================================================
+FILE: features/vault/screens/SecurityCenterScreen.tsx
+================================================
+import {
+  BadgeCheck,BellRing,Fingerprint,KeyRound,Laptop2,Lock,TimerReset,MoreVertical
+} from "lucide-react";
+import { Card,PageHeader,Screen } from "@/components/vault/ui";
+
+export function SecurityCenterScreen(){
+  const items=[
+    [KeyRound,"Two-Factor Authentication","Enabled"],
+    [Fingerprint,"Biometric Login","Enabled"],
+    [Lock,"End-to-End Encryption","Enabled"],
+    [Laptop2,"Trusted Devices","4 devices"],
+    [BellRing,"Login Alerts","Enabled"],
+    [TimerReset,"Auto-lock","5 minutes"],
+  ] as const;
+
+  return <Screen active="more">
+    <PageHeader title="Security Center"/>
+    <div className="px-5 pt-6">
+      <div className="text-center">
+        <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-green-500/15">
+          <BadgeCheck className="h-10 w-10 text-green-400"/>
+        </div>
+        <div className="mt-3 text-lg font-semibold text-green-400">Your vault is secure</div>
+        <div className="mt-1 text-xs text-slate-400">All systems are protected</div>
+      </div>
+
+      <div className="mt-6 text-xs font-semibold">Security Features</div>
+      <Card className="mt-2 divide-y divide-white/[0.05] px-3">
+        {items.map(([Icon,label,value])=><div key={label}
+          className="flex items-center gap-3 py-3">
+          <Icon className="h-4 w-4"/>
+          <div className="flex-1 text-sm">{label}</div>
+          <div className={value==="Enabled"?"text-xs text-green-400":"text-xs text-slate-400"}>
+            {value}
+          </div>
+          <MoreVertical className="h-4 w-4 text-slate-600"/>
+        </div>)}
+      </Card>
+    </div>
+  </Screen>
+}
+================================================
+FILE: app/vault-preview/page.tsx
+================================================
+import { PhoneFrame } from "@/components/vault/ui";
+import { HomeScreen } from "@/features/vault/screens/HomeScreen";
+import { MyFilesScreen } from "@/features/vault/screens/MyFilesScreen";
+import { IntakeCenterScreen } from "@/features/vault/screens/IntakeCenterScreen";
+import { SaveFromSocialScreen } from "@/features/vault/screens/SaveFromSocialScreen";
+import { SecurityScanScreen } from "@/features/vault/screens/SecurityScanScreen";
+import { SaveToVaultScreen } from "@/features/vault/screens/SaveToVaultScreen";
+import { PrivateVaultScreen } from "@/features/vault/screens/PrivateVaultScreen";
+import { ShareScreen } from "@/features/vault/screens/ShareScreen";
+import { StoragePlansScreen } from "@/features/vault/screens/StoragePlansScreen";
+import { SecurityCenterScreen } from "@/features/vault/screens/SecurityCenterScreen";
+
+export default function VaultPreviewPage(){
+  const screens=[
+    ["1. Home",<HomeScreen/>],
+    ["2. My Files",<MyFilesScreen/>],
+    ["3. Intake Center",<IntakeCenterScreen/>],
+    ["4. Save from Social",<SaveFromSocialScreen/>],
+    ["5. Security Scan",<SecurityScanScreen/>],
+    ["6. Save to Vault",<SaveToVaultScreen/>],
+    ["7. Private Vault",<PrivateVaultScreen/>],
+    ["8. Share",<ShareScreen/>],
+    ["9. Storage Plans",<StoragePlansScreen/>],
+    ["10. Security",<SecurityCenterScreen/>],
+  ] as const;
+
+  return <main className="min-h-screen bg-slate-100 px-5 py-10 text-slate-950">
+    <h1 className="text-center text-3xl font-bold">Linqa Vault — Mobile UI Preview</h1>
+    <div className="mx-auto mt-10 grid max-w-[2400px] gap-10 md:grid-cols-2
+                    xl:grid-cols-3 2xl:grid-cols-5">
+      {screens.map(([title,screen])=><section key={title}>
+        <h2 className="mb-4 text-center text-lg font-bold">{title}</h2>
+        <PhoneFrame>{screen}</PhoneFrame>
+      </section>)}
+    </div>
+  </main>
+}
+
+================================================
+ROUTING RECOMMENDATION
+================================================
+/vault                              Home
+/vault/files                        My Files
+/vault/intake                       Intake Center
+/vault/intake/social/:attachmentId  Save from Social
+/vault/scan/:uploadId               Security Scan
+/vault/save/:uploadId               Save to Vault
+/vault/private                      Private Vault
+/vault/share/:objectId              Share
+/vault/plans                        Storage Plans
+/vault/security                     Security Center
+
+================================================
+API CONTRACTS
+================================================
+POST /v1/vault/imports/social
+{
+  "sourceAttachmentId":"soc_att_123",
+  "destinationVaultId":"vault_123",
+  "destinationFolderId":"folder_reports"
+}
+
+Response:
+{
+  "importId":"import_123",
+  "status":"RECEIVED"
+}
+
+GET /v1/vault/uploads/:uploadId/status
+{
+  "state":"SCANNING",
+  "progress":72
+}
+
+POST /v1/vault/imports/:importId/confirm
+{
+  "displayFilename":"Q2 Financial Report.pdf",
+  "classification":"NORMAL"
+}
+
+POST /v1/vault/private/unlock
+{
+  "method":"PASSKEY"
+}
+
+POST /v1/vault/exports/social
+{
+  "objectId":"vlt_obj_123",
+  "destination":"LINQA_MESSAGE",
+  "explicitConfirmation":true
+}
+
+================================================
+SECURITY UI RULES
+================================================
+SOCIAL -> VAULT
+- Save to Vault is user initiated.
+- File passes Intake Gateway.
+- File is quarantined.
+- File is scanned.
+- User confirms save.
+- Independent Vault object is created.
+
+VAULT -> SOCIAL
+- No direct social browsing of Vault.
+- UI says "Export to Social (Copy)".
+- Explicit confirmation.
+- Step-up auth when required.
+- Backend policy can deny business export.
+- New social object is created.
+- Original Vault object remains private.
+
+PRIVATE VAULT
+- biometric / passkey / PIN
+- short auto-lock
+- no background previews while locked
+- notification redaction
+
+================================================
+PRODUCTION UI STATES TO ADD
+================================================
+LOADING
+EMPTY
+OFFLINE
+UPLOAD_FAILED
+SCAN_FAILED
+MALWARE_BLOCKED
+DLP_BLOCKED
+QUOTA_EXCEEDED
+OVER_QUOTA
+STEP_UP_REQUIRED
+BUSINESS_POLICY_DENIED
+SHARE_EXPIRED
+SHARE_REVOKED
+SESSION_EXPIRED
+DEVICE_UNTRUSTED
+
+================================================
+MOBILE ACCESSIBILITY
+================================================
+- minimum 44x44 tap targets
+- aria-label for icon-only buttons
+- focus-visible ring
+- WCAG AA contrast
+- reduced-motion support
+- safe-area padding
+- no security information conveyed by color alone
+
+================================================
+SAFE AREA EXAMPLE
+================================================
+<div className="
+  min-h-dvh
+  pt-[max(env(safe-area-inset-top),0.5rem)]
+  pb-[max(env(safe-area-inset-bottom),1rem)]
+">
+  ...
+</div>
+
+================================================
+API CLIENT
+================================================
+// features/vault/api/client.ts
+export async function vaultFetch<T>(path:string, init:RequestInit={}):Promise<T>{
+  const response=await fetch(path,{
+    ...init,
+    credentials:"include",
+    headers:{
+      "Content-Type":"application/json",
+      ...(init.headers??{})
+    }
+  });
+
+  if(!response.ok){
+    const body=await response.json().catch(()=>({}));
+    throw new Error(body.error ?? `VAULT_HTTP_${response.status}`);
+  }
+
+  return response.json();
+}
+
+================================================
+SAVE FROM SOCIAL ACTION
+================================================
+// features/vault/api/social.ts
+import { vaultFetch } from "./client";
+
+export function saveSocialAttachment(input:{
+  sourceAttachmentId:string;
+  destinationVaultId:string;
+  destinationFolderId?:string;
+}){
+  return vaultFetch("/v1/vault/imports/social",{
+    method:"POST",
+    body:JSON.stringify(input)
+  });
+}
+
+================================================
+EXPORT COPY ACTION
+================================================
+// features/vault/api/export.ts
+import { vaultFetch } from "./client";
+
+export function exportSocialCopy(input:{
+  objectId:string;
+  destination:"LINQA_MESSAGE"|"LINQA_GROUP"|"LINQA_SOCIAL_POST";
+}){
+  return vaultFetch("/v1/vault/exports/social",{
+    method:"POST",
+    body:JSON.stringify({
+      ...input,
+      explicitConfirmation:true
+    })
+  });
+}
+
+================================================
+SCAN POLLING HOOK
+================================================
+// features/vault/hooks/useScanStatus.ts
+"use client";
+
+import { useEffect,useState } from "react";
+
+export function useScanStatus(uploadId:string){
+  const [state,setState]=useState("SCANNING");
+  const [progress,setProgress]=useState(0);
+
+  useEffect(()=>{
+    let stopped=false;
+
+    const run=async()=>{
+      while(!stopped){
+        const r=await fetch(`/v1/vault/uploads/${uploadId}/status`,{
+          credentials:"include"
+        });
+        if(r.ok){
+          const d=await r.json();
+          setState(d.state);
+          setProgress(d.progress??0);
+          if(["AWAITING_CONFIRMATION","FAILED","COMPLETED"].includes(d.state)) break;
+        }
+        await new Promise(x=>setTimeout(x,1500));
+      }
+    };
+
+    run();
+    return()=>{stopped=true};
+  },[uploadId]);
+
+  return {state,progress};
+}
+
+================================================
+PLAYWRIGHT FLOW TEST
+================================================
+import { test,expect } from "@playwright/test";
+
+test("social attachment saves into Vault",async({page})=>{
+  await page.goto("/vault");
+  await page.getByText("Intake Center").click();
+  await page.getByText("From Linqa Social").click();
+  await page.getByTestId("vault-social-save-button").click();
+  await expect(page.getByTestId("vault-security-scan")).toBeVisible();
+  await page.getByTestId("vault-save-now").click();
+  await expect(page.getByText("Q2 Financial Report.pdf")).toBeVisible();
+});
+
+test("social export is explicitly a copy",async({page})=>{
+  await page.goto("/vault/share/vlt_obj_123");
+  await page.getByTestId("vault-share-social-copy").click();
+  await expect(page.getByText(/original.*remains private/i)).toBeVisible();
+});
+
+================================================
+FINAL IMPLEMENTATION PRINCIPLE
+================================================
+The mobile UI can initiate operations, but it cannot enforce the Vault trust
+boundary by itself. Backend IAM, authorization, KMS policy, object-storage
+policy, tenant policy, audit, and the Export Gateway remain authoritative.
+
+SOCIAL CAN SEND INFORMATION INTO THE VAULT WHEN THE USER REQUESTS IT.
+VAULT CANNOT EXPOSE INFORMATION OUT TO SOCIAL WITHOUT EXPLICIT AUTHORIZATION.
+
+END OF PACK

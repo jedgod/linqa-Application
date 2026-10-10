@@ -1,0 +1,587 @@
+LINQA CONVERSATION V2 — IMPLEMENTATION NOTEPAD
+Read README.md first. Host adapters and physical-device testing are still required.
+
+
+========================================================================
+FILE: README.md
+========================================================================
+# Linqa Conversation v2 — Indigo + Apricot
+
+An additive conversation module for the existing Linqa application. Includes React web, React Native mobile, a shared encrypted-event client, Express routes, PostgreSQL tables, and unit tests. It is source code for integration, not a modification of your live repository. Existing authentication, device directory, cryptography, block/discovery policy, calling, notifications and attachment modules must be connected using the contracts below. No plaintext fallback is provided.
+
+## Design and implemented features
+
+- Violet, midnight and apricot themes. No green, doodle wallpaper or WhatsApp branding.
+- Individual conversation screen, message history, text composer, clear relay acceptance and retry states.
+- Encrypted topic lanes: All, Plans and Ideas. Messages retain their lane inside their encrypted payload.
+- Encrypted decision boards: share 2–5 choices (mobile/web creation UI currently offers two), one vote per participant, latest vote wins, counts computed on clients.
+- Local appearance and mute preferences, persisted through a device-storage adapter.
+- Backend membership checks, canonical chat-policy checks, active-device checks, device-target validation, bounded ciphertext batches, pagination and transactionally persisted idempotency.
+- Opening a registered person creates or reuses one direct conversation via a unique pair key.
+
+These are distinctive combinations for Linqa; no claim is made that they are globally unprecedented.
+
+The image is a design concept. The code does not implement timed quiet hours, a calendar-linked Plans card, photo attachments, vote-avatar displays, delivery/read checkmarks or custom icon artwork. Calls, voice, attachments, safety numbers and blocking invoke the supplied host handlers. The UI shows an integration notice when they are missing. The code labels relay acceptance accurately; it does not claim recipient delivery. Quiet is a per-conversation mute flag, not the image's timed schedule.
+
+## File map
+
+| File | Responsibility |
+| --- | --- |
+| server/schema.sql | Additive relational schema |
+| server/postgres.mjs | Parameterized SQL, transactions, direct-pair deduplication |
+| server/service.mjs | Membership, policy, device-set and payload validation |
+| server/router.mjs | Authenticated Express route factory |
+| shared/engine.mjs | Encrypted events, lanes, decisions, vote projection |
+| shared/useConversation.jsx | Sequential polling, pending sends, stable retries |
+| shared/connection.mjs | HTTPS client, navigation and preferences helpers |
+| web/Conversation.jsx + conversation.css | Responsive web/desktop UI |
+| mobile/ConversationScreen.jsx | React Native conversation UI |
+| tests/conversation.test.mjs | Security and event-behavior unit tests |
+
+## Backend connection
+
+1. Back up and inspect the actual live schema. Apply schema.sql in staging using your migration runner. Bind lc2_members.user_id to your actual canonical user UUID table with an FK after confirming its name. These lc2 tables deliberately do not overwrite existing tables. Do not blindly assign a migration number.
+2. Import createConversationRouter into the existing authenticated Express server (the earlier Linqa setup used port 8088; use your current configured port).
+3. Mount it after your host security middleware:
+
+```js
+import {createConversationRouter} from './conversation/server/router.mjs';
+app.use('/v2/conversations', createConversationRouter({
+ express, pool,
+ authenticate: existingSessionMiddleware,
+ authorizeMutation: existingCsrfOrBearerMutationGuard,
+ rateLimit: existingAccountAndDeviceRateLimiter,
+ policy: chatPolicyAdapter,
+ devices: deviceDirectoryAdapter
+}));
+```
+
+Required adapter contracts:
+
+```js
+// authenticate(req,res,next) validates the session AND binds the device to it.
+// Set req.actor = {userId: canonicalUuid, deviceId: trustedBoundDeviceId}.
+// Never trust request-body sender IDs, X-User-Id or an unvalidated device header.
+// authorizeMutation(req,res,next) enforces host CSRF/origin checks for cookie
+// sessions or validates the already authenticated bearer-only mutation policy.
+const chatPolicyAdapter = {
+ async canChat(senderId,peerId) {
+   // Return true only for existing active accounts, allowed discovery/request
+// state and no block in either direction. Use your canonical repository.
+   throw new Error('Connect canonical account + block + discovery repositories');
+ }
+};
+const deviceDirectoryAdapter = {
+ async isActive(userId,deviceId) {
+   throw new Error('Connect canonical active/revoked device repository');
+ },
+ async listForUsers(memberIds) {
+   // Return all eligible trusted devices including sender devices:
+   // [{userId,deviceId}, ...]. No expired, revoked or pending devices.
+   throw new Error('Connect canonical trusted device repository');
+ }
+};
+```
+
+The throws above are intentional contract examples, not working production adapters. The router refuses to mount without required functions and rejects inactive devices. Session failures should be terminated by host middleware. Host middleware must enforce CORS, HTTPS, token validation, request rate limits, privacy-safe logging and notification settings. Never install an allow-all policy.
+
+## Client and registered-person navigation
+
+```jsx
+import {connectConversation,openPersonConversation} from './conversation/shared/connection.mjs';
+// Inside your authenticated account scope, memoize this object.
+const client = connectConversation({
+ apiOrigin: configuredLinqaApiHttpsOrigin,
+ getAccessToken: getCurrentSessionToken,
+ crypto: existingE2eeConversationAdapter,
+ actor: {userId: signedInUserId,deviceId: trustedDeviceId},
+ uuid: secureRandomUuid // Expo Crypto UUID on mobile; crypto.randomUUID on web
+});
+await openPersonConversation({client,peer:registeredPerson,navigate:({conversationId,peer})=>{
+ // Existing Expo/React router: open the route containing ConversationScreen
+ // or Conversation, using this conversationId and canonical peer record.
+}});
+```
+
+Attach openPersonConversation to each existing registered-user search result and Chats row. Use the existing discovery-aware directory; this pack does not create a parallel global account search. Resolve peer records from trusted session/API data, not an arbitrary route-supplied name. The backend performs its own policy checks. Preserve existing chat history through the mapping plan below.
+
+Render ConversationScreen on mobile under SafeAreaProvider; it requires your installed react-native-safe-area-context. Render Conversation for web/desktop. Supply a memoized client and the conversationId. Use the host React, React Native, Express and pg versions and lockfile rather than installing wildcard peer dependencies as a new standalone app. No new crypto dependency is introduced.
+
+Supply onBack, onCall(kind,peerId), onSafety(peerId), onBlock(peerId), onAttach(), and mobile onVoice(). Blocking must write the canonical block repository used by canChat; clear decrypted state and exit the screen after confirmation. Do not show success from a no-op. The settingsStore uses load(id) and save(id,{theme,quiet}); localPreferences provides an account-scoped implementation using host read/write storage functions. Notifications must consult quiet before displaying alerts.
+
+## Cryptographic bridge — mandatory
+
+Use the existing Linqa NativeCore / DeviceIdentity / KeyPackageApi / E2eeMessageRepository implementation after reviewing its actual current interfaces. This pack does not implement a second cipher, ratchet or native key store.
+
+```js
+const existingE2eeConversationAdapter = {
+ async encryptForDevices(payload,{conversationId,senderId,clientId}) {
+   // 1. Resolve both users' active verified device key packages.
+   // 2. Verify signatures and perform the existing authenticated protocol.
+   // 3. Encrypt JSON payload separately for every eligible trusted device.
+   // 4. Authenticate conversationId, senderId, clientId and device context as AAD.
+   // 5. Return [{userId,deviceId,ciphertext:base64}, ...].
+   throw new Error('Connect verified native E2EE send implementation');
+ },
+ async decryptAuthenticated(ciphertext,{conversationId,senderId,clientId}) {
+   // Verify sender key/account binding, signatures, AAD and replay protections
+   // using existing native crypto. Parse JSON only after verified decryption.
+   throw new Error('Connect verified native E2EE receive implementation');
+ }
+};
+```
+
+Never base64-encode plaintext as a substitute for encryption. Schema/validation cannot prove ciphertext authenticity; the native adapter must. Encryption key lifecycle, forward secrecy, verified safety numbers, newly linked device history and key rotation remain responsibilities of the existing messaging protocol. Server can reject changed device sets with 409; refresh keys and retry using the same clientId. The UI retains stable IDs for retries but the in-memory pending queue is lost when the app restarts; wire the existing encrypted durable outbox before production.
+
+## Existing relay/history mapping
+
+This pack's lc2 transport is additive and does not migrate existing /v1/relay/envelopes or history automatically. Choose ONE authoritative storage path before deploying:
+
+1. Prefer using existing relay infrastructure: implement the repo methods open, members, list, history and append against canonical conversation/relay tables, then inject that repository into createChatService in the router. Preserve transactionality and idempotency semantics.
+2. Alternatively adopt lc2: write and test an explicit mapping of existing conversation IDs and ciphertext metadata. Never copy plaintext or silently split one conversation across two stores.
+
+The HTTP client and server agree on /v2/conversations, /direct, /:id/events?after=cursor and /:id/events. Polling is sequential at 3 seconds; pagination drains 100-event pages. Switch to the existing authenticated WS wake-up flow later while keeping HTTP replay/cursor recovery. New linked devices do not receive historical envelopes unless the existing protocol supplies a secure history-transfer mechanism.
+
+## Validation and release boundaries
+
+Run `npm test` (or `node --test tests/*.test.mjs` without installing packages). Thirteen unit tests passed in the delivered version. They check nonmember denial, blocked initiation/send, self-chat rejection, duplicate/unauthorized/missing device targets, valid envelope batches, cursor validation, malformed ciphertext, vote replacement, invalid decision payloads, stable retry IDs, and authenticated-decryption failure. These are fake-repository unit tests; they do not certify PostgreSQL migrations, native encryption, physical devices, React rendering or production hosting.
+
+Before live use, run your host typecheck/bundler, execute PostgreSQL migration/integration tests, verify concurrent direct opens and duplicate sends, and test sending/receiving between two physical devices. Also test revoked devices, block changes, offline restart recovery, stale key packages, notification mute, accessibility, keyboard/safe-area layout and the existing account-switch flow.
+
+Authorization/device checks and the append transaction are separate calls here. To close revocation races in your live environment, make policy/device eligibility and append participate in your canonical transaction or versioned authorization mechanism; the current adapter contract alone does not guarantee atomic revocation. Do not call this pack production-ready until that integration and physical-device verification are complete.
+
+The ZIP and Notepad text contain identical source content. This is an implementable integration module with explicit missing host adapters, not a claim that the current Linqa application has been changed or certified.
+
+
+========================================================================
+FILE: mobile/ConversationScreen.jsx
+========================================================================
+import React,{useState,useEffect} from 'react';
+import {View,Text,TextInput,Pressable,ScrollView,KeyboardAvoidingView,Platform,StyleSheet,Alert,Switch} from 'react-native';
+import {SafeAreaView} from 'react-native-safe-area-context';
+import {useConversation} from '../shared/useConversation.jsx';
+import {THEMES,LANES} from '../shared/engine.mjs';
+// Render under the existing SafeAreaProvider. Pass a memoized client.
+export default function ConversationScreen({client,conversationId,peer,onBack,onCall,onSafety,onBlock,onAttach,onVoice,settingsStore}) {
+ const chat=useConversation(client,conversationId);
+ const [text,setText]=useState(''),[lane,setLane]=useState('All'),[settings,setSettings]=useState(false),[theme,setTheme]=useState('violet'),[quiet,setQuiet]=useState(false),[board,setBoard]=useState(false);
+ const [title,setTitle]=useState(''),[first,setFirst]=useState(''),[second,setSecond]=useState('');const c=THEMES[theme];
+ useEffect(()=>{let live=true;settingsStore?.load(conversationId).then(p=>{if(live&&p){if(THEMES[p.theme])setTheme(p.theme);setQuiet(!!p.quiet);}}).catch(()=>{});return()=>{live=false;};},[settingsStore,conversationId]);
+ async function save(next){try{if(!settingsStore)throw Error();await settingsStore.save(conversationId,next);}catch{Alert.alert('Preference not saved','Connect the local settings and notification adapter.');}}
+ const invoke=(fn,...args)=>fn?fn(...args):Alert.alert('Integration needed','Connect this action to the existing Linqa module.');
+ const button=(label,fn,selected=false,disabled=false)=><Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={fn} style={[s.button,{backgroundColor:selected?c.accent:c.incoming,opacity:disabled ? 0.5 : 1}]}><Text style={{color:selected?'white':c.ink}}>{label}</Text></Pressable>;
+ async function send(){if(text.trim()&&await chat.send({type:'text',text,lane:lane==='All'?'General':lane}))setText('');}
+ async function createBoard(){try{if(await chat.send({type:'decision',title,options:[first,second]})){setBoard(false);setTitle('');setFirst('');setSecond('');}}catch(e){Alert.alert('Check your decision',e.message);}}
+ return <SafeAreaView style={[s.root,{backgroundColor:c.background}]}><KeyboardAvoidingView style={s.root} behavior={Platform.OS==='ios'?'padding':undefined}>
+  <View style={[s.header,{backgroundColor:c.surface}]}>{button('‹',onBack)}<View style={s.person}><Text style={[s.name,{color:c.ink}]}>{peer.displayName}</Text><Text style={{color:c.ink}}>Conversation</Text></View>{button('☎',()=>invoke(onCall,'audio',peer.id))}{button('Video',()=>invoke(onCall,'video',peer.id))}{button('⚙',()=>setSettings(!settings))}</View>
+  <View style={s.tabs}>{LANES.map(x=><View key={x}>{button(x,()=>setLane(x),lane===x)}</View>)}{button('Decision',()=>setBoard(!board))}</View>
+  {settings&&<ScrollView style={{maxHeight:260,backgroundColor:c.surface}} contentContainerStyle={s.settings}><Text style={[s.name,{color:c.ink}]}>Conversation settings</Text><Text style={{color:c.ink}}>Appearance</Text><View style={s.tabs}>{Object.keys(THEMES).map(x=><View key={x}>{button(x,()=>{setTheme(x);save({theme:x,quiet});},theme===x)}</View>)}</View><View style={s.header}><Text style={{color:c.ink}}>Quiet this conversation</Text><Switch value={quiet} onValueChange={v=>{setQuiet(v);save({theme,quiet:v});}}/></View>{button('Verify safety number',()=>invoke(onSafety,peer.id))}{button('Block contact',()=>invoke(onBlock,peer.id))}</ScrollView>}
+  {board&&<View style={[s.settings,{backgroundColor:c.surface}]}>{[['Decision title',title,setTitle],['First option',first,setFirst],['Second option',second,setSecond]].map(([label,value,set])=><TextInput key={label} accessibilityLabel={label} placeholder={label} placeholderTextColor={c.ink} style={[s.input,{color:c.ink,backgroundColor:c.incoming}]} value={value} onChangeText={set} maxLength={label==='Decision title'?200:100}/>)}{button('Share decision',createBoard,true,chat.sending)}</View>}
+  {!!chat.error&&<Text accessibilityRole="alert" style={[s.error,{backgroundColor:c.highlight}]}>{chat.error}</Text>}
+  <ScrollView style={s.root} contentContainerStyle={s.history}>
+   {!chat.messages.length&&<View style={s.empty}><Text style={[s.name,{color:c.ink}]}>Begin something worth sharing.</Text><Text style={{color:c.ink}}>Say hello to {peer.displayName}.</Text></View>}
+   {chat.messages.filter(x=>lane==='All'||x.payload.type==='decision'||x.payload.lane===lane).map(x=>{const mine=x.sender_id===client.actor.userId;return <View key={x.id} style={[s.bubble,{alignSelf:mine?'flex-end':'flex-start',backgroundColor:mine?c.accent:c.incoming}]}>{x.payload.type==='text'?<Text style={{color:mine?'white':c.ink}}>{x.payload.text}</Text>:<View><Text style={{color:mine?'white':c.ink}}>Decision board</Text><Text style={[s.name,{color:mine?'white':c.ink}]}>{x.payload.title}</Text>{x.payload.options.map((o,i)=><View key={i}>{button(`${o} · ${Object.values(x.votes).filter(v=>v===i).length} votes`,()=>chat.send({type:'vote',boardId:x.client_id,choice:i}),x.votes[client.actor.userId]===i,chat.sending)}</View>)}</View>}<Text style={[s.time,{color:mine?'white':c.ink}]}>{new Date(x.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</Text></View>;})}
+   {chat.pending.map(d=><View key={d.clientId} style={[s.bubble,{alignSelf:'flex-end',backgroundColor:c.accent}]}><Text style={{color:'white'}}>{d.payload.type==='text'?d.payload.text:d.payload.type==='decision'?d.payload.title:'Your vote'}</Text><Text style={{color:'white'}}>{d.status==='accepted'?'Accepted by relay':d.status}</Text>{d.status==='failed'&&button('Retry',()=>chat.retry(d),false,chat.sending)}</View>)}
+  </ScrollView>
+  <View style={[s.composer,{backgroundColor:c.surface}]}>{button('＋',()=>invoke(onAttach))}<TextInput accessibilityLabel="Message" multiline maxLength={8000} placeholder="Write a message…" placeholderTextColor={c.ink} value={text} onChangeText={setText} style={[s.input,{flex:1,color:c.ink,backgroundColor:c.incoming,maxHeight:110}]}/>{text.trim()?button('↗',send,true,chat.sending):button('Voice',()=>invoke(onVoice))}</View>
+ </KeyboardAvoidingView></SafeAreaView>;
+}
+const s=StyleSheet.create({root:{flex:1},header:{flexDirection:'row',alignItems:'center',gap:6,padding:12},person:{flex:1},name:{fontSize:17,fontWeight:'700',marginBottom:4},button:{padding:10,borderRadius:14,minHeight:44,justifyContent:'center',marginVertical:2},tabs:{flexDirection:'row',flexWrap:'wrap',gap:6,padding:10},history:{padding:16},bubble:{padding:14,borderRadius:20,maxWidth:'90%',marginVertical:7},time:{fontSize:11,alignSelf:'flex-end',marginTop:8},composer:{flexDirection:'row',alignItems:'flex-end',gap:6,padding:10},input:{padding:12,borderRadius:16,minHeight:44,marginVertical:3},settings:{padding:14,gap:6},empty:{paddingVertical:70,alignItems:'center'},error:{padding:10,color:'#302342'}});
+
+
+========================================================================
+FILE: package.json
+========================================================================
+{
+  "name": "linqa-conversation-integration-v2",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node --test tests/*.test.mjs"},
+  "peerDependencies": {"express": "*", "pg": "*", "react": "*", "react-native": "*"}
+}
+
+
+========================================================================
+FILE: server/postgres.mjs
+========================================================================
+import {randomUUID} from 'node:crypto';
+export function createPostgresRepository(pool) {
+ async function transaction(fn) {
+  const c = await pool.connect();
+  try { await c.query('BEGIN'); const result = await fn(c); await c.query('COMMIT'); return result; }
+  catch(e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+ }
+ return {
+  async members(id) { const r=await pool.query('SELECT user_id FROM lc2_members WHERE conversation_id=$1',[id]); return r.rows.map(x=>x.user_id); },
+  open(pair,members) { return transaction(async c=>{
+   const r = await c.query('INSERT INTO lc2_conversations(id,pair_key) VALUES($1,$2) ON CONFLICT(pair_key) DO UPDATE SET pair_key=excluded.pair_key RETURNING id',[randomUUID(),pair]);
+   const id=r.rows[0].id;
+   for (const user of members) await c.query('INSERT INTO lc2_members VALUES($1,$2) ON CONFLICT DO NOTHING',[id,user]);
+   return {id};
+  }); },
+  async list(user) {
+   const r = await pool.query(`SELECT c.id,c.created_at,
+    (SELECT m.user_id FROM lc2_members m WHERE m.conversation_id=c.id AND m.user_id<>$1 LIMIT 1) AS peer_id
+    FROM lc2_conversations c JOIN lc2_members own ON own.conversation_id=c.id AND own.user_id=$1
+    ORDER BY c.created_at DESC LIMIT 100`,[user]);
+   return r.rows;
+  },
+  async history(id,actor,after) {
+   const r = await pool.query(`SELECT e.seq::text,e.id,e.client_id,e.sender_id,e.created_at,x.ciphertext
+    FROM lc2_events e JOIN lc2_envelopes x ON x.event_id=e.id
+    WHERE e.conversation_id=$1 AND e.seq>$2::bigint AND x.user_id=$3 AND x.device_id=$4
+    ORDER BY e.seq ASC LIMIT 100`,[id,after,actor.userId,actor.deviceId]);
+   return {events:r.rows,cursor:r.rows.at(-1)?.seq ?? after,hasMore:r.rows.length===100};
+  },
+  append(id,actor,input,eventId) { return transaction(async c=>{
+   const r = await c.query(`INSERT INTO lc2_events(id,conversation_id,sender_id,client_id) VALUES($1,$2,$3,$4)
+    ON CONFLICT(conversation_id,sender_id,client_id) DO NOTHING RETURNING id,seq::text`,[eventId,id,actor.userId,input.clientId]);
+   if (!r.rows.length) {
+    const existing=await c.query('SELECT id,seq::text FROM lc2_events WHERE conversation_id=$1 AND sender_id=$2 AND client_id=$3',[id,actor.userId,input.clientId]);
+    return {...existing.rows[0],duplicate:true};
+   }
+   for (const e of input.envelopes) await c.query('INSERT INTO lc2_envelopes VALUES($1,$2,$3,$4)',[eventId,e.userId,e.deviceId,e.ciphertext]);
+   return {...r.rows[0],duplicate:false};
+  }); }
+ };
+}
+
+
+========================================================================
+FILE: server/router.mjs
+========================================================================
+import {createChatService, requireValue, isUuid} from './service.mjs';
+import {createPostgresRepository} from './postgres.mjs';
+// Express passed by host; no second auth system or permissive dev fallback.
+export function createConversationRouter({express,pool,authenticate,policy,devices,rateLimit,authorizeMutation}) {
+ for (const [name,value] of Object.entries({authenticate,rateLimit,authorizeMutation})) if(typeof value!=='function') throw new Error(`Missing ${name} adapter`);
+ if(typeof policy?.canChat!=='function' || typeof devices?.listForUsers!=='function' || typeof devices?.isActive!=='function') throw new Error('Missing policy/device adapters');
+ const router=express.Router(); const service=createChatService({repo:createPostgresRepository(pool),policy,devices});
+ const route=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
+ router.use(authenticate,rateLimit,express.json({limit:'2mb'}));
+ router.use((req,res,next)=>Promise.resolve().then(async()=>{
+  requireValue(isUuid(req.actor?.userId) && typeof req.actor?.deviceId==='string',401,'Authentication required');
+  requireValue(await devices.isActive(req.actor.userId,req.actor.deviceId),401,'Device inactive');
+ }).then(()=>next(),next));
+ router.get('/',route(async(req,res)=>res.json({conversations:await service.list(req.actor)})));
+ router.post('/direct',authorizeMutation,route(async(req,res)=>res.json(await service.open(req.actor,req.body?.peerId))));
+ router.get('/:id/events',route(async(req,res)=>res.json(await service.history(req.actor,req.params.id,req.query.after??'0'))));
+ router.post('/:id/events',authorizeMutation,route(async(req,res)=>res.status(202).json(await service.send(req.actor,req.params.id,req.body))));
+ router.use((error,req,res,next)=>{
+  // Do not log request bodies, ciphertext, keys or session tokens.
+  res.status(error.status ?? 500).json({error:error.status?error.message:'Conversation service unavailable'});
+ });
+ return router;
+}
+
+
+========================================================================
+FILE: server/schema.sql
+========================================================================
+BEGIN;
+-- Separate names avoid overwriting existing Linqa chat tables. Bind user UUIDs
+-- to your canonical account table after checking the actual live schema.
+CREATE TABLE IF NOT EXISTS lc2_conversations (
+ id uuid PRIMARY KEY, pair_key text UNIQUE NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS lc2_members (
+ conversation_id uuid REFERENCES lc2_conversations(id) ON DELETE CASCADE,
+ user_id uuid NOT NULL, PRIMARY KEY(conversation_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS lc2_events (
+ seq bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ id uuid UNIQUE NOT NULL, conversation_id uuid NOT NULL REFERENCES lc2_conversations(id),
+ sender_id uuid NOT NULL, client_id uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(conversation_id,sender_id,client_id),
+ FOREIGN KEY(conversation_id,sender_id) REFERENCES lc2_members(conversation_id,user_id)
+);
+-- One ciphertext envelope per authorized device, including sender's devices.
+-- User/device keys are opaque canonical IDs from the device directory adapter.
+CREATE TABLE IF NOT EXISTS lc2_envelopes (
+ event_id uuid REFERENCES lc2_events(id) ON DELETE CASCADE,
+ user_id uuid NOT NULL, device_id text NOT NULL, ciphertext text NOT NULL,
+ PRIMARY KEY(event_id,user_id,device_id)
+);
+CREATE INDEX IF NOT EXISTS lc2_events_history ON lc2_events(conversation_id,seq);
+CREATE INDEX IF NOT EXISTS lc2_envelopes_recipient ON lc2_envelopes(user_id,device_id,event_id);
+COMMIT;
+
+
+========================================================================
+FILE: server/service.mjs
+========================================================================
+import {randomUUID, createHash} from 'node:crypto';
+export class ChatError extends Error {
+ constructor(status, message) { super(message); this.status = status; }
+}
+export const requireValue = (ok, status, message) => { if (!ok) throw new ChatError(status, message); };
+export const isUuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+export function validateSend(input) {
+ requireValue(input && isUuid(input.clientId),400,'Invalid clientId');
+ requireValue(Array.isArray(input.envelopes) && input.envelopes.length > 0 && input.envelopes.length <= 32,400,'Invalid envelopes');
+ const seen = new Set(); let total = 0;
+ for (const e of input.envelopes) {
+  requireValue(isUuid(e.userId) && typeof e.deviceId === 'string' && e.deviceId.length > 0 && e.deviceId.length <= 128,400,'Invalid device');
+  requireValue(typeof e.ciphertext === 'string' && e.ciphertext.length >= 16 && e.ciphertext.length <= 131072 && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(e.ciphertext),400,'Invalid ciphertext');
+  const k = JSON.stringify([e.userId,e.deviceId]); requireValue(!seen.has(k),400,'Duplicate device'); seen.add(k); total += e.ciphertext.length;
+ }
+ requireValue(total <= 1048576,413,'Envelope batch too large');
+ return input;
+}
+export function createChatService({repo, policy, devices}) {
+ // policy must consult canonical accounts, blocks, chat requests and discovery.
+ async function authorize(actor, id) {
+  requireValue(isUuid(id),400,'Invalid conversation');
+  const members = await repo.members(id);
+  requireValue(members.includes(actor.userId),404,'Conversation unavailable');
+  const other = members.find(x => x !== actor.userId);
+  requireValue(other && await policy.canChat(actor.userId,other),403,'Chat is not permitted');
+  return members;
+ }
+ return {
+  async open(actor, peerId) {
+   requireValue(isUuid(peerId) && peerId !== actor.userId,400,'Invalid recipient');
+   requireValue(await policy.canChat(actor.userId,peerId),403,'Chat is not permitted');
+   const pair = [actor.userId,peerId].sort();
+   return repo.open(createHash('sha256').update(pair.join(':')).digest('hex'),pair);
+  },
+  async list(actor) { return repo.list(actor.userId); },
+  async history(actor,id,after='0') {
+   await authorize(actor,id);
+   requireValue(typeof after === 'string' && /^\d{1,20}$/.test(after) && BigInt(after) <= 9223372036854775807n,400,'Invalid cursor');
+   return repo.history(id,actor,after);
+  },
+  async send(actor,id,input) {
+   const members = await authorize(actor,id); validateSend(input);
+   const eligible = await devices.listForUsers(members);
+   requireValue(eligible.every(e=>members.includes(e.userId)) && members.every(u=>eligible.some(e=>e.userId===u)),409,'Recipient device unavailable');
+   const wanted = new Set(eligible.map(x=>JSON.stringify([x.userId,x.deviceId])));
+   requireValue(wanted.size > 0 && wanted.has(JSON.stringify([actor.userId,actor.deviceId])),409,'Device not active');
+   requireValue(input.envelopes.length === wanted.size && input.envelopes.every(e=>wanted.has(JSON.stringify([e.userId,e.deviceId]))),409,'Device set changed; refresh keys and retry');
+   // Caller encryption must authenticate conversation ID, sender and client ID as AAD.
+   return repo.append(id,actor,input,randomUUID());
+  }
+ };
+}
+
+
+========================================================================
+FILE: shared/connection.mjs
+========================================================================
+import {createConversationClient} from './engine.mjs';
+// Instantiate once per authenticated account/device (useMemo in React).
+// apiOrigin must be your configured HTTPS origin; never derive it from a user.
+export function connectConversation({apiOrigin,getAccessToken,getCsrfToken,crypto,actor,uuid}) {
+ if(!apiOrigin.startsWith('https://'))throw new Error('Conversation API requires HTTPS');
+ const origin=apiOrigin.replace(/\/$/,'');
+ async function request(path,{method,body}) {
+  const token=await getAccessToken();if(!token)throw new Error('Sign in again');
+  const headers={Authorization:`Bearer ${token}`};
+  if(body)headers['Content-Type']='application/json';
+  if(getCsrfToken && method!=='GET')headers['X-CSRF-Token']=await getCsrfToken();
+  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),15000);
+  try{
+   const response=await fetch(origin+path,{method,headers,body:body?JSON.stringify(body):undefined,signal:controller.signal});
+   const data=await response.json();if(!response.ok)throw new Error(data.error||'Conversation request failed');return data;
+  }finally{clearTimeout(timer);}
+ }
+ return createConversationClient({request,crypto,actor,uuid});
+}
+export async function openPersonConversation({client,peer,navigate}) {
+ const {id}=await client.open(peer.id);
+ // navigate is supplied by Expo Router, React Router or your desktop router.
+ // Navigation receives the canonical conversation UUID, not a phone number.
+ navigate({conversationId:id,peer});
+}
+export function localPreferences({read,write,accountId}) {
+ // read/write use the host's device storage. No message text or keys stored here.
+ const key=id=>`linqa:conversation:${accountId}:${id}:preferences`;
+ return {load:async id=>{const raw=await read(key(id));return raw?JSON.parse(raw):null;},save:async(id,value)=>write(key(id),JSON.stringify(value))};
+}
+
+
+========================================================================
+FILE: shared/engine.mjs
+========================================================================
+export const THEMES = {
+ violet:{background:'#F5F3FC',surface:'#FFFFFF',ink:'#211B43',accent:'#6947D7',incoming:'#ECE7F8',highlight:'#FFD8B4'},
+ midnight:{background:'#17162B',surface:'#25233D',ink:'#F5F2FF',accent:'#9F87FF',incoming:'#35314E',highlight:'#F8C79F'},
+ apricot:{background:'#FFF5EE',surface:'#FFFFFF',ink:'#392535',accent:'#8651AD',incoming:'#F7E5D9',highlight:'#FFC28D'}
+};
+export const LANES = ['All','Plans','Ideas'];
+export function validatePayload(p) {
+ if(!p || !['text','decision','vote'].includes(p.type)) throw new Error('Unsupported message');
+ if(p.type==='text' && (typeof p.text!=='string' || !p.text.trim() || p.text.length>8000 || !['Plans','Ideas','General'].includes(p.lane))) throw new Error('Invalid message');
+ if(p.type==='decision' && (typeof p.title!=='string' || !p.title.trim() || p.title.length>200 || !Array.isArray(p.options) || p.options.length<2 || p.options.length>5 || new Set(p.options).size!==p.options.length || p.options.some(x=>typeof x!=='string'||!x.trim()||x.length>100))) throw new Error('Invalid decision');
+ if(p.type==='vote' && (typeof p.boardId!=='string' || !Number.isInteger(p.choice) || p.choice<0 || p.choice>4)) throw new Error('Invalid vote');
+ return p;
+}
+export function projectEvents(events) {
+ const sorted=[...events].sort((a,b)=>BigInt(a.seq)<BigInt(b.seq)?-1:BigInt(a.seq)>BigInt(b.seq)?1:0);
+ const boards = new Map(); const messages=[];
+ for(const event of sorted) {
+  const p=event.payload;
+  if(p.type==='decision') { const board={...event,votes:{}}; boards.set(event.client_id,board); messages.push(board); }
+  if(p.type==='text') messages.push(event);
+  if(p.type==='vote') {const board=boards.get(p.boardId); if(board && p.choice<board.payload.options.length) board.votes[event.sender_id]=p.choice;}
+ }
+ return messages;
+}
+export function createConversationClient({request,crypto,actor,uuid}) {
+ if(!request || !crypto?.encryptForDevices || !crypto?.decryptAuthenticated || !uuid) throw new Error('Missing authenticated messaging adapters');
+ const root='/v2/conversations';
+ return {
+  actor,
+  open:peerId=>request(`${root}/direct`,{method:'POST',body:{peerId}}),
+  list:()=>request(root,{method:'GET'}),
+  async page(id,cursor) {
+   const page=await request(`${root}/${encodeURIComponent(id)}/events?after=${encodeURIComponent(cursor)}`,{method:'GET'});
+   const events=[];
+   for(const e of page.events) {
+    // Adapter MUST verify device signature, replay protections and AAD; return
+    // plaintext only after verifying sender account/device in the key directory.
+    const payload=await crypto.decryptAuthenticated(e.ciphertext,{conversationId:id,senderId:e.sender_id,clientId:e.client_id});
+    events.push({...e,payload:validatePayload(payload)});
+   }
+   return {...page,events};
+  },
+  draft(payload) { return {clientId:uuid(),payload:validatePayload(payload)}; },
+  async send(id,draft) {
+   const envelopes=await crypto.encryptForDevices(draft.payload,{conversationId:id,senderId:actor.userId,clientId:draft.clientId});
+   return request(`${root}/${encodeURIComponent(id)}/events`,{method:'POST',body:{clientId:draft.clientId,envelopes}});
+  }
+ };
+}
+
+
+========================================================================
+FILE: shared/useConversation.jsx
+========================================================================
+import {useEffect,useRef,useState} from 'react';
+import {projectEvents} from './engine.mjs';
+export function useConversation(client,id) {
+ const [events,setEvents]=useState([]),[error,setError]=useState(''),[pending,setPending]=useState([]),[sending,setSending]=useState(false);
+ const state=useRef({id:null,cursor:'0'}), busy=useRef(false);
+ useEffect(()=>{
+  let cancelled=false, timer; const current={id,cursor:'0'}; state.current=current;
+  setEvents([]);setPending([]);setError('');
+  async function poll(){
+   if(!id)return;
+   try {
+    let more=true;
+    while(more && !cancelled) {
+     const page=await client.page(id,current.cursor);
+     if(cancelled)return;
+     setEvents(old=>{const map=new Map(old.map(x=>[x.id,x]));for(const e of page.events)map.set(e.id,e);return [...map.values()];});
+     setPending(old=>old.filter(d=>!page.events.some(e=>e.client_id===d.clientId && e.sender_id===client.actor.userId)));
+     current.cursor=page.cursor; more=page.hasMore;
+    }
+    if(!cancelled)setError('');
+   }catch(e){if(!cancelled)setError(e.message||'Unable to load messages');}
+   finally{if(!cancelled)timer=setTimeout(poll,3000);}
+  }
+  poll();return()=>{cancelled=true;clearTimeout(timer);};
+ },[client,id]);
+ async function attempt(draft){
+  if(busy.current || !id)return false;
+  busy.current=true;setSending(true);const context=state.current;
+  setPending(old=>[...old.filter(x=>x.clientId!==draft.clientId),{...draft,status:'sending'}]);
+  try{
+   await client.send(id,draft);
+   if(state.current===context)setPending(old=>old.map(x=>x.clientId===draft.clientId?{...x,status:'accepted'}:x));
+   return true;
+  }catch(e){
+   if(state.current===context){setError(e.message||'Send failed');setPending(old=>old.map(x=>x.clientId===draft.clientId?{...x,status:'failed'}:x));}
+   return false;
+  }finally{busy.current=false;setSending(false);}
+ }
+ return {messages:projectEvents(events),pending,error,sending,
+  send:payload=>attempt(client.draft(payload)),retry:attempt};
+}
+
+
+========================================================================
+FILE: tests/conversation.test.mjs
+========================================================================
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createChatService,validateSend} from '../server/service.mjs';
+import {projectEvents,validatePayload,createConversationClient} from '../shared/engine.mjs';
+const a='00000000-0000-4000-8000-000000000001',b='00000000-0000-4000-8000-000000000002',id='00000000-0000-4000-8000-000000000003',clientId='00000000-0000-4000-8000-000000000004';
+const actor={userId:a,deviceId:'A'};const ciphertext=Buffer.alloc(32).toString('base64');
+const envelopes=[{userId:a,deviceId:'A',ciphertext},{userId:b,deviceId:'B',ciphertext}];
+function service({members=[a,b],allowed=true,eligible=envelopes}={}){
+ return createChatService({repo:{members:async()=>members,append:async()=>({id}),open:async()=>({id})},policy:{canChat:async()=>allowed},devices:{listForUsers:async()=>eligible}});
+}
+test('nonmember cannot read history',async()=>{await assert.rejects(service({members:[b]}).history(actor,id),/unavailable/);});
+test('block policy rejects sends and conversation initiation',async()=>{const s=service({allowed:false});await assert.rejects(s.send(actor,id,{clientId,envelopes}),/not permitted/);await assert.rejects(s.open(actor,b),/not permitted/);});
+test('self chat rejected',async()=>{await assert.rejects(service().open(actor,a),/recipient/);});
+test('duplicate envelope rejected',()=>assert.throws(()=>validateSend({clientId,envelopes:[envelopes[0],envelopes[0]]}),/Duplicate/));
+test('missing recipient envelope fails closed',async()=>{await assert.rejects(service().send(actor,id,{clientId,envelopes:[envelopes[0]]}),/Device set changed/);});
+test('unauthorized target device rejected',async()=>{await assert.rejects(service().send(actor,id,{clientId,envelopes:[envelopes[0],{...envelopes[1],deviceId:'C'}]}),/Device set changed/);});
+test('valid encrypted device batch accepted',async()=>assert.equal((await service().send(actor,id,{clientId,envelopes})).id,id));
+test('invalid cursor rejected',async()=>{await assert.rejects(service().history(actor,id,'-1'),/cursor/);});
+test('plaintext field is not accepted as ciphertext',()=>assert.throws(()=>validateSend({clientId,envelopes:[{...envelopes[0],ciphertext:'hello world!'}]}),/ciphertext/));
+test('one vote per sender, latest choice wins, out-of-range ignored',()=>{
+ const e=(seq,sender_id,payload)=>({seq:String(seq),sender_id,client_id:seq===1?clientId:`vote${seq}`,payload});
+ const result=projectEvents([e(1,a,{type:'decision',title:'When?',options:['3 PM','4 PM']}),e(2,a,{type:'vote',boardId:clientId,choice:0}),e(3,a,{type:'vote',boardId:clientId,choice:1}),e(4,b,{type:'vote',boardId:clientId,choice:0}),e(5,b,{type:'vote',boardId:clientId,choice:4})]);
+ assert.deepEqual(result[0].votes,{[a]:1,[b]:0});
+});
+test('invalid payloads rejected',()=>{assert.throws(()=>validatePayload({type:'text',text:'',lane:'General'}));assert.throws(()=>validatePayload({type:'decision',title:'x',options:['same','same']}));});
+test('send uses crypto envelopes and stable retry client ID',async()=>{
+ const calls=[];const client=createConversationClient({actor,uuid:()=>clientId,crypto:{encryptForDevices:async()=>envelopes,decryptAuthenticated:async()=>({type:'text',text:'ok',lane:'General'})},request:async(path,options)=>{calls.push(options.body);return{id};}});
+ const d=client.draft({type:'text',text:'secret text',lane:'Plans'});await client.send(id,d);await client.send(id,d);
+ assert.equal(calls[0].clientId,calls[1].clientId);assert.equal(JSON.stringify(calls).includes('secret text'),false);
+});
+test('failed authenticated decryption never yields displayable plaintext',async()=>{
+ const client=createConversationClient({actor,uuid:()=>clientId,crypto:{encryptForDevices:async()=>envelopes,decryptAuthenticated:async()=>{throw Error('Signature invalid');}},request:async()=>({events:[{ciphertext,sender_id:b,client_id:clientId}],cursor:'1'})});
+ await assert.rejects(client.page(id,'0'),/Signature invalid/);
+});
+
+
+========================================================================
+FILE: web/Conversation.jsx
+========================================================================
+import React,{useState,useEffect} from 'react';
+import {useConversation} from '../shared/useConversation.jsx';
+import {THEMES,LANES} from '../shared/engine.mjs';
+import './conversation.css';
+export default function Conversation({client,conversationId,peer,onBack,onCall,onSafety,onBlock,onAttach,settingsStore}) {
+ const chat=useConversation(client,conversationId);
+ const [text,setText]=useState(''),[lane,setLane]=useState('All'),[settings,setSettings]=useState(false),[theme,setTheme]=useState('violet'),[quiet,setQuiet]=useState(false);
+ const [notice,setNotice]=useState('');const colors=THEMES[theme];
+ useEffect(()=>{let live=true;settingsStore?.load(conversationId).then(p=>{if(live&&p){if(THEMES[p.theme])setTheme(p.theme);setQuiet(!!p.quiet);}}).catch(()=>{});return()=>{live=false;};},[settingsStore,conversationId]);
+ async function preference(next){
+  try{if(!settingsStore)throw new Error('Missing settings adapter');await settingsStore.save(conversationId,next);setNotice('Preference saved on this device.');}
+  catch{setNotice('Could not save preference.');}
+ }
+ async function submit(e){e.preventDefault();if(!text.trim())return;const value=text;if(await chat.send({type:'text',text:value,lane:lane==='All'?'General':lane}))setText('');}
+ async function decision(){
+  const title=window.prompt('Decision title');if(!title)return;
+  const a=window.prompt('First option');const b=window.prompt('Second option');if(!a||!b||a===b)return;
+  await chat.send({type:'decision',title,options:[a,b]});
+ }
+ function action(fn){if(fn)fn();else setNotice('Connect this action to the existing Linqa module.');}
+ return <section className="lc" style={{'--bg':colors.background,'--surface':colors.surface,'--ink':colors.ink,'--accent':colors.accent,'--incoming':colors.incoming,'--highlight':colors.highlight}}>
+  <header><button aria-label="Back" onClick={onBack}>←</button><div className="lc-avatar">{peer.displayName?.slice(0,1)}</div><div className="lc-person"><strong>{peer.displayName}</strong><small>Conversation</small></div><button onClick={()=>action(onCall?()=>onCall('audio',peer.id):null)} aria-label="Voice call">☎</button><button onClick={()=>action(onCall?()=>onCall('video',peer.id):null)}>Video</button><button onClick={()=>setSettings(!settings)} aria-label="Conversation settings">⚙</button></header>
+  <nav>{LANES.map(x=><button key={x} className={lane===x?'selected':''} onClick={()=>setLane(x)}>{x}</button>)}<button disabled={chat.sending} onClick={decision}>＋ Decision board</button></nav>
+  {settings&&<aside><h3>Conversation settings</h3><label>Appearance <select value={theme} onChange={e=>{setTheme(e.target.value);preference({theme:e.target.value,quiet});}}>{Object.keys(THEMES).map(x=><option key={x}>{x}</option>)}</select></label><label><input type="checkbox" checked={quiet} onChange={e=>{setQuiet(e.target.checked);preference({theme,quiet:e.target.checked});}}/> Quiet this conversation on this device</label><button onClick={()=>action(onSafety?()=>onSafety(peer.id):null)}>Verify safety number</button><button onClick={()=>action(onBlock?()=>onBlock(peer.id):null)}>Block contact</button><small>Quiet applies through your notification adapter. Blocking applies through the canonical server policy.</small></aside>}
+  {(chat.error||notice)&&<div role="status" className="lc-notice">{chat.error||notice}</div>}
+  <main aria-label="Message history" aria-live="polite">
+   {!chat.messages.length&&<div className="lc-empty"><h2>Begin something worth sharing.</h2><p>Say hello to {peer.displayName}, organize ideas, or decide together.</p></div>}
+   {chat.messages.filter(x=>lane==='All'||x.payload.type==='decision'||x.payload.lane===lane).map(x=><article key={x.id} className={x.sender_id===client.actor.userId?'outgoing':'incoming'}>
+    {x.payload.type==='text'?<p>{x.payload.text}</p>:<div className="lc-board"><small>Decision board</small><h3>{x.payload.title}</h3>{x.payload.options.map((o,i)=><button key={i} disabled={chat.sending} className={x.votes[client.actor.userId]===i?'selected':''} onClick={()=>chat.send({type:'vote',boardId:x.client_id,choice:i})}>{o}<span>{Object.values(x.votes).filter(v=>v===i).length} votes</span></button>)}</div>}
+    <small>{new Date(x.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</small>
+   </article>)}
+   {chat.pending.map(d=><article key={d.clientId} className="outgoing"><p>{d.payload.type==='text'?d.payload.text:d.payload.type==='decision'?d.payload.title:'Your vote'}</p><small>{d.status==='accepted'?'Accepted by relay':d.status}</small>{d.status==='failed'&&<button disabled={chat.sending} onClick={()=>chat.retry(d)}>Retry</button>}</article>)}
+  </main>
+  <form onSubmit={submit}><button type="button" aria-label="Add attachment" onClick={()=>action(onAttach)}>＋</button><input aria-label="Message" maxLength={8000} placeholder="Write a message…" value={text} onChange={e=>setText(e.target.value)}/><button className="lc-send" disabled={chat.sending||!text.trim()}>Send ↗</button></form>
+ </section>;
+}
+
+
+========================================================================
+FILE: web/conversation.css
+========================================================================
+.lc{height:100dvh;max-width:1200px;margin:auto;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:16px system-ui;border:1px solid #b9b0d433}.lc *{box-sizing:border-box}.lc button,.lc input,.lc select{font:inherit}.lc button{cursor:pointer;border:0;border-radius:14px;padding:10px 14px;color:var(--ink);background:var(--incoming)}.lc button:disabled{opacity:.5;cursor:default}.lc button:focus-visible,.lc input:focus-visible{outline:3px solid var(--highlight)}.lc header{display:flex;align-items:center;gap:12px;padding:18px;background:var(--surface)}.lc-avatar{border-radius:18px;width:44px;height:44px;display:grid;place-items:center;background:var(--highlight);color:#302342}.lc-person{flex:1}.lc small{display:block;font-size:12px;opacity:.8}.lc nav{display:flex;gap:8px;padding:12px 18px;flex-wrap:wrap}.lc .selected,.lc .lc-send{background:var(--accent);color:white}.lc main{flex:1;overflow:auto;padding:24px;background-image:radial-gradient(ellipse at 85% 15%,#a28ac011,transparent 55%)}.lc article{max-width:75%;width:fit-content;border-radius:20px;padding:14px 18px;margin:12px 0;background:var(--incoming);overflow-wrap:anywhere}.lc article p{margin:0 0 8px;white-space:pre-wrap}.lc .outgoing{margin-left:auto;background:var(--accent);color:white;border-bottom-right-radius:6px}.lc .incoming{border-bottom-left-radius:6px}.lc article>small{text-align:right}.lc-board{min-width:220px}.lc-board button{width:100%;margin:5px 0;display:flex;justify-content:space-between;gap:16px}.lc-board h3{margin:10px 0}.lc form{display:flex;gap:12px;padding:18px;padding-bottom:max(18px,env(safe-area-inset-bottom));background:var(--surface)}.lc form input{flex:1;min-width:0;border:0;border-radius:16px;padding:14px;background:var(--incoming);color:var(--ink)}.lc aside{padding:16px;background:var(--surface);display:flex;gap:12px;flex-wrap:wrap;align-items:center}.lc aside h3{width:100%;margin:0}.lc aside label{display:flex;align-items:center;gap:8px}.lc aside small{width:100%}.lc-notice{padding:10px 18px;background:var(--highlight);color:#302342}.lc-empty{text-align:center;margin:12vh auto;max-width:400px;opacity:.8}@media(max-width:600px){.lc header{padding:12px;gap:6px}.lc header button{padding:8px}.lc main{padding:14px}.lc article{max-width:90%}.lc form{padding:12px;gap:8px}}
+

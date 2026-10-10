@@ -1,0 +1,255 @@
+:root {
+  --ink: #1c2834;
+  --muted: #6d7b88;
+  --line: #e6ebf0;
+  --paper: #f4f7f8;
+  --card: #ffffff;
+  --teal: #14685a;
+  --teal-ink: #0f3f38;
+  --live: #c44747;
+  --warn: #8a6230;
+  --warn-bg: #fbf3e4;
+}
+
+.linqa-sheet,
+.linqa-composer,
+.linqa-recorder,
+.linqa-editor,
+.linqa-stage {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+  border-radius: 28px 28px 0 0;
+  padding: 18px 16px 24px;
+  max-width: 420px;
+}
+
+.linqa-sheet__head,
+.linqa-composer__bar,
+.linqa-editor header,
+.linqa-recorder header,
+.linqa-stage header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.linqa-sheet__head h2,
+.linqa-composer__bar h2,
+.linqa-editor h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.linqa-text-btn,
+.linqa-composer button,
+.linqa-editor button,
+.linqa-recorder button {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+
+.linqa-recent,
+.linqa-grid,
+.linqa-chips,
+.linqa-row,
+.linqa-split,
+.linqa-tools {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.linqa-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 18px;
+}
+
+.linqa-grid__item {
+  border: 0;
+  background: transparent;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.linqa-grid__icon,
+.linqa-recent__thumb,
+.linqa-recent__all {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: #e7f3ef;
+  display: grid;
+  place-items: center;
+}
+
+.linqa-grid__icon.is-exception {
+  background: #f8f1e4;
+  outline: 1px dashed #d7b27a;
+}
+
+.linqa-seal-note,
+.linqa-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-radius: 16px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.linqa-field,
+.linqa-option,
+.linqa-card,
+.linqa-callout,
+.linqa-toggle {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 12px 14px;
+  margin: 8px 0;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  text-align: left;
+}
+
+.linqa-field span,
+.linqa-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.linqa-field input,
+.linqa-field textarea,
+.linqa-option input {
+  width: 100%;
+  border: 0;
+  font: inherit;
+  font-size: 16px;
+  color: var(--ink);
+  background: transparent;
+}
+
+.linqa-chips button,
+.linqa-seg button,
+.linqa-ghost {
+  border-radius: 999px;
+  border: 1px solid #d5dee6;
+  background: white;
+  padding: 8px 14px;
+}
+
+.linqa-chips button.is-on,
+.linqa-seg button.is-on,
+.linqa-send,
+.linqa-go {
+  background: var(--teal);
+  color: white;
+  border-color: var(--teal);
+}
+
+.linqa-send {
+  width: 100%;
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 18px;
+  font-size: 16px;
+  margin-top: 12px;
+}
+
+.linqa-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.linqa-toggle small {
+  display: block;
+  color: var(--muted);
+}
+
+.linqa-toggle i {
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: #d5dee6;
+  display: inline-block;
+  position: relative;
+}
+
+.linqa-toggle i.is-on { background: var(--teal); }
+.linqa-toggle i::after {
+  content: "";
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+}
+.linqa-toggle i.is-on::after { left: 20px; }
+
+.linqa-thread {
+  background: #e7f0ea;
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.linqa-msg,
+.linqa-file,
+.linqa-meet,
+.linqa-contact {
+  background: white;
+  border-radius: 18px;
+  padding: 12px;
+}
+
+.linqa-file,
+.linqa-livebar,
+.linqa-map__meta,
+.linqa-ai p {
+  background: var(--teal);
+  color: white;
+  border-radius: 16px;
+  padding: 12px;
+}
+
+.linqa-livebar,
+.linqa-stage {
+  background: #14181d;
+  color: white;
+}
+
+.linqa-stage .is-leave,
+.linqa-rec { color: var(--live); }
+
+.linqa-album {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.linqa-album__cell,
+.linqa-album__more,
+.linqa-map,
+.linqa-video,
+.linqa-ai__canvas,
+.linqa-stage__page,
+.linqa-crop {
+  min-height: 88px;
+  background: #d5dee8;
+  border-radius: 8px;
+}
+
+.linqa-wave { display: flex; align-items: center; gap: 2px; height: 28px; }
+.linqa-wave span { width: 3px; background: var(--teal); border-radius: 2px; display: block; }

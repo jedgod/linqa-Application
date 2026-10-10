@@ -1,0 +1,2 @@
+import fs from 'node:fs';import path from 'node:path';import pg from 'pg';
+const {Pool}=pg;if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL required');const pool=new Pool({connectionString:process.env.DATABASE_URL});const root=path.resolve(process.argv[2]??'.');const files=['v1.0/001_vault_core.sql','v2.0/002_secure_intake.sql','v3.0/003_business_billing.sql','v4.0/004_private_export.sql','v5.0/005_production_closure.sql'];for(const f of files){console.log('apply',f);await pool.query(fs.readFileSync(path.join(root,f),'utf8'))}await pool.end();

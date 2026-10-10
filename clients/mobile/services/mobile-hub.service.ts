@@ -88,7 +88,8 @@ export class MobileHubService {
     const text = await response.text();
     const data = text ? JSON.parse(text) : {};
     if (!response.ok) {
-      const message = typeof data?.error === "string" ? data.error : `Hub request failed (${response.status}).`;
+      const code = typeof data?.error === "string" ? data.error : data?.error?.code;
+      const message = code === "RATE_LIMITED" ? "Too many searches. Please wait a minute." : code === "INVALID_PHONE_NUMBER" ? "Enter the full phone number with its country code, such as +12025550123." : code === "COUNTRY_UNVERIFIED" ? "Verify your country in CountryLinqa before starting a new chat." : code === "CONTACTS_ONLY" || code === "CHAT_REQUESTS_DISABLED" || code === "COUNTRY_NOT_ALLOWED" ? "This person’s chat settings do not allow a new conversation." : code === "USER_NOT_FOUND" ? "This person is unavailable for a new chat." : `Unable to complete the request (${response.status}).`;
       throw new Error(message);
     }
     return data as T;
@@ -150,11 +151,16 @@ export class MobileHubService {
     return this.request<{ id: string }>("/v1/mobile-hub/statuses", { method: "POST", body: JSON.stringify({ body }) });
   }
 
-  createConversation(recipientUserId: string) {
-    return this.request<{ id: string }>("/v1/mobile-hub/conversations", {
-      method: "POST",
-      body: JSON.stringify({ recipientUserId })
+  async findChatContact(phone: string): Promise<HubContact | null> {
+    const { contact } = await this.request<{ contact: { id: string; displayName: string } | null }>("/v1/chats/contacts/find", { method: "POST", body: JSON.stringify({ phone }) });
+    return contact ? { ...contact, initials: initialsFor(contact.displayName), colorHue: hashHue(contact.displayName), online: false, statusBody: null } : null;
+  }
+
+  async createConversation(recipientUserId: string) {
+    const result = await this.request<{ conversationId: string }>("/v1/chats/direct", {
+      method: "POST", body: JSON.stringify({ userId: recipientUserId })
     });
+    return { id: result.conversationId };
   }
 
   createCall(peerUserId: string, video = false) {

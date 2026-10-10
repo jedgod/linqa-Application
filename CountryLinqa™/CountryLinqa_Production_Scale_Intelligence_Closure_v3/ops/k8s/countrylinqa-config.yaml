@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: countrylinqa-config
+data:
+  COUNTRYLINQA_DISCOVERY_ENABLED: "true"
+  COUNTRYLINQA_RECOMMENDATIONS_ENABLED: "true"
+  COUNTRYLINQA_SAVED_SEARCH_ALERTS_ENABLED: "true"
+  COUNTRYLINQA_ROLLOUT_PERCENT: "5"
+  COUNTRYLINQA_CACHE_TTL_SECONDS: "60"
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: countrylinqa-api-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: linqa-api

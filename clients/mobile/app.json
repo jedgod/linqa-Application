@@ -3,23 +3,93 @@
     "name": "Linqa",
     "slug": "linqa-mobile",
     "scheme": "linqa",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.linqa.mobile"
+      "bundleIdentifier": "com.linqa.mobile",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Use Face ID to unlock LinqaVault and authorize LinqaSend transfers.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "entitlements": {
+        "com.apple.developer.devicecheck.appattest-environment": "production"
+      }
     },
     "android": {
-      "package": "com.linqa.mobile"
+      "package": "com.linqa.mobile",
+      "versionCode": 2,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.CAMERA"
+      ]
     },
-    "runtimeVersion": { "policy": "appVersion" },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "plugins": [
       "expo-router",
       "expo-font",
       "expo-asset",
       "expo-secure-store",
-      "expo-sqlite"
-    ]
+      "expo-sqlite",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Allow Linqa to use the camera for video calls.",
+          "microphonePermission": "Allow Linqa to use the microphone for calls."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Linqa to record voice messages.",
+          "enableBackgroundPlayback": false,
+          "enableBackgroundRecording": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow Linqa to record video messages.",
+          "photosPermission": "Allow Linqa to select photos and GIFs.",
+          "microphonePermission": "Allow Linqa to record video sound."
+        }
+      ],
+      "expo-video",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Linqa to record video messages.",
+          "microphonePermission": "Allow Linqa to record video sound.",
+          "recordAudioAndroid": true,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      "expo-sharing",
+      "@react-native-community/datetimepicker",
+      "react-native-blob-util",
+      ["expo-location", { "locationWhenInUsePermission": "Allow Linqa to share a location you choose." }],
+      ["expo-contacts", { "contactsPermission": "Allow Linqa to select and save contact cards." }],
+      ["expo-calendar", { "calendarPermission": "Allow Linqa to add events and meetings you choose." }],
+      ["expo-media-library", { "photosPermission": "Allow Linqa to select photos.", "savePhotosPermission": "Allow Linqa to save attachments you choose." }],
+      "expo-notifications",
+      "./plugins/with-chat-features.cjs"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c2a8460b-e527-47b8-9ee4-04a35fce9844"
+      }
+    },
+    "owner": "guardalert",
+    "updates": {
+      "url": "https://u.expo.dev/c2a8460b-e527-47b8-9ee4-04a35fce9844"
+    }
   }
 }

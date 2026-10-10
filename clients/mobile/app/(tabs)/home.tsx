@@ -322,7 +322,7 @@ export default function HomeScreen() {
             </Pressable>
             <Pressable
               style={s.iconButton}
-              onPress={() => router.push("/settings/notifications")}
+              onPress={() => router.push("/notifications")}
               accessibilityLabel={badgeCount > 0 ? `Open notifications, ${badgeCount} unread` : "Open notifications"}
             >
               <Ionicons name="notifications-outline" size={23} color="#0F172A" />
@@ -907,11 +907,11 @@ export default function HomeScreen() {
             </View>
             <Ionicons name="chevron-forward" size={16} color="#4438CA" />
           </Pressable>
-          <Pressable style={s.aiToolButton} onPress={() => router.push({ pathname: "/modules/ai", params: { mode: "voice" } })}>
+          <Pressable style={s.aiToolButton} accessibilityRole="button" accessibilityLabel="Record voice" onPress={() => router.push({ pathname: "/recorder", params: { mode: "voice" } })}>
             <Ionicons name="mic-outline" size={18} color="#5B4CFF" />
             <Text style={s.aiToolText}>Voice</Text>
           </Pressable>
-          <Pressable style={s.aiToolButton} onPress={() => router.push("/(tabs)/media")}>
+          <Pressable style={s.aiToolButton} accessibilityRole="button" accessibilityLabel="Open camera" onPress={() => router.push({ pathname: "/recorder", params: { mode: "camera" } })}>
             <Ionicons name="camera-outline" size={18} color="#5B4CFF" />
             <Text style={s.aiToolText}>Camera</Text>
           </Pressable>

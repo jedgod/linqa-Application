@@ -1,117 +1,130 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { TransferRow, transferRoute } from "../../components/linqasend/TransferRow";
+import { LinqaSendStatusBar, LinqaSendTabBar, send } from "../../components/linqasend/ui";
+import { getApiBaseUrl } from "../../config/api";
 import { LinqaSendService, type LinqaSendTransferSummary } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
-import { radius, spacing, useTheme, type Palette } from "../../theme/tokens";
-import { getApiBaseUrl } from "../../config/api";
+import { fonts } from "../../theme/tokens";
 
 const API = getApiBaseUrl();
-const TERMINAL_STATUSES = new Set(["COMPLETED", "DECLINED", "CANCELED", "FAILED", "EXPIRED"]);
-type TransferFilter = "ALL" | "IN_PROGRESS" | "COMPLETED";
+const PAGE = 20;
+type Filter = "all" | "sent" | "received";
+const FILTERS: Array<[Filter, string]> = [["all", "All"], ["sent", "Sent"], ["received", "Received"]];
 
-/** SCREEN 14 (Transaction History) — the full real list, not the 5-item
- * preview on the dashboard. */
+/** Transaction History: sent and received transfers, newest first, loaded a page at a time. */
 export default function LinqaSendHistory() {
-  const { colors } = useTheme();
-  const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
+  const [filter, setFilter] = useState<Filter>("all");
   const [items, setItems] = useState<LinqaSendTransferSummary[] | null>(null);
-  const [filter, setFilter] = useState<TransferFilter>("ALL");
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (which: Filter) => {
     setError(null);
     setItems(null);
+    setNextOffset(null);
     try {
-      const response = await client.listTransfers(100);
-      setItems(response.items);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to load transaction history.");
+      const page = await client.listTransfers(PAGE, { direction: which });
+      setItems(page.items);
+      setNextOffset(page.nextOffset ?? null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()) : "Unable to load transaction history.");
     }
   }, [client]);
+  // The filter is the only thing a reload depends on, so a fast switch cannot show another filter's rows.
+  useEffect(() => { void load(filter); }, [filter, load]);
 
-  useEffect(() => { void load(); }, [load]);
-
-  const visibleItems = (items ?? []).filter((item) => {
-    if (filter === "COMPLETED") return item.status === "COMPLETED";
-    if (filter === "IN_PROGRESS") return !TERMINAL_STATUSES.has(item.status);
-    return true;
-  });
+  async function loadMore() {
+    if (nextOffset === null || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await client.listTransfers(PAGE, { direction: filter, offset: nextOffset });
+      setItems((current) => {
+        const seen = new Set((current ?? []).map((i) => i.id));
+        return [...(current ?? []), ...page.items.filter((i) => !seen.has(i.id))];
+      });
+      setNextOffset(page.nextOffset ?? null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()) : "Unable to load more.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   return (
     <SafeAreaView style={s.screen}>
+      <LinqaSendStatusBar />
       <View style={s.header}>
-        <Pressable onPress={() => router.back()} accessibilityLabel="Back">
-          <Text style={s.back}>←</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Back" style={s.headerButton} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={26} color={send.text} />
         </Pressable>
-        <Text style={s.headerTitle}>Transaction History</Text>
+        <Text accessibilityRole="header" style={s.title}>Transaction History</Text>
+        <View style={s.headerButton} />
       </View>
-      <View style={s.filters}>
-        {(["ALL", "IN_PROGRESS", "COMPLETED"] as const).map((value) => (
-          <Pressable key={value} style={[s.filter, filter === value && s.filterSelected]} onPress={() => setFilter(value)}>
-            <Text style={[s.filterText, filter === value && s.filterTextSelected]}>
-              {value === "ALL" ? "All" : value === "IN_PROGRESS" ? "In progress" : "Completed"}
-            </Text>
+
+      <View style={s.filters} accessibilityRole="tablist">
+        {FILTERS.map(([key, label]) => (
+          <Pressable key={key} accessibilityRole="tab" accessibilityState={{ selected: filter === key }} style={[s.pill, filter === key && s.pillOn]} onPress={() => setFilter(key)}>
+            <Text style={[s.pillText, filter === key && s.pillTextOn]}>{label}</Text>
           </Pressable>
         ))}
       </View>
-      {items === null && (
-        <View style={s.center}>
-          {error ? <><Text style={s.muted}>{error.replace(/_/g, " ")}</Text><Pressable onPress={() => void load()}><Text style={s.retry}>Try again</Text></Pressable></> : <ActivityIndicator color={colors.accent} />}
-        </View>
-      )}
-      {items !== null && !error && items.length === 0 && (
-        <View style={s.center}>
-          <Text style={s.muted}>No transfers yet.</Text>
-        </View>
-      )}
-      {items !== null && !error && items.length > 0 && (
-        <ScrollView contentContainerStyle={s.content}>
-          {visibleItems.length === 0 ? <Text style={s.muted}>No {filter === "COMPLETED" ? "completed" : "in-progress"} transfers.</Text> : visibleItems.map((t) => (
-            <Pressable key={t.id} style={s.row} onPress={() => router.push({ pathname: "/linqasend/status", params: { id: t.id } })}>
-              <View style={{ flex: 1 }}>
-                <Text style={s.rowTitle}>{t.recipientName}</Text>
-                <Text style={s.rowSub}>{new Date(t.createdAt).toLocaleString()}</Text>
-              </View>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={s.rowAmount}>
-                  {(Number(t.sendAmountMinor) / 100).toFixed(2)} {t.sendCurrency}
-                </Text>
-                <Text style={s.rowStatus}>{t.status.replace(/_/g, " ")}</Text>
-              </View>
-            </Pressable>
-          ))}
-        </ScrollView>
-      )}
+
+      <ScrollView contentContainerStyle={s.list}>
+        {error ? (
+          <View style={s.errorBox}>
+            <Text style={s.error}>{error}</Text>
+            <Pressable accessibilityRole="button" onPress={() => void load(filter)}><Text style={s.link}>Try again</Text></Pressable>
+          </View>
+        ) : null}
+        {items === null && !error ? <ActivityIndicator color={send.primary} style={{ marginTop: 40 }} /> : null}
+
+        {items?.map((item) => (
+          <TransferRow key={`${item.direction}-${item.id}`} item={item} onPress={() => router.push(transferRoute(item))} />
+        ))}
+
+        {items !== null && items.length === 0 && !error ? (
+          <View style={s.empty}>
+            <Ionicons name="receipt-outline" size={42} color={send.faint} />
+            <Text style={s.emptyTitle}>{filter === "received" ? "Nothing received yet" : filter === "sent" ? "No transfers sent yet" : "No transactions yet"}</Text>
+            <Text style={s.emptyText}>{filter === "received" ? "Money sent to you by other Linqa users will appear here." : "Your transfers will appear here."}</Text>
+          </View>
+        ) : null}
+
+        {nextOffset !== null ? (
+          <Pressable accessibilityRole="button" disabled={loadingMore} style={s.more} onPress={() => void loadMore()}>
+            {loadingMore ? <ActivityIndicator color={send.primary} /> : <Text style={s.moreText}>Load More</Text>}
+          </Pressable>
+        ) : null}
+      </ScrollView>
+      <LinqaSendTabBar active="activity" />
     </SafeAreaView>
   );
 }
 
-const makeStyles = (colors: Palette) => StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, paddingTop: 52 },
-  back: { color: colors.text, fontSize: 20 },
-  headerTitle: { color: colors.text, fontSize: 17, fontWeight: "700" },
-  filters: { flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.sm },
-  filter: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  filterSelected: { borderColor: colors.accent, backgroundColor: colors.accent },
-  filterText: { color: colors.textMuted, fontSize: 12, fontWeight: "700" },
-  filterTextSelected: { color: "#FFFFFF" },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  muted: { color: colors.textFaint, fontSize: 13 },
-  retry: { color: colors.accent, fontSize: 13, fontWeight: "700", marginTop: spacing.md },
-  content: { padding: spacing.lg },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border
-  },
-  rowTitle: { color: colors.text, fontWeight: "700" },
-  rowSub: { color: colors.textFaint, fontSize: 12, marginTop: 2 },
-  rowAmount: { color: colors.text, fontWeight: "700", fontSize: 12 },
-  rowStatus: { color: colors.textFaint, fontSize: 12, marginTop: 2 }
+const s = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: send.bg },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
+  headerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
+  filters: { flexDirection: "row", gap: 12, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 6 },
+  pill: { flex: 1, height: 46, borderRadius: 12, borderWidth: 1.5, borderColor: send.border, alignItems: "center", justifyContent: "center", backgroundColor: send.bg },
+  pillOn: { backgroundColor: send.primary, borderColor: send.primary },
+  pillText: { color: send.text, fontFamily: fonts.semibold, fontSize: 15 },
+  pillTextOn: { color: "#FFFFFF", fontFamily: fonts.bold },
+  list: { paddingHorizontal: 20, paddingBottom: 30 },
+  more: { alignItems: "center", justifyContent: "center", minHeight: 64, marginTop: 8 },
+  moreText: { color: send.primary, fontFamily: fonts.bold, fontSize: 17 },
+  empty: { alignItems: "center", paddingTop: 54, gap: 8, paddingHorizontal: 16 },
+  emptyTitle: { color: send.text, fontFamily: fonts.bold, fontSize: 17, marginTop: 6 },
+  emptyText: { color: send.muted, fontFamily: fonts.regular, fontSize: 14, lineHeight: 21, textAlign: "center" },
+  errorBox: { backgroundColor: "#FEF3F2", borderRadius: 14, padding: 14, gap: 8, marginTop: 12 },
+  error: { color: send.danger, fontFamily: fonts.medium, fontSize: 14 },
+  link: { color: send.primary, fontFamily: fonts.bold, fontSize: 14 }
 });

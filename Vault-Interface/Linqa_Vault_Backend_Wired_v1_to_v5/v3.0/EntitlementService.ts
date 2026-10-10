@@ -1,0 +1,5 @@
+import {Pool} from 'pg';
+export interface BillingProvider{createCheckout(input:{userId:string;workspaceId:string;planCode:string}):Promise<{checkoutUrl:string}>}
+export class EntitlementService{constructor(private db:Pool,private billing:BillingProvider){}
+ async changePlan(userId:string,workspaceId:string,planCode:string){const p=await this.db.query(`SELECT * FROM vault_plans WHERE code=$1 AND active=true`,[planCode]);if(!p.rowCount)throw Object.assign(new Error('PLAN_NOT_FOUND'),{status:404});const w=await this.db.query(`SELECT * FROM vault_workspaces WHERE id=$1 AND owner_user_id=$2`,[workspaceId,userId]);if(!w.rowCount)throw Object.assign(new Error('FORBIDDEN'),{status:403});return this.billing.createCheckout({userId,workspaceId,planCode})}
+ async applyPaidEntitlement(workspaceId:string,planCode:string){await this.db.query(`UPDATE vault_workspaces w SET plan_code=p.code,quota_bytes=p.quota_bytes,updated_at=now() FROM vault_plans p WHERE w.id=$1 AND p.code=$2`,[workspaceId,planCode])}}

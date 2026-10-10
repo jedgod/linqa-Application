@@ -6,7 +6,9 @@ const db = createPool(config);
 
 try {
   const result = await db.query(`
-    WITH deleted_envelopes AS (
+    WITH deleted_country_quotas AS (
+      DELETE FROM countrylinqa_rate_buckets WHERE expires_at < now() RETURNING 1
+    ), deleted_envelopes AS (
       DELETE FROM message_envelopes
       WHERE expires_at < now()
          OR acknowledged_at < now() - interval '7 days'
@@ -19,6 +21,7 @@ try {
       RETURNING 1
     )
     SELECT
+      (SELECT count(*) FROM deleted_country_quotas) AS country_quotas_deleted,
       (SELECT count(*) FROM deleted_envelopes) AS envelopes_deleted,
       (SELECT count(*) FROM deleted_challenges) AS challenges_deleted
   `);

@@ -1,3 +1,6 @@
+import { limitedOwnedWrite } from "./limited-write.js";
+import { publicCountryError } from "./public-error.js";
+import { discoverBusinesses } from "../../services/countrylinqa/golive/businessRanking.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../../config.js";
@@ -16,8 +19,7 @@ function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) =
       if (error instanceof z.ZodError) {
         return reply.code(422).send({ error: "validation_error", details: error.flatten() });
       }
-      const status = typeof error?.status === "number" ? error.status : 400;
-      const code = typeof error?.code === "string" ? error.code : "invalid_request";
+      const { status, code } = publicCountryError(error);
       request.log.warn({ err: error }, "countrylinqa final request rejected");
       return reply.code(status).send({ error: code });
     }
@@ -152,23 +154,9 @@ export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, conf
       requireScope(p, "countrylinqa:read");
       businessRateLimit(p.userId, request);
 
-      const result = await db.query(
-        `WITH viewer AS (SELECT verified_country_code AS country_code FROM users WHERE id = $1)
-         SELECT b.id, b.name, b.category, b.logo_url AS "logoUrl"
-         FROM businesses b
-         JOIN business_geo_targets t ON t.business_id = b.id AND t.enabled = TRUE
-         CROSS JOIN viewer v
-         LEFT JOIN countries c ON c.code = v.country_code
-         WHERE b.status = 'ACTIVE'
-           AND (
-             (t.target_type = 'COUNTRY' AND t.country_code = v.country_code)
-             OR (t.target_type = 'REGION' AND t.region_code = c.region_code)
-             OR (t.target_type = 'STATE' AND t.country_code = v.country_code)
-           )
-         LIMIT 100`,
-        [p.userId]
-      );
-      return { items: result.rows };
+      const query = collectionSearchSchema.parse(request.query);
+      const items = await discoverBusinesses(db, p.userId, query.limit, query);
+      return pageItems(items, query);
     })
   );
 
@@ -253,7 +241,7 @@ export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, conf
       const p = await auth(request);
       requireScope(p, "countrylinqa:write");
       const body = saveSearchSchema.parse(request.body);
-      const result = await db.query(
+      const result = await limitedOwnedWrite(db, p.userId, "countrylinqa_saved_searches",
         `INSERT INTO countrylinqa_saved_searches (user_id, name, filters)
          VALUES ($1,$2,$3)
          RETURNING id, name, filters, created_at AS "createdAt"`,
@@ -300,7 +288,7 @@ export async function registerCountryLinqaFinalRoutes(app: FastifyInstance, conf
       requireScope(p, "countrylinqa:write");
       const params = z.object({ id: z.string().uuid() }).parse(request.params);
       await db.query(
-        `UPDATE countrylinqa_saved_searches SET enabled = FALSE, updated_at = now() WHERE id = $1 AND user_id = $2`,
+        `DELETE FROM countrylinqa_saved_searches WHERE id = $1 AND user_id = $2`,
         [params.id, p.userId]
       );
       return { deleted: true };

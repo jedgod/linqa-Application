@@ -1,3 +1,4 @@
+import { publicCountryError } from "./public-error.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../../config.js";
@@ -19,8 +20,7 @@ function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) =
       if (error instanceof z.ZodError) {
         return reply.code(422).send({ error: "validation_error", details: error.flatten() });
       }
-      const status = typeof error?.status === "number" ? error.status : 400;
-      const code = typeof error?.code === "string" ? error.code : "invalid_request";
+      const { status, code } = publicCountryError(error);
       request.log.warn({ err: error }, "countrylinqa golive request rejected");
       return reply.code(status).send({ error: code });
     }

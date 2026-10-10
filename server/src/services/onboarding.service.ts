@@ -1,10 +1,11 @@
 import type { Database } from "../db/pool.js";
 
 export type OnboardingNextStep =
-  | "AUTH_REQUIRED" | "DEVICE_ENROLLMENT" | "RECOVERY_SETUP"
+  | "AUTH_REQUIRED" | "DEVICE_ENROLLMENT" | "PROFILE_SETUP" | "RECOVERY_SETUP"
   | "COUNTRY_CONFIRMATION" | "COUNTRY_DISCOVERY" | "SECURITY_REVIEW" | "COMPLETION" | "COMPLETE";
 
 export interface OnboardingStatus {
+  profileReady: boolean;
   phoneVerified: boolean;
   deviceEnrollmentRequired: boolean;
   recoveryReady: boolean;
@@ -37,6 +38,8 @@ export class OnboardingService {
          COALESCE(os.registration_required,FALSE) AS registration_required,
          COALESCE(os.recovery_required,FALSE) AS recovery_required,
          os.completed_at,os.completion_screen_seen_at,
+         EXISTS(SELECT 1 FROM user_profiles p WHERE p.user_id=u.id
+           AND length(btrim(p.full_name))>0 AND length(btrim(p.stage_name))>0) AS profile_ready,
          EXISTS(SELECT 1 FROM phone_identities_v2 p WHERE p.user_id=u.id AND p.verification_state='VERIFIED_MOBILE') AS phone_verified,
          (EXISTS(SELECT 1 FROM recovery_email_identities_v3 r WHERE r.user_id=u.id AND r.verification_state='VERIFIED')
           OR EXISTS(SELECT 1 FROM account_identifiers ai WHERE ai.user_id=u.id AND ai.type='EMAIL'
@@ -54,6 +57,7 @@ export class OnboardingService {
     const row = result.rows[0];
     if (!row) throw new Error("account_not_found");
 
+    const profileReady = !Boolean(row.registration_required) || Boolean(row.profile_ready);
     const phoneVerified = Boolean(row.phone_verified);
     const deviceEnrollmentRequired = !Boolean(row.device_enrolled);
     const recoveryReady = Boolean(row.recovery_ready);
@@ -65,12 +69,13 @@ export class OnboardingService {
     if (row.status !== "ACTIVE") blockers.push(`ACCOUNT_${row.status}`);
     if (["REVIEW_REQUIRED", "RESTRICTED"].includes(countryVerificationState)) blockers.push(`COUNTRY_${countryVerificationState}`);
 
-    const technicallyComplete = phoneVerified && !deviceEnrollmentRequired && (!recoveryRequired || recoveryReady)
+    const technicallyComplete = profileReady && phoneVerified && !deviceEnrollmentRequired && (!recoveryRequired || recoveryReady)
       && countryInitialized && discoveryConfigured && blockers.length === 0;
     const completionScreenSeen = Boolean(row.completion_screen_seen_at);
     let nextStep: OnboardingNextStep = "COMPLETE";
     if (!phoneVerified) nextStep = "AUTH_REQUIRED";
     else if (deviceEnrollmentRequired) nextStep = "DEVICE_ENROLLMENT";
+    else if (!profileReady) nextStep = "PROFILE_SETUP";
     else if (recoveryRequired && !recoveryReady) nextStep = "RECOVERY_SETUP";
     else if (!countryInitialized) nextStep = "COUNTRY_CONFIRMATION";
     else if (!discoveryConfigured) nextStep = "COUNTRY_DISCOVERY";
@@ -95,10 +100,31 @@ export class OnboardingService {
       code: String(row.detected_country_code), name: String(row.detected_country_name ?? row.detected_country_code),
       callingCode: row.detected_calling_code ? String(row.detected_calling_code) : null
     } : null;
-    return { phoneVerified, deviceEnrollmentRequired, recoveryReady, recoveryRequired,
+    return { profileReady, phoneVerified, deviceEnrollmentRequired, recoveryReady, recoveryRequired,
       countryInitialized, countryVerificationState, discoveryConfigured, blockers, detectedCountry,
       onboardingCompletedAt: technicallyComplete ? (row.completed_at ? new Date(row.completed_at).toISOString() : new Date().toISOString()) : null,
       completionScreenSeen, nextStep };
+  }
+
+  async profile(userId: string) {
+    const result = await this.db.query(
+      `SELECT full_name AS "fullName",stage_name AS "stageName" FROM user_profiles WHERE user_id=$1`, [userId]
+    );
+    return { fullName: result.rows[0]?.fullName ?? "", stageName: result.rows[0]?.stageName ?? "" };
+  }
+
+  async saveProfile(userId: string, deviceId: string | undefined, fullName: string, stageName: string) {
+    const current = await this.status(userId, deviceId);
+    if (!current.phoneVerified || current.deviceEnrollmentRequired || current.blockers.length) {
+      throw new Error("profile_setup_not_allowed");
+    }
+    await this.db.query(
+      `INSERT INTO user_profiles(user_id,display_name,full_name,stage_name) VALUES($1,$3,$2,$3)
+       ON CONFLICT(user_id) DO UPDATE SET display_name=EXCLUDED.stage_name,
+         full_name=EXCLUDED.full_name,stage_name=EXCLUDED.stage_name,updated_at=now()`,
+      [userId, fullName, stageName]
+    );
+    return { saved: true };
   }
 
   async acknowledgeCompletion(userId: string, deviceId?: string) {

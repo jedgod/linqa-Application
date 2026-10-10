@@ -29,7 +29,7 @@ export function simpleRateLimit(options: { windowMs: number; max: number; keyPre
   };
 
   return (userId: string, request: FastifyRequest): void => {
-    const key = `${options.keyPrefix}:${userId}:${request.ip}`;
+    const key = `${options.keyPrefix}:${userId}`;
     const now = Date.now();
     sweep(now);
 

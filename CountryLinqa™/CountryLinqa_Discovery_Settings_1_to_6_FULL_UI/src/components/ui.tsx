@@ -1,0 +1,5 @@
+import React from 'react';import {cn} from './libShim';
+export function Button({className,...p}:React.ButtonHTMLAttributes<HTMLButtonElement>){return <button {...p} className={cn('w-full rounded-2xl bg-violet-600 px-4 py-3.5 text-sm font-bold text-white disabled:opacity-50',className)}/>};
+export function Card({children,className}:{children:React.ReactNode;className?:string}){return <div className={cn('rounded-2xl border border-zinc-200 bg-white',className)}>{children}</div>}
+export function Switch({checked,onChange}:{checked:boolean;onChange:(v:boolean)=>void}){return <button onClick={()=>onChange(!checked)} className={cn('relative h-7 w-12 rounded-full',checked?'bg-violet-600':'bg-zinc-200')}><span className={cn('absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all',checked?'left-6':'left-1')}/></button>}
+export function Badge({children,tone='premium'}:{children:React.ReactNode;tone?:'premium'|'elite'}){return <span className={cn('rounded-full px-2 py-1 text-[10px] font-bold uppercase',tone==='elite'?'bg-amber-100 text-amber-700':'bg-violet-100 text-violet-700')}>{children}</span>}

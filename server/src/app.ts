@@ -1,9 +1,11 @@
+import { registerCountrySecurity } from "./routes/countrylinqa/shared-security.js";
 import Fastify from "fastify";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import cors from "@fastify/cors";
 import rawBody from "fastify-raw-body";
 import { randomUUID } from "node:crypto";
+import { ScopeAuthorizationError } from "./auth/jwt.js";
 import type { AppConfig } from "./config.js";
 import type { Database } from "./db/pool.js";
 import { createServiceContainer } from "./bootstrap/service-container.js";
@@ -24,6 +26,11 @@ export async function buildApp(config: AppConfig, db: Database) {
       redact: [
         "req.headers.authorization",
         "req.headers.cookie",
+        "req.headers.x-vault-unlock-token",
+        "body.signatureBase64",
+        "body.challenge",
+        "body.nonce",
+        "body.token",
         "body.ciphertextBase64",
         "body.packageBase64",
         "body.code",
@@ -38,7 +45,7 @@ export async function buildApp(config: AppConfig, db: Database) {
     genReqId: () => randomUUID(),
     bodyLimit: config.MAX_ENVELOPE_BYTES * 2,
     requestTimeout: 15_000,
-    trustProxy: false
+    trustProxy: config.TRUSTED_PROXY_CIDRS?.split(",").map(value => value.trim()).filter(Boolean) ?? false
   });
 
   // Registered before any plugin (in particular @fastify/websocket, which
@@ -48,6 +55,10 @@ export async function buildApp(config: AppConfig, db: Database) {
   // order, so a setErrorHandler() call placed textually "after" register()
   // can still lose to a plugin's internal handler set during boot).
   app.setErrorHandler((error, request, reply) => {
+    if (error instanceof ScopeAuthorizationError) {
+      void reply.code(403).send({ error: "FORBIDDEN", requestId: request.id });
+      return;
+    }
     request.log.error({ err: error }, "request failed");
     void reply.code(500).send({
       error: "internal_error",
@@ -71,6 +82,7 @@ export async function buildApp(config: AppConfig, db: Database) {
   });
   await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
 
+  registerCountrySecurity(app, config, db);
   const metrics = registerMetrics(app);
   const services = createServiceContainer(config, db);
   await enforceProductionBoot(config.NODE_ENV, services.runtimeCapabilities);

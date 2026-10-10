@@ -1,0 +1,22 @@
+{
+  "gitSha": "TBD",
+  "serverSha256": "TBD",
+  "androidSha256": "TBD",
+  "iosSha256": "TBD",
+  "countryA": "TBD",
+  "countryB": "TBD",
+  "deviceA": "TBD",
+  "deviceB": "TBD",
+  "myCountry": "PENDING",
+  "selectedCountries": "PENDING",
+  "region": "PENDING",
+  "worldwide": "PENDING",
+  "inboundPrivacy": "PENDING",
+  "block": "PENDING",
+  "restrictedUser": "PENDING",
+  "savedSearch": "PENDING",
+  "pagination": "PENDING",
+  "cachePolicyChange": "PENDING",
+  "iosRequired": false,
+  "iosPhysical": "BLOCKED_NO_IOS_PROJECT"
+}

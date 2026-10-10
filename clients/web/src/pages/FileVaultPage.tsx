@@ -53,36 +53,6 @@ function fileGlyph(item: VaultItemSummary): string {
   return "📁";
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes));
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-/** Session-only PIN gate for Private Vault: hashes the PIN client-side and
- * compares it in this tab's memory only. This locks the view for casual
- * shoulder-surfing/screen-share scenarios; it is not a server-enforced
- * secret and must not be described to users as such. */
-function usePrivateVaultLock() {
-  const [pinHash, setPinHash] = useState<string | null>(null);
-  const [unlocked, setUnlocked] = useState(false);
-
-  async function setPin(pin: string) {
-    setPinHash(await sha256Hex(new TextEncoder().encode(pin)));
-    setUnlocked(true);
-  }
-
-  async function tryUnlock(pin: string): Promise<boolean> {
-    const hash = await sha256Hex(new TextEncoder().encode(pin));
-    const ok = hash === pinHash;
-    if (ok) setUnlocked(true);
-    return ok;
-  }
-
-  return { hasPin: pinHash !== null, unlocked, setPin, tryUnlock, lock: () => setUnlocked(false) };
-}
-
 export function FileVaultPage({ apiBaseUrl, accessToken }: { apiBaseUrl: string; accessToken: string }) {
   const [client] = useState(() => new FileVaultClient(apiBaseUrl, () => Promise.resolve(accessToken)));
   const [items, setItems] = useState<VaultItemSummary[]>([]);
@@ -95,7 +65,6 @@ export function FileVaultPage({ apiBaseUrl, accessToken }: { apiBaseUrl: string;
   const [scanStage, setScanStage] = useState(0);
   const [scanError, setScanError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
-  const privateVault = usePrivateVaultLock();
 
   const refresh = useCallback(() => {
     setError(null);
@@ -232,12 +201,7 @@ export function FileVaultPage({ apiBaseUrl, accessToken }: { apiBaseUrl: string;
         />
       )}
       {screen === "private" && (
-        <VaultPrivate
-          lock={privateVault}
-          items={items}
-          onBack={() => setScreen("home")}
-          onDownload={handleDownload}
-        />
+        <VaultPrivate onBack={() => setScreen("home")} />
       )}
       {screen === "share" && shareItem && (
         <VaultShare item={shareItem} onBack={() => setScreen(activeFolder ? "files" : "home")} />
@@ -584,89 +548,8 @@ function VaultSave({
   );
 }
 
-function VaultPrivate({
-  lock,
-  items,
-  onBack,
-  onDownload
-}: {
-  lock: ReturnType<typeof usePrivateVaultLock>;
-  items: VaultItemSummary[];
-  onBack(): void;
-  onDownload(item: VaultItemSummary): void;
-}) {
-  const [pinInput, setPinInput] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const identityItems = items.filter((i) => i.itemType === "IDENTITY" || i.itemType === "RECOVERY");
-
-  if (lock.unlocked) {
-    return (
-      <div className="vault-screen">
-        <VaultPageHeader title="Private Vault" onBack={onBack} extra={<button className="vault-link-btn" onClick={lock.lock}>Lock</button>} />
-        <div className="vault-card vault-list">
-          {identityItems.length === 0 && <p className="vault-muted">No identity or recovery items yet.</p>}
-          {identityItems.map((item) => (
-            <div className="vault-row" key={item.id}>
-              <span className="vault-file-icon">🔐</span>
-              <div className="vault-row-body">
-                <div className="vault-row-title">{item.name}</div>
-                <div className="vault-row-sub">{item.itemType}</div>
-              </div>
-              <button className="vault-link-btn" onClick={() => onDownload(item)}>
-                Download
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="vault-screen">
-      <VaultPageHeader title="Private Vault" onBack={onBack} />
-      <div className="vault-private-lock">
-        <div className="vault-private-icon">🔒</div>
-        <h2>{lock.hasPin ? "Enter your PIN" : "Set a PIN for this session"}</h2>
-        <p className="vault-muted">
-          {lock.hasPin
-            ? "Unlock to view identity and recovery documents."
-            : "This PIN only protects this browser tab for this session — it is not sent anywhere."}
-        </p>
-        <input
-          className="vault-input vault-pin-input"
-          type="password"
-          inputMode="numeric"
-          value={pinInput}
-          onChange={(e) => setPinInput(e.target.value)}
-          placeholder="••••"
-        />
-        {error && (
-          <p className="vault-error" role="alert">
-            {error}
-          </p>
-        )}
-        <button
-          className="vault-primary-btn"
-          onClick={async () => {
-            if (lock.hasPin) {
-              const ok = await lock.tryUnlock(pinInput);
-              setError(ok ? null : "Incorrect PIN.");
-            } else {
-              if (pinInput.length < 4) {
-                setError("Use at least 4 digits.");
-                return;
-              }
-              await lock.setPin(pinInput);
-            }
-            setPinInput("");
-          }}
-        >
-          {lock.hasPin ? "Unlock" : "Set PIN"}
-        </button>
-      </div>
-    </div>
-  );
+function VaultPrivate({ onBack }: { onBack(): void }) {
+  return <div className="vault-screen"><VaultPageHeader title="Private Vault" onBack={onBack} /><div className="vault-private-lock"><h2>Unlock in the Linqa mobile app</h2><p className="vault-muted">Identity and recovery files require device biometric signing and a server-confirmed Private Vault session.</p><p className="vault-muted">This browser has no Linqa hardware signing bridge. Open Private Vault on your enrolled mobile device.</p></div></div>;
 }
 
 function VaultShare({ item, onBack }: { item: VaultItemSummary; onBack(): void }) {
@@ -759,7 +642,7 @@ function VaultSecurityCenter({ onBack }: { onBack(): void }) {
     ["Two-Factor Authentication", "Managed in account settings", false],
     ["Biometric Login", "Not available on this device/browser", false],
     ["Trusted Devices", "Managed in account settings", false],
-    ["Auto-lock (Private Vault)", "Per-session, this tab only", true]
+    ["Auto-lock (Private Vault)", "5 minutes on the mobile app", true]
   ];
   return (
     <div className="vault-screen">

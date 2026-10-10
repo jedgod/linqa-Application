@@ -10,7 +10,9 @@ export function getApiBaseUrl(): string {
   const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
   if (configured) {
     const normalized = configured.replace(/\/+$/, "");
-    if (!__DEV__ && !/^https:\/\//i.test(normalized)) {
+    // Plain HTTP is allowed only for this phone's own loopback (the USB tunnel to a development computer); nothing else.
+    const loopback = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i.test(normalized);
+    if (!__DEV__ && !loopback && !/^https:\/\//i.test(normalized)) {
       throw new Error("EXPO_PUBLIC_API_URL must be an HTTPS URL in release builds");
     }
     return normalized;

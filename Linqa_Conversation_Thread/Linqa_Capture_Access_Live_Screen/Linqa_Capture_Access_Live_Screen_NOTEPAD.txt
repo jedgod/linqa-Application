@@ -1,0 +1,264 @@
+LINQA CAPTURE ACCESS + LIVE SCREEN
+Photos/video need camera. Video and voice need microphone. Documents need files. Design accepts photo, pdf, docx. Contacts and location are separate prompts. Screen share has its own table.
+
+
+========================================================================================
+FILE: server/migrations/029_live_screen.sql
+========================================================================================
+-- Live screen share. Signaling only. Frames stay on the peer connection.
+
+CREATE TABLE IF NOT EXISTS live_screen_sessions (
+  id               TEXT PRIMARY KEY,
+  conversation_id  TEXT NOT NULL,
+  host_user_id     TEXT NOT NULL,
+  host_device_id   TEXT NOT NULL,
+  state            TEXT NOT NULL CHECK (state IN ('OFFERED','ACTIVE','STOPPED','DECLINED')),
+  offer_envelope   BYTEA,
+  answer_envelope  BYTEA,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  stopped_at       TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS live_screen_conv_idx
+  ON live_screen_sessions(conversation_id, created_at DESC);
+
+========================================================================================
+FILE: server/src/services/live-screen.service.ts
+========================================================================================
+import type { Database } from "../db/pool.js";
+
+export class LiveScreenService {
+  constructor(private readonly db: Database) {}
+
+  async offer(input: {
+    id: string;
+    conversationId: string;
+    userId: string;
+    deviceId: string;
+    offerEnvelope: Buffer;
+  }) {
+    await this.requireMember(input.userId, input.conversationId);
+    if (input.offerEnvelope.length < 32) throw new Error("SCREEN_OFFER_INVALID");
+    await this.db.query(
+      `INSERT INTO live_screen_sessions(
+         id,conversation_id,host_user_id,host_device_id,state,offer_envelope
+       ) VALUES($1,$2,$3,$4,'OFFERED',$5)`,
+      [input.id, input.conversationId, input.userId, input.deviceId, input.offerEnvelope],
+    );
+    return { id: input.id, state: "OFFERED" };
+  }
+
+  async answer(input: { id: string; userId: string; accept: boolean; answerEnvelope?: Buffer }) {
+    const row = await this.db.query(
+      `SELECT conversation_id,host_user_id,state FROM live_screen_sessions WHERE id=$1`,
+      [input.id],
+    );
+    if (row.rowCount !== 1) throw new Error("SCREEN_SESSION_NOT_FOUND");
+    await this.requireMember(input.userId, row.rows[0].conversation_id);
+    if (row.rows[0].host_user_id === input.userId) throw new Error("SCREEN_HOST_CANNOT_ANSWER");
+    if (!input.accept) {
+      await this.db.query(
+        `UPDATE live_screen_sessions SET state='DECLINED', stopped_at=now() WHERE id=$1 AND state='OFFERED'`,
+        [input.id],
+      );
+      return { id: input.id, state: "DECLINED" };
+    }
+    if (!input.answerEnvelope || input.answerEnvelope.length < 32) throw new Error("SCREEN_ANSWER_INVALID");
+    await this.db.query(
+      `UPDATE live_screen_sessions SET state='ACTIVE', answer_envelope=$2 WHERE id=$1 AND state='OFFERED'`,
+      [input.id, input.answerEnvelope],
+    );
+    return { id: input.id, state: "ACTIVE" };
+  }
+
+  async stop(id: string, userId: string) {
+    const updated = await this.db.query(
+      `UPDATE live_screen_sessions
+          SET state='STOPPED', stopped_at=now(), offer_envelope=NULL, answer_envelope=NULL
+        WHERE id=$1 AND host_user_id=$2 AND state IN ('OFFERED','ACTIVE')`,
+      [id, userId],
+    );
+    if (updated.rowCount !== 1) throw new Error("SCREEN_SESSION_NOT_ACTIVE");
+    return { id, state: "STOPPED" };
+  }
+
+  private async requireMember(userId: string, conversationId: string) {
+    const result = await this.db.query(
+      `SELECT 1 FROM chat_members WHERE thread_id=$1 AND user_id=$2`,
+      [conversationId, userId],
+    );
+    if (result.rowCount !== 1) throw new Error("conversation access denied");
+  }
+}
+
+========================================================================================
+FILE: server/src/routes/live-screen.routes.ts
+========================================================================================
+import { z } from "zod";
+import type { LiveScreenService } from "../services/live-screen.service.js";
+
+export function registerLiveScreenRoutes(
+  app: { post: Function },
+  deps: {
+    screens: LiveScreenService;
+    authenticate: (request: any) => Promise<{ userId: string; deviceId: string }>;
+  },
+) {
+  app.post("/v2/chats/:id/screen-shares", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    const body = z.object({ id: z.string().min(8), offerEnvelopeBase64: z.string().min(16) }).parse(request.body);
+    return deps.screens.offer({
+      id: body.id,
+      conversationId: request.params.id,
+      userId: actor.userId,
+      deviceId: actor.deviceId,
+      offerEnvelope: Buffer.from(body.offerEnvelopeBase64, "base64url"),
+    });
+  });
+
+  app.post("/v2/screen-shares/:id/answer", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    const body = z.object({
+      accept: z.boolean(),
+      answerEnvelopeBase64: z.string().optional(),
+    }).parse(request.body);
+    return deps.screens.answer({
+      id: request.params.id,
+      userId: actor.userId,
+      accept: body.accept,
+      answerEnvelope: body.answerEnvelopeBase64
+        ? Buffer.from(body.answerEnvelopeBase64, "base64url")
+        : undefined,
+    });
+  });
+
+  app.post("/v2/screen-shares/:id/stop", async (request: any) => {
+    const actor = await deps.authenticate(request);
+    return deps.screens.stop(request.params.id, actor.userId);
+  });
+}
+
+========================================================================================
+FILE: clients/mobile/src/conversation/thread-access.ts
+========================================================================================
+/**
+ * Device access required before a thread action can capture.
+ * Denied permission fails closed. The page must not open the picker.
+ */
+
+export type DeviceAccess =
+  | "CAMERA"
+  | "MICROPHONE"
+  | "PHOTOS"
+  | "FILES"
+  | "CONTACTS"
+  | "LOCATION"
+  | "SCREEN";
+
+export type AccessState = "GRANTED" | "DENIED" | "UNDETERMINED";
+
+export interface AccessPrompt {
+  request(access: DeviceAccess): Promise<AccessState>;
+}
+
+export const ACCESS_FOR: Record<string, DeviceAccess[]> = {
+  PHOTO: ["CAMERA", "PHOTOS"],
+  VIDEO: ["CAMERA", "MICROPHONE"],
+  VOICE: ["MICROPHONE"],
+  DOCUMENT: ["FILES"],
+  DESIGN: ["PHOTOS", "FILES"],
+  CONTACT: ["CONTACTS"],
+  LOCATION: ["LOCATION"],
+  LIVE_SCREEN: ["SCREEN"],
+};
+
+export const DESIGN_TYPES = ["image/jpeg", "image/png", "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+
+export class ThreadAccessGate {
+  constructor(private readonly prompt: AccessPrompt) {}
+
+  async allow(action: keyof typeof ACCESS_FOR): Promise<{ ok: true } | { ok: false; missing: DeviceAccess }> {
+    for (const access of ACCESS_FOR[action]) {
+      const state = await this.prompt.request(access);
+      if (state !== "GRANTED") return { ok: false, missing: access };
+    }
+    return { ok: true };
+  }
+}
+
+export function designFileAllowed(mime: string): boolean {
+  return DESIGN_TYPES.includes(mime);
+}
+
+========================================================================================
+FILE: clients/mobile/src/services/CaptureActivation.ts
+========================================================================================
+import type { ApiClient } from "./ApiClient";
+import type { SecureCoreMessaging } from "./ConversationService";
+import { ThreadAccessGate, designFileAllowed, type AccessPrompt } from "../conversation/thread-access";
+
+export class CaptureActivation {
+  constructor(
+    private readonly access: ThreadAccessGate,
+    private readonly api: ApiClient,
+    private readonly core: SecureCoreMessaging,
+  ) {}
+
+  static create(prompt: AccessPrompt, api: ApiClient, core: SecureCoreMessaging) {
+    return new CaptureActivation(new ThreadAccessGate(prompt), api, core);
+  }
+
+  async photo() {
+    return this.access.allow("PHOTO");
+  }
+
+  async video() {
+    return this.access.allow("VIDEO");
+  }
+
+  async voice() {
+    return this.access.allow("VOICE");
+  }
+
+  async document() {
+    return this.access.allow("DOCUMENT");
+  }
+
+  async contact() {
+    return this.access.allow("CONTACT");
+  }
+
+  async location() {
+    return this.access.allow("LOCATION");
+  }
+
+  async design(mime: string) {
+    const gate = await this.access.allow("DESIGN");
+    if (!gate.ok) return gate;
+    if (!designFileAllowed(mime)) return { ok: false as const, missing: "FILES" as const, reason: "DESIGN_TYPE_REJECTED" };
+    return { ok: true as const };
+  }
+
+  async offerScreen(conversationId: string) {
+    const gate = await this.access.allow("LIVE_SCREEN");
+    if (!gate.ok) return gate;
+    const offer = await this.core.encrypt({
+      conversationId,
+      plaintext: JSON.stringify({ kind: "LIVE_SCREEN", at: Date.now() }),
+      messageType: "LIVE_SCREEN",
+    });
+    return this.api.request(`/v2/chats/${conversationId}/screen-shares`, {
+      method: "POST",
+      body: JSON.stringify({
+        id: offer.messageId,
+        offerEnvelopeBase64: toBase64Url(offer.ciphertext),
+      }),
+    });
+  }
+}
+
+function toBase64Url(bytes: Uint8Array) {
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}

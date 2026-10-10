@@ -1,0 +1,1 @@
+{"platforms":["android","ios"],"android":{"modules":["com.linqa.securecore.LinqaSecureCoreModule"]},"ios":{"modules":["LinqaSecureCoreModule"]}}

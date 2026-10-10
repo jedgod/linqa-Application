@@ -122,7 +122,8 @@ export async function registerCallRoutes(
       }
 
       const params = z.object({ callId: z.string().uuid() }).parse(request.params);
-      await calls.end(params.callId, principal.deviceId);
+      const body = z.object({ reason: z.enum(["REJECTED", "FAILED"]).optional() }).default({}).parse(request.body ?? {});
+      await calls.end(params.callId, principal.deviceId, body.reason);
 
       return reply.code(204).send();
     } catch (error) {

@@ -59,8 +59,14 @@ export function createAuthenticator(config: AppConfig) {
   };
 }
 
+export class ScopeAuthorizationError extends Error {
+  readonly status = 403;
+  readonly code = "FORBIDDEN";
+  constructor() { super("Forbidden"); this.name = "ScopeAuthorizationError"; }
+}
+
 export function requireScope(principal: AuthPrincipal, scope: string): void {
   if (!principal.scopes.has(scope)) {
-    throw new Error(`missing scope: ${scope}`);
+    throw new ScopeAuthorizationError();
   }
 }

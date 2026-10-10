@@ -1,0 +1,2 @@
+{"platforms":["apple","android"],"apple":{"modules":["LinqaBiometricModule"]},"android":{"modules":["com.linqa.biometric.LinqaBiometricModule"]}}
+

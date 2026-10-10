@@ -12,7 +12,7 @@ const config: AppConfig = {
   PASSKEY_RP_ID: "test.linqa.local", PASSKEY_RP_NAME: "Linqa Test", PASSKEY_ORIGINS: ["https://test.linqa.local"], APNS_SANDBOX: false,
   BILLING_WEBHOOK_TOLERANCE_SECONDS: 300, LINQASEND_WEBHOOK_TOLERANCE_SECONDS: 300, COUNTRY_SELECTION_PREMIUM_LIMIT: 20, LOG_LEVEL: "fatal"
 };
-const database = { query: async (sql: string) => sql.includes("schema_migrations") ? { rows: [{ count: 36 }] } : { rows: [], rowCount: 0 } } as unknown as Database;
+const database = { query: async (sql: string) => (sql.includes("schema_migrations") || sql.includes("INSERT INTO countrylinqa_rate_buckets")) ? { rows: [{ count: 36 }] } : { rows: [], rowCount: 0 } } as unknown as Database;
 
 describe("CountryLinqa engine routes", () => {
   let app: Awaited<ReturnType<typeof buildApp>> | undefined;
@@ -24,15 +24,14 @@ describe("CountryLinqa engine routes", () => {
       ["POST", "/v1/countrylinqa/discover/people/search"], ["GET", "/v1/countrylinqa/search"],
       ["GET", "/v1/countrylinqa/recommendations/people"], ["GET", "/v1/countrylinqa/discovery/features"],
       ["PUT", "/v1/countrylinqa/discovery/features"], ["PATCH", "/v1/countrylinqa/saved-searches/:id/alerts"],
-      ["GET", "/v1/countrylinqa/world/home"], ["GET", "/v1/countrylinqa/world/countries"], ["GET", "/v1/countrylinqa/people/details"], ["GET", "/v1/countrylinqa/world/countries/:code"], ["POST", "/v1/countrylinqa/events/:id/interest"], ["GET", "/v1/countrylinqa/subscription"], ["GET", "/v1/countrylinqa/blocked"], ["DELETE", "/v1/countrylinqa/blocked/:userId"], ["POST", "/v1/countrylinqa/saved-searches/:id/used"], ["GET", "/v1/countrylinqa/plans"], ["POST", "/v1/countrylinqa/checkouts"], ["GET", "/v1/countrylinqa/checkouts/:id"], ["POST", "/v1/countrylinqa/checkouts/:id/cancel"]
+      ["GET", "/v1/countrylinqa/world/home"], ["GET", "/v1/countrylinqa/world/countries"], ["GET", "/v1/countrylinqa/people/details"], ["GET", "/v1/countrylinqa/world/countries/:code"], ["POST", "/v1/countrylinqa/events/:id/interest"], ["GET", "/v1/countrylinqa/subscription"], ["GET", "/v1/countrylinqa/blocked"], ["DELETE", "/v1/countrylinqa/blocked/:userId"], ["POST", "/v1/countrylinqa/blocked"], ["POST", "/v1/countrylinqa/saved-searches/:id/used"], ["GET", "/v1/countrylinqa/plans"], ["POST", "/v1/countrylinqa/checkouts"], ["GET", "/v1/countrylinqa/checkouts/:id"], ["POST", "/v1/countrylinqa/checkouts/:id/cancel"]
     ] as const) expect(app.hasRoute({ method, url }), `${method} ${url}`).toBe(true);
   });
 
   it("rejects unauthenticated requests without leaking results", async () => {
     app = await buildApp(config, database); await app.ready();
     const response = await app.inject({ method: "POST", url: "/v1/countrylinqa/discover/people/search", payload: { filters: { countries: ["GH"] } } });
-    expect(response.statusCode).toBeGreaterThanOrEqual(400);
-    expect(response.statusCode).toBeLessThan(500);
+    expect(response.statusCode).toBe(401);
     expect(response.json()).not.toHaveProperty("items");
   });
 });

@@ -5,10 +5,10 @@
 // "crypto.getRandomValues must be defined" the first time a device
 // generates its enrollment keypair.
 import "react-native-get-random-values";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { View } from "react-native";
+import { ActivityIndicator, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import {
   useFonts,
@@ -25,6 +25,8 @@ import { setActiveAccountSessionResolver } from "../services/session";
 import { createSessionRefresher } from "../services/session-refresh";
 import { useTheme } from "../theme/tokens";
 import { getApiBaseUrl } from "../config/api";
+import { CallOverlay } from "../components/calls/CallOverlay";
+import { startIncomingCallListener } from "../services/incoming-call-listener";
 
 const sessionStore = new AccountSessionStore(new AccountSecureStorage());
 const API_BASE_URL = getApiBaseUrl();
@@ -53,8 +55,19 @@ function AccountSessionBridge() {
   return null;
 }
 
+/** Keeps this device reachable for calls while an account is signed in, and shows the call screen when one is live. */
+function CallHost() {
+  const { active, loaded } = useAccounts();
+  useEffect(() => {
+    if (!loaded || !active) return;
+    return startIncomingCallListener();
+  }, [active, loaded]);
+  return <CallOverlay />;
+}
+
 export default function RootLayout() {
   const { colors } = useTheme();
+  const [fontWaitExpired, setFontWaitExpired] = useState(false);
   const [fontsReady, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
@@ -63,15 +76,30 @@ export default function RootLayout() {
     PlusJakartaSans_800ExtraBold
   });
 
+  useEffect(() => {
+    // Remote development assets or a stalled font loader must not hold the
+    // entire app on an empty screen. Screens can use system fonts meanwhile.
+    if (fontsReady || fontError) return;
+    const timer = setTimeout(() => setFontWaitExpired(true), 8000);
+    return () => clearTimeout(timer);
+  }, [fontsReady, fontError]);
+
   // Holding the first paint avoids the flash where every screen renders in the
   // system face and then reflows once the real one arrives -- on Home that
   // shifts the whole layout, because the type is what sizes the cards.
-  if (!fontsReady && !fontError) return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
+  if (!fontsReady && !fontError && !fontWaitExpired) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator color={colors.accent} />
+      </View>
+    );
+  }
 
   return (
     <SafeAreaProvider>
       <AccountProvider>
         <AccountSessionBridge />
+        <CallHost />
         <StatusBar style="auto" />
         <Stack screenOptions={{ headerShown: false, animation: "slide_from_right" }}>
         <Stack.Screen name="welcome" />
@@ -90,20 +118,8 @@ export default function RootLayout() {
         <Stack.Screen name="settings/ai-privacy" />
         <Stack.Screen name="settings/privacy-rights" />
         <Stack.Screen name="settings/countrylinqa" />
-        <Stack.Screen name="countrylinqa/world" />
-        <Stack.Screen name="countrylinqa/full-flow" />
-        <Stack.Screen name="countrylinqa/list" />
-        <Stack.Screen name="countrylinqa/search" />
-        <Stack.Screen name="countrylinqa/saved-searches" />
-        <Stack.Screen name="countrylinqa/recommendations" />
-        <Stack.Screen name="countrylinqa/discovery-profile" />
-        <Stack.Screen name="countrylinqa/notifications" />
-        <Stack.Screen name="countrylinqa/connections" />
-        <Stack.Screen name="countrylinqa/profile" />
-        <Stack.Screen name="countrylinqa/security" />
-        <Stack.Screen name="countrylinqa/report" />
-        <Stack.Screen name="countrylinqa/create" options={{ presentation: "modal" }} />
         <Stack.Screen name="settings/countrylinqa-reach" />
+        <Stack.Screen name="countrylinqa/world" />
         <Stack.Screen name="countrylinqa/activate" />
         <Stack.Screen name="countrylinqa/people" />
         <Stack.Screen name="countrylinqa/person" />
@@ -123,13 +139,43 @@ export default function RootLayout() {
         <Stack.Screen name="countrylinqa/plans-confirm" />
         <Stack.Screen name="countrylinqa/plans-result" options={{ gestureEnabled: false }} />
         <Stack.Screen name="countrylinqa/chat-access" options={{ presentation: "transparentModal", animation: "fade" }} />
+        <Stack.Screen name="countrylinqa/full-flow" />
+        <Stack.Screen name="countrylinqa/list" />
+        <Stack.Screen name="countrylinqa/search" />
+        <Stack.Screen name="countrylinqa/saved-searches" />
+        <Stack.Screen name="countrylinqa/recommendations" />
+        <Stack.Screen name="countrylinqa/discovery-profile" />
+        <Stack.Screen name="countrylinqa/notifications" />
+        <Stack.Screen name="countrylinqa/connections" />
+        <Stack.Screen name="countrylinqa/profile" />
+        <Stack.Screen name="countrylinqa/security" />
+        <Stack.Screen name="countrylinqa/report" />
+        <Stack.Screen name="countrylinqa/create" options={{ presentation: "modal" }} />
         <Stack.Screen name="modules/file-vault" />
+        <Stack.Screen name="vault/index" />
+        <Stack.Screen name="vault/files" />
+        <Stack.Screen name="vault/intake" />
+        <Stack.Screen name="vault/social" />
+        <Stack.Screen name="vault/scan" />
+        <Stack.Screen name="vault/save" />
+        <Stack.Screen name="vault/private" />
+        <Stack.Screen name="vault/share" />
+        <Stack.Screen name="vault/plans" />
+        <Stack.Screen name="vault/security" />
         <Stack.Screen name="linqasend/index" />
         <Stack.Screen name="linqasend/recipients" />
         <Stack.Screen name="linqasend/amount" />
+        <Stack.Screen name="linqasend/select-payment" />
+        <Stack.Screen name="linqasend/global-contacts" />
+        <Stack.Screen name="linqasend/add-recipient" />
+        <Stack.Screen name="linqasend/add-card" />
+        <Stack.Screen name="linqasend/transfer-limits" />
+        <Stack.Screen name="linqasend/authorize" options={{ presentation: "fullScreenModal", animation: "fade", gestureEnabled: false }} />
         <Stack.Screen name="linqasend/review" />
         <Stack.Screen name="linqasend/status" options={{ presentation: "fullScreenModal" }} />
         <Stack.Screen name="linqasend/history" />
+        <Stack.Screen name="linqasend/dashboard" />
+        <Stack.Screen name="linqasend/receipt" />
         <Stack.Screen name="linqasend/payment-methods" />
         <Stack.Screen name="security/key-transparency" />
         <Stack.Screen name="support/index" />
@@ -144,6 +190,7 @@ export default function RootLayout() {
         <Stack.Screen name="account/max-limit" options={{ presentation: "modal" }} />
         <Stack.Screen name="onboarding/resolve" />
         <Stack.Screen name="onboarding/detect-country" />
+        <Stack.Screen name="onboarding/profile" />
         <Stack.Screen name="onboarding/recovery" />
         <Stack.Screen name="onboarding/recovery-verify" />
         <Stack.Screen name="onboarding/country-confirmation" />

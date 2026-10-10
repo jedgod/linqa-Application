@@ -1,35 +1,37 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { LinqaSendStatusBar, formatMinor, send } from "../../components/linqasend/ui";
+import { getApiBaseUrl } from "../../config/api";
 import { LinqaSendService, type LinqaSendTransferDetail } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
-import { radius, spacing, useTheme, type Palette } from "../../theme/tokens";
-import { getApiBaseUrl } from "../../config/api";
+import { TrackingTimeline } from "../../components/linqasend/TrackingTimeline";
+import { trackTransfer } from "../../services/transfer-tracking";
+import { fonts } from "../../theme/tokens";
 
 const API = getApiBaseUrl();
-const TERMINAL_STATUSES = new Set(["COMPLETED", "DECLINED", "CANCELED", "FAILED", "EXPIRED"]);
+const TERMINAL_STATUSES = new Set(["COMPLETED", "DECLINED", "CANCELED", "FAILED", "EXPIRED", "REVERSED", "REFUNDED"]);
+const CANCELABLE = new Set(["CREATED", "QUOTE_CREATED", "AWAITING_CONFIRMATION", "REQUIRES_ACTION"]);
 
-/** SCREEN 7 (Transfer Tracking) + SCREEN 15 (Receipt): real status polling
- * against the transfer's actual state and attempt timeline, not a fake
- * animated progress bar. */
+/** Transfer Tracking: real status polling, shown as the five-step timeline. */
 export default function LinqaSendStatus() {
-  const { colors } = useTheme();
-  const s = useMemo(() => makeStyles(colors), [colors]);
   const router = useRouter();
   const params = useLocalSearchParams<{ id: string }>();
   const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
   const [transfer, setTransfer] = useState<LinqaSendTransferDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   async function cancel() {
-    try { await client.cancelTransfer(params.id); setTransfer(await client.getTransfer(params.id)); setActionMessage("Transfer canceled."); }
-    catch (e) { setActionMessage(e instanceof Error ? e.message.replace(/_/g, " ") : "Unable to cancel transfer."); }
+    try { await client.cancelTransfer(params.id); setTransfer(await client.getTransfer(params.id)); setNote("Transfer canceled."); }
+    catch (e) { setNote(e instanceof Error ? e.message.replace(/_/g, " ") : "Unable to cancel transfer."); }
   }
 
   async function refund() {
-    try { await client.requestRefund(params.id, "CUSTOMER_REQUEST"); setActionMessage("Refund request submitted for operations approval."); }
-    catch (e) { setActionMessage(e instanceof Error ? e.message.replace(/_/g, " ") : "Unable to request refund."); }
+    try { await client.requestRefund(params.id, "CUSTOMER_REQUEST"); setNote("Refund request submitted for operations approval."); }
+    catch (e) { setNote(e instanceof Error ? e.message.replace(/_/g, " ") : "Unable to request refund."); }
   }
 
   useEffect(() => {
@@ -42,89 +44,82 @@ export default function LinqaSendStatus() {
           setTransfer(detail);
           if (TERMINAL_STATUSES.has(detail.status) || detail.status === "MANUAL_REVIEW") return;
         } catch (e) {
-          setError(e instanceof Error ? e.message : "Unable to load this transfer.");
+          setError(e instanceof Error ? e.message.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()) : "Unable to load this transfer.");
           return;
         }
-        await new Promise((r) => setTimeout(r, 3000));
+        await new Promise((resolve) => setTimeout(resolve, 3000));
       }
     }
-    poll();
-    return () => {
-      stopped = true;
-    };
+    void poll();
+    return () => { stopped = true; };
   }, [client, params.id]);
+
+  const tracking = useMemo(
+    () => (transfer ? trackTransfer({ status: transfer.status, createdAt: transfer.createdAt, completedAt: transfer.completedAt, timeline: transfer.timeline, failureCode: transfer.failureCode }) : null),
+    [transfer]
+  );
 
   return (
     <SafeAreaView style={s.screen}>
+      <LinqaSendStatusBar />
       <View style={s.header}>
-        <Pressable onPress={() => router.replace("/linqasend")} accessibilityLabel="Close">
-          <Text style={s.back}>✕</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Close" style={s.headerButton} onPress={() => router.replace("/linqasend")}>
+          <Ionicons name="close" size={26} color={send.text} />
         </Pressable>
-        <Text style={s.headerTitle}>Transfer {params.id}</Text>
+        <Text accessibilityRole="header" style={s.title}>{tracking?.title ?? "Transfer"}</Text>
+        <View style={s.headerButton} />
       </View>
-      {!transfer && !error && (
-        <View style={s.center}>
-          <ActivityIndicator color={colors.accent} />
-        </View>
-      )}
-      {error && (
+
+      {!transfer && !error ? <View style={s.center}><ActivityIndicator color={send.primary} /></View> : null}
+      {error ? (
         <View style={s.center}>
           <Text style={s.muted}>{error}</Text>
+          <Pressable accessibilityRole="button" style={{ marginTop: 14 }} onPress={() => router.replace("/linqasend")}><Text style={s.link}>Back to LinqaSend</Text></Pressable>
         </View>
-      )}
-      {transfer && (
+      ) : null}
+
+      {transfer && tracking ? (
         <ScrollView contentContainerStyle={s.content}>
-          <View style={s.card}>
-            <Text style={s.status}>{transfer.status.replace(/_/g, " ")}</Text>
-            <Text style={s.amount}>
-              {(Number(transfer.sendAmountMinor) / 100).toFixed(2)} {transfer.sendCurrency} → {(Number(transfer.receiveAmountMinor) / 100).toFixed(2)}{" "}
-              {transfer.receiveCurrency}
-            </Text>
-            <Text style={s.sub}>To {transfer.recipientName}</Text>
-            {transfer.failureCode && <Text style={s.failure}>Reason: {transfer.failureCode.replace(/_/g, " ").toLowerCase()}</Text>}
-            {actionMessage && <Text style={s.actionMessage}>{actionMessage}</Text>}
-            {["CREATED","QUOTE_CREATED","AWAITING_CONFIRMATION","REQUIRES_ACTION"].includes(transfer.status) && <Pressable style={s.actionButton} onPress={cancel}><Text style={s.actionButtonText}>Cancel transfer</Text></Pressable>}
-            {transfer.status === "COMPLETED" && <Pressable style={s.actionButton} onPress={refund}><Text style={s.actionButtonText}>Request refund</Text></Pressable>}
+          <Text style={s.summary}>
+            ${formatMinor(transfer.sendAmountMinor)} {transfer.sendCurrency} → {formatMinor(transfer.receiveAmountMinor)} {transfer.receiveCurrency} to {transfer.recipientName}
+          </Text>
+
+          <TrackingTimeline steps={tracking.steps} />
+
+          <View style={s.messageCard}>
+            <Text style={s.message}>{tracking.message}</Text>
+            {transfer.failureCode && tracking.outcome === "STOPPED" ? <Text style={s.reason}>Reason: {transfer.failureCode.replace(/_/g, " ").toLowerCase()}</Text> : null}
           </View>
 
-          <Text style={s.sectionTitle}>Timeline</Text>
-          {transfer.timeline.length === 0 && <Text style={s.muted}>No provider attempts recorded yet at this stage.</Text>}
-          {transfer.timeline.map((t, i) => (
-            <View key={i} style={s.timelineRow}>
-              <Text style={s.timelinePhase}>{t.phase.replace(/_/g, " ")}</Text>
-              <Text style={s.timelineStatus}>{t.status}</Text>
-            </View>
-          ))}
+          {note ? <Text style={s.note}>{note}</Text> : null}
+          <View style={s.actions}>
+            {CANCELABLE.has(transfer.status) ? <Pressable accessibilityRole="button" style={s.actionButton} onPress={cancel}><Text style={s.actionText}>Cancel transfer</Text></Pressable> : null}
+            {transfer.status === "COMPLETED" ? <Pressable accessibilityRole="button" style={s.actionButton} onPress={refund}><Text style={s.actionText}>Request refund</Text></Pressable> : null}
+            <Pressable accessibilityRole="button" style={s.primary} onPress={() => router.replace("/linqasend")}><Text style={s.primaryText}>Done</Text></Pressable>
+          </View>
         </ScrollView>
-      )}
+      ) : null}
     </SafeAreaView>
   );
 }
 
-const makeStyles = (colors: Palette) => StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, paddingTop: 52 },
-  back: { color: colors.text, fontSize: 18 },
-  headerTitle: { color: colors.text, fontSize: 15, fontWeight: "700" },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  muted: { color: colors.textFaint, fontSize: 13 },
-  content: { padding: spacing.lg },
-  card: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, padding: spacing.lg, marginBottom: spacing.lg },
-  status: { color: colors.accent, fontWeight: "900", fontSize: 16 },
-  amount: { color: colors.text, fontWeight: "800", fontSize: 20, marginTop: spacing.sm },
-  sub: { color: colors.textMuted, fontSize: 12, marginTop: spacing.xs },
-  failure: { color: colors.danger, fontSize: 12, marginTop: spacing.sm },
-  actionMessage: { color: colors.textMuted, fontSize: 12, marginTop: spacing.sm },
-  actionButton: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, alignItems: "center", marginTop: spacing.md },
-  actionButtonText: { color: colors.accent, fontWeight: "800", fontSize: 12 },
-  sectionTitle: { color: colors.text, fontWeight: "800", marginBottom: spacing.sm },
-  timelineRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border
-  },
-  timelinePhase: { color: colors.text, fontSize: 12, fontWeight: "700" },
-  timelineStatus: { color: colors.textFaint, fontSize: 12 }
+const s = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: send.bg },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
+  headerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 19 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
+  muted: { color: send.muted, fontFamily: fonts.regular, fontSize: 14, textAlign: "center" },
+  link: { color: send.primary, fontFamily: fonts.bold, fontSize: 15 },
+  content: { paddingHorizontal: 28, paddingTop: 8, paddingBottom: 32 },
+  summary: { color: send.muted, fontFamily: fonts.medium, fontSize: 14, textAlign: "center", marginBottom: 26 },
+  messageCard: { backgroundColor: send.surface, borderRadius: 16, paddingVertical: 24, paddingHorizontal: 20, marginTop: 20 },
+  message: { color: send.text, fontFamily: fonts.semibold, fontSize: 16, lineHeight: 24, textAlign: "center" },
+  reason: { color: send.danger, fontFamily: fonts.medium, fontSize: 13, textAlign: "center", marginTop: 10 },
+  note: { color: send.muted, fontFamily: fonts.medium, fontSize: 13, textAlign: "center", marginTop: 14 },
+  actions: { marginTop: 18, gap: 10 },
+  actionButton: { height: 48, borderRadius: 14, borderWidth: 1.5, borderColor: send.border, alignItems: "center", justifyContent: "center" },
+  actionText: { color: send.primary, fontFamily: fonts.bold, fontSize: 15 },
+  primary: { height: 54, borderRadius: 16, backgroundColor: send.primary, alignItems: "center", justifyContent: "center" },
+  primaryText: { color: "#FFFFFF", fontFamily: fonts.bold, fontSize: 16 }
 });

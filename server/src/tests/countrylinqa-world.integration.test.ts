@@ -8,6 +8,7 @@ import { cursorKey } from "../services/countrylinqa/engine/cursor.js";
 import { AdvancedDiscoveryService } from "../services/countrylinqa/engine/people.js";
 import { validateFilters } from "../services/countrylinqa/engine/filters.js";
 import { discoverEvents } from "../services/countrylinqa/golive/eventRanking.js";
+import { TrustSafetyService } from "../services/trust-safety.service.js";
 import { blockedAccounts, countryHub, personDetails, setEventInterest, subscriptionSummary, unblockAccount, worldCountries, worldHome } from "../services/countrylinqa/world.js";
 
 const url = process.env.DATABASE_URL;
@@ -222,6 +223,16 @@ run("Linqa World read models against the database", () => {
       expect(await setEventInterest(db, viewer, past, true)).toBeNull();
       expect(await setEventInterest(db, viewer, randomUUID(), true)).toBeNull();
     });
+  });
+
+  it("blocks a person from a profile with the same behaviour as the safety route, and refuses yourself or a stranger id", async () => {
+    const me = await makeUser();
+    const target = await makeUser({ name: "Block Target" });
+    await new TrustSafetyService(db).block({ blockerUserId: me, blockedUserId: target });
+    expect((await blockedAccounts(db, me)).map((b) => b.userId)).toContain(target);
+    expect((await personDetails(db, me, [target]))).toEqual([]);
+    await expect(new TrustSafetyService(db).block({ blockerUserId: me, blockedUserId: me })).rejects.toThrow();
+    await expect(new TrustSafetyService(db).block({ blockerUserId: me, blockedUserId: randomUUID() })).rejects.toThrow();
   });
 
   describe("Advanced search by city", () => {

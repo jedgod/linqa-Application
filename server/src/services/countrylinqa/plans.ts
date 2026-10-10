@@ -61,12 +61,25 @@ export class CountryLinqaPlans {
    * must be a step up from the current one; and the same idempotency key always returns the same attempt.
    */
   async createCheckout(userId: string, input: { planCode: string; method: PaymentMethod; idempotencyKey: string }) {
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      const user = await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [userId]);
+      if (!user.rowCount) throw new PlanError("CHECKOUT_NOT_FOUND", 404);
+      const result = await new CountryLinqaPlans(client as unknown as Database, this.config, this.provider).createCheckoutAttempt(userId, input);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) { await client.query("ROLLBACK"); throw error; }
+    finally { client.release(); }
+  }
+
+  private async createCheckoutAttempt(userId: string, input: { planCode: string; method: PaymentMethod; idempotencyKey: string }) {
     const plan = await this.db.query("SELECT plan_code, tier_rank, monthly_price_minor, currency FROM countrylinqa_plan_catalog WHERE plan_code = $1 AND active = TRUE", [input.planCode]);
     if (!plan.rowCount) throw new PlanError("PLAN_NOT_FOUND", 404);
     const sub = await subscriptionSummary(this.db, userId);
     if (RANK[sub.tier] >= Number(plan.rows[0].tier_rank)) throw new PlanError("PLAN_NOT_AN_UPGRADE", 409);
 
-    const old = await this.db.query("SELECT id, user_id, plan_code, payment_method FROM countrylinqa_checkouts WHERE idempotency_key = $1", [input.idempotencyKey]);
+    const old = await this.db.query("SELECT id, user_id, plan_code, payment_method FROM countrylinqa_checkouts WHERE idempotency_key = $1 AND user_id = $2", [input.idempotencyKey, userId]);
     if (old.rowCount) {
       const r = old.rows[0];
       if (r.user_id !== userId || r.plan_code !== input.planCode || r.payment_method !== input.method) throw new PlanError("IDEMPOTENCY_KEY_REUSED", 409);
@@ -80,7 +93,7 @@ export class CountryLinqaPlans {
     let session: { sessionRef: string; checkoutUrl: string | null } | null = null;
     if (!methods.includes(input.method)) failure = methods.length === 0 ? "PAYMENT_NOT_CONFIGURED" : "METHOD_NOT_AVAILABLE";
     else {
-      try { session = await this.provider.createCheckout({ userId, planCode: input.planCode, amountMinor, currency, method: input.method, idempotencyKey: input.idempotencyKey }); }
+      try { session = await this.provider.createCheckout({ userId, planCode: input.planCode, amountMinor, currency, method: input.method, idempotencyKey: `${userId}:${input.idempotencyKey}` }); }
       catch (error) { failure = error instanceof PlanError ? error.code : "PAYMENT_START_FAILED"; }
     }
     // The attempt is recorded either way, so a failed start still shows up as "Payment failed".

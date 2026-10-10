@@ -21,7 +21,7 @@ describe("LinqaSend full module surface", () => {
   it("mounts the API surface required by the full UI/backend pack", async () => {
     app = await buildApp(config, database); await app.ready();
     const routes: Array<[string,string]> = [
-      ["GET","/v1/linqasend/availability"], ["GET","/v1/linqasend/home"], ["POST","/v1/linqasend/recipients/resolve/linqa"], ["POST","/v1/linqasend/recipients/resolve/external"],
+      ["GET","/v1/linqasend/availability"], ["GET","/v1/linqasend/payout-providers"], ["GET","/v1/linqasend/dashboard"], ["GET","/v1/linqasend/home"], ["POST","/v1/linqasend/recipients/resolve/linqa"], ["POST","/v1/linqasend/recipients/resolve/external"],
       ["POST","/v1/linqasend/external-recipients"], ["PATCH","/v1/linqasend/external-recipients/:id"], ["POST","/v1/linqasend/payment-methods/setup"], ["POST","/v1/linqasend/payment-methods/confirm"], ["DELETE","/v1/linqasend/payment-methods/:id"],
       ["GET","/v1/linqasend/receive-profile"], ["POST","/v1/linqasend/requests"], ["GET","/v1/linqasend/requests"],
       ["POST","/v1/linqasend/requests/:id/pay"], ["POST","/v1/linqasend/requests/:id/decline"], ["GET","/v1/linqasend/limits"],

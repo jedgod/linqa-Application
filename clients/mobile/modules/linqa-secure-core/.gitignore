@@ -1,0 +1,4 @@
+# Staged by stage-core.mjs from core/target and core/generated. Rebuilt, not committed.
+android/src/main/jniLibs/
+android/src/main/java/uniffi/
+android/build/

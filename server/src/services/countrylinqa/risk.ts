@@ -21,7 +21,7 @@ export function evaluateCountryRisk(e: CountryEvidence): CountryRiskResult {
   let score = 0;
   const reasons: string[] = [];
 
-  if (!e.phoneVerified) {
+  if (!e.phoneVerified || !e.phoneCountryCode) {
     score += 50;
     reasons.push("PHONE_NOT_VERIFIED");
   }
@@ -29,25 +29,13 @@ export function evaluateCountryRisk(e: CountryEvidence): CountryRiskResult {
     score += 70;
     reasons.push("UNSUPPORTED_LINE_TYPE");
   }
-  if (e.claimedCountryCode && e.phoneCountryCode && e.claimedCountryCode !== e.phoneCountryCode) {
-    score += 25;
-    reasons.push("CLAIMED_PHONE_COUNTRY_MISMATCH");
-  }
   if (e.carrierCountryCode && e.phoneCountryCode && e.carrierCountryCode !== e.phoneCountryCode) {
     score += 20;
     reasons.push("CARRIER_PHONE_COUNTRY_MISMATCH");
   }
-  if (e.simCountryCode && e.phoneCountryCode && e.simCountryCode !== e.phoneCountryCode) {
-    score += 10;
-    reasons.push("SIM_PHONE_COUNTRY_MISMATCH");
-  }
   if (e.ipCountryCode && e.phoneCountryCode && e.ipCountryCode !== e.phoneCountryCode) {
     score += 5;
     reasons.push("IP_PHONE_COUNTRY_MISMATCH");
-  }
-  if (e.localeCountryCode && e.phoneCountryCode && e.localeCountryCode !== e.phoneCountryCode) {
-    score += 3;
-    reasons.push("LOCALE_PHONE_COUNTRY_MISMATCH");
   }
 
   score = Math.min(score, 100);
@@ -55,7 +43,7 @@ export function evaluateCountryRisk(e: CountryEvidence): CountryRiskResult {
   let state: CountryRiskResult["state"];
   if (score >= 80) state = "RESTRICTED";
   else if (score >= 40) state = "REVIEW_REQUIRED";
-  else if (e.phoneVerified) state = "VERIFIED";
+  else if (e.phoneVerified && e.phoneCountryCode) state = "VERIFIED";
   else state = "UNVERIFIED";
 
   return { score, reasons, state };

@@ -7,20 +7,22 @@ type State = {
   status?: string; phone_verified?: boolean; device_enrolled?: boolean;
   recovery_required?: boolean; recovery_ready?: boolean; verified_country_code?: string | null;
   country_verification_state?: string; discovery_configured?: boolean;
-  registration_required?: boolean; completion_screen_seen_at?: string | null;
+  profile_ready?: boolean; registration_required?: boolean; completion_screen_seen_at?: string | null;
 };
 
 function flow(state: State) {
   const query = vi.fn(async (sql: string) => sql.includes("FROM users u")
     ? { rows: [{ status: "ACTIVE", phone_verified: true, device_enrolled: true,
         recovery_required: false, recovery_ready: true, verified_country_code: "US",
-        country_verification_state: "VERIFIED", discovery_configured: true, ...state }], rowCount: 1 }
+        country_verification_state: "VERIFIED", discovery_configured: true, profile_ready: true, ...state }], rowCount: 1 }
     : { rows: [], rowCount: 1 });
   return { service: new OnboardingService({ query } as unknown as Database), query };
 }
 
 describe("Unified Authentication + Onboarding flows", () => {
   const cases: Array<[string, State, OnboardingNextStep]> = [
+    ["every new registration requires name and stage name before recovery", { registration_required: true, profile_ready: false, recovery_required: true, recovery_ready: false }, "PROFILE_SETUP"],
+    ["completed registration missing its names resumes profile setup", { registration_required: true, profile_ready: false, completion_screen_seen_at: "2026-08-14T00:00:00Z" }, "PROFILE_SETUP"],
     ["brand-new registration requires recovery after device enrollment", { recovery_required: true, recovery_ready: false }, "RECOVERY_SETUP"],
     ["existing configured user enters Home", {}, "COMPLETE"],
     ["interrupted registration resumes its missing recovery step", { recovery_required: true, recovery_ready: false }, "RECOVERY_SETUP"],
@@ -41,6 +43,24 @@ describe("Unified Authentication + Onboarding flows", () => {
     });
   }
 
+  it("prevents completion acknowledgment before required names are saved", async () => {
+    const { service } = flow({ registration_required: true, profile_ready: false });
+    await expect(service.acknowledgeCompletion("user-1", "device-1")).rejects.toThrow("onboarding_not_complete");
+  });
+
+  it("saves the name privately and uses the stage name for display", async () => {
+    const { service, query } = flow({ registration_required: true, profile_ready: false });
+    await service.saveProfile("user-1", "device-1", "Jane Doe", "Jazzy Jane");
+    expect(query.mock.calls.at(-1)?.[0]).toContain("display_name=EXCLUDED.stage_name");
+    expect((query.mock.calls.at(-1) as unknown as [string, string[]])[1]).toEqual(["user-1", "Jane Doe", "Jazzy Jane"]);
+  });
+
+  it("rejects profile writes from an unenrolled device", async () => {
+    const { service, query } = flow({ device_enrolled: false });
+    await expect(service.saveProfile("user-1", undefined, "Jane", "Jazz")).rejects.toThrow("profile_setup_not_allowed");
+    expect(query.mock.calls.some(([sql]) => sql.includes("INSERT INTO user_profiles"))).toBe(false);
+  });
+
   it("persists new-account recovery policy for resume", async () => {
     const { service, query } = flow({});
     await service.markNewRegistration("00000000-0000-4000-8000-000000000001");
@@ -59,7 +79,7 @@ describe("Unified Authentication + Onboarding flows", () => {
     query.mockImplementation(async (sql: string) => sql.includes("FROM users u")
       ? { rows: [{ status: "ACTIVE", phone_verified: true, device_enrolled: true, recovery_required: false,
           recovery_ready: true, verified_country_code: null, country_verification_state: "UNVERIFIED",
-          discovery_configured: false, detected_country_code: "US", detected_country_name: "United States",
+          discovery_configured: false, profile_ready: true, detected_country_code: "US", detected_country_name: "United States",
           detected_calling_code: "+1", registration_required: true }], rowCount: 1 }
       : { rows: [], rowCount: 1 });
     const status = await service.status("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002");
@@ -70,7 +90,7 @@ describe("Unified Authentication + Onboarding flows", () => {
     const query = vi.fn(async (_sql: string) => ({ rows: [{ completion_screen_seen_at: "2026-08-14T12:00:00Z" }], rowCount: 1 }));
     const service = new OnboardingService({ query } as unknown as Database);
     vi.spyOn(service, "status").mockResolvedValue({
-      phoneVerified: true, deviceEnrollmentRequired: false, recoveryReady: true, recoveryRequired: true,
+      profileReady: true, phoneVerified: true, deviceEnrollmentRequired: false, recoveryReady: true, recoveryRequired: true,
       countryInitialized: true, countryVerificationState: "VERIFIED", discoveryConfigured: true,
       blockers: [], detectedCountry: { code: "US", name: "United States", callingCode: "+1" },
       onboardingCompletedAt: "2026-08-14T11:59:00Z", completionScreenSeen: false, nextStep: "COMPLETION"

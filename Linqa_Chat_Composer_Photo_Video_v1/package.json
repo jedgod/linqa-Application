@@ -1,0 +1,11 @@
+{
+  "name": "linqa-chat-composer-media-v1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/media.test.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Database } from "../db/pool.js";
 import { canonicalJson, snapshotSha256, type RegulatedEntityResolution } from "../services/linqasend/regulatory-v7.js";
 import { ResponsibilityError, ResponsibilityExecutionGuard } from "../services/linqasend/v7-execution-guard.js";
-import { createTransferSchema } from "../routes/linqasend/routes.js";
+import { createTransferSchema, linqaSendAvailability } from "../routes/linqasend/routes.js";
 
 const ids = { quote: "11111111-1111-4111-8111-111111111111", method: "22222222-2222-4222-8222-222222222222", auth: "33333333-3333-4333-8333-333333333333" };
 const validBody = { quoteId: ids.quote, paymentMethodId: ids.method, securityAuthorizationId: ids.auth, transactionHash: "a".repeat(64) };
@@ -133,5 +133,14 @@ describe("execution guard in front of every provider call (tests J-L, A-E, G)", 
     const error = new ResponsibilityError("REGULATED_PROVIDER_NOT_AUTHORIZED", "BANK_DEBIT:acme");
     expect(error.code).toBe("REGULATED_PROVIDER_NOT_AUTHORIZED");
     expect(error.message).toBe("REGULATED_PROVIDER_NOT_AUTHORIZED:BANK_DEBIT:acme");
+  });
+});
+
+describe("LinqaSend availability", () => {
+  it("is visible outside production, and in production only when real money is enabled", () => {
+    expect(linqaSendAvailability({ NODE_ENV: "development" })).toMatchObject({ available: true, realMoneyEnabled: false });
+    expect(linqaSendAvailability({ NODE_ENV: "test" }).available).toBe(true);
+    expect(linqaSendAvailability({ NODE_ENV: "production" }).available).toBe(false);
+    expect(linqaSendAvailability({ NODE_ENV: "production", LINQASEND_REAL_MONEY_ENABLED: true })).toMatchObject({ available: true, realMoneyEnabled: true });
   });
 });
