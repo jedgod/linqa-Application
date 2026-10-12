@@ -72,3 +72,6 @@ server/.local-vault/
 
 # Speech model for on-device transcripts: fetched by clients/mobile/scripts/fetch-vosk-model.sh, not committed
 clients/mobile/android/app/src/main/assets/vosk-model-en/
+
+# Local release signing (keystore passwords): never commit
+**/linqa-signing.properties
