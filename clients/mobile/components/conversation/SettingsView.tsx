@@ -24,6 +24,8 @@ interface Props {
   onUnblock: () => void;
   /** Present only when this chat is readable: hands its recent text to Linqa AI after confirmation. */
   onAskAi?: () => void;
+  /** Group people, and the actions that work on the whole chat. These are the same as on Linqa for computers. */
+  chat?: { isGroup: boolean; members: Array<{ name: string; role: string }>; onAddPeople?: () => void; onReport: () => void; onClear: () => void; onDelete: () => void };
   onBack: () => void;
 }
 
@@ -31,7 +33,7 @@ const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2)
 const LABEL: Record<ThemeChoice, string> = { system: "System", light: "Light", dark: "Dark" };
 
 /** Conversation settings: privacy, appearance, notifications, block. Only settings that really do something are live. */
-export function SettingsView({ theme: t, peerName, peerFirstName, gate, prefs, featureSupport, blocked, pinned, disappearAfterSeconds, onPinnedChange, onDisappearChange, onChange, onVerify, onBlock, onUnblock, onAskAi, onBack }: Props) {
+export function SettingsView({ theme: t, peerName, peerFirstName, gate, prefs, featureSupport, blocked, pinned, disappearAfterSeconds, onPinnedChange, onDisappearChange, onChange, onVerify, onBlock, onUnblock, onAskAi, chat, onBack }: Props) {
   const status = blocked ? "Blocked" : gate.mode === "LIVE" ? "End-to-end encrypted" : gate.mode === "CHECKING" ? "Checking encryption" : "Messages sealed on this device";
   const section = (label: string) => <Text style={[type.meta, styles.section, { color: t.muted }]}>{label.toUpperCase()}</Text>;
   const card = [styles.card, { backgroundColor: t.surface }];
@@ -156,6 +158,25 @@ export function SettingsView({ theme: t, peerName, peerFirstName, gate, prefs, f
           </View>
         </View>
 
+        {chat?.isGroup ? (
+          <>
+            {section(`People · ${chat.members.length}`)}
+            <View style={card}>
+              {chat.members.map((m, i) => (
+                <View key={`${m.name}-${i}`} style={[styles.rowTop, i > 0 ? { borderTopColor: t.line, borderTopWidth: StyleSheet.hairlineWidth } : null]}>
+                  <Text style={[type.body, { color: t.ink, flex: 1 }]}>{m.name}</Text>
+                  {m.role !== "MEMBER" ? <Text style={[type.meta, { color: t.muted }]}>{m.role === "OWNER" ? "Owner" : "Admin"}</Text> : null}
+                </View>
+              ))}
+              {chat.onAddPeople ? (
+                <Pressable accessibilityRole="button" onPress={chat.onAddPeople} style={[styles.rowTop, { borderTopColor: t.line, borderTopWidth: StyleSheet.hairlineWidth }]}>
+                  <Text style={[type.body, { color: t.accent, fontWeight: "600" }]}>Add people</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </>
+        ) : null}
+
         {section("Notifications")}
         <View style={card}>
           <View style={styles.rowTop}>
@@ -175,9 +196,23 @@ export function SettingsView({ theme: t, peerName, peerFirstName, gate, prefs, f
           <Pressable accessibilityRole="button" onPress={blocked ? onUnblock : onBlock} style={[styles.rowTop, { borderTopColor: t.line, borderTopWidth: StyleSheet.hairlineWidth }]}>
             <Text style={[type.body, { color: blocked ? t.accent : t.danger, fontWeight: "600" }]}>{blocked ? `Unblock ${peerFirstName}` : `Block ${peerFirstName}`}</Text>
           </Pressable>
-          <Pressable accessibilityRole="button" onPress={() => notYet("Delete conversation")} style={[styles.rowTop, { borderTopColor: t.line, borderTopWidth: StyleSheet.hairlineWidth }]}>
-            <Text style={[type.body, { color: t.danger, fontWeight: "600" }]}>Delete conversation from this device</Text>
-          </Pressable>
+          {chat ? (
+            <>
+              <Pressable accessibilityRole="button" onPress={chat.onReport} style={[styles.rowTop, { borderTopColor: t.line, borderTopWidth: StyleSheet.hairlineWidth }]}>
+                <Text style={[type.body, { color: t.danger, fontWeight: "600" }]}>{chat.isGroup ? "Report group" : `Report ${peerFirstName}`}</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" onPress={chat.onClear} style={[styles.rowTop, { borderTopColor: t.line, borderTopWidth: StyleSheet.hairlineWidth }]}>
+                <Text style={[type.body, { color: t.danger, fontWeight: "600" }]}>Clear chat</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" onPress={chat.onDelete} style={[styles.rowTop, { borderTopColor: t.line, borderTopWidth: StyleSheet.hairlineWidth }]}>
+                <Text style={[type.body, { color: t.danger, fontWeight: "600" }]}>Delete chat</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable accessibilityRole="button" onPress={() => notYet("Delete conversation")} style={[styles.rowTop, { borderTopColor: t.line, borderTopWidth: StyleSheet.hairlineWidth }]}>
+              <Text style={[type.body, { color: t.danger, fontWeight: "600" }]}>Delete conversation from this device</Text>
+            </Pressable>
+          )}
         </View>
       </ScrollView>
     </View>

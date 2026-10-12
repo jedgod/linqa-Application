@@ -115,6 +115,23 @@ export class ConversationService implements ConversationServiceLike {
     this.attachmentSeals.delete(messageId);
   }
 
+  private readonly knownMessages=new Map<string,Set<string>>();
+  private readonly hiddenMessages=new Map<string,Set<string>>();
+  async deleteMessage(conversationId:string,messageId:string,scope:'me'|'everyone'):Promise<void> {
+    await this.request(`/v1/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,{method:'DELETE',body:JSON.stringify({scope})});
+    const hidden=this.hiddenMessages.get(conversationId)??new Set<string>();hidden.add(messageId);this.hiddenMessages.set(conversationId,hidden);
+  }
+  private async removedMessages(conversationId:string):Promise<ServerRow[]> {
+    const ids=[...(this.knownMessages.get(conversationId)??[])];
+    const hidden=this.hiddenMessages.get(conversationId)??new Set<string>();
+    for(let i=0;i<ids.length;i+=500){
+      const batch=ids.slice(i,i+500);
+      const result=await this.request<{visibleMessageIds:string[]}>(`/v1/chats/${encodeURIComponent(conversationId)}/messages/visibility`,{method:'POST',body:JSON.stringify({messageIds:batch})});
+      const visible=new Set(result.visibleMessageIds);for(const id of batch)if(!visible.has(id))hidden.add(id);
+    }
+    this.hiddenMessages.set(conversationId,hidden);
+    return [...hidden].map(id=>({id,senderId:'',sentAt:'',ciphertext:'',deleted:true}));
+  }
   private toRow(m: ApiMessage): ServerRow { return { id: m.id, senderId: m.senderUserId, sentAt: m.createdAt, ciphertext: m.ciphertext ?? "" }; }
   async uploadFeatureBlob(conversationId: string, id: string, sealed: string): Promise<void> {
     await this.request(`/v2/chats/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ envelopeBase64: b64ToB64url(sealed) }) });
@@ -145,7 +162,11 @@ export class ConversationService implements ConversationServiceLike {
         }
       } catch { /* see above */ }
     }
-    return { rows, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) };
+    const known=this.knownMessages.get(conversationId)??new Set<string>();
+    for(const m of page.messages)known.add(m.id);this.knownMessages.set(conversationId,known);
+    const removed=await this.removedMessages(conversationId);
+    const hidden=new Set(removed.map(r=>r.id));
+    return { rows:[...rows.filter(r=>!hidden.has(r.id)),...removed], ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) };
   }
 
   async decryptServerRows(conversationId: string, rows: ServerRow[]): Promise<DecryptResult[]> {

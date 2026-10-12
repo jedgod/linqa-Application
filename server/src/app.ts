@@ -77,7 +77,7 @@ export async function buildApp(config: AppConfig, db: Database) {
   });
 
   await app.register(rateLimit, {
-    max: 120,
+    max: config.GLOBAL_RATE_LIMIT_PER_MINUTE ?? 120,
     timeWindow: "1 minute"
   });
   await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });

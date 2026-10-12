@@ -56,7 +56,7 @@ export type JoinedScheduledCall = {
 /**
  * Raised when the callee has no device that can ring. Distinct from a generic
  * failure so the UI can say "they have no active device" instead of a vague
- * error — the difference matters to the person trying to call.
+ * error â€” the difference matters to the person trying to call.
  */
 export class NoActiveDeviceError extends Error {
   constructor(peerName?: string) {
@@ -129,6 +129,10 @@ export class CallsService {
     }
 
     return payload as T;
+  }
+
+  reportCall(callId: string, category: string, description: string): Promise<unknown> {
+    return this.request("/v1/safety/reports", { method: "POST", body: JSON.stringify({ callId, category, description }) });
   }
 
   async listHistory(limit = 50): Promise<CallHistoryItem[]> {
@@ -246,7 +250,7 @@ export class CallsService {
   }
 }
 
-/** "4m 12s" / "48s" / "1h 03m" — compact enough for a list row. */
+/** "4m 12s" / "48s" / "1h 03m" â€” compact enough for a list row. */
 export function formatCallDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "";
   if (seconds < 60) return `${Math.round(seconds)}s`;
@@ -295,7 +299,7 @@ export function avatarTint(name: string): string {
   return palette[Math.abs(hash) % palette.length]!;
 }
 
-/** Preset scheduling offsets — avoids pulling in a date-picker dependency. */
+/** Preset scheduling offsets â€” avoids pulling in a date-picker dependency. */
 export function schedulePresets(now = new Date()): Array<{ key: string; label: string; at: Date }> {
   const round = (date: Date) => {
     const rounded = new Date(date);

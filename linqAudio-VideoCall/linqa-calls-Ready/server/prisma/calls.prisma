@@ -1,0 +1,44 @@
+// Add these two models to prisma/schema.prisma, then run:
+//   npx prisma migrate dev --name calls
+//
+// Calls also read these EXISTING models (see src/calls/adapters/calls-prisma.ts):
+//   ConversationMember { conversationId, userId, conversation -> Conversation }
+//   Conversation       { members -> ConversationMember[] }
+//   Block              { blockerId, blockedId }
+//   Device             { id, userId, name, platform, revokedAt DateTime? }
+// If a name differs in your schema, change it in calls-prisma.ts and the adapters.
+
+/// A user's report about a call. Metadata only: calls are end-to-end encrypted and never recorded.
+model CallReport {
+  id                 String    @id @db.Uuid
+  callId             String    @db.Uuid
+  conversationId     String
+  kind               String // "voice" | "video"
+  reporterUserId     String
+  reportedUserIds    String[]
+  reason             String // harassment | spam | sexual-content | violence | impersonation | other
+  note               String?   @db.VarChar(1000)
+  callCreatedAt      DateTime
+  callAnsweredAt     DateTime?
+  callEndedAt        DateTime?
+  participantUserIds String[]
+  createdAt          DateTime  @default(now())
+  status             String    @default("open") // open | actioned | dismissed
+
+  @@index([callId, reporterUserId])
+  @@index([status, createdAt(sort: Desc)])
+}
+
+/// PushKit (iOS, kind "voip") or FCM (Android, kind "fcm") token for ringing a device.
+model CallPushToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String
+  deviceId  String
+  kind      String // "voip" | "fcm"
+  token     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@unique([deviceId, kind])
+  @@index([userId])
+}

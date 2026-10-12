@@ -33,13 +33,16 @@ export const LANES = ["All", "Plans", "Ideas"] as const;
 export type Lane = (typeof LANES)[number];
 export type TextLane = "Plans" | "Ideas" | "General";
 
+/** The message a reply answers: its id, who wrote it, and a short quote. Sealed inside the message like everything else. */
+export type ReplyRef = { id: string; senderId: string; text: string };
+
 export type MediaPayload = { type: "media"; mediaId: string; mediaKind: "VOICE" | "VIDEO" | "GIF" | "PHOTO"; mimeType: string; durationMs?: number; mediaKey?: string; localUri?: string; caption?: string; mediaDigest?: string };
 
 export type Payload =
   | { type: "feature"; content: MessageContent }
   | SharedAttachment
   | MediaPayload
-  | { type: "text"; text: string; lane: TextLane }
+  | { type: "text"; text: string; lane: TextLane; reply?: ReplyRef; forwarded?: boolean }
   | { type: "decision"; title: string; options: string[] }
   | { type: "vote"; boardId: string; choice: number }
   | { type: "event"; title: string; startsAt: string; place?: string }
@@ -76,6 +79,9 @@ export function validatePayload(p: unknown): Payload {
   }
   if (x.type === "text") {
     if (typeof x.text !== "string" || !x.text.trim() || x.text.length > MAX_TEXT || !["Plans", "Ideas", "General"].includes(x.lane as string)) throw new Error("Invalid message");
+    const reply = x.reply as Record<string, unknown> | undefined;
+    if (reply !== undefined && !(reply && typeof reply === "object" && typeof reply.id === "string" && reply.id.length <= 80 && typeof reply.senderId === "string" && reply.senderId.length <= 80 && typeof reply.text === "string" && reply.text.length <= 200)) throw new Error("Invalid reply");
+    if (x.forwarded !== undefined && typeof x.forwarded !== "boolean") throw new Error("Invalid message");
   }
   if (x.type === "decision") {
     const options = x.options;

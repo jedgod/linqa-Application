@@ -22,7 +22,8 @@ function jwtUserId(token: string): string {
 async function request<T>(baseUrl: string, path: string, token: string, body?: unknown): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    // A request with no body must not claim to be JSON: the server rejects an empty JSON body.
+    headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), authorization: `Bearer ${token}` },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const payload = await response.json().catch(() => ({}));

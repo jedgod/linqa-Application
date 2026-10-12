@@ -1,18 +1,19 @@
+import { startSecureCall } from "../../services/secure-call-rooms";
 //conversation.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Text, View } from "react-native";
+import { Alert, AppState, Text, View, useColorScheme } from "react-native";
 import { ExpoSqliteMobileOutboxDb } from "../../src/messaging/sqlite-outbox";
 import { sealedTextOutbox, type SealedTextOutbox } from "../../services/sealed-text-outbox";
 import * as Crypto from "expo-crypto";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useAccounts } from "../../account/AccountContext";
 import { ConversationScreen } from "../../components/conversation/ConversationScreen";
+import { ForwardSheet, PeopleSheet, ReportChatSheet, type ForwardTarget, type PickPerson } from "../../components/conversation/ChatActionSheets";
+import { resolveTheme } from "../../services/conversation-engine";
+import type { ChatControls } from "../../services/chat-inbox.service";
 import { useCountryClient } from "../../components/CountryLinqaUI";
 import { getApiBaseUrl } from "../../config/api";
-import { AccountSecureStorage } from "../../account/AccountSecureStorage";
-import { secureCoreModule } from "../../modules/linqa-secure-core";
-import { SecureCoreDevice, SecureCoreError, SecureCoreMessaging } from "../../services/secure-core";
-import { SecureCoreServer } from "../../services/secure-core-server";
+import { sendGroup, sendPeer, sharedSecureSession } from "../../services/shared-secure-session";
 import { ChatInboxService } from "../../services/chat-inbox.service";
 import { CallsService } from "../../services/calls.service";
 import { callController } from "../../services/call-controller";
@@ -26,7 +27,6 @@ import { RuntimeCapabilitiesService } from "../../services/runtime-capabilities.
 import { accessTokenProvider } from "../../services/session";
 
 const API = getApiBaseUrl();
-const accountStorage = new AccountSecureStorage();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -42,16 +42,9 @@ function RealConversation() {
 
   // The secure core: the native bridge (when this build has it) over this account's own device keys. Without the bridge there is no
   // core, the gate locks, and nothing can be sent or opened.
-  const peerRef = useRef<string | null>(null);
-  const secure = useMemo(() => {
-    const bridge = secureCoreModule();
-    if (!bridge || !selfId) return null;
-    const store = { get: (key: string) => accountStorage.get(selfId, key), put: (key: string, value: string) => accountStorage.put(selfId, key, value) };
-    const server = new SecureCoreServer(API, () => accessTokenProvider.getAccessToken());
-    const device = new SecureCoreDevice(bridge, store, selfId);
-    const messaging = new SecureCoreMessaging({ bridge, device, directory: server, members: async () => { if (!peerRef.current) throw new SecureCoreError("RECIPIENT_UNKNOWN"); return [selfId, peerRef.current]; } });
-    return { device, server, store, messaging };
-  }, [selfId]);
+  // One secure session per account, shared with the chat list's previews, so a message opened for a preview still opens here.
+  const peerRef = sendPeer;
+  const secure = useMemo(() => sharedSecureSession(selfId), [selfId]);
   const gate = useMemo(() => createMessagingGate({ core: secure?.device.asNativeCore() ?? null, capabilities: () => new RuntimeCapabilitiesService(API).snapshot() }), [secure]);
   // Other people can only message this phone once its key package is published.
   useEffect(() => { if (secure) void secure.server.publishKeyPackage(secure.device, secure.store).catch(() => undefined); }, [secure]);
@@ -87,6 +80,13 @@ function RealConversation() {
   const [pinned, setPinned] = useState(false);
   const [disappear, setDisappear] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [controls, setControls] = useState<ChatControls | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [addPeopleOpen, setAddPeopleOpen] = useState(false);
+  const [contacts, setContacts] = useState<PickPerson[]>([]);
+  const systemScheme = useColorScheme();
+  const [forwardText, setForwardText] = useState<string | null>(null);
+  const [otherChats, setOtherChats] = useState<Array<ForwardTarget & { peerUserId: string | null; memberUserIds?: string[] }>>([]);
   peerRef.current = peer.id;
 
   useEffect(() => { let live = true; if (conversationId) void loadPrefs(conversationId).then((p) => { if (live) setPrefs(p); }); return () => { live = false; }; }, [conversationId]);
@@ -95,10 +95,12 @@ function RealConversation() {
   useEffect(() => {
     let live = true;
     if (!conversationId) return;
+    sendGroup.current = null;
     inbox.inbox("all").then((payload) => {
       const row = payload.conversations.find((x) => x.conversationId === conversationId);
       if (!live || !row) return;
       setPeer({ id: row.peerUserId, displayName: row.title });
+      sendGroup.current = row.isGroup && row.memberUserIds ? row.memberUserIds.filter((id) => id !== selfId) : null;
       setPrefs((p) => ({ ...p, quiet: row.muted }));
     }, () => undefined);
     return () => { live = false; };
@@ -126,6 +128,20 @@ function RealConversation() {
     } catch { /* leave as it was */ }
   }, [countryClient]);
   useEffect(() => { void refreshBlocked(peer.id); }, [peer.id, refreshBlocked]);
+
+  // The group's people (and who it is with) come from the server. Contacts to add are the people already chatted with directly.
+  const loadControls = useCallback(async () => {
+    if (!conversationId) return;
+    const value=await inbox.controls(conversationId);
+    setControls(value);
+  }, [conversationId, inbox]);
+  useEffect(() => { void loadControls().catch(()=>undefined); }, [loadControls]);
+  useEffect(() => {
+    inbox.inbox("all").then((payload) => setOtherChats(payload.conversations.filter((c) => c.conversationId !== conversationId).map((c) => ({ conversationId: c.conversationId, title: c.title, peerUserId: c.peerUserId, ...(c.memberUserIds ? { memberUserIds: c.memberUserIds } : {}) }))), () => undefined);
+  }, [inbox, conversationId]);
+  useEffect(() => {
+    inbox.inbox("all").then((payload) => setContacts(payload.conversations.filter((c) => !c.isGroup && c.peerUserId).map((c) => ({ userId: c.peerUserId!, name: c.title }))), () => undefined);
+  }, [inbox]);
 
   const back = useCallback(() => (router.canGoBack() ? router.back() : router.replace("/(tabs)/chats")), [router]);
 
@@ -166,6 +182,42 @@ function RealConversation() {
     countryClient.unblockAccount(peer.id).then(() => setBlocked(null), () => setNotice("Couldn't unblock this person. Try again."));
   }
 
+  /** Forward a message's text: it is sealed again for each chosen chat, with the people in that chat. */
+  async function forwardTo(conversationIds: string[]) {
+    const text = forwardText;
+    if (!text) return;
+    const keepPeer = sendPeer.current;
+    const keepGroup = sendGroup.current;
+    let failed = 0;
+    try {
+      for (const id of conversationIds) {
+        const target = otherChats.find((c) => c.conversationId === id);
+        if (!target) { failed += 1; continue; }
+        // Sealing uses whoever the current chat is with, so point it at the target chat for this message.
+        sendGroup.current = target.memberUserIds ? target.memberUserIds.filter((m) => m !== selfId) : null;
+        sendPeer.current = target.peerUserId;
+        try { await service.send(id, { type: "text", text, lane: "General", forwarded: true }, newId()); } catch { failed += 1; }
+      }
+    } finally { sendPeer.current = keepPeer; sendGroup.current = keepGroup; }
+    if (failed > 0) throw new Error("FORWARD_FAILED");
+    setNotice(null);
+  }
+
+  function confirmClear() {
+    if (!conversationId) return;
+    Alert.alert("Clear this chat?", "Messages in this chat will be removed from your devices. The other people keep their copy, and new messages will still arrive.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Clear chat", style: "destructive", onPress: () => { void inbox.clearChat(conversationId).then(() => { setNotice(null); back(); }, () => setNotice("Couldn't clear the chat. Check your connection and try again.")); } }
+    ]);
+  }
+  function confirmDelete() {
+    if (!conversationId) return;
+    Alert.alert("Delete this chat?", "The chat and its messages are removed from your devices and your lists. The other people keep their copy. A new message from them will bring the chat back.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete chat", style: "destructive", onPress: () => { void inbox.deleteChat(conversationId).then(() => router.replace("/(tabs)/chats"), () => setNotice("Couldn't delete the chat. Check your connection and try again.")); } }
+    ]);
+  }
+
   function call(kind: "AUDIO" | "VIDEO") {
     if (!peer.id || blocked || placingCall.current) return;
     const recipientUserId = peer.id;
@@ -175,7 +227,7 @@ function RealConversation() {
         if (placingCall.current) return;
         placingCall.current = true;
         setNotice(null);
-        void callController.start({ peerUserId: recipientUserId, peerName: peer.displayName, callType: kind }).then((problem) => { if (problem) setNotice(problem); }).finally(() => { placingCall.current = false; });
+        void startSecureCall(conversationId!, kind, [recipientUserId]).then((problem) => { if (problem) setNotice(problem); }).finally(() => { placingCall.current = false; });
       } }
     ]);
   }
@@ -183,7 +235,18 @@ function RealConversation() {
   if (!conversationId || !selfId) {
     return <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}><Text>This conversation isn't available.</Text></View>;
   }
+  const sheetTheme = resolveTheme(prefs.theme, systemScheme);
+  const existingMembers = new Set(controls?.members.map((m) => m.userId) ?? []);
   return (
+    <>
+    <ForwardSheet visible={forwardText !== null} theme={sheetTheme} targets={otherChats} onClose={() => setForwardText(null)} onConfirm={forwardTo} />
+    <ReportChatSheet visible={reportOpen} theme={sheetTheme} title={`Report ${controls?.title ?? peer.displayName}`} onClose={() => setReportOpen(false)} onSend={(category, description) => inbox.reportChat(conversationId, category, description)} />
+    <PeopleSheet
+      visible={addPeopleOpen} theme={sheetTheme} title={`Add people to ${controls?.title ?? peer.displayName}`} confirm="Add people" maxPick={Math.max(0,5-existingMembers.size)}
+      people={contacts.filter((c) => !existingMembers.has(c.userId))}
+      onClose={() => setAddPeopleOpen(false)}
+      onConfirm={async (userIds) => { await inbox.addGroupMembers(conversationId, userIds); await loadControls(); }}
+    />
     <ConversationScreen
       conversationId={conversationId}
       selfId={selfId}
@@ -205,10 +268,20 @@ function RealConversation() {
       notice={notice ?? rejectionNotice}
       rejectedOutbox={outbox?.failures}
       onCall={call}
+      onForward={(text) => setForwardText(text)}
+      chatActions={{
+        isGroup: controls?.isGroup ?? false,
+        members: (controls?.members ?? []).map((m) => ({ name: m.displayName, role: m.role })),
+        onReport: () => setReportOpen(true),
+        onClear: confirmClear,
+        onDelete: confirmDelete,
+        ...(controls?.isGroup && controls.members.some((m) => m.userId === selfId && m.role !== "MEMBER") ? { onAddPeople: () => setAddPeopleOpen(true) } : {})
+      }}
       aiShareOnOpen={aiShare === "1"}
       onAskAi={(context) => { handOffToAssistant(context); if (aiShare === "1") router.back(); else router.push("/modules/ai"); }}
       onAiShareCancelled={() => { if (aiShare === "1") router.back(); }}
     />
+    </>
   );
 }
 

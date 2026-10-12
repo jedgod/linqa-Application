@@ -126,7 +126,7 @@ describe("chat inbox: payload", () => {
     expect(body.conversations[0].initials).toBe("AC");
     expect(body.conversations[0].unreadCount).toBe(2);
     expect(body.unreadTotal).toBe(7);
-    expect(body.counts).toEqual({ all: 5, unread: 2, groups: 1, pinned: 1 });
+    expect(body.counts).toEqual({ all: 5, unread: 2, groups: 1, pinned: 1, favorites: 1, archived: 0 });
 
     // This is a consumer surface: no server version, host, or environment.
     const serialized = JSON.stringify(body).toLowerCase();
@@ -245,7 +245,7 @@ describe("chat inbox: filters", () => {
     const { app } = await buildApp({});
     const response = await app.inject({
       method: "GET",
-      url: "/v1/chats/inbox?filter=archived",
+      url: "/v1/chats/inbox?filter=nonsense",
       headers: { authorization: `Bearer ${await token("messages:read")}` }
     });
     expect(response.statusCode).toBe(422);

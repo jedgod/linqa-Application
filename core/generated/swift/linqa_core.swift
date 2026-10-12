@@ -467,7 +467,13 @@ public protocol NativeSecureCoreProtocol: AnyObject, Sendable {
     
     func generateKeyPackage(userId: String, deviceId: String, expiresAt: UInt64) throws  -> String
     
+    func openCallKey(sealed: String, aad: String) throws  -> String
+    
     func protectionLevel()  -> String
+    
+    func sealCallKey(x25519: String, mlkem768: String, plaintext: String, aad: String) throws  -> String
+    
+    func signCallMessage(message: String) throws  -> String
     
     func verifyKeyPackage(packageB64: String) throws 
     
@@ -576,9 +582,37 @@ open func generateKeyPackage(userId: String, deviceId: String, expiresAt: UInt64
 })
 }
     
+open func openCallKey(sealed: String, aad: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeNativeCoreError_lift) {
+    uniffi_linqa_core_fn_method_nativesecurecore_open_call_key(self.uniffiClonePointer(),
+        FfiConverterString.lower(sealed),
+        FfiConverterString.lower(aad),$0
+    )
+})
+}
+    
 open func protectionLevel() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_linqa_core_fn_method_nativesecurecore_protection_level(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func sealCallKey(x25519: String, mlkem768: String, plaintext: String, aad: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeNativeCoreError_lift) {
+    uniffi_linqa_core_fn_method_nativesecurecore_seal_call_key(self.uniffiClonePointer(),
+        FfiConverterString.lower(x25519),
+        FfiConverterString.lower(mlkem768),
+        FfiConverterString.lower(plaintext),
+        FfiConverterString.lower(aad),$0
+    )
+})
+}
+    
+open func signCallMessage(message: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeNativeCoreError_lift) {
+    uniffi_linqa_core_fn_method_nativesecurecore_sign_call_message(self.uniffiClonePointer(),
+        FfiConverterString.lower(message),$0
     )
 })
 }
@@ -764,7 +798,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_linqa_core_checksum_method_nativesecurecore_generate_key_package() != 57539) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_linqa_core_checksum_method_nativesecurecore_open_call_key() != 12687) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_linqa_core_checksum_method_nativesecurecore_protection_level() != 21394) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_linqa_core_checksum_method_nativesecurecore_seal_call_key() != 62275) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_linqa_core_checksum_method_nativesecurecore_sign_call_message() != 41724) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_linqa_core_checksum_method_nativesecurecore_verify_key_package() != 3093) {

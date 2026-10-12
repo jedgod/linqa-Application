@@ -1,9 +1,11 @@
+import { useChatPreviews } from "../../services/chat-previews";
+import { startSecureCallForPeer } from "../../services/secure-call-rooms";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, FlatList, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
-import { CHAT_FILTERS, ChatInboxService, deduplicateConversations, type ChatFilter, type ChatInboxPayload, type ChatSummary } from "../../services/chat-inbox.service";
+import { CHAT_FILTERS, ChatInboxService, deduplicateConversations, type ChatFilter, type ChatInboxPayload, type ChatList, type ChatSummary } from "../../services/chat-inbox.service";
 import { callController } from "../../services/call-controller";
 import { CallsService } from "../../services/calls.service";
 import { ChatRealtimeClient, TypingRegistry } from "../../services/chat-realtime.client";
@@ -13,6 +15,8 @@ import { getApiBaseUrl } from "../../config/api";
 import { C, s } from "../../components/chats/styles";
 import { FILTER_LABELS, Avatar, HeaderButton, SummaryCard, PresenceStrip, ConversationRow } from "../../components/chats/parts";
 import { AccountSwitcherSheet } from "../../components/AccountSwitcherSheet";
+import { PeopleSheet, type PickPerson } from "../../components/conversation/ChatActionSheets";
+import { THEMES } from "../../services/conversation-engine";
 import { useAccounts } from "../../account/AccountContext";
 import { ACCOUNT_SWITCH_LANDING_ROUTE } from "../../account/landing";
 
@@ -40,6 +44,15 @@ function ChatsInbox() {
   );
 
   const [filter, setFilter] = useState<ChatFilter>("all");
+  /** A custom list being viewed (its chats are shown under "All"). */
+  const [listId, setListId] = useState<string | null>(null);
+  const [lists, setLists] = useState<ChatList[]>([]);
+  const [newListOpen, setNewListOpen] = useState(false);
+  const [newListName, setNewListName] = useState("");
+  const [newListError, setNewListError] = useState<string | null>(null);
+  const [organizeNote, setOrganizeNote] = useState<string | null>(null);
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [renaming, setRenaming] = useState<ChatList | null>(null);
   const [data, setData] = useState<ChatInboxPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -60,6 +73,7 @@ function ChatsInbox() {
   const [typingIn, setTypingIn] = useState<Set<string>>(new Set());
   const mounted = useRef(true);
   const loadVersion = useRef(0);
+  const loadInFlight = useRef(false);
 
   const realtime = useMemo(
     () => new ChatRealtimeClient(API, () => accessTokenProvider.getAccessToken()),
@@ -69,9 +83,10 @@ function ChatsInbox() {
   const load = useCallback(
     async (signal?: AbortSignal, quiet = false) => {
       const request = ++loadVersion.current;
+      loadInFlight.current = true;
       if (!quiet) setError(null);
       try {
-        const result = await inbox.inbox(filter, signal);
+        const result = await inbox.inbox(filter, signal, listId ?? undefined);
         if (!mounted.current || signal?.aborted || request !== loadVersion.current) return;
         setData({ ...result, conversations: deduplicateConversations(result.conversations) });
         setError(null);
@@ -79,14 +94,20 @@ function ChatsInbox() {
         if (signal?.aborted || !mounted.current || request !== loadVersion.current) return;
         setError(cause instanceof Error ? cause.message : "Unable to load chats.");
       } finally {
+        if (request === loadVersion.current) loadInFlight.current = false;
         if (mounted.current && !signal?.aborted && request === loadVersion.current) {
           setLoading(false);
           setRefreshing(false);
         }
       }
     },
-    [inbox, filter]
+    [inbox, filter, listId]
   );
+
+  const loadLists = useCallback(async () => {
+    try { const next = await inbox.lists(); if (mounted.current) setLists(next); } catch { /* the chips stay as they were */ }
+  }, [inbox]);
+  useFocusEffect(useCallback(() => { void loadLists(); }, [loadLists]));
 
   useFocusEffect(useCallback(() => {
     mounted.current = true;
@@ -101,6 +122,16 @@ function ChatsInbox() {
       controller.abort();
     };
   }, [load]));
+
+  useEffect(() => {
+    if (!error) return;
+    const retry = () => {
+      if (mounted.current && AppState.currentState === "active" && !loadInFlight.current) void load(undefined, true);
+    };
+    const timer = setInterval(retry, 5000);
+    const subscription = AppState.addEventListener("change", state => { if (state === "active") retry(); });
+    return () => { clearInterval(timer); subscription.remove(); };
+  }, [error, load]);
 
   /**
    * Live inbox.
@@ -142,13 +173,68 @@ function ChatsInbox() {
     realtime.setConversations(ids);
   }, [realtime, data?.conversations]);
 
-  const counts = data?.counts ?? { all: 0, unread: 0, groups: 0, pinned: 0 };
-  const conversations = data?.conversations ?? [];
+  const counts = data?.counts ?? { all: 0, unread: 0, groups: 0, pinned: 0, archived: 0 };
+  const conversations = useChatPreviews(active?.userId ?? "", data?.conversations ?? []);
   const scheduledCall = data?.scheduledCall ?? null;
 
   function openConversation(item: ChatSummary) {
     // The thread checks access when loading and marks messages read only after encryption is available.
     router.push({ pathname: "/modules/conversation", params: { conversationId: item.conversationId, name: item.title, ...(item.peerUserId ? { peerId: item.peerUserId } : {}) } });
+  }
+
+  /** Long press on a chat: favorite, archive and lists. These are the same on the person's other devices. */
+  function organizeChat(item: ChatSummary) {
+    const refresh = () => { void load(undefined, true); void loadLists(); };
+    const run = (work: () => Promise<unknown>) => { setOrganizeNote(null); work().then(refresh, () => setOrganizeNote("That change did not save. Check your connection and try again.")); };
+    const archived = Boolean(item.archived) || filter === "archived";
+    const pickList = () => {
+      if (lists.length === 0) { setNewListOpen(true); return; }
+      Alert.alert("Lists", item.title, [
+        ...lists.slice(0, 6).map((l) => ({
+          text: (item.listIds?.includes(l.id) ? "✓ " : "") + l.name,
+          onPress: () => run(() => inbox.setInList(l.id, item.conversationId, !item.listIds?.includes(l.id)))
+        })),
+        { text: "New list…", onPress: () => setNewListOpen(true) },
+        { text: "Cancel", style: "cancel" as const }
+      ]);
+    };
+    Alert.alert(item.title, undefined, [
+      { text: item.pinned ? "Remove from favorites" : "Add to favorites", onPress: () => run(() => inbox.setFavorite(item.conversationId, !item.pinned)) },
+      { text: archived ? "Unarchive" : "Archive", onPress: () => run(() => inbox.setArchived(item.conversationId, !archived)) },
+      { text: "Add to list…", onPress: pickList },
+      { text: "Cancel", style: "cancel" }
+    ]);
+  }
+
+  async function createList() {
+    const name = newListName.trim();
+    if (!name) return;
+    setNewListError(null);
+    try {
+      if (renaming) await inbox.renameList(renaming.id, name); else await inbox.createList(name);
+      setRenaming(null);
+      setNewListOpen(false); setNewListName("");
+      void loadLists();
+    } catch (cause) {
+      const code = cause instanceof Error ? cause.message : "";
+      setNewListError(code === "LIST_EXISTS" ? "You already have a list with that name." : code === "TOO_MANY_LISTS" ? "You have reached the limit of 20 lists." : "The list could not be created.");
+    }
+  }
+
+  /** Long press on a list chip: rename or delete it. */
+  function listMenu(list: ChatList) {
+    Alert.alert(list.name, undefined, [
+      { text: "Rename", onPress: () => { setRenaming(list); setNewListName(list.name); setNewListOpen(true); } },
+      { text: "Delete", style: "destructive", onPress: () => removeList(list) },
+      { text: "Cancel", style: "cancel" }
+    ]);
+  }
+
+  function removeList(list: ChatList) {
+    Alert.alert(`Delete "${list.name}"?`, "Your chats stay where they are.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => { void inbox.deleteList(list.id).then(() => { if (listId === list.id) setListId(null); void loadLists(); }, () => setOrganizeNote("The list could not be deleted.")); } }
+    ]);
   }
 
   function closeCompose() {
@@ -218,7 +304,7 @@ function ChatsInbox() {
 
   function startPeerCall(peerUserId: string, callType: "AUDIO" | "VIDEO", peerName: string) {
     setError(null);
-    void callController.start({ peerUserId, peerName, callType }).then((problem) => { if (problem) setError(problem); });
+    void startSecureCallForPeer(peerUserId, callType).then((problem) => { if (problem) setError(problem); });
   }
 
   function go(route: string) {
@@ -228,7 +314,7 @@ function ChatsInbox() {
 
   const hubActions: Array<[string, string, string, () => void]> = [
     ["New chat", "chatbubble-ellipses-outline", C.teal, openCompose],
-    ["New group", "people-outline", C.blue, () => go("/connections")],
+    ["New group", "people-outline", C.blue, () => { setHubOpen(false); setGroupOpen(true); }],
     ["Schedule", "calendar-outline", C.purple, () => go("/(tabs)/calls")],
     ["Start call", "call-outline", C.teal, () => go("/(tabs)/calls")],
     ["Broadcast", "megaphone-outline", C.red, () => go("/modules/status")],
@@ -318,15 +404,15 @@ function ChatsInbox() {
               onStatus={() => go("/modules/status")}
               onContact={() => go("/connections")}
             />
-            <View style={s.filters}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filters} contentContainerStyle={{ gap: 4 }}>
               {CHAT_FILTERS.map((key) => (
                 <Pressable
                   key={key}
                   accessibilityRole="tab"
                   accessibilityState={{ selected: filter === key }}
                   accessibilityLabel={`${FILTER_LABELS[key]}, ${counts[key]}`}
-                  onPress={() => setFilter(key)}
-                  style={[s.filter, filter === key && s.filterActive]}
+                  onPress={() => { setListId(null); setFilter(key); }}
+                  style={[s.filter, filter === key && !listId && s.filterActive]}
                 >
                   <Text style={[s.filterText, filter === key && s.filterTextActive]}>
                     {FILTER_LABELS[key]}
@@ -338,7 +424,30 @@ function ChatsInbox() {
                   </View>
                 </Pressable>
               ))}
-            </View>
+            </ScrollView>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 6, paddingHorizontal: 2 }}>
+              {lists.map((list) => (
+                <Pressable
+                  key={list.id}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: listId === list.id }}
+                  accessibilityLabel={`List ${list.name}, ${list.count}`}
+                  accessibilityHint="Long press to rename or delete this list"
+                  onPress={() => { setFilter("all"); setListId(listId === list.id ? null : list.id); }}
+                  onLongPress={() => listMenu(list)}
+                  style={[s.filter, listId === list.id && s.filterActive]}
+                >
+                  <Ionicons name="folder-outline" size={14} color={listId === list.id ? C.white : C.muted} />
+                  <Text style={[s.filterText, listId === list.id && s.filterTextActive]}>{list.name}</Text>
+                  <View style={[s.filterCount, listId === list.id && s.filterCountActive]}><Text style={[s.filterCountText, listId === list.id && s.filterCountTextActive]}>{list.count}</Text></View>
+                </Pressable>
+              ))}
+              <Pressable accessibilityRole="button" accessibilityLabel="Create a list" onPress={() => setNewListOpen(true)} style={s.filter}>
+                <Ionicons name="add" size={16} color={C.teal} />
+                <Text style={[s.filterText, { color: C.teal }]}>New list</Text>
+              </Pressable>
+            </ScrollView>
+            {organizeNote ? <Text accessibilityRole="alert" style={s.modalHint}>{organizeNote}</Text> : null}
             {error ? (
               <Pressable style={s.errorCard} onPress={() => void load()}>
                 <Ionicons name="warning-outline" size={17} color={C.red} />
@@ -355,6 +464,7 @@ function ChatsInbox() {
                 : item
             }
             onOpen={() => void openConversation(item)}
+            onLongPress={() => organizeChat(item)}
             onCall={(peerUserId, callType, peerName) => startPeerCall(peerUserId, callType, peerName)}
           />
         )}
@@ -422,6 +532,31 @@ function ChatsInbox() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={newListOpen} transparent animationType="fade" onRequestClose={() => setNewListOpen(false)}>
+        <View style={s.modalBackdrop}>
+          <View style={s.modalCard}>
+            <Text style={s.modalTitle}>{renaming ? "Rename list" : "New list"}</Text>
+            <Text style={s.modalHint}>A list sorts your chats. Only you see it, and it is the same on your computer.</Text>
+            <TextInput accessibilityLabel="List name" value={newListName} maxLength={40} autoFocus placeholder="Work, Family, …" placeholderTextColor={C.muted} onChangeText={(v) => { setNewListName(v); setNewListError(null); }} onSubmitEditing={() => void createList()} style={{ color: C.white, borderColor: C.border, borderWidth: 1, borderRadius: 12, padding: 12, minHeight: 48 }} />
+            {newListError ? <Text accessibilityRole="alert" style={s.modalHint}>{newListError}</Text> : null}
+            <Pressable accessibilityRole="button" disabled={!newListName.trim()} onPress={() => void createList()} style={{ padding: 12, minHeight: 44, alignItems: "center", opacity: newListName.trim() ? 1 : 0.5 }}><Text style={{ color: C.teal }}>{renaming ? "Save" : "Create list"}</Text></Pressable>
+            <Pressable onPress={() => { setNewListOpen(false); setNewListName(""); setNewListError(null); setRenaming(null); }} style={s.modalCancel}><Text style={s.modalCancelText}>Cancel</Text></Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <PeopleSheet
+        visible={groupOpen} theme={THEMES.dark} title="New group" confirm="Create group" maxPick={4} askName
+        people={((data?.conversations ?? []).filter((c) => !c.isGroup && c.peerUserId).map((c): PickPerson => ({ userId: c.peerUserId!, name: c.title })))}
+        onClose={() => setGroupOpen(false)}
+        onConfirm={async (userIds, name) => {
+          const id = await inbox.createGroup(name, userIds);
+          setGroupOpen(false);
+          void load(undefined, true);
+          router.push({ pathname: "/modules/conversation", params: { conversationId: id, name } });
+        }}
+      />
 
       <AccountSwitcherSheet
         visible={switcherOpen}

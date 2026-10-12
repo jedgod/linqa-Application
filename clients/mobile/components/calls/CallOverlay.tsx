@@ -1,5 +1,7 @@
+import { BoardView } from "./BoardView";
+import { buildMoreMenu, type MoreItem } from "../../services/call-actions/moreMenu";
 import React, { useEffect, useState, useSyncExternalStore } from "react";
-import { Modal, Pressable, StatusBar, StyleSheet, Text, View } from "react-native";
+import { Alert, Platform, Modal, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { callController, type CallState } from "../../services/call-controller";
@@ -61,6 +63,11 @@ function NetworkPill({ network }: { network: CallState["network"] }) {
 export function CallOverlay() {
   const call = useCallState();
   const [now, setNow] = useState(() => Date.now());
+  const [boardVisible, setBoardVisible] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportNote, setReportNote] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportCategory, setReportCategory] = useState("HARASSMENT");
   const [moreOpen, setMoreOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -75,10 +82,10 @@ export function CallOverlay() {
     return () => clearTimeout(id);
   }, [call.note]);
   useEffect(() => { if (!notice) return; const id = setTimeout(() => setNotice(null), 3500); return () => clearTimeout(id); }, [notice]);
-  useEffect(() => { if (call.phase === "idle") { setMoreOpen(false); setNotice(null); } }, [call.phase]);
+  useEffect(() => { if (call.phase === "idle") { setMoreOpen(false); setBoardVisible(false); setReportOpen(false); setReportNote(""); setNotice(null); } }, [call.phase]);
 
-  const RTC = call.phase !== "idle" && call.callType === "VIDEO" ? rtcView() : null;
-  const video = call.callType === "VIDEO";
+  const RTC = call.phase !== "idle" && (call.callType === "VIDEO" || call.sharingScreen) ? rtcView() : null;
+  const video = call.callType === "VIDEO" || call.sharingScreen;
   const live = call.phase !== "idle";
   const time = elapsed(call.connectedAt, now);
   const status = call.phase === "ringing" ? `Incoming ${video ? "video" : "voice"} call`
@@ -102,6 +109,30 @@ export function CallOverlay() {
     else callController.requestRecording();
   };
 
+  const menu = buildMoreMenu({ kind: video ? "video" : "voice", cameraOn: video && !call.cameraOff,
+    selfViewHasFlip: video, sharingScreen: call.sharingScreen, handRaised: call.handRaised,
+    boardOpen: call.board.open, blurOn: false, blurSupported: false, screenShareSupported: Platform.OS === "android",
+    participantCount: 2, ringingCount: 0, maxParticipants: 2 }).map(item => {
+      if (item.id === "add-person") return { ...item, disabled: true, hint: "Group calling is not enabled yet" };
+      if (item.id === "switch-device") return { ...item, disabled: true, hint: "Device handoff is not enabled yet" };
+      return item;
+    });
+  const act = (item: MoreItem) => {
+    if (item.disabled || call.phase !== "active") return;
+    setMoreOpen(false);
+    const run = () => {
+      if (item.id === "share-screen") void callController.toggleScreenShare();
+      if (item.id === "raise-hand") callController.toggleHand();
+      if (item.id === "board") {
+        if (call.board.open || callController.boardAction({ t: "board-open", by: "self", at: Date.now() })) setBoardVisible(true);
+      }
+      if (item.id === "call-info") Alert.alert("Call info", `${video ? "Video" : "Voice"} call\nWith ${call.peerName}\nDuration: ${time}\nConnection: ${call.network}\nMedia: DTLS-SRTP encrypted\nCall ID: ${call.callId}`);
+      if (item.id === "report") { setReportNote(""); setReportOpen(true); }
+    };
+    if (item.confirm) Alert.alert(item.confirm.title, item.confirm.body, [{ text: "Cancel", style: "cancel" }, { text: item.confirm.confirmLabel, onPress: run }]);
+    else run();
+  };
+
   const recordingBanner = (
     <>
       {call.recording === "on" ? (
@@ -109,6 +140,8 @@ export function CallOverlay() {
       ) : null}
       {call.recording === "requesting" ? <Text style={styles.note}>Asking {call.peerName || "them"} to allow recording…</Text> : null}
       {call.recordingNote && call.recording !== "asking" ? <Text accessibilityLiveRegion="polite" style={styles.note}>{call.recordingNote}</Text> : null}
+      {call.peerHandRaised ? <Text style={styles.note}>{call.peerName} raised a hand</Text> : null}
+      {live && call.note ? <Text accessibilityLiveRegion="polite" style={styles.note}>{call.note}</Text> : null}
       {notice ? <Text accessibilityLiveRegion="polite" style={styles.note}>{notice}</Text> : null}
     </>
   );
@@ -137,7 +170,6 @@ export function CallOverlay() {
     </View>
   ) : null;
 
-  const unavailable = (what: string) => setNotice(`${what} is not available during a call yet.`);
 
   return (
     <>
@@ -171,15 +203,15 @@ export function CallOverlay() {
                 </View>
                 <View style={styles.videoIdentity}>
                   <Text style={styles.nameBig} numberOfLines={1}>{call.peerName || "Linqa call"}</Text>
-                  <Text style={styles.statusGreen}>🔒  {privacyLine}</Text>
+                  <Text style={styles.statusGreen}>ðŸ”’  {privacyLine}</Text>
                 </View>
               </View>
               <View style={{ alignItems: "center" }}>{recordingBanner}</View>
 
               {call.localStreamUrl && call.phase !== "ringing" && RTC ? (
                 <View style={styles.self}>
-                  {call.cameraOff ? <View style={[StyleSheet.absoluteFill, { backgroundColor: "#333" }]} /> : <RTC streamURL={call.localStreamUrl} style={StyleSheet.absoluteFill} objectFit="cover" mirror zOrder={1} />}
-                  <Pressable accessibilityRole="button" accessibilityLabel="Flip camera" onPress={() => callController.flipCamera()} style={styles.flip}><Ionicons name="camera-reverse-outline" size={18} color="#FFFFFF" /></Pressable>
+                  {call.cameraOff && !call.sharingScreen ? <View style={[StyleSheet.absoluteFill, { backgroundColor: "#333" }]} /> : <RTC streamURL={call.localStreamUrl} style={StyleSheet.absoluteFill} objectFit="cover" mirror={!call.sharingScreen} zOrder={1} />}
+                  {!call.sharingScreen ? <Pressable accessibilityRole="button" accessibilityLabel="Flip camera" onPress={() => callController.flipCamera()} style={styles.flip}><Ionicons name="camera-reverse-outline" size={18} color="#FFFFFF" /></Pressable> : null}
                 </View>
               ) : null}
 
@@ -225,14 +257,17 @@ export function CallOverlay() {
                 {ringing ?? (live ? (
                   <View style={styles.card}>
                     <View style={styles.row}>
-                      <Key icon="videocam" label="Video" dim onPress={() => unavailable("Switching to video")} />
+                      <Key icon="videocam" label="Video" dim={call.mediaBusy} onPress={() => void callController.toggleCamera()} />
                       <Key icon={call.speaker ? "volume-high" : "volume-low"} label="Speaker" on={call.speaker} onPress={() => void callController.toggleSpeaker()} />
                       <Key icon={call.muted ? "mic-off" : "mic"} label={call.muted ? "Unmute" : "Mute"} on={call.muted} onPress={() => callController.toggleMute()} />
                     </View>
                     <View style={styles.row}>
                       <Key icon="ellipsis-horizontal" label="More" onPress={() => setMoreOpen(true)} />
                       <EndKey onPress={() => void callController.hangUp()} />
-                      <Key icon="tv-outline" label={"Share\nscreen"} dim onPress={() => unavailable("Screen sharing")} />
+                      <Key icon="tv-outline" label={"Share\nscreen"} dim={Platform.OS !== "android" || call.mediaBusy} onPress={() => {
+                    if (call.sharingScreen) void callController.toggleScreenShare();
+                    else Alert.alert("Share your screen?", "Everyone in this call will see everything on your screen, including notifications, until you stop.", [{ text: "Cancel", style: "cancel" }, { text: "Share", onPress: () => void callController.toggleScreenShare() }]);
+                  }} />
                     </View>
                   </View>
                 ) : null)}
@@ -241,9 +276,26 @@ export function CallOverlay() {
           </View>
         )}
 
+        {boardVisible && call.board.open ? <BoardView onHide={() => setBoardVisible(false)} /> : null}
+        <Modal visible={reportOpen} transparent animationType="slide" onRequestClose={() => { if (!reportBusy) setReportOpen(false); }}>
+          <View style={styles.sheetBackdrop}><View style={styles.sheet}>
+            <Text style={styles.sheetLabel}>Report this call</Text>
+            <Text style={styles.sheetHint}>Only the call reference and your report are sent. No audio, video, or board content is attached.</Text>
+            <ScrollView style={{ maxHeight: 160 }}>{["HARASSMENT", "IMPERSONATION", "THREATS", "SCAM", "SEXUAL_CONTENT", "HATE", "MINOR_SAFETY", "OTHER"].map(category => <Pressable key={category} disabled={reportBusy} onPress={() => setReportCategory(category)} style={styles.sheetRow}><Text style={[styles.sheetLabel, reportCategory === category && { color: GREEN }]}>{category.replaceAll("_", " ")}</Text></Pressable>)}</ScrollView>
+            <TextInput accessibilityLabel="Report details" multiline maxLength={1000} value={reportNote} onChangeText={setReportNote} editable={!reportBusy} placeholder="Describe what happened (at least 10 characters)" placeholderTextColor="#aaa" style={{ color: "white", minHeight: 80, padding: 12 }} />
+            <Pressable accessibilityRole="button" disabled={reportBusy || reportNote.trim().length < 10} style={styles.sheetRow} onPress={() => {
+              setReportBusy(true);
+              void callController.report(reportCategory, reportNote.trim()).then(() => { setReportOpen(false); Alert.alert("Report submitted", "Your report has been sent for review."); }).catch(() => Alert.alert("Report not sent", "Please try again.")).finally(() => setReportBusy(false));
+            }}><Text style={styles.sheetLabel}>{reportBusy ? "Sending?" : "Submit report"}</Text></Pressable>
+            <Pressable disabled={reportBusy} onPress={() => setReportOpen(false)} style={styles.sheetRow}><Text style={styles.sheetLabel}>Cancel</Text></Pressable>
+          </View></View>
+        </Modal>
         <Modal visible={moreOpen} transparent animationType="slide" onRequestClose={() => setMoreOpen(false)}>
           <Pressable accessibilityLabel="Close menu" onPress={() => setMoreOpen(false)} style={styles.sheetBackdrop}>
             <Pressable accessible={false} onPress={() => undefined} style={styles.sheet}>
+              <ScrollView style={{ maxHeight: 340 }}>
+              {menu.map(item => <Pressable key={item.id} accessibilityRole="button" accessibilityState={{ disabled: item.disabled || call.phase !== "active" }} disabled={item.disabled || call.phase !== "active"} onPress={() => act(item)} style={[styles.sheetRow, item.disabled && { opacity: 0.45 }]}><View><Text style={[styles.sheetLabel, item.destructive && { color: RED }]}>{item.label}</Text>{item.hint ? <Text style={styles.sheetHint}>{item.hint}</Text> : null}</View></Pressable>)}
+              </ScrollView>
               {call.phase === "active" && call.recordingAvailable ? (
                 <Pressable accessibilityRole="button" onPress={toggleRecord} disabled={call.recording === "requesting" || call.recording === "asking"} style={styles.sheetRow}>
                   <Ionicons name={call.recording === "on" ? "stop-circle" : "radio-button-on"} size={24} color={call.recording === "on" ? RED : "#FFFFFF"} />

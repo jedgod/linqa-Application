@@ -62,6 +62,15 @@ public class LinqaSecureCoreModule: Module {
       return true
     }
 
+    AsyncFunction("sealCallKey") { (x25519: String, mlkem768: String, plaintext: String, aad: String) -> String in
+      try self.guarded { try self.current().sealCallKey(x25519: x25519, mlkem768: mlkem768, plaintext: plaintext, aad: aad) }
+    }
+    AsyncFunction("openCallKey") { (sealed: String, aad: String) -> String in
+      try self.guarded { try self.current().openCallKey(sealed: sealed, aad: aad) }
+    }
+    AsyncFunction("signCallMessage") { (message: String) -> String in
+      try self.guarded { try self.current().signCallMessage(message: message) }
+    }
     AsyncFunction("encryptMessage") { (requestJson: String) -> String in
       try self.guarded { try self.current().encryptMessage(requestJson: requestJson) }
     }

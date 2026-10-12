@@ -48,6 +48,9 @@ class LinqaSecureCoreModule : Module() {
       guarded { current().generateKeyPackage(userId, deviceId, expiresAt.toLong().toULong()) }
     }
     AsyncFunction("verifyKeyPackage") { packageB64: String -> guarded { current().verifyKeyPackage(packageB64) }; true }
+    AsyncFunction("sealCallKey") { x25519: String, mlkem768: String, plaintext: String, aad: String -> guarded { current().sealCallKey(x25519, mlkem768, plaintext, aad) } }
+    AsyncFunction("openCallKey") { sealed: String, aad: String -> guarded { current().openCallKey(sealed, aad) } }
+    AsyncFunction("signCallMessage") { message: String -> guarded { current().signCallMessage(message) } }
     AsyncFunction("encryptMessage") { requestJson: String -> guarded { current().encryptMessage(requestJson) } }
     AsyncFunction("decryptMessage") { envelopeB64: String -> guarded { current().decryptMessage(envelopeB64) } }
     AsyncFunction("verifyTransparencyProof") { proofB64: String -> guarded { current().verifyTransparencyProof(proofB64) }; true }

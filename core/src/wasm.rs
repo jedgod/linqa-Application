@@ -4,6 +4,7 @@
 use crate::enrollment::EnrollmentChallenge;
 use crate::ffi::{DecryptRequest, EncryptRequest, FfiCore};
 use crate::identity::DeviceKeyMaterial;
+use crate::key_package::{validate_key_package, KeyPackage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -27,10 +28,51 @@ struct KeyPackageRequest {
 }
 
 #[derive(Deserialize)]
+struct VerifyKeyPackageRequest {
+    package: KeyPackage,
+    /// The caller's clock: the module has no clock of its own in a browser.
+    now_unix: i64,
+}
+
+#[derive(Deserialize)]
 struct EnrollmentProofRequest {
     challenge: EnrollmentChallenge,
     device_name: String,
     platform: String,
+}
+
+#[derive(Deserialize)]
+struct CallSealRequest {
+    x25519: [u8; 32],
+    mlkem768: Vec<u8>,
+    plaintext: Vec<u8>,
+    aad: Vec<u8>,
+}
+#[derive(Deserialize)]
+struct CallOpenRequest { sealed: Vec<u8>, aad: Vec<u8> }
+#[derive(Deserialize)]
+struct CallSignRequest { message: Vec<u8> }
+
+#[no_mangle]
+pub extern "C" fn linqa_core_call_seal(handle: u32, pointer: u32, length: u32) -> u64 {
+    match read_json::<CallSealRequest>(pointer, length) {
+        Ok(r) => with_core(handle, |c| c.seal_call_key(r.x25519, r.mlkem768, &r.plaintext, &r.aad).map_err(crate::LinqaError::InvalidInput)),
+        Err(e) => respond::<Vec<u8>>(Err(e)),
+    }
+}
+#[no_mangle]
+pub extern "C" fn linqa_core_call_open(handle: u32, pointer: u32, length: u32) -> u64 {
+    match read_json::<CallOpenRequest>(pointer, length) {
+        Ok(r) => with_core(handle, |c| c.open_call_key(&r.sealed, &r.aad).map_err(crate::LinqaError::InvalidInput)),
+        Err(e) => respond::<Vec<u8>>(Err(e)),
+    }
+}
+#[no_mangle]
+pub extern "C" fn linqa_core_call_sign(handle: u32, pointer: u32, length: u32) -> u64 {
+    match read_json::<CallSignRequest>(pointer, length) {
+        Ok(r) => with_core(handle, |c| c.sign_call_message(&r.message).map_err(crate::LinqaError::InvalidInput)),
+        Err(e) => respond::<Vec<u8>>(Err(e)),
+    }
 }
 
 fn respond<T: Serialize>(result: crate::Result<T>) -> u64 {
@@ -199,4 +241,13 @@ pub extern "C" fn linqa_core_decrypt(handle: u32, pointer: u32, length: u32) -> 
         Err(error) => return respond::<Vec<u8>>(Err(error)),
     };
     with_core(handle, |core| core.decrypt(request))
+}
+
+/// Checks another device's key package: its signature, who it names, and that it has not expired. No core handle is needed.
+#[no_mangle]
+pub extern "C" fn linqa_verify_key_package(pointer: u32, length: u32) -> u64 {
+    match read_json::<VerifyKeyPackageRequest>(pointer, length) {
+        Ok(request) => respond(validate_key_package(&request.package, request.now_unix).map(|_| true)),
+        Err(error) => respond::<bool>(Err(error)),
+    }
 }

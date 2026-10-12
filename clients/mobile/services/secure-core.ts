@@ -154,13 +154,14 @@ export type PeerDevice = { userId: string; deviceId: string; pkg: KeyPackageJson
 
 /** Where the key packages of a person's devices come from (the server, in the app). */
 export interface PeerDirectory {
-  keyPackages(userId: string): Promise<Array<{ deviceId: string; packageBase64: string }>>;
+  keyPackages(userId: string, fresh?: boolean): Promise<Array<{ deviceId: string; packageBase64: string }>>;
+  historicalSenderKey?(context: {conversationId:string;messageId:string;senderUserId:string;senderDeviceId:string;ciphertextBase64:string}): Promise<number[]>;
 }
 
 const MAX_DEVICES = 8;
 /** Envelopes outlive any plausible history: ten years. */
 const ENVELOPE_LIFETIME_S = 10 * 365 * 86_400;
-const CACHE_LIMIT = 500;
+const CACHE_LIMIT = 20_000;
 
 type Bundle = { v: 1; d: string; e: Record<string, string> };
 type Inner = { v: 1; c: string; s: string; t: string };
@@ -185,9 +186,9 @@ export class SecureCoreMessaging implements SecureMessaging {
   private now() { return Math.floor((this.deps.now?.() ?? Date.now()) / 1000); }
 
   /** Every device of `userId` whose package the core accepts and that names who it says it is; the rest are ignored. */
-  private async devicesOf(userId: string): Promise<PeerDevice[]> {
+  private async devicesOf(userId: string, fresh=false): Promise<PeerDevice[]> {
     const out: PeerDevice[] = [];
-    for (const entry of await this.deps.directory.keyPackages(userId)) {
+    for (const entry of await this.deps.directory.keyPackages(userId, fresh)) {
       try {
         await this.deps.bridge.verifyKeyPackage(entry.packageBase64);
         const pkg = fromJsonB64<KeyPackageJson>(entry.packageBase64);
@@ -207,7 +208,7 @@ export class SecureCoreMessaging implements SecureMessaging {
     if (people.length < 2) return fail("RECIPIENT_UNKNOWN");
     const recipients: PeerDevice[] = [];
     for (const userId of people) {
-      const devices = await this.devicesOf(userId);
+      const devices = await this.devicesOf(userId, true);
       // Someone who has no device to send to cannot be sent to: do not send a message only the sender can read.
       if (devices.length === 0) return fail(userId === context.senderUserId ? "OWN_DEVICE_NOT_PUBLISHED" : "RECIPIENT_NOT_READY");
       recipients.push(...devices);
@@ -246,10 +247,11 @@ export class SecureCoreMessaging implements SecureMessaging {
 
     // Who sent it: the device the bundle names must be a device of the sender the server says sent it.
     const sender = (await this.devicesOf(context.senderUserId)).find((d) => d.deviceId === bundle.d);
-    if (!sender) return fail("SENDER_UNKNOWN");
+    const signingKey = sender?.pkg.signing_public_key ?? await this.deps.directory.historicalSenderKey?.({...context,senderDeviceId:bundle.d,ciphertextBase64});
+    if (!signingKey || signingKey.length!==32 || !signingKey.every(n=>Number.isInteger(n)&&n>=0&&n<=255)) return fail("SENDER_UNKNOWN");
     const envelope = fromJsonB64<unknown>(mine);
     const plain = await this.deps.bridge.decryptMessage(jsonB64({
-      expected_recipient_device_id: selfDevice, sender_signing_public_key: sender.pkg.signing_public_key, envelope, now_unix: this.now()
+      expected_recipient_device_id: selfDevice, sender_signing_public_key: signingKey, envelope, now_unix: this.now()
     }));
     const inner = JSON.parse(text(base64ToBytes(plain))) as Inner;
     if (inner?.v !== 1 || inner.c !== context.conversationId || inner.s !== context.senderUserId || typeof inner.t !== "string") return fail("MESSAGE_CONTEXT_MISMATCH");

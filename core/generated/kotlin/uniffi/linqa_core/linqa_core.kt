@@ -734,6 +734,12 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -757,7 +763,13 @@ fun uniffi_linqa_core_checksum_method_nativesecurecore_export_key_material(
 ): Short
 fun uniffi_linqa_core_checksum_method_nativesecurecore_generate_key_package(
 ): Short
+fun uniffi_linqa_core_checksum_method_nativesecurecore_open_call_key(
+): Short
 fun uniffi_linqa_core_checksum_method_nativesecurecore_protection_level(
+): Short
+fun uniffi_linqa_core_checksum_method_nativesecurecore_seal_call_key(
+): Short
+fun uniffi_linqa_core_checksum_method_nativesecurecore_sign_call_message(
 ): Short
 fun uniffi_linqa_core_checksum_method_nativesecurecore_verify_key_package(
 ): Short
@@ -834,7 +846,13 @@ fun uniffi_linqa_core_fn_method_nativesecurecore_export_key_material(`ptr`: Poin
 ): RustBuffer.ByValue
 fun uniffi_linqa_core_fn_method_nativesecurecore_generate_key_package(`ptr`: Pointer,`userId`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`expiresAt`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_linqa_core_fn_method_nativesecurecore_open_call_key(`ptr`: Pointer,`sealed`: RustBuffer.ByValue,`aad`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_linqa_core_fn_method_nativesecurecore_protection_level(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_linqa_core_fn_method_nativesecurecore_seal_call_key(`ptr`: Pointer,`x25519`: RustBuffer.ByValue,`mlkem768`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,`aad`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_linqa_core_fn_method_nativesecurecore_sign_call_message(`ptr`: Pointer,`message`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_linqa_core_fn_method_nativesecurecore_verify_key_package(`ptr`: Pointer,`packageB64`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -980,7 +998,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_linqa_core_checksum_method_nativesecurecore_generate_key_package() != 57539.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_linqa_core_checksum_method_nativesecurecore_open_call_key() != 12687.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_linqa_core_checksum_method_nativesecurecore_protection_level() != 21394.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_linqa_core_checksum_method_nativesecurecore_seal_call_key() != 62275.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_linqa_core_checksum_method_nativesecurecore_sign_call_message() != 41724.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_linqa_core_checksum_method_nativesecurecore_verify_key_package() != 3093.toShort()) {
@@ -1330,7 +1357,13 @@ public interface NativeSecureCoreInterface {
     
     fun `generateKeyPackage`(`userId`: kotlin.String, `deviceId`: kotlin.String, `expiresAt`: kotlin.ULong): kotlin.String
     
+    fun `openCallKey`(`sealed`: kotlin.String, `aad`: kotlin.String): kotlin.String
+    
     fun `protectionLevel`(): kotlin.String
+    
+    fun `sealCallKey`(`x25519`: kotlin.String, `mlkem768`: kotlin.String, `plaintext`: kotlin.String, `aad`: kotlin.String): kotlin.String
+    
+    fun `signCallMessage`(`message`: kotlin.String): kotlin.String
     
     fun `verifyKeyPackage`(`packageB64`: kotlin.String)
     
@@ -1482,12 +1515,51 @@ open class NativeSecureCore: Disposable, AutoCloseable, NativeSecureCoreInterfac
     }
     
 
+    
+    @Throws(NativeCoreException::class)override fun `openCallKey`(`sealed`: kotlin.String, `aad`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeCoreException) { _status ->
+    UniffiLib.INSTANCE.uniffi_linqa_core_fn_method_nativesecurecore_open_call_key(
+        it, FfiConverterString.lower(`sealed`),FfiConverterString.lower(`aad`),_status)
+}
+    }
+    )
+    }
+    
+
     override fun `protectionLevel`(): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_linqa_core_fn_method_nativesecurecore_protection_level(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NativeCoreException::class)override fun `sealCallKey`(`x25519`: kotlin.String, `mlkem768`: kotlin.String, `plaintext`: kotlin.String, `aad`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeCoreException) { _status ->
+    UniffiLib.INSTANCE.uniffi_linqa_core_fn_method_nativesecurecore_seal_call_key(
+        it, FfiConverterString.lower(`x25519`),FfiConverterString.lower(`mlkem768`),FfiConverterString.lower(`plaintext`),FfiConverterString.lower(`aad`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NativeCoreException::class)override fun `signCallMessage`(`message`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NativeCoreException) { _status ->
+    UniffiLib.INSTANCE.uniffi_linqa_core_fn_method_nativesecurecore_sign_call_message(
+        it, FfiConverterString.lower(`message`),_status)
 }
     }
     )

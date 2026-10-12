@@ -56,6 +56,21 @@ export class TrustSafetyService {
       throw new Error("report description is too short");
     }
 
+    if (input.callId !== undefined) {
+      const participant = await this.db.query(
+        `SELECT 1 FROM call_participants WHERE call_id = $1 AND user_id = $2 LIMIT 1`,
+        [input.callId, input.reporterUserId]
+      );
+      if (!participant.rowCount) throw new Error("call not found");
+      if (input.reportedUserId !== undefined) {
+        const reported = await this.db.query(
+          `SELECT 1 FROM call_participants WHERE call_id = $1 AND user_id = $2 LIMIT 1`,
+          [input.callId, input.reportedUserId]
+        );
+        if (!reported.rowCount || input.reportedUserId === input.reporterUserId) throw new Error("invalid reported participant");
+      }
+    }
+
     const severity =
       input.category === "MINOR_SAFETY" || input.category === "THREATS"
         ? "CRITICAL"

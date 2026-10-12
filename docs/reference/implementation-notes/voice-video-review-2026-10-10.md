@@ -24,6 +24,10 @@ The dual-architecture debug build passed (`tmp/call-review-android-build.log`). 
 
 The Galaxy rejected the combined APK with `INSTALL_FAILED_INSUFFICIENT_STORAGE`. Optional `-PlinqaSplitApks=true` packaging produces separate ARM32/ARM64 test APKs without altering default packaging, to retry the update without deleting device data. The Galaxy retry was held while both devices displayed a call.
 
+After both peer connections closed, the split build passed (`tmp/call-review-split-build.log`) and the 166.8 MB ARM64 APK installed successfully on the Galaxy. Both phones were verified at version 0.3.0 / version code 2, with app data preserved.
+
+A subsequent chat connection failure was traced to lost USB reverse rules. The existing API remained ready on host port 8088. The LG also briefly went offline and returned after reconnecting. Metro was restarted as a hidden background process on port 8082; forwarding was restored on both phones. Phone-side HTTP probes through `127.0.0.1:8080` returned HTTP 200 and the Linqa API readiness response on both devices. Run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/restore-mobile-usb.ps1` from the repository after a USB reconnection; this process-only override does not alter Windows execution policy. The script checks API identity, restores only the named LG/Galaxy devices, and verifies the API tunnel from each connected phone. It requires the API and Metro servers to remain running.
+
 ## Remaining limits
 
 Switching a voice call into video and screen sharing on these call pages are still unavailable. Device refresh and startup do not prove two-party media, audio routing, camera switching, recording consent/transcription, or recovery on real networks. These need two configured test accounts and a reachable TURN relay. iOS was not built or device-tested. Signaling bodies use base64 JSON through the authenticated server; base64 is not encryption. Call media and the data channel use WebRTC transport encryption, but this review does not certify independent peer identity verification or encrypted signaling.

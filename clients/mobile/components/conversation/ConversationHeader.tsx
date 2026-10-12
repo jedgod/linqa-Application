@@ -12,6 +12,8 @@ interface Props {
   onBack: () => void;
   onOpenSettings: () => void;
   onOpenDecisions?: () => void;
+  /** Search inside this conversation. */
+  onSearch?: () => void;
   onCall?: (kind: "AUDIO" | "VIDEO") => void;
   /** The person is blocked: no status of encryption, no Decisions. */
   blocked?: boolean;
@@ -28,7 +30,7 @@ function statusFor(gate: GateState, t: Theme, blocked?: boolean) {
   }
 }
 
-export function ConversationHeader({ peer, gate, theme: t, onBack, onOpenSettings, onCall, blocked }: Props) {
+export function ConversationHeader({ peer, gate, theme: t, onBack, onOpenSettings, onSearch, onCall, blocked }: Props) {
   const status = statusFor(gate, t, blocked);
   const call = (kind: "AUDIO" | "VIDEO") => onCall ? onCall(kind) : Alert.alert("Call unavailable", "Calling is not connected in this preview.");
   return (
@@ -48,6 +50,7 @@ export function ConversationHeader({ peer, gate, theme: t, onBack, onOpenSetting
           </View>
         </View>
       </Pressable>
+      {onSearch ? <Pressable onPress={onSearch} accessibilityRole="button" accessibilityLabel="Search in this chat" hitSlop={8} style={styles.icon}><Ionicons name="search-outline" size={24} color={t.ink} /></Pressable> : null}
       {(["AUDIO", "VIDEO"] as const).map(kind => <Pressable key={kind} onPress={() => call(kind)} disabled={Boolean(blocked) || !peer.id} accessibilityRole="button" accessibilityLabel={`${kind === "AUDIO" ? "Audio" : "Video"} call ${peer.displayName}`} accessibilityState={{ disabled: Boolean(blocked) || !peer.id }} style={[styles.call, { opacity: blocked || !peer.id ? 0.4 : 1 }]}><Ionicons name={kind === "AUDIO" ? "call-outline" : "videocam-outline"} size={23} color="#FFFFFF" /></Pressable>)}
       <Pressable onPress={onOpenSettings} accessibilityRole="button" accessibilityLabel="Conversation settings" hitSlop={12} style={styles.icon}>
         <Ionicons name="ellipsis-vertical" size={26} color={t.accent} />

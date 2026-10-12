@@ -6,6 +6,9 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly linqa_alloc: (a: number) => number;
+    readonly linqa_core_call_open: (a: number, b: number, c: number) => bigint;
+    readonly linqa_core_call_seal: (a: number, b: number, c: number) => bigint;
+    readonly linqa_core_call_sign: (a: number, b: number, c: number) => bigint;
     readonly linqa_core_decrypt: (a: number, b: number, c: number) => bigint;
     readonly linqa_core_drop: (a: number) => void;
     readonly linqa_core_encrypt: (a: number, b: number, c: number) => bigint;
@@ -16,6 +19,7 @@ export interface InitOutput {
     readonly linqa_core_public_identity: (a: number) => bigint;
     readonly linqa_core_runtime: (a: number) => bigint;
     readonly linqa_dealloc: (a: number, b: number) => void;
+    readonly linqa_verify_key_package: (a: number, b: number) => bigint;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

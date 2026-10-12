@@ -11,11 +11,15 @@
  * transport without inventing one in the meantime.
  */
 
-export type ChatFilter = "all" | "unread" | "groups" | "pinned";
+export type ChatFilter = "all" | "unread" | "groups" | "pinned" | "archived";
 export type PreviewKind = "text" | "voice" | "photos" | "call" | "draft";
 export type DeliveryState = "sending" | "sent" | "delivered" | "read" | "failed";
 
-export const CHAT_FILTERS: ChatFilter[] = ["all", "unread", "groups", "pinned"];
+export const CHAT_FILTERS: ChatFilter[] = ["all", "unread", "groups", "pinned", "archived"];
+
+export type ListColor = "violet" | "blue" | "green" | "orange" | "red" | "teal";
+/** One of this person's own lists. Lists, favorites and the archive are the same on every device (computers included). */
+export type ChatList = { id: string; name: string; color: ListColor; count: number };
 
 export type ChatSummary = {
   conversationId: string;
@@ -27,8 +31,13 @@ export type ChatSummary = {
   preview: string | null;
   updatedAt: string | null;
   unreadCount: number;
+  /** "Favorite" on the screen. */
   pinned: boolean;
   muted: boolean;
+  archived?: boolean;
+  listIds?: string[];
+  /** Everyone in a group, this person included. Absent on direct chats. */
+  memberUserIds?: string[];
   online: boolean;
   e2eeVerified: boolean;
   /** The other member, on direct conversations only. Null for groups. */
@@ -40,6 +49,19 @@ export type ChatSummary = {
   deliveryState?: DeliveryState;
   scheduledEvent?: boolean;
   missedCall?: "audio" | "video";
+};
+
+export type ChatControls = {
+  conversationId: string;
+  isGroup: boolean;
+  title: string;
+  muted: boolean;
+  pinned: boolean;
+  archived: boolean;
+  disappearAfterSeconds: number | null;
+  peer: { userId: string; displayName: string; online: boolean; blockedByMe: boolean } | null;
+  members: Array<{ userId: string; displayName: string; role: string }>;
+  createdAt: string;
 };
 
 export type PresenceContact = {
@@ -104,11 +126,58 @@ export class ChatInboxService {
     return data as T;
   }
 
-  inbox(filter: ChatFilter, signal?: AbortSignal): Promise<ChatInboxPayload> {
+  inbox(filter: ChatFilter, signal?: AbortSignal, listId?: string): Promise<ChatInboxPayload> {
     return this.request<ChatInboxPayload>(
-      `/v1/chats/inbox?filter=${encodeURIComponent(filter)}`,
+      `/v1/chats/inbox?filter=${encodeURIComponent(filter)}${listId ? `&listId=${encodeURIComponent(listId)}` : ""}`,
       signal ? { signal } : {}
     );
+  }
+
+  async lists(): Promise<ChatList[]> {
+    return (await this.request<{ lists: ChatList[] }>("/v1/chat-lists")).lists;
+  }
+
+  createList(name: string, color?: ListColor): Promise<ChatList> {
+    return this.request<ChatList>("/v1/chat-lists", { method: "POST", body: JSON.stringify({ name, ...(color ? { color } : {}) }) });
+  }
+
+  deleteList(id: string): Promise<void> {
+    return this.request<void>(`/v1/chat-lists/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  setInList(listId: string, conversationId: string, present: boolean): Promise<void> {
+    return this.request<void>(`/v1/chat-lists/${encodeURIComponent(listId)}/chats/${encodeURIComponent(conversationId)}`, { method: present ? "PUT" : "DELETE" });
+  }
+
+  /** Who the chat is with and its settings; a group lists its people. */
+  controls(conversationId: string): Promise<ChatControls> {
+    return this.request<ChatControls>(`/v1/chats/${encodeURIComponent(conversationId)}/controls`);
+  }
+  async renameList(id: string, name: string): Promise<void> {
+    await this.request(`/v1/chat-lists/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ name }) });
+  }
+  async clearChat(conversationId: string): Promise<void> {
+    await this.request(`/v1/chats/${encodeURIComponent(conversationId)}/clear`, { method: "POST" });
+  }
+  async deleteChat(conversationId: string): Promise<void> {
+    await this.request(`/v1/chats/${encodeURIComponent(conversationId)}/delete`, { method: "POST" });
+  }
+  async reportChat(conversationId: string, category: string, description: string): Promise<void> {
+    await this.request(`/v1/chats/${encodeURIComponent(conversationId)}/report`, { method: "POST", body: JSON.stringify({ category, description }) });
+  }
+  async createGroup(title: string, memberUserIds: string[]): Promise<string> {
+    return (await this.request<{ conversationId: string }>("/v1/chats/groups", { method: "POST", body: JSON.stringify({ title, memberUserIds }) })).conversationId;
+  }
+  async addGroupMembers(conversationId: string, memberUserIds: string[]): Promise<number> {
+    return (await this.request<{ added: number }>(`/v1/chats/${encodeURIComponent(conversationId)}/members`, { method: "POST", body: JSON.stringify({ memberUserIds }) })).added;
+  }
+
+  async setArchived(conversationId: string, archived: boolean): Promise<void> {
+    await this.request(`/v1/chats/${encodeURIComponent(conversationId)}/archive`, { method: "POST", body: JSON.stringify({ archived }) });
+  }
+
+  async setFavorite(conversationId: string, pinned: boolean): Promise<void> {
+    await this.request(`/v1/chats/${encodeURIComponent(conversationId)}/pin`, { method: "POST", body: JSON.stringify({ pinned }) });
   }
 
   markRead(conversationId: string): Promise<void> {

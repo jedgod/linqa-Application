@@ -9,6 +9,7 @@ import { AttachmentChoices } from "./AttachmentChoices";
 import type { GateState, LockReason } from "../../services/conversation-types";
 import type { ThreadAction } from "../../services/conversation-thread";
 import { radius, space, type } from "./theme";
+import { loadEnterSends, subscribeEnterSends } from "../../services/messaging-prefs";
 
 interface Props {
   gate: GateState;
@@ -45,6 +46,10 @@ function Composer({ gate, theme: t, peerFirstName, onSend, onAdd, onOpenAttachme
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const [captureMode, setCaptureMode] = useState<CaptureMode>("video");
   const [selection, setSelection] = useState({ start: 0, end: 0 });
+  // "Enter key sends" (Settings > Messaging): the keyboard's Enter sends instead of starting a new line.
+  const [enterSends, setEnterSends] = useState(false);
+  useEffect(()=>subscribeEnterSends(setEnterSends),[]);
+  useEffect(() => { let live = true; void loadEnterSends().then((on) => { if (live) setEnterSends(on); }); return () => { live = false; }; }, []);
   const generation = useRef(0);
   useEffect(() => { generation.current++; setText(""); setCaptureMode("video"); setMenuOpen(false); setAttachmentsOpen(false); }, [scopeKey]);
   useEffect(() => { generation.current++; setMenuOpen(false); setAttachmentsOpen(false); if (gate.mode === "LOCKED") setText(""); }, [gate.mode]);
@@ -82,6 +87,9 @@ function Composer({ gate, theme: t, peerFirstName, onSend, onAdd, onOpenAttachme
         placeholder={draft ? "Add a caption…" : `Message ${peerFirstName}`}
         placeholderTextColor={t.muted}
         multiline
+        submitBehavior={enterSends ? "submit" : "newline"}
+        returnKeyType={enterSends ? "send" : "default"}
+        onSubmitEditing={enterSends ? () => { void submit(); } : undefined}
         maxLength={MAX_TEXT}
         style={[type.body, styles.input, { color: t.ink }]}
         accessibilityLabel={`Message ${peerFirstName}`}

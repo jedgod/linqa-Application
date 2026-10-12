@@ -53,7 +53,7 @@ function validate(c: Record<string, unknown>): MessageContent | null {
         (c.height === undefined || (Number.isSafeInteger(c.height) && (c.height as number) > 0 && (c.height as number) <= 32768)) &&
         (c.durationMs === undefined || (num(c.durationMs) && c.durationMs >= 0 && c.durationMs <= (c.fileKind === "voice" ? 300000 : 60000))) &&
         (c.waveform === undefined || (Array.isArray(c.waveform) && c.waveform.length <= 200 && c.waveform.every(x => num(x) && x >= 0 && x <= 1))) &&
-        (c.fileKind === "document" || (c.fileKind === "image" && /^image\/(jpeg|png|webp|gif)$/.test(c.mime as string)) || (c.fileKind === "video" && /^video\/(mp4|quicktime)$/.test(c.mime as string)) || (c.fileKind === "voice" && /^audio\/(mp4|aac|mpeg|x-m4a)$/.test(c.mime as string)))
+        (c.fileKind === "document" || (c.fileKind === "image" && /^image\/(jpeg|png|webp|gif)$/.test(c.mime as string)) || (c.fileKind === "video" && /^video\/(mp4|quicktime|webm)$/.test(c.mime as string)) || (c.fileKind === "voice" && /^audio\/(mp4|aac|mpeg|x-m4a|webm|ogg)$/.test(c.mime as string)))
         ? (c as never)
         : null;
 

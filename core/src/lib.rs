@@ -1,5 +1,6 @@
 pub mod attachments;
 pub mod backup;
+pub mod call_crypto;
 pub mod crypto;
 pub mod enrollment;
 pub mod envelope;

@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ActivityIndicator, Alert, BackHandler, FlatList, KeyboardAvoidingView, Pressable, StyleSheet, Text, TextInput, useColorScheme, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import { disappearLabel, resolveTheme, type ConversationPrefs, type Lane, type MediaPayload, type Payload, THEMES, chatTheme } from "../../services/conversation-engine";
+import { disappearLabel, resolveTheme, type ConversationPrefs, type Lane, type MediaPayload, type Payload, type ReplyRef, THEMES, chatTheme } from "../../services/conversation-engine";
 import { buildDecisions, buildTimeline, type TimelineItem } from "../../services/conversation-state";
 import type { ConversationPeer, ConversationServiceLike, MessagingGateLike } from "../../services/conversation-types";
 import * as Clipboard from "expo-clipboard";
@@ -16,7 +16,9 @@ import type { ThreadAction } from "../../services/conversation-thread";
 import { ComposerArea } from "./ComposerArea";
 import { ConversationHeader } from "./ConversationHeader";
 import { DecisionsView } from "./DecisionsView";
+import { MessageDeleteButton } from "./MessageDeleteButton";
 import { MessageBubble } from "./MessageBubble";
+import { ReplyBar, SwipeToReply, replyPreview } from "./ReplyUi";
 import { SafetyNumberView } from "./SafetyNumberView";
 import { RejectedMessagesPanel } from "./RejectedMessagesPanel";
 import type { RejectedOutbox } from "../../services/rejected-outbox";
@@ -56,6 +58,10 @@ export interface ConversationScreenProps {
   /** Messages the relay refused for good, kept on this device so they can be seen and discarded. */
   rejectedOutbox?: RejectedOutbox;
   onCall?: (kind: "AUDIO" | "VIDEO") => void;
+  /** Forward the text of a message to other chats (the owner of this screen picks them and sends). */
+  onForward?: (text: string) => void;
+  /** People in a group and the chat-wide actions (report, clear, delete, add people). */
+  chatActions?: { isGroup: boolean; members: Array<{ name: string; role: string }>; onAddPeople?: () => void; onReport: () => void; onClear: () => void; onDelete: () => void };
 }
 
 type View_ = "chat" | "decisions" | "settings" | "verify" | "compose" | "share";
@@ -83,6 +89,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
   const removeMedia = useCallback(() => { const draft = draftRef.current; draftRef.current = null; setMediaDraft(null); if (draft?.localUri) void discardLocalMedia(draft.localUri); }, []);
   useEffect(() => { setCapture(null); removeMedia(); return () => { const draft = draftRef.current; draftRef.current = null; if (draft?.localUri) void discardLocalMedia(draft.localUri); }; }, [scopeKey, removeMedia]);
   useEffect(() => { if (c.gateState.mode === "LOCKED") { setCapture(null); removeMedia(); } }, [c.gateState.mode, removeMedia]);
+  const [replyTo, setReplyTo] = useState<ReplyRef | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [selecting, setSelecting] = useState(false);
@@ -130,7 +137,22 @@ export function ConversationScreen(props: ConversationScreenProps) {
   }, [askAi, c.loading, live, props.aiShareOnOpen]);
   const decisions = useMemo(() => buildDecisions(c.messages, selfId, peer.id, firstName), [c.messages, firstName, peer.id, selfId]);
 
-  const sendText = useCallback((text: string) => c.send({ type: "text", text: text.trim(), lane: lane === "All" ? "General" : lane }), [c, lane]);
+  const sendText = useCallback(async (text: string) => {
+    const ok = await c.send({ type: "text", text: text.trim(), lane: lane === "All" ? "General" : lane, ...(replyTo ? { reply: replyTo } : {}) });
+    if (ok) setReplyTo(null);
+    return ok;
+  }, [c, lane, replyTo]);
+  // Reply, forward and copy for one message (a long press on it). Dragging it to the right replies too.
+  const messageMenu = useCallback((item: TimelineItem) => {
+    const quote = replyPreview(item);
+    const text = item.kind === "text" ? item.payload.text : null;
+    Alert.alert("Message", undefined, [
+      ...(quote && live && !blocked ? [{ text: "Reply", onPress: () => setReplyTo(quote) }] : []),
+      ...(text && props.onForward && live && !blocked ? [{ text: "Forward", onPress: () => props.onForward!(text) }] : []),
+      ...(text ? [{ text: "Copy", onPress: () => { void Clipboard.setStringAsync(text).catch(() => Alert.alert("Copy failed", "Please try again.")); } }] : []),
+      { text: "Cancel", style: "cancel" as const }
+    ]);
+  }, [blocked, live, props]);
   const vote = useCallback((boardId: string, choice: number) => { void c.send({ type: "vote", boardId, choice }); }, [c]);
   const create = useCallback((payload: Payload) => live && !blocked ? c.send(payload) : Promise.resolve(false), [blocked, c, live]);
   const openDecisions = useCallback(() => { setStartDecision(false); setView("decisions"); }, []);
@@ -165,9 +187,9 @@ export function ConversationScreen(props: ConversationScreenProps) {
   const notYet = (what: string) => Alert.alert(what, "This isn't available in this version yet.");
 
   const renderItem = useCallback(({ item }: { item: TimelineItem }) => (
-    item.kind === "feature" ? features.render(item) :
-    <View style={{ flexDirection: "row", alignItems: "center" }}>{selecting ? <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected.includes(item.message.id), disabled: item.kind !== "text" }} disabled={item.kind !== "text"} onPress={() => setSelected(ids => ids.includes(item.message.id) ? ids.filter(id => id !== item.message.id) : [...ids, item.message.id])} style={{ padding: 12 }}><Text style={{ color: t.accent, fontSize: 22 }}>{selected.includes(item.message.id) ? "☑" : "□"}</Text></Pressable> : null}<View style={{ flex: 1 }}><MessageBubble item={item} theme={t} onOpenMedia={service.openMedia ? payload => service.openMedia!(conversationId, item.message.senderId, payload) : undefined} onRetry={c.retry} onRetryOpen={c.retryOpen} onDiscard={c.discard} {...(live && !blocked ? { onOpenDecisions: openDecisions } : {})} /></View></View>
-  ), [blocked, c.discard, c.retry, live, openDecisions, t, selecting, selected, service, conversationId, features]);
+    item.kind === "feature" ? <View>{features.render(item)}{service.deleteMessage?<MessageDeleteButton message={item.message} onDelete={c.deleteMessage} color={t.muted}/>:null}</View> :
+    <View style={{ flexDirection: "row", alignItems: "center" }}>{selecting ? <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected.includes(item.message.id), disabled: item.kind !== "text" }} disabled={item.kind !== "text"} onPress={() => setSelected(ids => ids.includes(item.message.id) ? ids.filter(id => id !== item.message.id) : [...ids, item.message.id])} style={{ padding: 12 }}><Text style={{ color: t.accent, fontSize: 22 }}>{selected.includes(item.message.id) ? "☑" : "□"}</Text></Pressable> : null}<View style={{ flex: 1 }}><SwipeToReply enabled={live && !blocked && !selecting && replyPreview(item) !== null} direction={item.message.outgoing ? "left" : "right"} color={t.muted} onReply={() => setReplyTo(replyPreview(item))}><Pressable onLongPress={() => messageMenu(item)} delayLongPress={350} disabled={selecting}><MessageBubble item={item} theme={t} selfId={selfId} peerName={peer.displayName} onOpenMedia={service.openMedia ? payload => service.openMedia!(conversationId, item.message.senderId, payload) : undefined} onRetry={c.retry} onRetryOpen={c.retryOpen} onDiscard={c.discard} {...(live && !blocked ? { onOpenDecisions: openDecisions } : {})} /></Pressable></SwipeToReply>{service.deleteMessage && (item.kind==="text"||item.kind==="media"||item.kind==="closed")?<MessageDeleteButton message={item.message} onDelete={c.deleteMessage} color={t.muted}/>:null}</View></View>
+  ), [blocked, c.deleteMessage, c.discard, c.retry, live, openDecisions, t, selecting, selected, service, conversationId, features, messageMenu, peer.displayName, selfId]);
 
   const empty = !c.loading && !c.loadError && items.length === 0;
   const noticeEl = props.notice ? <Text accessibilityRole="alert" style={[type.meta, styles.notice, { backgroundColor: t.highlight, color: t.ink }]}>{props.notice}</Text> : null;
@@ -202,7 +224,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
     return (
       <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}
         {noticeEl}
-        <SettingsView theme={t} peerName={peer.displayName} peerFirstName={firstName} gate={c.gateState} prefs={prefs} featureSupport={features.featureSupport} blocked={Boolean(blocked)} pinned={props.pinned} disappearAfterSeconds={props.disappearAfterSeconds} onPinnedChange={props.onPinnedChange} onDisappearChange={props.onDisappearChange} onChange={props.onPrefsChange} onVerify={() => setView("verify")} onBlock={confirmBlock} onUnblock={props.onUnblock} onAskAi={props.onAskAi && live ? askAi : undefined} onBack={() => setView("chat")} />
+        <SettingsView theme={t} peerName={peer.displayName} peerFirstName={firstName} gate={c.gateState} prefs={prefs} featureSupport={features.featureSupport} blocked={Boolean(blocked)} pinned={props.pinned} disappearAfterSeconds={props.disappearAfterSeconds} onPinnedChange={props.onPinnedChange} onDisappearChange={props.onDisappearChange} onChange={props.onPrefsChange} onVerify={() => setView("verify")} onBlock={confirmBlock} onUnblock={props.onUnblock} onAskAi={props.onAskAi && live ? askAi : undefined} chat={props.chatActions} onBack={() => setView("chat")} />
       </SafeAreaView>
     );
   }
@@ -210,7 +232,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
   return (
     <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>
       {statusBar}
-      <ConversationHeader peer={peer} gate={c.gateState} theme={t} blocked={Boolean(blocked)} onBack={props.onBack} onOpenSettings={() => setView("settings")} onCall={props.onCall} />
+      <ConversationHeader peer={peer} gate={c.gateState} theme={t} blocked={Boolean(blocked)} onBack={props.onBack} onOpenSettings={() => setView("settings")} onSearch={() => { setSearchOpen(true); setSelecting(false); }} onCall={props.onCall} />
 
       {searchOpen ? <View style={{ flexDirection: "row", backgroundColor: t.surface, padding: 10, alignItems: "center", gap: 10 }}><TextInput autoFocus accessibilityLabel="Search opened messages" value={search} onChangeText={setSearch} placeholder="Search messages" placeholderTextColor={t.muted} style={{ flex: 1, color: t.ink, padding: 8 }} /><Pressable onPress={() => { setSearchOpen(false); setSearch(""); }}><Text style={{ color: t.accent, padding: 10 }}>Done</Text></Pressable></View> : null}
       {selecting ? <View style={{ flexDirection: "row", justifyContent: "space-between", padding: 12, backgroundColor: t.surface }}><Text style={{ color: t.ink }}>{selected.length} selected</Text><Pressable onPress={() => void copySelection()}><Text style={{ color: t.accent }}>Copy text</Text></Pressable><Pressable onPress={() => { setSelecting(false); setSelected([]); }}><Text style={{ color: t.accent }}>Done</Text></Pressable></View> : null}
@@ -259,6 +281,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
         ) : (
           <>
             {live ? <Text style={[type.meta, styles.secured, { color: t.muted }]}>{props.disappearAfterSeconds ? `Messages disappear after ${disappearLabel(props.disappearAfterSeconds)}. ` : ""}Messages and calls are secured with end-to-end encryption.</Text> : null}
+          {replyTo ? <ReplyBar reply={replyTo} who={replyTo.senderId === selfId ? "yourself" : peer.displayName} theme={t} onCancel={() => setReplyTo(null)} /> : null}
           <ComposerArea key={scopeKey} scopeKey={scopeKey} draft={mediaDraft} onRemoveMedia={removeMedia} onSendMedia={async payload => { if (!live || blocked) return false; await create(payload); if (draftRef.current?.mediaId === payload.mediaId) { draftRef.current = null; setMediaDraft(null); } return true; }} gate={c.gateState} theme={t} peerFirstName={firstName} onSend={sendText} onRecheck={c.recheck} onAdd={features.open} onOpenAttachments={features.open} onTools={tools} onRecord={setCapture} onAction={pickAction} canUseActions={canUseActions} />
           </>
         )}

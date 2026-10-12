@@ -29,9 +29,7 @@
         "android.permission.CAMERA"
       ]
     },
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
+    "runtimeVersion": "0.3.0",
     "plugins": [
       "expo-router",
       "expo-font",

@@ -26,12 +26,14 @@ import { createAuthenticator, requireScope } from "../auth/jwt.js";
  *    no host, no environment, no row counts from other tenants.
  */
 
-const CHAT_FILTERS = ["all", "unread", "groups", "pinned"] as const;
+const CHAT_FILTERS = ["all", "unread", "groups", "pinned", "favorites", "archived"] as const;
 type ChatFilter = (typeof CHAT_FILTERS)[number];
 
 const InboxQuery = z.object({
   filter: z.enum(CHAT_FILTERS).default("all"),
-  limit: z.coerce.number().int().min(1).max(100).default(50)
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  /** Only the chats on one of this person's own lists. */
+  listId: z.string().uuid().optional()
 });
 
 interface ConversationRow {
@@ -47,6 +49,9 @@ interface ConversationRow {
   participantInitials: string[];
   e2eeVerified: boolean;
   peerUserId: string | null;
+  archived?: boolean;
+  listIds?: string[];
+  memberUserIds?: string[] | null;
 }
 
 /** "Avery Chen" -> "AC". Group titles collapse the same way. */
@@ -68,6 +73,10 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
     try {
       principal = await authenticate(request);
       requireScope(principal, "messages:read");
+      if(principal.deviceId){
+        const device=await db.query("SELECT 1 FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL",[principal.deviceId,principal.userId]);
+        if(!device.rowCount)throw new Error('device authentication revoked');
+      }
     } catch (error) {
       request.log.warn({ err: error }, "chat inbox authentication rejected");
       return reply.code(401).send({ error: "unauthenticated" });
@@ -77,16 +86,22 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
     if (!parsed.success) {
       return reply.code(422).send({ code: "INVALID_CHAT_FILTER", details: parsed.error.flatten() });
     }
-    const { filter, limit } = parsed.data;
+    const { filter, limit, listId } = parsed.data;
 
     // The filter is applied in SQL rather than after the fact so that `limit`
     // means "50 conversations matching this filter", not "50 conversations, of
     // which some happen to match".
+    // Archived chats leave every view except the archive itself. "favorites" is the same flag as "pinned".
     const filterClause =
-      filter === "unread" ? "AND cm.unread_count > 0"
-      : filter === "groups" ? "AND c.conversation_type <> 'DIRECT'"
-      : filter === "pinned" ? "AND cm.pinned"
-      : "";
+      // A deleted chat stays out of the list until someone sends a newer message.
+      "AND (cm.hidden_at IS NULL OR c.last_message_at > cm.hidden_at) " +
+      (filter === "archived" ? "AND cm.archived_at IS NOT NULL" : "AND cm.archived_at IS NULL") +
+      (filter === "unread" ? " AND cm.unread_count > 0"
+      : filter === "groups" ? " AND c.conversation_type <> 'DIRECT'"
+      : filter === "pinned" || filter === "favorites" ? " AND cm.pinned"
+      : "") +
+      (listId ? " AND EXISTS (SELECT 1 FROM chat_list_items li JOIN chat_lists l ON l.id = li.list_id WHERE li.conversation_id = c.id AND l.user_id = $1 AND l.id = $3)" : "");
+    const inboxParams: unknown[] = listId ? [principal.userId, limit, listId] : [principal.userId, limit];
 
     try {
       const [conversations, scheduled, presence, totals] = await Promise.all([
@@ -99,6 +114,17 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
                   cm.unread_count AS "unreadCount",
                   cm.pinned,
                   cm.muted,
+                  (cm.archived_at IS NOT NULL) AS archived,
+                  COALESCE((
+                    SELECT array_agg(li.list_id::text ORDER BY li.added_at)
+                    FROM chat_list_items li JOIN chat_lists l ON l.id = li.list_id
+                    WHERE li.conversation_id = c.id AND l.user_id = $1
+                  ), '{}') AS "listIds",
+                  -- A group's members know each other; a person's own devices need the roster to seal a message for everyone in it.
+                  CASE WHEN c.conversation_type <> 'DIRECT' THEN COALESCE((
+                    SELECT array_agg(m.user_id::text) FROM conversation_members m
+                    WHERE m.conversation_id = c.id AND m.removed_at IS NULL
+                  ), '{}') END AS "memberUserIds",
                   -- "Online" is a device fact, not a self-reported status: at
                   -- least one of the peer's devices checked in recently.
                   COALESCE((
@@ -150,7 +176,7 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
              ) ${filterClause}
            ORDER BY cm.pinned DESC, c.last_message_at DESC NULLS LAST
            LIMIT $2`,
-          [principal.userId, limit]
+          inboxParams
         ),
         // Title is `title_ciphertext` and the server holds no key for it, so
         // the card is labelled from the call type and time instead of from a
@@ -188,15 +214,17 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
         // Unread total spans the whole inbox, not the filtered slice, so the
         // tab badge does not change when the user taps "Groups".
         db.query(
-          `SELECT COALESCE(sum(cm.unread_count),0)::int AS "unreadTotal",
-                  count(*) FILTER (WHERE cm.unread_count > 0)::int AS "unread",
-                  count(*)::int AS "all",
-                  count(*) FILTER (WHERE c.conversation_type <> 'DIRECT')::int AS "groups",
-                  count(*) FILTER (WHERE cm.pinned)::int AS "pinned"
+          `SELECT COALESCE(sum(cm.unread_count) FILTER (WHERE cm.archived_at IS NULL),0)::int AS "unreadTotal",
+                  count(*) FILTER (WHERE cm.unread_count > 0 AND cm.archived_at IS NULL)::int AS "unread",
+                  count(*) FILTER (WHERE cm.archived_at IS NULL)::int AS "all",
+                  count(*) FILTER (WHERE c.conversation_type <> 'DIRECT' AND cm.archived_at IS NULL)::int AS "groups",
+                  count(*) FILTER (WHERE cm.pinned AND cm.archived_at IS NULL)::int AS "pinned",
+                  count(*) FILTER (WHERE cm.archived_at IS NOT NULL)::int AS "archived"
            FROM conversations c
            JOIN conversation_members cm
              ON cm.conversation_id = c.id AND cm.user_id = $1 AND cm.removed_at IS NULL
            WHERE c.archived_at IS NULL
+             AND (cm.hidden_at IS NULL OR c.last_message_at > cm.hidden_at)
              AND (
                c.conversation_type <> 'DIRECT'
                OR NOT EXISTS (
@@ -234,6 +262,9 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
           unreadCount: Number(row.unreadCount ?? 0),
           pinned: Boolean(row.pinned),
           muted: Boolean(row.muted),
+          archived: Boolean(row.archived),
+          listIds: row.listIds ?? [],
+          ...(row.memberUserIds ? { memberUserIds: row.memberUserIds } : {}),
           online: Boolean(row.online),
           e2eeVerified: Boolean(row.e2eeVerified),
           peerUserId: row.peerUserId ?? null
@@ -252,7 +283,9 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
           all: Number(counts.all ?? 0),
           unread: Number(counts.unread ?? 0),
           groups: Number(counts.groups ?? 0),
-          pinned: Number(counts.pinned ?? 0)
+          pinned: Number(counts.pinned ?? 0),
+          favorites: Number(counts.pinned ?? 0),
+          archived: Number(counts.archived ?? 0)
         },
         scheduledCall: call
           ? {
@@ -285,6 +318,10 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
     try {
       principal = await authenticate(request);
       requireScope(principal, "messages:read");
+      if(principal.deviceId){
+        const device=await db.query("SELECT 1 FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL",[principal.deviceId,principal.userId]);
+        if(!device.rowCount)throw new Error('device authentication revoked');
+      }
     } catch (error) {
       request.log.warn({ err: error }, "chat read receipt authentication rejected");
       return reply.code(401).send({ error: "unauthenticated" });

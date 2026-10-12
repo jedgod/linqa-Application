@@ -5,6 +5,8 @@
 // "crypto.getRandomValues must be defined" the first time a device
 // generates its enrollment keypair.
 import "react-native-get-random-values";
+import { SecureCallHost } from "../components/calls/SecureCallHost";
+import { HistoryTransferHost } from "../components/HistoryTransferHost";
 import { useEffect, useState } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -62,7 +64,7 @@ function CallHost() {
     if (!loaded || !active) return;
     return startIncomingCallListener();
   }, [active, loaded]);
-  return <CallOverlay />;
+  return <><CallOverlay /><SecureCallHost /><HistoryTransferHost /></>;
 }
 
 export default function RootLayout() {
@@ -114,6 +116,8 @@ export default function RootLayout() {
         />
         <Stack.Screen name="settings/notifications" />
         <Stack.Screen name="settings/accessibility" />
+        <Stack.Screen name="settings/messaging" />
+        <Stack.Screen name="event-log" />
         <Stack.Screen name="settings/storage" />
         <Stack.Screen name="settings/ai-privacy" />
         <Stack.Screen name="settings/privacy-rights" />

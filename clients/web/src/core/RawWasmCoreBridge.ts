@@ -1,6 +1,9 @@
 import type { SecureCoreBridge } from "./SecureCoreBridge";
 import { WebCryptoKeyProvider } from "../security/WebCryptoKeyProvider";
 
+/** Built from parts so the dev server serves this file from /public as-is instead of trying to bundle it. */
+const CORE_GLUE_URL = ["", "linqa-core", "linqa_core.js"].join("/");
+
 type WasmExports = {
   memory: WebAssembly.Memory;
   linqa_alloc(length: number): number;
@@ -14,6 +17,10 @@ type WasmExports = {
   linqa_core_key_package(handle: number, pointer: number, length: number): bigint;
   linqa_core_encrypt(handle: number, pointer: number, length: number): bigint;
   linqa_core_decrypt(handle: number, pointer: number, length: number): bigint;
+  linqa_core_call_seal(handle: number, pointer: number, length: number): bigint;
+  linqa_core_call_open(handle: number, pointer: number, length: number): bigint;
+  linqa_core_call_sign(handle: number, pointer: number, length: number): bigint;
+  linqa_verify_key_package(pointer: number, length: number): bigint;
 };
 
 type WasmResponse<T> = { ok: boolean; value: T | null; error: string | null };
@@ -85,7 +92,7 @@ export class RawWasmCoreBridge implements SecureCoreBridge {
     wasmInitializer?: (input: { module_or_path: ArrayBuffer | string | URL }) => Promise<WasmExports>;
   }): Promise<RawWasmCoreBridge> {
     const initializer = input.wasmInitializer ?? (await import(
-      /* @vite-ignore */ input.glueUrl ?? "/linqa-core/linqa_core.js"
+      /* @vite-ignore */ input.glueUrl ?? CORE_GLUE_URL
     ) as { default(input: { module_or_path: ArrayBuffer | string | URL }): Promise<WasmExports> }).default;
     const wasm = await initializer({
       module_or_path: input.moduleBytes ?? input.wasmUrl ?? "/linqa-core/linqa_core_bg.wasm"
@@ -216,6 +223,50 @@ export class RawWasmCoreBridge implements SecureCoreBridge {
       request
     );
     return new TextEncoder().encode(JSON.stringify(envelope));
+  }
+
+  /* ---- the JSON-level calls the chat layer uses (the same requests the phone sends its native core) ---- */
+
+  /** Throws unless another device's key package is correctly signed, names who it says, and has not expired. */
+  async verifyKeyPackage(keyPackage: unknown): Promise<void> {
+    const request = new TextEncoder().encode(JSON.stringify({ package: keyPackage, now_unix: Math.floor(Date.now() / 1000) }));
+    callJson<boolean>(this.wasm, (pointer, length) => this.wasm.linqa_verify_key_package(pointer, length), request);
+  }
+
+  private callBytes(operation: (pointer: number, length: number) => bigint, input: unknown): Uint8Array {
+    return Uint8Array.from(callJson<number[]>(this.wasm,operation,new TextEncoder().encode(JSON.stringify(input))));
+  }
+  async sealCallKey(x25519: Uint8Array, mlkem768: Uint8Array, plaintext: Uint8Array, aad: Uint8Array): Promise<Uint8Array> {
+    return this.callBytes((p,n)=>this.wasm.linqa_core_call_seal(this.handle,p,n),{x25519:Array.from(x25519),mlkem768:Array.from(mlkem768),plaintext:Array.from(plaintext),aad:Array.from(aad)});
+  }
+  async openCallKey(sealed: Uint8Array, aad: Uint8Array): Promise<Uint8Array> {
+    return this.callBytes((p,n)=>this.wasm.linqa_core_call_open(this.handle,p,n),{sealed:Array.from(sealed),aad:Array.from(aad)});
+  }
+  async signCallMessage(message: Uint8Array): Promise<Uint8Array> {
+    return this.callBytes((p,n)=>this.wasm.linqa_core_call_sign(this.handle,p,n),{message:Array.from(message)});
+  }
+
+  /** Seals one message to one device. `request` is the core's own encrypt request; the envelope comes back as JSON. */
+  async encryptRaw(request: unknown): Promise<unknown> {
+    return callJson<unknown>(this.wasm, (pointer, length) => this.wasm.linqa_core_encrypt(this.handle, pointer, length), new TextEncoder().encode(JSON.stringify(request)));
+  }
+
+  /** Opens one envelope meant for this device. Returns the plaintext bytes. */
+  async decryptRaw(request: unknown): Promise<Uint8Array> {
+    const bytes = callJson<number[]>(this.wasm, (pointer, length) => this.wasm.linqa_core_decrypt(this.handle, pointer, length), new TextEncoder().encode(JSON.stringify(request)));
+    return Uint8Array.from(bytes);
+  }
+
+  /** A signed key package for this device, in the form the server publishes (base64 of the package JSON). */
+  async publishableKeyPackage(userId: string, deviceId: string, lifetimeSeconds = 14 * 86_400): Promise<{ packageBase64: string; packageVersion: number; expiresAt: string }> {
+    const now = Math.floor(Date.now() / 1000);
+    const request = new TextEncoder().encode(JSON.stringify({ user_id: userId, device_id: deviceId, created_at_unix: now, expires_at_unix: now + lifetimeSeconds }));
+    const keyPackage = callJson<RustKeyPackage>(this.wasm, (pointer, length) => this.wasm.linqa_core_key_package(this.handle, pointer, length), request);
+    return {
+      packageBase64: bytesToBase64(new TextEncoder().encode(JSON.stringify(keyPackage))),
+      packageVersion: keyPackage.version,
+      expiresAt: new Date(keyPackage.expires_at_unix * 1000).toISOString()
+    };
   }
 
   async decryptMessage(ciphertext: Uint8Array, senderSigningPublicKeyBase64?: string) {

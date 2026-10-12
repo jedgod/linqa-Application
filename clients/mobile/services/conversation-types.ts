@@ -20,6 +20,7 @@ export interface ServerRow {
   senderId: string;
   sentAt: string; // ISO 8601
   ciphertext: string;
+  deleted?: boolean;
 }
 
 export type DecryptResult = { id: string; ok: true; text: string } | { id: string; ok: false; code?: string };
@@ -36,6 +37,7 @@ export interface ConversationServiceLike {
   decryptServerRows(conversationId: string, rows: ServerRow[]): Promise<DecryptResult[]>;
   /** `clientMessageId` makes a retry safe: the server answers with the original message. */
   send(conversationId: string, payload: Payload, clientMessageId: string): Promise<ServerRow>;
+  deleteMessage?(conversationId:string,messageId:string,scope:'me'|'everyone'):Promise<void>;
   discardPending?(clientMessageId: string): Promise<void>;
   openMedia?(conversationId: string, senderUserId: string, payload: Extract<Payload, { type: "media" }>): Promise<string>;
   markRead(conversationId: string, upToMessageId: string): Promise<void>;

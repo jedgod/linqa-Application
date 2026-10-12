@@ -181,7 +181,7 @@ export const s = StyleSheet.create({
     marginBottom: 12
   },
   filter: {
-    flex: 1,
+    paddingHorizontal: 12,
     minHeight: 40,
     borderRadius: 9,
     alignItems: "center",

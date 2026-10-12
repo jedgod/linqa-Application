@@ -10,6 +10,7 @@ import type { Theme } from "../../services/conversation-engine";
 import { cardWhen } from "../../services/conversation-thread";
 import type { TimelineItem } from "../../services/conversation-state";
 import { radius, space, type } from "./theme";
+import { QuotedReply } from "./ReplyUi";
 
 interface Props {
   item: TimelineItem;
@@ -21,6 +22,9 @@ interface Props {
   onRetryOpen?: (id: string) => void;
   onDiscard?: (id: string) => void;
   onOpenMedia?: (p: MediaPayload) => Promise<string>;
+  /** Who is "You" and who is the other person, for naming the author of a quoted reply. */
+  selfId?: string;
+  peerName?: string;
 }
 
 function timeLabel(iso: string) {
@@ -32,7 +36,7 @@ function timeLabel(iso: string) {
  * One message: a rounded bubble with its time underneath. Mine are dark green on the right, theirs white on the left.
  * A message that can't be opened is an orange dashed bubble; one that failed to send has Retry and Delete beneath it.
  */
-function BubbleImpl({ item, theme: t, onOpenDecisions, onRetry, onRetryOpen, onDiscard, onOpenMedia }: Props) {
+function BubbleImpl({ item, theme: t, onOpenDecisions, onRetry, onRetryOpen, onDiscard, onOpenMedia, selfId, peerName }: Props) {
   const m = item.message;
   const out = m.outgoing;
   const fg = out ? t.onOutgoing : t.ink;
@@ -44,8 +48,15 @@ function BubbleImpl({ item, theme: t, onOpenDecisions, onRetry, onRetryOpen, onD
 
   if (item.kind === "text") {
     bubbleStyle = { backgroundColor: out ? t.outgoing : t.incoming };
-    content = <Text style={[type.body, { color: fg }]} selectable>{item.payload.text}</Text>;
-    a11y = item.payload.text;
+    const { reply, forwarded } = item.payload;
+    content = (
+      <View>
+        {forwarded ? <Text style={[type.meta, { color: fg, opacity: 0.75, fontStyle: "italic", marginBottom: 4 }]}>Forwarded</Text> : null}
+        {reply ? <QuotedReply reply={reply} who={reply.senderId === selfId ? "You" : peerName ?? "Them"} color={fg} tint={out ? "rgba(255,255,255,0.16)" : t.background} /> : null}
+        <Text style={[type.body, { color: fg }]}>{item.payload.text}</Text>
+      </View>
+    );
+    a11y = (forwarded ? "Forwarded. " : "") + (reply ? `Reply to ${reply.text}. ` : "") + item.payload.text;
   } else if (item.kind === "media") {
     bubbleStyle = { backgroundColor: out ? t.outgoing : t.incoming };
     content = <View style={{ gap: 8 }}><MediaContent payload={item.payload} onOpen={onOpenMedia} color={fg} />{item.payload.caption ? <Text style={[type.body, { color: fg }]} selectable>{item.payload.caption}</Text> : null}</View>;

@@ -1,3 +1,4 @@
+import { registerCallRooms } from "../call-rooms/register.js";
 import type { FastifyInstance } from "fastify";
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
@@ -18,6 +19,8 @@ import { registerCountryLinqaEngineRoutes } from "../routes/countrylinqa/engine-
 import { registerCountryLinqaPlanRoutes } from "../routes/countrylinqa/plan-routes.js";
 import { registerCountryLinqaAdminRoutes } from "../routes/countrylinqa/admin-routes.js";
 import { registerCountryLinqaSecurityRoutes } from "../routes/countrylinqa/security-routes.js";
+import { registerHistoryTransferRoutes } from "../history-transfer/register.js";
+import { registerDeviceLinkRoutes } from "../device-links/register.js";
 import { registerEnrollmentRoutes } from "../routes/enrollment.js";
 import { registerEntitlementRoutes } from "../routes/entitlements.js";
 import { registerExecutionLaunchRoutes } from "../routes/execution-launch.js";
@@ -32,6 +35,7 @@ import { registerGaHardeningRoutes } from "../routes/ga-hardening.routes.js";
 import { createHomeModule } from "../home/home.module.js";
 import { registerChatRoutes } from "../routes/chats.js";
 import { registerChatV2Routes } from "../chat/chat-v2.routes.js";
+import { registerChatOrganizationRoutes } from "../chat-organization/register.js";
 import { registerThreadAttachmentRoutes } from "../chat/thread-attachment.routes.js";
 import { registerChatFeatureRoutes } from "../chat/chat-feature.routes.js";
 import { registerLiveScreenRoutes } from "../chat/live-screen.routes.js";
@@ -88,6 +92,8 @@ export async function registerAll(
   // intentionally not mounted here to avoid three competing, confusing
   // enrollment paths. See docs/reference/assessments/claudeassess.txt, "TODAY ASSESS TXT".
   await registerEnrollmentRoutes(app, config, db, services.sessions);
+  await registerDeviceLinkRoutes(app, config, db, services.sessions, hub);
+  await registerHistoryTransferRoutes(app, config, db);
   await registerAuthRoutes(app, config, db, {
     challengeService: services.authChallenges,
     sessionService: services.sessions,
@@ -214,6 +220,7 @@ export async function registerAll(
 
   await registerRealtime(app, config, db, hub);
   await registerSignaling(app, config, db, services.signaling, hub);
+  await registerCallRooms(app, config, db);
   await registerMobileHubRoutes(app, config, db, hub);
 
   // Cross-node chat fan-out. Without Redis this is a no-op and delivery falls
@@ -225,6 +232,7 @@ export async function registerAll(
   startChatBusSubscriber(hub, chatBus);
   await registerChatRoutes(app, config, db);
   await registerChatV2Routes(app, config, db, hub, chatBus);
+  await registerChatOrganizationRoutes(app, config, db);
   await registerThreadAttachmentRoutes(app, config, db);
   await registerChatFeatureRoutes(app, config, db);
   await registerLiveScreenRoutes(app, config, db);

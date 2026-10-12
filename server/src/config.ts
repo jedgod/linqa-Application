@@ -44,6 +44,8 @@ const EnvSchema = z.object({
   ENVELOPE_TTL_SECONDS: z.coerce.number().int().min(3600).max(7_776_000).default(2_592_000),
   MAX_ENVELOPE_BYTES: z.coerce.number().int().min(1024).max(1_048_576).default(262_144),
   DELIVERY_LEASE_SECONDS: z.coerce.number().int().min(10).max(600).default(60),
+  /** Requests one address may make per minute across the whole API. Raise it only for local testing, where several phones share one address. */
+  GLOBAL_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(30).max(5000).optional(),
   OBJECT_STORAGE_REGION: z.string().min(1).optional(),
   OBJECT_STORAGE_BUCKET: z.string().min(1).optional(),
   OBJECT_STORAGE_KMS_KEY_ID: z.string().min(1).optional(),

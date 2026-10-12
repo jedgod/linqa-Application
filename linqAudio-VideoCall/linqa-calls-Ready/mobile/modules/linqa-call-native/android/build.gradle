@@ -1,0 +1,26 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'app.linqa'
+version = '1.0.0'
+
+android {
+  namespace "app.linqa.callnative"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+dependencies {
+  // ProcessorProvider / VideoFrameProcessor, and org.webrtc (exposed as `api`).
+  implementation project(':react-native-webrtc')
+  // On-device person segmentation for background blur.
+  implementation 'com.google.mlkit:segmentation-selfie:16.0.0-beta6'
+  // Ringing while the app is closed. Needs google-services.json (android.googleServicesFile in app config).
+  implementation 'com.google.firebase:firebase-messaging:24.1.0'
+  // NotificationCompat.CallStyle, ServiceCompat.startForeground with types.
+  implementation 'androidx.core:core-ktx:1.13.1'
+}

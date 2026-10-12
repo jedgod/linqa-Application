@@ -6,7 +6,7 @@ import { HIDDEN_TYPES, type ContentMessage } from "../features/conversation/cont
 /** Rows by id (a later copy replaces an earlier one), oldest first. */
 export function mergeRows(prev: ServerRow[], incoming: ServerRow[]): ServerRow[] {
   const byId = new Map(prev.map((r) => [r.id, r]));
-  for (const r of incoming) byId.set(r.id, r);
+  for (const r of incoming) { if(r.deleted)byId.delete(r.id);else byId.set(r.id,r); }
   return [...byId.values()].sort((a, b) => a.sentAt.localeCompare(b.sentAt));
 }
 

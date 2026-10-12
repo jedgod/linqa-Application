@@ -21,9 +21,16 @@ export class SecureCoreServer implements PeerDirectory {
   }
 
   /** A person's active devices' key packages. Kept for a minute so a burst of messages asks once. */
-  async keyPackages(userId: string): Promise<Array<{ deviceId: string; packageBase64: string }>> {
+  async historicalSenderKey(context:{conversationId:string;messageId:string;senderUserId:string;senderDeviceId:string;ciphertextBase64:string}):Promise<number[]> {
+    const {conversationId,messageId,...body}=context;
+    const key=await this.request<{senderUserId:string;senderDeviceId:string;signingPublicKey:number[]}>(`/v1/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/sender-key`,{method:'POST',body:JSON.stringify(body)});
+    if(key.senderUserId!==context.senderUserId||key.senderDeviceId!==context.senderDeviceId||!Array.isArray(key.signingPublicKey))throw Error('SENDER_UNKNOWN');
+    return key.signingPublicKey;
+  }
+
+  async keyPackages(userId: string, fresh=false): Promise<Array<{ deviceId: string; packageBase64: string }>> {
     const hit = this.cache.get(userId);
-    if (hit && this.now() - hit.at < 60_000) return hit.list;
+    if (!fresh && hit && this.now() - hit.at < 60_000) return hit.list;
     const { keyPackages } = await this.request<{ keyPackages: Array<{ deviceId: string; packageBase64: string }> }>(`/v1/users/${encodeURIComponent(userId)}/key-packages`);
     const list = keyPackages.map((k) => ({ deviceId: k.deviceId, packageBase64: k.packageBase64 }));
     this.cache.set(userId, { at: this.now(), list });
@@ -31,6 +38,13 @@ export class SecureCoreServer implements PeerDirectory {
   }
 
   forget(userId: string) { this.cache.delete(userId); }
+
+  /** Membership must be fresh when sealing, including people just added to a group. */
+  async conversationMembers(conversationId:string):Promise<string[]> {
+    const controls=await this.request<{members:Array<{userId:string}>}>(`/v1/chats/${encodeURIComponent(conversationId)}/controls`);
+    if(!Array.isArray(controls.members)||!controls.members.every(m=>typeof m.userId==='string'&&/^[0-9a-f-]{36}$/i.test(m.userId)))throw Error('RECIPIENT_UNKNOWN');
+    return [...new Set(controls.members.map(m=>m.userId))];
+  }
 
   /**
    * Publishes this device's key package unless a valid one is already out there (more than three days left). Returns what

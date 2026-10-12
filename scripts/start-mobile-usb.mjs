@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { connectedPhones } from "./lib/mobile-routes.mjs";
 import { apiReady, portAvailable, readJson, resolveAndroidLaunchArgs, selectDevice, waitUntil } from "./lib/mobile-launch.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -37,7 +38,10 @@ async function main() {
     (process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Android/Sdk"));
   const adb = sdk ? path.join(sdk, "platform-tools", process.platform === "win32" ? "adb.exe" : "adb") : "adb";
   const runAdb = (...args) => execFileSync(adb, args, { encoding: "utf8", windowsHide: true, timeout: 30_000 });
-  const serial = selectDevice(runAdb("devices", "-l"), process.env.ANDROID_SERIAL);
+  const deviceList = runAdb("devices", "-l");
+  const knownPhones = connectedPhones(deviceList);
+  const serial = selectDevice(deviceList, process.env.ANDROID_SERIAL || knownPhones[0]);
+  const launchPhones = process.env.ANDROID_SERIAL ? [serial] : (knownPhones.length ? knownPhones : [serial]);
   const device = (...args) => runAdb("-s", serial, ...args);
   if (!device("shell", "pm", "list", "packages", "com.linqa.mobile").split(/\r?\n/).includes("package:com.linqa.mobile")) {
     throw new Error("Install clients/mobile first with npm run android. The native com.linqa.app is a separate client.");
@@ -65,13 +69,18 @@ async function main() {
     });
     await waitUntil(() => apiReady(apiPort), "Linqa API/database");
   }
+  let metroPort = 8081;
+  for (const candidate of [8082,8081]) {
+    const manifest = await readJson(`http://localhost:${candidate}/`, { "expo-platform": "android", accept: "application/json" }, 3000);
+    if (manifest?.extra?.expoClient?._internal?.projectRoot === mobile) { metroPort = candidate; break; }
+  }
   const metroReady = async () => {
-    const manifest = await readJson("http://localhost:8081/", { "expo-platform": "android", accept: "application/json" }, 15_000);
+    const manifest = await readJson(`http://localhost:${metroPort}/`, { "expo-platform": "android", accept: "application/json" }, 15_000);
     return manifest?.extra?.expoClient?._internal?.projectRoot === mobile;
   };
-  if (!await portAvailable(8081)) {
+  if (!await portAvailable(metroPort)) {
     if (!await metroReady()) throw new Error("Port 8081 belongs to another server. Stop it before launching Linqa.");
-    if (state.metro?.signature !== signature) throw new Error("Restart the existing Metro server after dependency changes; then run this launcher again.");
+    if (state.metro?.signature && state.metro.signature !== signature) throw new Error("Restart the existing Metro server after dependency changes; then run this launcher again.");
   } else {
     const env = {
       ...process.env,
@@ -81,20 +90,26 @@ async function main() {
       NODE_OPTIONS: [process.env.NODE_OPTIONS, "--dns-result-order=ipv4first"].filter(Boolean).join(" ")
     };
     delete env.CI;
-    start("metro", ["node_modules/expo/bin/cli", "start", "--host", "localhost", "--port", "8081"], mobile, env);
+    start("metro", ["node_modules/expo/bin/cli", "start", "--host", "localhost", "--port", String(metroPort)], mobile, env);
     await waitUntil(metroReady, "Linqa Metro");
   }
-  for (const [local, remote] of [[8080, apiPort], [8088, apiPort], [8081, 8081], [8083, 8081]]) {
-    device("reverse", "tcp:" + local, "tcp:" + remote);
+  for (const [local, remote] of [[8080, apiPort], [8088, apiPort], [8081, metroPort], [8082, metroPort], [8083, metroPort]]) {
+    for (const phone of launchPhones) runAdb("-s",phone,"reverse", "tcp:" + local, "tcp:" + remote);
   }
   state.apiPort = apiPort;
+  state.metroPort = metroPort;
   state.serial = serial;
   saveState();
+  let watcherAlive = false;
+  if (state.routes?.pid) { try { process.kill(state.routes.pid, 0); watcherAlive = true; } catch {} }
+  if (!watcherAlive) start("routes", [path.join(root,"scripts/watch-mobile-usb.mjs")], root, process.env);
   const launch = resolveAndroidLaunchArgs("com.linqa.mobile", ".MainActivity");
-  device(...launch.forceStop);
-  device(...launch.start);
-  console.log("Linqa launched on " + serial + ". API: phone 127.0.0.1:8080 -> computer 127.0.0.1:" + apiPort + "; Metro: 8081.");
-  console.log("Keep USB connected. Re-run this command after reconnecting. Logs: .runtime/mobile-launch/");
+  for (const phone of launchPhones) {
+    runAdb("-s",phone,...launch.forceStop);
+    runAdb("-s",phone,...launch.start);
+  }
+  console.log("Linqa launched on " + serial + ". API: phone 127.0.0.1:8080 -> computer 127.0.0.1:" + apiPort + "; Metro: " + metroPort + ".");
+  console.log("Phone routes are repaired automatically after reconnecting. Logs: .runtime/mobile-launch/");
 }
 
 main().catch((error) => {

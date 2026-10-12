@@ -53,6 +53,7 @@ export function useConversation({ conversationId, selfId, deviceId = "", service
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
 
+  const deletedIds=useRef(new Set<string>());
   const mounted = useRef(true);
   const mediaDrafts = useRef(new Map<string, string>());
   const sendingIds = useRef(new Set<string>());
@@ -95,7 +96,8 @@ export function useConversation({ conversationId, selfId, deviceId = "", service
       const page = await service.loadHistory(conversationId, from);
       // A page that arrives after the screen moved to another conversation must not paint there.
       if (!mounted.current || scopeNow.current !== conversationId) return;
-      setRows((prev) => mergeRows(prev, page.rows));
+      for(const row of page.rows)if(row.deleted)deletedIds.current.add(row.id);
+      setRows((prev) => mergeRows(prev, page.rows).filter(row=>!deletedIds.current.has(row.id)));
       setCursor(page.nextCursor);
       setHasMore(Boolean(page.nextCursor));
     } catch {
@@ -105,13 +107,13 @@ export function useConversation({ conversationId, selfId, deviceId = "", service
     }
   }, [conversationId, service]);
 
-  useEffect(() => { setRows([]); lastMarked.current = null; void loadPage(); }, [loadPage]);
+  useEffect(() => { deletedIds.current.clear();setRows([]); lastMarked.current = null; void loadPage(); }, [loadPage]);
 
   const loadOlder = useCallback(() => { if (!loading && hasMore && cursor) void loadPage(cursor); }, [cursor, hasMore, loadPage, loading]);
 
   useEffect(() => {
     if (!service.subscribe) return;
-    return service.subscribe(conversationId, (row) => setRows((prev) => mergeRows(prev, [row])));
+    return service.subscribe(conversationId, (row) => {if(row.deleted)deletedIds.current.add(row.id);setRows((prev) => mergeRows(prev, [row]).filter(r=>!deletedIds.current.has(r.id)));});
   }, [conversationId, service]);
 
   // Opening goes through the receive controller: it drops everything held for an old scope or gate state before anything can
@@ -144,6 +146,7 @@ export function useConversation({ conversationId, selfId, deviceId = "", service
   }, [receiver, selfId, deviceId, conversationId, live]);
   useEffect(() => {
     if (!live) return;
+    for(const id of deletedIds.current)receiver.forget(id);
     for (const row of rows) void receiver.open(row);
   }, [live, receiver, rows]);
   const retryOpen = useCallback((id: string) => {
@@ -200,7 +203,13 @@ export function useConversation({ conversationId, selfId, deviceId = "", service
     setPending((p) => p.filter((m) => m.id !== tempId));
   }, [service]);
 
+  const deleteMessage=useCallback(async(id:string,scope:'me'|'everyone')=>{
+    if(!service.deleteMessage)throw new Error('DELETE_UNAVAILABLE');
+    await service.deleteMessage(conversationId,id,scope);
+    if(mounted.current&&scopeNow.current===conversationId){deletedIds.current.add(id);receiver.forget(id);setRows(prev=>prev.filter(row=>row.id!==id));}
+  },[service,conversationId,receiver]);
+
   const messages = useMemo(() => buildMessages({ live, rows, opened, pending, selfId }), [live, opened, pending, rows, selfId]);
 
-  return { gateState, messages, loading, loadError, hasMore, loadOlder, reload: () => loadPage(), recheck: evaluateGate, send, retry, discard, retryOpen };
+  return { gateState, messages, loading, loadError, hasMore, loadOlder, reload: () => loadPage(), recheck: evaluateGate, send, retry, discard, retryOpen, deleteMessage };
 }

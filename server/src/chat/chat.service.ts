@@ -262,6 +262,13 @@ export async function sendMessage(db: Database, input: SendMessageInput): Promis
   return withTransaction(db, async (client) => {
     await assertMember(client, input.senderUserId, input.conversationId);
 
+    // Serialize acceptance against unlink's device-row update. A JWT issued
+    // before unlink must not authorize new messages after revocation.
+    if (input.senderDeviceId) {
+      const device = await client.query(`SELECT id FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL FOR SHARE`, [input.senderDeviceId,input.senderUserId]);
+      if (!device.rowCount) throw new ChatError(401, 'DEVICE_REQUIRED');
+    }
+
     // Disappearing messages: drop what has already expired here, and stamp this message with its own expiry.
     await client.query(`DELETE FROM chat_messages WHERE conversation_id = $1 AND expires_at IS NOT NULL AND expires_at <= now()`, [input.conversationId]);
     const setting = await client.query(`SELECT disappear_after_seconds AS "seconds" FROM conversations WHERE id = $1`, [input.conversationId]);
@@ -455,9 +462,10 @@ export async function markConversationRead(
     const newest = await client.query(
       `SELECT id, created_at AS "createdAt" FROM chat_messages
         WHERE conversation_id = $1 AND deleted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM chat_message_deletions md WHERE md.message_id=chat_messages.id AND md.user_id=$2)
           AND (expires_at IS NULL OR expires_at > now())
         ORDER BY created_at DESC, id DESC LIMIT 1`,
-      [conversationId]
+      [conversationId, userId]
     );
     const latest = newest.rows[0] as { id: string; createdAt: Date } | undefined;
 
@@ -518,11 +526,13 @@ export async function listMessages(
               created_at AS "createdAt", edited_at AS "editedAt"
          FROM chat_messages
         WHERE conversation_id = $1 AND deleted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM chat_message_deletions md WHERE md.message_id=chat_messages.id AND md.user_id=$5)
           AND (expires_at IS NULL OR expires_at > now())
+          AND created_at > COALESCE((SELECT cleared_at FROM conversation_members WHERE conversation_id = $1 AND user_id = $5), '-infinity'::timestamptz)
           AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
         ORDER BY created_at DESC, id DESC
         LIMIT $4`,
-      [conversationId, after?.createdAt ?? null, after?.id ?? null, limit]
+      [conversationId, after?.createdAt ?? null, after?.id ?? null, limit, userId]
     );
 
     const rows = result.rows as Array<{ id: string; createdAt: Date }>;

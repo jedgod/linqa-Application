@@ -8,7 +8,8 @@ export const FILTER_LABELS: Record<ChatFilter, string> = {
   all: "All",
   unread: "Unread",
   groups: "Groups",
-  pinned: "Pinned"
+  pinned: "Favorites",
+  archived: "Archived"
 };
 
 /** Gradient pairs for initial avatars, picked deterministically from the id. */
@@ -213,10 +214,12 @@ export function PresenceStrip({
 export function ConversationRow({
   item,
   onOpen,
+  onLongPress,
   onCall
 }: {
   item: ChatSummary;
   onOpen: () => void;
+  onLongPress?: () => void;
   onCall: (peerUserId: string, callType: "AUDIO" | "VIDEO", peerName: string) => void;
 }) {
   const previewIcon =
@@ -229,8 +232,11 @@ export function ConversationRow({
   return (
     <Pressable
       onPress={onOpen}
+      onLongPress={onLongPress}
+      delayLongPress={350}
+      accessibilityHint={onLongPress ? "Long press for favorite, archive and lists" : undefined}
       accessibilityRole="button"
-      accessibilityLabel={`${item.title}${unreadLabel}`}
+      accessibilityLabel={`${item.title}${item.pinned ? ", favorite" : ""}${unreadLabel}`}
       style={({ pressed }) => [s.row, pressed && s.pressed]}
     >
       {item.isGroup && item.participantInitials.length > 1 ? (
@@ -244,7 +250,7 @@ export function ConversationRow({
           <Text numberOfLines={1} style={s.rowTitle}>
             {item.title}
           </Text>
-          {item.pinned ? <Ionicons name="pin" size={14} color={C.blue} /> : null}
+          {item.pinned ? <Ionicons name="star" size={14} color="#E8A317" /> : null}
           {item.scheduledEvent ? <Ionicons name="calendar" size={14} color={C.purple} /> : null}
           {item.muted ? <Ionicons name="notifications-off-outline" size={14} color={C.muted} /> : null}
           {item.missedCall ? <Ionicons name="call" size={14} color={C.red} /> : null}

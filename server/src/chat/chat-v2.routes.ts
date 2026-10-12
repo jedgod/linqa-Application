@@ -100,6 +100,10 @@ export async function registerChatV2Routes(
     try {
       const principal = await authenticate(request);
       requireScope(principal, scope);
+      if (principal.deviceId) {
+        const device=await db.query("SELECT 1 FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL",[principal.deviceId,principal.userId]);
+        if (!device.rowCount) throw new Error('device authentication revoked');
+      }
       return principal;
     } catch (error) {
       request.log.warn({ err: error }, "chat v2 authentication rejected");
@@ -234,6 +238,55 @@ export async function registerChatV2Routes(
         return reply.code(422).send({ error: { code: "INVALID_REPLY_TARGET", requestId: request.id } });
       }
       return fail(request, reply, error);
+    }
+  });
+
+  app.delete('/v1/chats/:conversationId/messages/:messageId', async (request, reply) => {
+    const principal = await principalOf(request, reply, 'messages:send');
+    if (!principal) return reply;
+    try {
+      limits.messages(principal.userId, request);
+      const params = z.object({conversationId:z.string().uuid(),messageId:z.string().uuid()}).parse(request.params);
+      const body = z.object({scope:z.enum(['me','everyone'])}).strict().parse(request.body);
+      await withTransaction(db, async client => {
+        await assertMember(client, principal.userId, params.conversationId);
+        if (!principal.deviceId) throw new ChatError(401,'DEVICE_REQUIRED');
+        const active=await client.query("SELECT id FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL FOR SHARE",[principal.deviceId,principal.userId]);
+        if(!active.rowCount) throw new ChatError(401,'DEVICE_REQUIRED');
+        const message=await client.query('SELECT sender_user_id FROM chat_messages WHERE id=$1 AND conversation_id=$2 FOR UPDATE',[params.messageId,params.conversationId]);
+        if(!message.rowCount) throw new ChatError(404,'MESSAGE_NOT_FOUND');
+        if(body.scope==='everyone') {
+          if(message.rows[0].sender_user_id!==principal.userId) throw new ChatError(403,'MESSAGE_NOT_OWNED');
+          await client.query("UPDATE chat_messages SET deleted_at=COALESCE(deleted_at,now()),body_ciphertext=CASE WHEN kind IN ('CALL','SYSTEM') THEN NULL ELSE ''::bytea END WHERE id=$1",[params.messageId]);
+        } else await client.query('INSERT INTO chat_message_deletions(message_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[params.messageId,principal.userId]);
+      });
+      return reply.header('Cache-Control','private, no-store').send({deleted:true,messageId:params.messageId,scope:body.scope});
+    } catch(error) {
+      if(error instanceof z.ZodError) return reply.code(422).send({error:{code:'INVALID_BODY',requestId:request.id}});
+      return fail(request,reply,error);
+    }
+  });
+
+  // Check loaded pages as well as the newest page, so polling cannot resurrect
+  // deleted photos/text or miss a deletion further back in the conversation.
+  app.post('/v1/chats/:conversationId/messages/visibility', async (request,reply) => {
+    const principal=await principalOf(request,reply,'messages:read');
+    if(!principal)return reply;
+    try {
+      limits.page(principal.userId,request);
+      const params=z.object({conversationId:z.string().uuid()}).parse(request.params);
+      const body=z.object({messageIds:z.array(z.string().uuid()).max(500)}).strict().parse(request.body);
+      const visible=await withTransaction(db,async client=>{
+        await assertMember(client,principal.userId,params.conversationId);
+        return client.query(`SELECT m.id FROM chat_messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.user_id=$1
+          WHERE m.conversation_id=$2 AND m.id=ANY($3::uuid[]) AND m.deleted_at IS NULL
+          AND (m.expires_at IS NULL OR m.expires_at>now()) AND m.created_at>COALESCE(cm.cleared_at,'-infinity'::timestamptz)
+          AND NOT EXISTS (SELECT 1 FROM chat_message_deletions md WHERE md.message_id=m.id AND md.user_id=$1)`,[principal.userId,params.conversationId,body.messageIds]);
+      });
+      return reply.header('Cache-Control','private, no-store').send({visibleMessageIds:visible.rows.map(r=>r.id)});
+    } catch(error) {
+      if(error instanceof z.ZodError)return reply.code(422).send({error:{code:'INVALID_BODY',requestId:request.id}});
+      return fail(request,reply,error);
     }
   });
 

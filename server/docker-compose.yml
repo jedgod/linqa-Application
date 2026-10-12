@@ -57,6 +57,8 @@ services:
       - --realm=linqa.local
       - --min-port=49160
       - --max-port=49200
+      # The address phones reach this relay on (the PC's LAN address in development); unset keeps the default.
+      - --external-ip=${LINQA_TURN_EXTERNAL_IP:-127.0.0.1}
 
 volumes:
   linqa_postgres:

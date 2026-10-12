@@ -7,7 +7,8 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { ContentMessage, EventContent, MeetingContent, RsvpResponse } from "../../content/types";
 import { newId } from "../../content/codec";
 import { joinState, rsvpTally, whenLabel } from "./scheduleModel";
-import { addToCalendar } from "./calendar";
+import { addToCalendar, wasAddedToCalendar } from "./calendar";
+import { addMyEvent, isInMyEvents } from "../../../../services/my-events";
 import { Field, ToggleRow } from "../polls/Poll";
 import { FormShell, Segmented } from "../../ui/Form";
 import { palette as c, space } from "../../ui/tokens";
@@ -201,18 +202,41 @@ export function MeetingCard(props: { meeting: MeetingContent; outgoing: boolean;
 
 function CalendarLink({ item }: { item: EventContent | MeetingContent }) {
   const [added, setAdded] = useState(false);
+  const id = item.type === "meeting" ? item.meetingId : item.eventId;
+  // The card remembers across reloads and restarts that it is already in Linqa (Upcoming and the event log) or on the phone's calendar.
+  useEffect(() => {
+    let live = true;
+    void Promise.all([wasAddedToCalendar(item), isInMyEvents(id)]).then(([onPhone, inLinqa]) => { if (live && (onPhone || inLinqa)) setAdded(true); });
+    return () => { live = false; };
+  }, [id, item]);
   return (
     <Pressable
       disabled={added}
       onPress={async () => {
-        const r = await addToCalendar(item).catch(() => "error" as const);
-        if (r === "added") setAdded(true);
-        else Alert.alert("Not added", r === "denied" ? "Allow calendar access in Settings to add this." : "It couldn't be added. Try again.");
+        const startsAt = new Date(item.startsAt);
+        if (Number.isNaN(startsAt.getTime())) { Alert.alert("Not added", "This event has no valid date, so it cannot be added."); return; }
+        const endsAt = item.type === "meeting" ? new Date(startsAt.getTime() + item.durationMin * 60_000) : new Date(item.endsAt);
+        // First into Linqa itself (Upcoming on Home and Calls, and the Event log), which needs no permission and works on any phone.
+        await addMyEvent({
+          id, kind: item.type, title: item.title, startsAt: startsAt.toISOString(),
+          endsAt: (Number.isNaN(endsAt.getTime()) ? startsAt : endsAt).toISOString(),
+          ...(item.type === "event" && item.place ? { place: item.place } : {}),
+          ...(item.note ? { note: item.note } : {})
+        });
+        setAdded(true);
+        // Then onto the phone's own calendar.
+        let problem = "";
+        const r = await addToCalendar(item).catch((cause: unknown) => { problem = cause instanceof Error ? cause.message : ""; return "error" as const; });
+        if (r === "added") Alert.alert("Added", "It is in Linqa Upcoming and the Event log, and on your calendar.");
+        else if (r === "cancelled") Alert.alert("Added to Linqa", "It is in Linqa Upcoming and the Event log. It was not saved to your phone's calendar.");
+        else if (r === "denied") Alert.alert("Added to Linqa", "It is in Linqa Upcoming and the Event log. Allow calendar access in Settings to also add it to your phone's calendar.");
+        else if (/no activity|resolve|handle|not found/i.test(problem)) Alert.alert("Added to Linqa", "It is in Linqa Upcoming and the Event log. This phone has no calendar app that can save events; install one, such as Google Calendar, to add it there too.");
+        else Alert.alert("Added to Linqa", "It is in Linqa Upcoming and the Event log, but it could not be added to your phone's calendar.");
       }}
       accessibilityRole="button"
       style={styles.calLink}
     >
-      <Text style={styles.calText}>{added ? "Added to calendar" : "Add to calendar"}</Text>
+      <Text style={styles.calText}>{added ? "Added to Upcoming & calendar" : "Add to calendar"}</Text>
     </Pressable>
   );
 }

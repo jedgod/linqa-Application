@@ -7,6 +7,8 @@ import ts from '../clients/mobile/node_modules/typescript/lib/typescript.js';
 const code = ts.transpileModule(fs.readFileSync(new URL('../clients/mobile/services/call-controller.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
 }).outputText;
+const boardModule = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../clients/mobile/services/call-actions/board.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { module: boardModule, exports: boardModule.exports, Date });
 const deferred = () => { let resolve; const promise = new Promise(r => resolve = r); return { promise, resolve }; };
 function fixture() {
   const tracks = [{ enabled: true, stopped: false, stop() { this.stopped = true; } }];
@@ -23,10 +25,10 @@ function fixture() {
     close() { this.readyState = 3; this.onclose?.(); }
   }
   const native = { NativeModules: { LinqaCallRecorder: recorder }, DeviceEventEmitter: { addListener: () => ({ remove() {} }) }, Platform: { OS: 'ios' }, PermissionsAndroid: {} };
-  const imports = { 'react-native': native, '../config/api': { getApiBaseUrl: () => 'http://test' }, './calls.service': { CallsService: class { constructor() { return calls; } } }, './session': { accessTokenProvider: { getAccessToken: async () => 'token' } }, './call-recordings': { newRecordingUri: async () => 'file://record.wav', saveRecording: async () => {} }, 'react-native-webrtc': rtc, 'react-native-incall-manager': { default: manager } };
+  const imports = { './call-ownership': { anotherCallActive: () => false }, './call-actions/board': boardModule.exports, 'react-native': native, '../config/api': { getApiBaseUrl: () => 'http://test' }, './calls.service': { CallsService: class { constructor() { return calls; } } }, './session': { accessTokenProvider: { getAccessToken: async () => 'token' } }, './call-recordings': { newRecordingUri: async () => 'file://record.wav', saveRecording: async () => {} }, 'react-native-webrtc': rtc, 'react-native-incall-manager': { default: manager } };
   const module = { exports: {} };
   vm.runInNewContext(code, { module, exports: module.exports, require: name => { if (!(name in imports)) throw Error(name); return imports[name]; }, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask, WebSocket: Socket, btoa, atob, console });
-  return { controller: new module.exports.CallController(), tracks, stream, calls, recorder, rtc };
+  return { controller: new module.exports.CallController(), tracks, stream, calls, recorder, rtc, native };
 }
 const turn = () => new Promise(resolve => setImmediate(resolve));
 
@@ -96,4 +98,71 @@ test('outgoing calls preserve relay-only privacy and fail closed without a usabl
   await f.controller.start({ peerUserId: 'user', peerName: 'Test', callType: 'AUDIO' }); assert.equal(privacy, 'RELAY_ONLY');
   f.calls.turnCredentials = async () => ({ urls: ['turn:127.0.0.1:3478'] });
   await assert.rejects(f.controller.iceServers(), /reachable TURN relay/); await f.controller.hangUp();
+});
+
+test('hand state changes only after delivery and ignores malformed peer messages', async () => {
+  const { controller: c } = fixture(); c.set({ phase: 'active', callId: 'call' });
+  c.toggleHand(); assert.equal(c.getState().handRaised, false);
+  c.channel = { readyState: 'open', send() {} }; c.toggleHand(); assert.equal(c.getState().handRaised, true);
+  await c.onPeerMessage(null); await c.onPeerMessage({ t: 'call.hand', raised: 'yes' });
+  assert.equal(c.getState().peerHandRaised, false);
+  await c.onPeerMessage({ t: 'call.hand', raised: true }); assert.equal(c.getState().peerHandRaised, true);
+  await c.hangUp(); assert.equal(c.getState().handRaised, false);
+});
+test('board transport validates ownership and disallows peer snapshots', async () => {
+  const { controller: c } = fixture(); c.set({ phase: 'active', callId: 'call' }); c.channel = { readyState: 'open', send() {} };
+  assert.ok(c.boardAction({ t: 'board-open', by: 'self', at: 1 }));
+  c.boardAction({ t: 'stroke-pts', id: 'one', color: '#ffffff', width: .01, pts: [0, 0, 1, 1] });
+  await c.onPeerMessage({ t: 'call.board', op: { t: 'stroke-undo', id: 'one' } });
+  await c.onPeerMessage({ t: 'call.board', op: { t: 'board-close', by: 'self' } });
+  assert.equal(c.getState().board.strokes.length, 1); assert.ok(c.getState().board.open);
+  await c.onPeerMessage({ t: 'call.board', op: { t: 'board-sync', openedBy: 'peer', strokes: [] } });
+  assert.equal(c.getState().board.openedBy, 'self'); await c.hangUp(); assert.equal(c.getState().board.open, false);
+});
+
+test('camera permission completing after hangup never acquires media', async () => {
+  const f = fixture(); const c = f.controller; const gate = deferred(); let acquisitions = 0;
+  c.set({ phase: 'active', callId: 'call' }); c.pc = {}; c.localStream = f.stream;
+  c.videoSender = { replaceTrack: async () => {} }; c.ensurePermissions = () => gate.promise;
+  f.rtc.mediaDevices.getUserMedia = async () => { acquisitions++; return f.stream; };
+  const operation = c.toggleCamera(); await turn(); await c.hangUp(); gate.resolve(); await operation;
+  assert.equal(acquisitions, 0); assert.equal(c.getState().phase, 'idle');
+});
+test('late camera media is stopped after hangup', async () => {
+  const f = fixture(); const c = f.controller; const gate = deferred(); const track = { stop() { this.stopped = true; } };
+  c.set({ phase: 'active', callId: 'call' }); c.pc = {}; c.localStream = f.stream;
+  c.videoSender = { replaceTrack: async () => {} }; c.ensurePermissions = async () => {};
+  f.rtc.mediaDevices.getUserMedia = () => gate.promise;
+  const operation = c.toggleCamera(); await turn(); await c.hangUp(); gate.resolve({ getTracks: () => [track] }); await operation;
+  assert.equal(track.stopped, true); assert.equal(c.getState().phase, 'idle');
+});
+test('screen sharing fails closed on iOS without a broadcast extension', async () => {
+  const { controller: c } = fixture(); c.set({ phase: 'active', callId: 'call' }); c.videoSender = {};
+  await c.toggleScreenShare(); assert.equal(c.getState().sharingScreen, false); assert.equal(c.getState().mediaBusy, false);
+  assert.match(c.getState().note, /unavailable/); await c.hangUp();
+});
+test('ending a call stops every display capture track', async () => {
+  const { controller: c } = fixture(); let stopped = 0; c.set({ phase: 'active', callId: 'call', sharingScreen: true });
+  c.displayStream = { getTracks: () => [{ stop() { stopped++; } }, { stop() { stopped++; } }] };
+  await c.hangUp(); assert.equal(stopped, 2); assert.equal(c.getState().sharingScreen, false);
+});
+
+test('Android screen sharing replaces the video sender and restores the camera when stopped', async () => {
+  const f = fixture(); const c = f.controller; f.native.Platform.OS = 'android';
+  let stopped = false; const displayTrack = { addEventListener() {}, stop() { stopped = true; } };
+  const display = { getTracks: () => [displayTrack], getVideoTracks: () => [displayTrack], toURL: () => 'display' };
+  f.rtc.mediaDevices.getDisplayMedia = async () => display;
+  const replacements = []; c.pc = {}; c.localStream = f.stream; c.videoSender = { replaceTrack: async track => replacements.push(track) };
+  c.set({ phase: 'active', callId: 'call' }); c.channel = { readyState: 'open', send() {} };
+  await c.toggleScreenShare(); assert.equal(c.getState().sharingScreen, true); assert.equal(c.getState().localStreamUrl, 'display');
+  await c.toggleScreenShare(); assert.equal(stopped, true); assert.equal(c.getState().sharingScreen, false);
+  assert.equal(replacements[0], displayTrack); assert.equal(replacements[1], null); await c.hangUp();
+});
+test('Android capture consent completing after hangup releases its stream', async () => {
+  const f = fixture(); const c = f.controller; f.native.Platform.OS = 'android'; const gate = deferred();
+  f.rtc.mediaDevices.getDisplayMedia = () => gate.promise;
+  c.pc = {}; c.videoSender = {}; c.set({ phase: 'active', callId: 'call' });
+  const operation = c.toggleScreenShare(); await turn(); await c.hangUp(); let stopped = false;
+  gate.resolve({ getTracks: () => [{ stop() { stopped = true; } }] }); await operation;
+  assert.equal(stopped, true); assert.equal(c.getState().phase, 'idle');
 });

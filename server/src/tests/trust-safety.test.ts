@@ -78,3 +78,22 @@ describe("TrustSafetyService", () => {
     expect(query).not.toHaveBeenCalled();
   });
 });
+
+describe("call report authorization", () => {
+  it("rejects a report for a call the reporter did not participate in", async () => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }));
+    const service = new TrustSafetyService({ query } as unknown as Database);
+    await expect(service.submitReport({ reporterUserId: "outsider", callId: "private-call", category: "HARASSMENT", description: "A sufficiently long report" })).rejects.toThrow("call not found");
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0]?.[0]).not.toContain("INSERT");
+  });
+  it("allows a participant to submit a metadata-only call report", async () => {
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes("FROM call_participants")) { expect(params).toEqual(["call", "member"]); return { rows: [{}], rowCount: 1 }; }
+      expect(sql).toContain("INSERT INTO safety_reports"); expect(params?.[2]).toBe("call"); expect(params?.[7]).toBeNull();
+      return { rows: [{ id: "report" }], rowCount: 1 };
+    });
+    const service = new TrustSafetyService({ query } as unknown as Database);
+    expect((await service.submitReport({ reporterUserId: "member", callId: "call", category: "HARASSMENT", description: "A sufficiently long report" })).id).toBe("report");
+  });
+});

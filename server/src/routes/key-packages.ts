@@ -27,6 +27,34 @@ export async function registerKeyPackageRoutes(
     ? new TransparencyProofService(db, config.TRANSPARENCY_PRIVATE_KEY_PEM)
     : null;
 
+  // Historical verification is scoped to an already accepted, visible ciphertext.
+  // This never publishes revoked devices as encryption recipients or call peers.
+  app.post('/v1/chats/:conversationId/messages/:messageId/sender-key', async (request, reply) => {
+    try {
+      const principal = await authenticate(request);
+      requireScope(principal, 'messages:read');
+      const params = z.object({conversationId:z.string().uuid(),messageId:z.string().uuid()}).parse(request.params);
+      const body = z.object({senderUserId:z.string().uuid(),senderDeviceId:z.string().uuid(),ciphertextBase64:z.string().min(1).max(87384).regex(/^[A-Za-z0-9+/_=-]+$/)}).strict().parse(request.body);
+      if (!principal.deviceId || !await devices.findActive(principal.deviceId, principal.userId)) return reply.code(403).send({error:'forbidden'});
+      const ciphertext = Buffer.from(body.ciphertextBase64, 'base64');
+      const result = await db.query(`SELECT d.signing_public_key
+        FROM chat_messages m
+        JOIN devices d ON d.id=m.sender_device_id AND d.user_id=m.sender_user_id
+        JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.user_id=$1 AND cm.removed_at IS NULL
+        WHERE m.conversation_id=$2 AND m.id=$3 AND m.sender_user_id=$4 AND m.sender_device_id=$5
+          AND m.body_ciphertext=$6 AND m.deleted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM chat_message_deletions md WHERE md.message_id=m.id AND md.user_id=$1)
+          AND (m.expires_at IS NULL OR m.expires_at>now())
+          AND m.created_at>COALESCE(cm.cleared_at,'-infinity'::timestamptz)
+          AND (d.revoked_at IS NULL OR m.created_at<=d.revoked_at)`,
+        [principal.userId,params.conversationId,params.messageId,body.senderUserId,body.senderDeviceId,ciphertext]);
+      const key = result.rows[0]?.signing_public_key as Buffer | undefined;
+      if (!key || key.length!==32) return reply.code(404).send({error:'message_sender_key_not_found'});
+      reply.header('Cache-Control','private, no-store');
+      return {senderUserId:body.senderUserId,senderDeviceId:body.senderDeviceId,signingPublicKey:Array.from(key)};
+    } catch { return reply.code(400).send({error:'invalid_request'}); }
+  });
+
   app.put("/v1/devices/:deviceId/key-package", async (request, reply) => {
     try {
       const principal = await authenticate(request);
@@ -92,6 +120,7 @@ export async function registerKeyPackageRoutes(
       await authenticate(request);
       const params = z.object({ userId: z.string().uuid() }).parse(request.params);
       const rows = await packages.findActiveForUser(params.userId);
+      reply.header('Cache-Control','private, no-store');
 
       if (config.NODE_ENV === "production" && !transparency) {
         return reply.code(503).send({ error: "transparency_checkpoint_signer_unavailable" });

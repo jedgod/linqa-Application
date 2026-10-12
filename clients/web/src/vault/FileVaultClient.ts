@@ -88,7 +88,8 @@ export class FileVaultClient {
     private readonly baseUrl: string,
     private readonly getAuthToken: () => Promise<string>,
     private readonly keys: WebCryptoKeyProvider = new WebCryptoKeyProvider(),
-    private readonly http: FileVaultHttp = { fetch: fetch.bind(globalThis) }
+    private readonly http: FileVaultHttp = { fetch: fetch.bind(globalThis) },
+    private readonly wrappingAlias: string = WRAPPING_KEY_ALIAS
   ) {}
 
   async upload(input: {
@@ -98,7 +99,7 @@ export class FileVaultClient {
     content: Uint8Array;
     contentType: string;
   }): Promise<{ itemId: string }> {
-    await this.keys.createWrappingKey(WRAPPING_KEY_ALIAS);
+    await this.keys.createWrappingKey(this.wrappingAlias);
 
     const dataKey = await generateDataKey();
     const rawDataKey = new Uint8Array(await crypto.subtle.exportKey("raw", dataKey));
@@ -115,7 +116,7 @@ export class FileVaultClient {
     const contentHash = await sha256(encryptedContent);
 
     const keyEnvelope = await this.keys.wrapKey({
-      alias: WRAPPING_KEY_ALIAS,
+      alias: this.wrappingAlias,
       rawKey: rawDataKey,
       context: itemTypeContext(input.itemType)
     });
@@ -166,6 +167,7 @@ export class FileVaultClient {
     const body = (await response.json()) as { items: RawVaultItemRow[] };
     const items: VaultItemSummary[] = [];
     for (const row of body.items) {
+      try {
       const dataKey = await this.unwrapDataKey(row.key_envelope, row.item_type);
       const name = new TextDecoder().decode(
         await decryptWithDataKey(dataKey, bufferLikeToBytes(row.name_ciphertext))
@@ -182,6 +184,7 @@ export class FileVaultClient {
         version: row.version,
         createdAt: row.created_at
       });
+      } catch { items.push({id:row.id,itemType:row.item_type,name:"Locked item from another device",metadata:{locked:true},encryptedSize:row.encrypted_size,version:row.version,createdAt:row.created_at}); }
     }
     return items;
   }
@@ -219,7 +222,7 @@ export class FileVaultClient {
     itemType: VaultItemType
   ): Promise<CryptoKey> {
     const rawDataKey = await this.keys.unwrapKey({
-      alias: WRAPPING_KEY_ALIAS,
+      alias: this.wrappingAlias,
       wrappedKey: bufferLikeToBytes(keyEnvelope),
       context: itemTypeContext(itemType)
     });

@@ -1,0 +1,16 @@
+{
+  "platforms": [
+    "apple",
+    "android"
+  ],
+  "apple": {
+    "modules": [
+      "LinqaCallNativeModule"
+    ]
+  },
+  "android": {
+    "modules": [
+      "app.linqa.callnative.LinqaCallNativeModule"
+    ]
+  }
+}

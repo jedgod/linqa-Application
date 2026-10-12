@@ -97,3 +97,22 @@ fn the_same_key_material_gives_the_same_key_package_identity() {
     assert_eq!(first["version"], 2);
     assert_eq!(first["pq_encryption_public_key"].as_array().unwrap().len(), 1184);
 }
+
+#[test]
+fn native_call_key_and_signature_bindings_round_trip() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    let alice=device_core(21,22);let bob=device_core(31,32);
+    let bob_package=package(&bob,USER_B,DEVICE_B);
+    let raw=|v:&Value| v.as_array().unwrap().iter().map(|b|b.as_u64().unwrap() as u8).collect::<Vec<_>>();
+    let aad=STANDARD.encode(b"linqa-call-env-v1|key|bob:phone");
+    let sealed=alice.seal_call_key(STANDARD.encode(raw(&bob_package["encryption_public_key"])),STANDARD.encode(raw(&bob_package["pq_encryption_public_key"])),STANDARD.encode(b"native-call-key"),aad.clone()).unwrap();
+    assert_eq!(STANDARD.decode(bob.open_call_key(sealed.clone(),aad.clone()).unwrap()).unwrap(),b"native-call-key");
+    assert!(alice.open_call_key(sealed.clone(),aad).is_err());
+    assert!(bob.open_call_key(sealed,STANDARD.encode(b"linqa-call-env-v1|other|bob:phone")).is_err());
+    let message=b"linqa-call-sig-v1{header-ciphertext}";
+    let sig=STANDARD.decode(alice.sign_call_message(STANDARD.encode(message)).unwrap()).unwrap();
+    let alice_package=package(&alice,USER_A,DEVICE_A);
+    let public:[u8;32]=raw(&alice_package["signing_public_key"]).try_into().unwrap();
+    VerifyingKey::from_bytes(&public).unwrap().verify(message,&Signature::from_slice(&sig).unwrap()).unwrap();
+    assert!(alice.sign_call_message(STANDARD.encode(b"unrelated signing request")).is_err());
+}

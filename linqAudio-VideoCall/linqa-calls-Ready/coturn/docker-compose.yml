@@ -1,0 +1,36 @@
+# Linqa TURN relay. Run on a small VM with a public IP (1 vCPU / 1 GB is fine to start).
+#   1. Point DNS:  turn.linqa.app  A  <server public IP>
+#   2. cp .env.example .env  and fill it in (TURN_SECRET must match the API's)
+#   3. docker compose run --rm certbot   (first time, gets the TLS cert)
+#   4. docker compose up -d coturn
+# Firewall: open 3478/udp+tcp, 5349/tcp, and 49160-49200/udp.
+
+services:
+  coturn:
+    image: coturn/coturn:4.6.3
+    restart: unless-stopped
+    network_mode: host # TURN needs the real public IP and the relay port range
+    env_file: .env
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./letsencrypt:/etc/letsencrypt:ro
+    command:
+      - -c
+      - /etc/coturn/turnserver.conf
+      - --static-auth-secret=${TURN_SECRET}
+      - --realm=${TURN_REALM}
+      - --external-ip=${TURN_PUBLIC_IP}
+      - --cert=/etc/letsencrypt/live/${TURN_DOMAIN}/fullchain.pem
+      - --pkey=/etc/letsencrypt/live/${TURN_DOMAIN}/privkey.pem
+
+  # One-shot cert issue/renew. Needs port 80 free for a moment.
+  # Renew monthly with cron:  docker compose run --rm certbot renew && docker compose restart coturn
+  certbot:
+    image: certbot/certbot:v2.11.0
+    profiles: ["tools"]
+    network_mode: host
+    volumes:
+      - ./letsencrypt:/etc/letsencrypt
+    command: >
+      certonly --standalone --non-interactive --agree-tos
+      -m ${CERT_EMAIL} -d ${TURN_DOMAIN}

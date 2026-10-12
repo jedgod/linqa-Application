@@ -19,6 +19,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "../../components/LinearGradient";
 import { RecordingsSection } from "../../components/calls/RecordingsSection";
+import { useRouter } from "expo-router";
+import { upcomingOf, useMyEvents } from "../../services/my-events";
 
 type Filter = "All" | "Missed" | "Audio" | "Video";
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -154,7 +156,7 @@ export default function CallsScreen() {
           <FilterBar selected={filter} onChange={setFilter} />
 
           <SectionTitle title="Upcoming" />
-          <UpcomingCard onJoin={() => startCall("Global Team Sync", "video")} />
+          <MyUpcoming fallback={<UpcomingCard onJoin={() => startCall("Global Team Sync", "video")} />} />
 
           <View style={styles.recentHeading}>
             <SectionTitle title="Recent calls" compact />
@@ -313,6 +315,35 @@ function FilterBar({ selected, onChange }: { selected: Filter; onChange: (filter
 
 function SectionTitle({ title, compact = false }: { title: string; compact?: boolean }) {
   return <Text style={[styles.sectionTitle, compact && styles.sectionTitleCompact]}>{title}</Text>;
+}
+
+/** What this person added to Linqa from chats; the sample card below only shows while there is nothing of their own. */
+function MyUpcoming({ fallback }: { fallback: React.ReactElement }) {
+  const router = useRouter();
+  const { items } = useMyEvents();
+  const next = upcomingOf(items).slice(0, 3);
+  if (next.length === 0) return fallback;
+  return (
+    <View>
+      {next.map((e) => {
+        const d = new Date(e.startsAt);
+        return (
+          <Pressable key={e.id} onPress={() => router.push("/event-log" as never)} accessibilityRole="button" accessibilityLabel={`${e.kind === "meeting" ? "Meeting" : "Event"}: ${e.title}. Open the event log`} style={{ marginBottom: 8 }}>
+            <View style={styles.upcomingCard}>
+              <View style={[styles.groupAvatar, { backgroundColor: "#245EDA", alignItems: "center", justifyContent: "center" }]}>
+                <Ionicons name={e.kind === "meeting" ? "videocam" : "calendar"} size={30} color="#FFFFFF" />
+              </View>
+              <View style={styles.upcomingCopy}>
+                <Text style={styles.upcomingTitle} numberOfLines={2}>{e.title}</Text>
+                <Text style={styles.upcomingTime}>{d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} · {d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</Text>
+                {e.place ? <Text style={[styles.upcomingTime, { color: "#94A3B8" }]} numberOfLines={1}>{e.place}</Text> : null}
+              </View>
+            </View>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
 }
 
 function UpcomingCard({ onJoin }: { onJoin: () => void }) {

@@ -27,6 +27,7 @@ export class ReceiveController {
   readonly bodies = new Map<string, MessageBody>();
   private readonly failures = new Map<string, Failure>();
   private readonly inflight = new Set<string>();
+  private readonly forgotten = new Set<string>();
 
   constructor(private readonly adapter: ReceiveAdapter, private readonly parse: (text: string) => Payload | null, private readonly changed: () => void = () => {}) {}
 
@@ -35,7 +36,7 @@ export class ReceiveController {
     ++this.generation;
     this.scope = Object.freeze({ ...scope });
     this.live = live;
-    this.bodies.clear(); this.failures.clear(); this.inflight.clear();
+    this.bodies.clear(); this.failures.clear(); this.inflight.clear(); this.forgotten.clear();
     this.lastReceipt = null;
     this.changed();
   }
@@ -44,10 +45,12 @@ export class ReceiveController {
   private valid(t: { generation: number; scope: Readonly<ReceiveScope> | null }) { return this.live && t.generation === this.generation && t.scope === this.scope; }
 
   /** An outgoing message already known to this device needs no opening. */
-  seed(id: string, payload: Payload) { if (this.live) { this.bodies.set(id, { state: "open", payload }); this.changed(); } }
+  seed(id: string, payload: Payload) { if (this.live && !this.forgotten.has(id)) { this.bodies.set(id, { state: "open", payload }); this.changed(); } }
+
+  forget(id: string) { if(this.forgotten.has(id))return;this.forgotten.add(id); this.bodies.delete(id); this.failures.delete(id); this.changed(); }
 
   async open(row: ServerRow, { explicit = false, keyRevision }: { explicit?: boolean; keyRevision?: string } = {}): Promise<void> {
-    if (!this.live || !this.scope || this.bodies.has(row.id) || this.inflight.has(row.id)) return;
+    if (!this.live || !this.scope || this.forgotten.has(row.id) || this.bodies.has(row.id) || this.inflight.has(row.id)) return;
     const previous = this.failures.get(row.id);
     if (previous?.kind === "blocked") return;
     if (previous && !explicit && (!keyRevision || keyRevision === previous.revision || previous.attempts >= MAX_AUTOMATIC_ATTEMPTS)) return;
@@ -55,13 +58,13 @@ export class ReceiveController {
     this.inflight.add(row.id);
     try {
       const text = await this.adapter.readOrOpenAndCommit(t.scope!, row);
-      if (!this.valid(t)) return;
+      if (!this.valid(t) || this.forgotten.has(row.id)) return;
       const payload = this.parse(text);
       if (!payload) { this.failures.set(row.id, { kind: "blocked", code: "INVALID_PAYLOAD", attempts: 1 }); return; }
       this.bodies.set(row.id, { state: "open", payload });
       this.failures.delete(row.id);
     } catch (error) {
-      if (!this.valid(t)) return;
+      if (!this.valid(t) || this.forgotten.has(row.id)) return;
       this.failures.set(row.id, {
         kind: this.adapter.classify(error) === "transient" ? "retryable" : "blocked",
         code: this.adapter.safeCode(error), ...(keyRevision ? { revision: keyRevision } : {}),

@@ -1,3 +1,5 @@
+import { anotherCallActive } from "./call-ownership";
+import { applyBoardOp, emptyBoard, type BoardOp, type BoardState } from "./call-actions/board";
 import { DeviceEventEmitter, NativeModules, PermissionsAndroid, Platform } from "react-native";
 import { getApiBaseUrl } from "../config/api";
 import { CallsService, type PrivacyMode } from "./calls.service";
@@ -43,6 +45,11 @@ export interface CallState {
   peerPlace: { name: string; flag: string } | null;
   /** The call keeps running but its screen is tucked away behind a Return-to-call bar. */
   minimized: boolean;
+  handRaised: boolean;
+  peerHandRaised: boolean;
+  board: BoardState;
+  sharingScreen: boolean;
+  mediaBusy: boolean;
 }
 
 export interface IncomingCall {
@@ -58,7 +65,7 @@ const IDLE: CallState = {
   phase: "idle", callId: null, peerName: "", callType: "AUDIO", incoming: false, muted: false, speaker: false, cameraOff: false,
   localStreamUrl: null, remoteStreamUrl: null, note: null, connectedAt: null,
   recording: "off", recordingStartedAt: null, recordingNote: null, recordingAvailable: Boolean(NativeModules.LinqaCallRecorder),
-  network: "Good", peerPlace: null, minimized: false
+  network: "Good", peerPlace: null, minimized: false, handRaised: false, peerHandRaised: false, board: emptyBoard(), sharingScreen: false, mediaBusy: false
 };
 
 const RING_TIMEOUT_MS = 45_000;
@@ -77,6 +84,9 @@ export class CallController {
   private socket: WebSocket | null = null;
   private pc: Any = null;
   private localStream: Any = null;
+  private videoSender: Any = null;
+  private displayStream: Any = null;
+  private remoteStream: Any = null;
   private peerDeviceId: string | null = null;
   private privacy: PrivacyMode = "RELAY_ONLY";
   private sequence = 0;
@@ -122,7 +132,7 @@ export class CallController {
    * back as a plain-words message for the caller to display. Returns null on success.
    */
   async start(input: { peerUserId: string; peerName: string; callType: CallKind }): Promise<string | null> {
-    if (this.state.phase !== "idle" || this.starting || this.finishing || this.recordingStarting || this.recordingStopping) return "Another call is still starting or ending.";
+    if (anotherCallActive("legacy") || this.state.phase !== "idle" || this.starting || this.finishing || this.recordingStarting || this.recordingStopping) return "Another call is still starting or ending.";
     this.starting = true;
     // Match the existing call API and mobile hub privacy default; an incoming
     // STANDARD call must not change the next outgoing call's policy.
@@ -161,7 +171,7 @@ export class CallController {
   }
 
   handleIncoming(call: IncomingCall): void {
-    if (this.state.phase !== "idle" || this.starting || this.finishing) return;
+    if (anotherCallActive("legacy") || this.state.phase !== "idle" || this.starting || this.finishing) return;
     this.peerDeviceId = call.callerDeviceId;
     this.privacy = call.privacyMode;
     this.set({ ...IDLE, phase: "ringing", callId: call.callId, peerName: call.callerName, callType: call.callType, incoming: true, speaker: call.callType === "VIDEO" });
@@ -171,6 +181,7 @@ export class CallController {
   }
 
   async accept(): Promise<void> {
+    if (anotherCallActive("legacy")) { await this.decline(); return; }
     const { phase, callId, callType } = this.state;
     if (phase !== "ringing" || !callId) return;
     this.clearTimer();
@@ -217,10 +228,68 @@ export class CallController {
     this.set({ muted });
   }
 
-  toggleCamera(): void {
-    const cameraOff = !this.state.cameraOff;
-    this.localStream?.getVideoTracks?.().forEach((track: Any) => { track.enabled = !cameraOff; });
-    this.set({ cameraOff });
+  async toggleCamera(): Promise<void> {
+    if (this.state.phase !== "active" || this.state.mediaBusy || this.state.sharingScreen) return;
+    const callId = this.state.callId!;
+    const pc = this.pc;
+    this.set({ mediaBusy: true });
+    try {
+      let track = this.localStream?.getVideoTracks?.()[0];
+      if (!track) {
+        if (!this.videoSender) throw new Error("Video is unavailable for this call. Start a new video call.");
+        await this.ensurePermissions("VIDEO");
+        if (!this.isCurrent(callId) || this.pc !== pc) return;
+        const rtc = (await import("react-native-webrtc")) as Any;
+        const stream = await rtc.mediaDevices.getUserMedia({ audio: false, video: { facingMode: "user", width: 640, height: 480, frameRate: 24 } });
+        if (!this.isCurrent(callId) || this.pc !== pc) { stream.getTracks().forEach((t: Any) => t.stop()); return; }
+        track = stream.getVideoTracks()[0];
+        if (!track) throw new Error("The camera could not start.");
+        try { await this.videoSender.replaceTrack(track); } catch (error) { stream.getTracks().forEach((t: Any) => t.stop()); throw error; }
+        if (!this.isCurrent(callId) || this.pc !== pc) { stream.getTracks().forEach((t: Any) => t.stop()); return; }
+        this.localStream.addTrack(track);
+        this.set({ callType: "VIDEO", cameraOff: false, localStreamUrl: this.localStream.toURL() });
+      } else {
+        track.enabled = !track.enabled;
+        this.set({ cameraOff: !track.enabled });
+      }
+      this.sendPeer({ t: "call.video", cameraOn: !this.state.cameraOff });
+    } catch (error) { if (this.isCurrent(callId)) this.set({ note: error instanceof Error ? error.message : "Unable to start video." }); }
+    finally { if (this.isCurrent(callId)) this.set({ mediaBusy: false }); }
+  }
+
+  async toggleScreenShare(): Promise<void> {
+    if (this.state.phase !== "active" || this.state.mediaBusy) return;
+    const callId = this.state.callId!;
+    const pc = this.pc;
+    this.set({ mediaBusy: true });
+    let acquired: Any = null;
+    try {
+      if (this.displayStream) {
+        const display = this.displayStream;
+        await this.videoSender.replaceTrack(this.localStream?.getVideoTracks?.()[0] ?? null);
+        display.getTracks().forEach((t: Any) => t.stop());
+        if (!this.isCurrent(callId) || this.pc !== pc) return;
+        this.displayStream = null;
+        this.set({ sharingScreen: false, localStreamUrl: this.state.callType === "VIDEO" ? this.localStream.toURL() : null });
+        this.sendPeer({ t: "call.screen", sharing: false });
+        return;
+      }
+      if (Platform.OS !== "android" || !this.videoSender) throw new Error("Screen sharing is unavailable on this device or call.");
+      const rtc = (await import("react-native-webrtc")) as Any;
+      acquired = await rtc.mediaDevices.getDisplayMedia({});
+      if (!this.isCurrent(callId) || this.pc !== pc) { acquired.getTracks().forEach((t: Any) => t.stop()); return; }
+      const track = acquired.getVideoTracks()[0];
+      if (!track) throw new Error("Screen capture did not start.");
+      await this.videoSender.replaceTrack(track);
+      if (!this.isCurrent(callId) || this.pc !== pc) { acquired.getTracks().forEach((t: Any) => t.stop()); return; }
+      this.displayStream = acquired;
+      track.addEventListener("ended", () => { if (this.displayStream === acquired && this.isCurrent(callId)) void this.toggleScreenShare(); });
+      this.set({ sharingScreen: true, localStreamUrl: acquired.toURL() });
+      this.sendPeer({ t: "call.screen", sharing: true });
+    } catch (error) {
+      if (acquired && acquired !== this.displayStream) acquired.getTracks().forEach((t: Any) => t.stop());
+      if (this.isCurrent(callId)) this.set({ note: error instanceof Error ? error.message : "Unable to share your screen." });
+    } finally { if (this.isCurrent(callId)) this.set({ mediaBusy: false }); }
   }
 
   flipCamera(): void {
@@ -231,6 +300,26 @@ export class CallController {
     const speaker = !this.state.speaker;
     (await this.loadCallManager())?.setForceSpeakerphone?.(speaker);
     this.set({ speaker });
+  }
+
+  toggleHand(): void {
+    if (this.state.phase !== "active") return;
+    const handRaised = !this.state.handRaised;
+    if (this.sendPeer({ t: "call.hand", raised: handRaised })) this.set({ handRaised });
+    else this.set({ note: "The shared call connection is not ready." });
+  }
+
+  boardAction(op: BoardOp): boolean {
+    if (this.state.phase !== "active" || op.t === "board-sync") return false;
+    const next = applyBoardOp(this.state.board, op, "self");
+    if (next === this.state.board || !this.sendPeer({ t: "call.board", op })) return false;
+    this.set({ board: next });
+    return true;
+  }
+
+  report(category: string, description: string): Promise<unknown> {
+    if (!this.state.callId) return Promise.reject(new Error("This call has ended."));
+    return this.calls.reportCall(this.state.callId, category, description);
   }
 
   // ---- recording -------------------------------------------------------------------------------------------------------------
@@ -279,7 +368,24 @@ export class CallController {
   }
 
   private async onPeerMessage(message: Any): Promise<void> {
+    if (!message || typeof message !== "object") return;
     switch (message.t) {
+      case "call.video":
+        if (message.cameraOn === true) this.set({ callType: "VIDEO" });
+        return;
+      case "call.screen":
+        if (message.sharing === true) this.set({ callType: "VIDEO" });
+        return;
+      case "call.hand":
+        if (typeof message.raised === "boolean") this.set({ peerHandRaised: message.raised });
+        return;
+      case "call.board":
+        if (!message.op || typeof message.op !== "object" || message.op.t === "board-sync") return;
+        // If both open at once, the original caller wins on both phones.
+        const board = message.op.t === "board-open" && this.state.board.openedBy === "self" && this.state.incoming
+          ? emptyBoard() : this.state.board;
+        this.set({ board: applyBoardOp(board, message.op, "peer") });
+        return;
       case "rec.request":
         if (this.state.phase === "active" && this.state.recording === "off" && this.state.recordingAvailable) this.set({ recording: "asking", recordingNote: null });
         else this.sendPeer({ t: "rec.decline" });
@@ -436,6 +542,9 @@ export class CallController {
     });
     this.pc = pc;
     this.localStream.getTracks().forEach((track: Any) => pc.addTrack(track, this.localStream));
+    this.videoSender = pc.getSenders?.().find((sender: Any) => sender.track?.kind === "video") ?? null;
+    // Reserve a video slot in voice calls so upgrading never needs a conflicting offer.
+    if (!this.videoSender && pc.addTransceiver) this.videoSender = pc.addTransceiver("video", { direction: "sendrecv" }).sender;
     // Recording consent and transcript lines travel on a data channel between the two phones (DTLS-encrypted), never through the server.
     if (!this.state.incoming) this.attachChannel(pc.createDataChannel("linqa", { ordered: true }));
     pc.addEventListener("datachannel", (event: Any) => this.attachChannel(event.channel));
@@ -445,7 +554,12 @@ export class CallController {
     pc.addEventListener("track", (event: Any) => {
       if (this.pc !== pc || !this.isCurrent(callId)) return;
       const stream = event.streams?.[0];
-      if (stream) this.set({ remoteStreamUrl: stream.toURL() });
+      if (stream) this.remoteStream = stream;
+      else if (event.track) {
+        this.remoteStream ??= new webrtc.MediaStream();
+        if (!this.remoteStream.getTracks().some((t: Any) => t.id === event.track.id)) this.remoteStream.addTrack(event.track);
+      }
+      if (this.remoteStream) this.set({ remoteStreamUrl: this.remoteStream.toURL() });
     });
     this.startQualityMonitor(pc);
     pc.addEventListener("connectionstatechange", () => {
@@ -526,7 +640,7 @@ export class CallController {
         this.set({ phase: "connecting" });
         this.timer = setTimeout(() => { if (this.isCurrent(callId)) void this.hangUp("Connection timed out", "FAILED"); }, RING_TIMEOUT_MS);
         const pc = await this.createPeer();
-        const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: this.state.callType === "VIDEO" });
+        const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
         if (this.pc !== pc || !this.isCurrent(callId)) return;
         await pc.setLocalDescription(offer);
         if (this.pc !== pc || !this.isCurrent(callId)) return;
@@ -622,6 +736,11 @@ export class CallController {
     if (this.statsTimer) { clearInterval(this.statsTimer); this.statsTimer = null; }
     const saving = this.state.recording === "on" ? this.endRecording(0) : Promise.resolve();
     this.channel = null;
+    const display = this.displayStream;
+    this.displayStream = null;
+    display?.getTracks?.().forEach((track: Any) => track.stop());
+    this.videoSender = null;
+    this.remoteStream = null;
     const socket = this.socket;
     this.socket = null;
     try { socket?.close(); } catch { /* already closed */ }

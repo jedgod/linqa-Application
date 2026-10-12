@@ -3,6 +3,7 @@ import { ActivityIndicator, Image, ImageBackground, Linking, Modal, Pressable, R
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { upcomingOf, useMyEvents } from "../../services/my-events";
 import { MobileHubService, type HubContact, type HubSnapshot } from "../../services/mobile-hub.service";
 import { HIDEABLE_HOME_SECTIONS, HomeFeedService, JurisdictionRequiredError, attributionFor, newsStateLabel, relativeAge, type HideableHomeSection, type HomeFeedPayload, type HomeNewsItem } from "../../services/home-feed.service";
 import { accessTokenProvider } from "../../services/session";
@@ -119,7 +120,13 @@ export default function HomeScreen() {
   const transfers = (feed?.pendingTransfers ?? []).slice(0, 2);
   const hasContinueCards = conversations.length + vaultItems.length + transfers.length > 0;
   const countryPanel = feed?.countryLinqa;
-  const publishedUpcoming = (feed?.upcoming ?? []).slice(0, 4);
+  // Events and meetings added from chats come first, then what the server publishes.
+  const mine = useMyEvents();
+  const mineUpcoming: HomeUpcomingCard[] = upcomingOf(mine.items).slice(0, 4).map((e) => ({
+    id: `mine-${e.id}`, title: e.title, startsAt: e.startsAt, countryCode: null, regionCode: null, city: null,
+    displayPlace: { icon: e.kind === "meeting" ? "videocam-outline" : "calendar-outline", label: e.place ? e.place : e.kind === "meeting" ? "Meeting" : "On your calendar" }
+  }));
+  const publishedUpcoming = [...mineUpcoming, ...(feed?.upcoming ?? [])].slice(0, 4);
   const upcoming: HomeUpcomingCard[] = [
     ...publishedUpcoming,
     ...(feed
@@ -557,6 +564,9 @@ export default function HomeScreen() {
           <>
             <View style={s.sectionRow}>
               <Text style={s.panelTitle}>UPCOMING</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="Open the event log" onPress={() => router.push("/event-log" as never)} style={{ marginRight: 14 }}>
+                <Text style={s.seeAll}>Event log</Text>
+              </Pressable>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="See all upcoming events"
@@ -594,7 +604,7 @@ export default function HomeScreen() {
                             startsAt: event.startsAt
                           }
                         })
-                      : router.push(eventsRoute as never)}
+                      : String(event.id).startsWith("mine-") ? router.push("/event-log" as never) : router.push(eventsRoute as never)}
                   >
                     <View style={[s.eventTopRow, compactUpcomingCards && s.eventTopRowCompact]}>
                       <View style={[s.eventDateChip, compactUpcomingCards && s.eventDateChipCompact]}>

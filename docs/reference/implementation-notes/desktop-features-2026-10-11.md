@@ -1,0 +1,13 @@
+# Desktop feature activation — 2026-10-11
+
+The linked desktop interface is `clients/web`, served locally on port 5173. Its former phone-only menu entries now launch desktop actions: voice/video calls, call tools, shared whiteboard, screen selection, microphone recording, local transcription, encrypted media/files, voice notes, GIF uploads, location/contact cards, events/meetings, Vault and AI image generation/local text excerpts.
+
+Calls use the secure call-room protocol shared with the phone, with Rust/WASM sealing, opening and signing. There is no production JavaScript core fallback. Browser WebSockets authenticate with a bounded first frame rather than a token in the URL. Existing native header authentication remains supported.
+
+Attachment encryption is compatible with the phone's XChaCha20-Poly1305 media format. The phone and desktop content validators accept browser WebM/Ogg recordings. The desktop also opens legacy phone media cards. Closing a recorder or cancelling pending microphone permission releases tracks; transcription never falls back to a cloud recognizer. Media object URLs are released when cards unmount.
+
+Validation: production web build and server TypeScript check passed; the complete existing web suite passed 73 tests. Six additional desktop menu/card/calendar and microphone/transcription tests passed. Seventeen backend browser-authentication and call-room service tests passed. Browser authentication tests use real Fastify/WebSocket/JWT verification with a database stub; they do not certify PostgreSQL persistence. Attachment tests run the actual phone media cryptography and both validators. Call crypto tests run the rebuilt production Rust/WASM artifact and check identity binding and replay rejection.
+
+The local backend was restarted with the new browser authentication route and its readiness endpoint verified. The desktop preview serves the new compiled assets. No connected browser was available for interactive visual verification. Live desktop-to-phone calls, microphone/camera permission, screen capture and TURN connectivity still require a physical acceptance check.
+
+Operational limits: recordings and transcripts capture the local microphone, not remote participants. Transcription requires on-device SpeechRecognition support and an English language pack. Screen sharing requires browser support and user selection. AI image generation requires the configured provider; local text excerpts are not a language model. Vault keys are scoped to the local user and device; existing phone-encrypted items remain locked unless their keys are transferred. These changes do not implement key transfer, background call push, or multi-worker call-room scaling.
