@@ -1,40 +1,69 @@
-Application Security Assessment — Page-by-Page Review
+Application Security Assessment — Expanded Follow-up
 Date: 2026-10-12
 
-Summary
+Executive summary
 
-No new confirmed vulnerabilities were identified in the reviewed pages/screens and related API paths listed below. This is a static, scoped review, not a claim that every page, route, runtime behavior, or deployed configuration is secure.
+The locally available evidence confirms that release-signing credentials were committed to Git history and remain reachable from the current branch and its remote-tracking ref as of the last fetch. Credential rotation and history rewriting are not evidenced in the checkout. This follow-up did not complete a page-by-page review of the full mobile/web route inventory, and it did not access production, provider consoles, live user accounts, or GitHub audit/access records. No new application-code vulnerability was confirmed in this follow-up. This is not a full security clearance.
 
 Findings
 
 | # | Severity | File | Lines | Vulnerability | Confidence |
 |---|----------|------|-------|---------------|------------|
-| 1 | 🟡 MEDIUM | linqaChat-And-iOS/linqa-signing.properties (historical; deleted from current tree) | 3, 5 | Release keystore and key passwords were committed in cleartext. Deleting the file does not remove it from Git history. If the matching keystore is obtained and the credentials remain valid, they could be used to sign a release. This is a previously reported historical exposure, not a newly confirmed flaw in the pages reviewed here. | 8/10 |
+| 1 | 🟡 MEDIUM | linqaChat-And-iOS/linqa-signing.properties (historical; deleted from working tree) | 3, 5 | Non-empty release keystore and key passwords, along with the keystore path and alias, were committed in cleartext. The credential-bearing commit remains reachable in Git history. If the matching keystore is available and the credentials are valid, they could enable release signing. Do not treat the values as rotated based on the deletion commit. | 9/10 |
 
-Pages and screens assessed
+Historical exposure evidence
 
-- Mobile conversation: `/modules/conversation`, `ConversationScreen`, and `ChatActionSheets`, including message forwarding and related conversation-service calls.
-- Mobile event scheduling: meeting/event composition, event cards in conversations, calendar export, reminders, and the Event log screen.
-- Web linked-browser chat: chat-screen message forwarding, `ForwardDialog`, and secure-message opening/caching.
-- Related mobile screens/flows: account context, vault access and checkout, and news-link handling.
+- Local Git inspection found the credential file at commit `77fcf52`; its credential-bearing fields occur on lines 3 and 5. The secret values were not copied into this report.
+- Commit `d852fcb` deleted/untracked the file; deletion does not purge earlier Git blobs.
+- As of the last local fetch, `77fcf52` is reachable from `agent/production-module-hardening` and `remotes/origin/agent/production-module-hardening`, but not from `main` or `origin/main`. The remote tracking ref indicates the commit reached the configured GitHub remote; it does not establish repository visibility or who accessed it.
+- No evidence of credential/key rotation or history rewrite was found in the inspected checkout. `thingsdone.txt` contains advice to rotate, not proof that rotation occurred.
+- Whether the keystore itself was ever committed was not established; a full-history search for keystore file types was not completed.
+- The repository's current visibility, collaborators, forks, clones, and access/audit logs cannot be established from the local checkout.
 
-Related backend/API paths assessed
+Page/route review coverage
 
-- Chat message deletion and visibility, attachment deletion, and historical sender-key lookup.
-- Thread attachment/media upload and read paths, and location-share handlers and service authorization.
-- Key-package handling, global rate-limit key selection, and API bootstrap/schema-readiness checks.
-- Relevant vault, authentication, account-deletion, and LinqaSend route authorization patterns.
+Screens/flows reviewed in the preceding scoped static assessment:
+
+- Mobile conversation: `/modules/conversation`, `ConversationScreen`, and `ChatActionSheets`, including forwarding and related conversation-service calls.
+- Mobile event scheduling: meeting/event composition, conversation event cards, calendar export, reminders, and the Event log screen.
+- Web linked-browser chat: message forwarding, `ForwardDialog`, and secure-message opening/caching.
+- Related mobile flows: account context, vault access and checkout, and news-link handling.
+- Related backend/API paths: message deletion and visibility, attachment deletion, sender-key lookup, thread media upload/read, location share, key packages, rate-limit key selection, schema readiness, vault/authentication/account deletion, and LinqaSend authorization patterns.
+
+Coverage NOT completed by this follow-up:
+
+- Mobile pages in `clients/mobile/app/**` were not individually enumerated and traced end-to-end.
+- Web pages in `clients/web/src` were not individually enumerated and traced end-to-end.
+- The server has approximately 448 route registrations across 68 files; all registrations were counted, not individually reviewed for authentication, authorization/IDOR, injection, SSRF, path traversal, upload handling, and rate limiting.
+- Mobile/web client folders `clients/android`, `clients/ios`, and `clients/shared`, and prototype/page-code packs such as `Admin-Staff`, `CountryLinqa`, `LinkaSend-pageCode`, and `Linqa_*` were not comprehensively reviewed. Prototype files are not necessarily deployed routes.
+- Prior scoped review observations above are not a substitute for tracing every screen to its server-side authorization and data paths.
+
+The security-review pass identified these higher-priority areas for the unfinished route trace, not as confirmed vulnerabilities:
+
+- `server/src/routes/vault-intake.ts`
+- `server/src/routes/linqasend/advanced-routes.ts`
+- `server/src/services/storage/local-vault-object-storage.ts` (path-traversal review pending)
+- `server/src/routes/calls.ts`
+- `server/src/routes/device-links/`
+- `server/src/routes/history-transfer/`
+- `server/src/routes/countrylinqa/`
+
+Deployment, providers, and live verification
+
+Not verified: deployment manifests/configuration, production TLS/WAF/secrets-manager state, CI workflow behavior, or actual deployed build settings. Push, OTP/SMS, TURN, storage, AI, KMS, and other provider behavior were not tested against provider accounts or production. Runtime authorization with live accounts was not tested. The local environment had no authorized production session or account context supplied for these checks; no production probing or credential use was performed.
+
+Credential validity and rotation cannot be confirmed without authorized access to the signing keystore and the relevant Play Console/App Store signing records. Repository access history requires authorized GitHub organization/repository audit logs and visibility/collaborator/fork data; it is not available from the local Git checkout. No passwords, tokens, or signing material were used or reproduced.
 
 Recommendations
 
-- Signing credentials: rotate the exposed release keystore and key passwords. If the keystore or credentials may have been accessed by an untrusted party, assess replacing the signing key. Verify rotation independently; removing the historical file or rewriting history does not invalidate credentials.
-- Conversation and forwarding: preserve server-side authorization checks for every read, delete, attachment, and forwarding operation; test that users cannot access another account's messages or media by changing identifiers.
-- Events and reminders: validate event ownership and participant permissions on the server, and test calendar export/reminder data for unauthorized access and unintended disclosure.
-- Web secure-message flow: test cache lifecycle and logout/account-switch behavior to ensure decrypted material is not exposed to a subsequent user or session.
-- Vault, account, and send flows: test authentication, account scoping, and authorization against direct API requests, not only the visible UI.
-- API and uploads: retain server-side type/size validation and access controls for attachments, media, and location data; verify rate limiting and key-package behavior under abuse scenarios.
-- Coverage: complete a route-by-route review of the remaining web/mobile screens and exercise authorization-sensitive paths with multiple test accounts before treating the application as fully assessed.
+1. Treat the historical release credentials as compromised. Rotate the store/key passwords and replace or reset the signing key using the platform's supported process (for example, an upload-key reset where applicable). Confirm and record completion with the release owner; rotation is not evidenced here.
+2. Determine whether any corresponding keystore exists in current or historical Git objects and whether the signing credentials remain active. Do this in a controlled environment without printing secret values.
+3. Review GitHub repository visibility, collaborators, forks, audit logs, secret-scanning alerts, and push-protection events with an authorized repository administrator. If history cleanup is appropriate, coordinate it with collaborators; a history rewrite does not revoke the credentials.
+4. Add ignore rules for `*.jks`, `*.p12`, `*.pfx`, `*.mobileprovision`, `server/.local-vault/`, and `server/key-directory/`, and enable secret scanning/push protection. `.gitignore` already ignores `**/linqa-signing.properties`; the other patterns were identified as a hardening gap.
+5. Complete a route-by-route mobile/web inventory and trace each screen's sensitive operations to API authentication, authorization, ownership checks, validation, and rate limits. Start with the pending higher-priority paths above; record routes actually inspected and targeted tests run.
+6. Separately review deployment configuration and CI/CD, then validate TLS, secret delivery, and provider settings with authorized production owners.
+7. With authorized test accounts, dynamically test direct API requests for cross-account access, IDOR, session/logout/account-switch leakage, upload abuse, and role/ownership boundaries. Do not use real users' accounts or data.
 
-Review scope and limitations
+Assessment method and limitations
 
-The review was static. Conversation, scheduling, forwarding, and associated API paths received the most detailed examination; the reviewer did not individually trace every screen in the large mobile/web route inventory. Deployed configuration, provider behavior, credential validity/rotation, and runtime authorization with live accounts were not verified. The historical credential finding was reported previously; repository access history and whether the credentials remain valid were not verified.
+Static review only; no comprehensive dynamic test or penetration test was performed. The expanded route trace ran out of review capacity before tracing the full mobile/web inventory and all server routes. The approximately 448 server route registrations across 68 files are a count, not a finding-by-finding review. Deployed configuration, provider behavior, credential validity/rotation, repository access history, the existence/accessibility of the keystore, and runtime authorization with live accounts remain unverified. No new code vulnerability was confirmed in this follow-up; absence of findings in unreviewed areas must not be read as evidence those areas are secure.
