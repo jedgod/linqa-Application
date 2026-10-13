@@ -4,6 +4,7 @@ import { secureCoreModule } from "../modules/linqa-secure-core";
 import { SecureCoreDevice, SecureCoreMessaging } from "./secure-core";
 import { SecureCoreServer } from "./secure-core-server";
 import { accessTokenProvider } from "./session";
+import { registerAccountScopeReset } from "./account-scope";
 
 /**
  * One secure messaging session per account, shared by every screen that opens messages (a conversation, the chat list previews).
@@ -27,6 +28,9 @@ export interface SharedSecure {
 }
 
 const sessions = new Map<string, SharedSecure | null>();
+// The native module holds one core. A session's readiness cannot survive
+// switching which account's keys that core has loaded.
+registerAccountScopeReset('secure-session',()=>{sessions.clear();sendPeer.current=null;sendGroup.current=null;});
 
 export function sharedSecureSession(selfId: string): SharedSecure | null {
   if (!selfId) return null;

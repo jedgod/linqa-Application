@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
 import { ChatError } from "./chat.service.js";
+import type { Database } from '../db/pool.js';
 
 export type Who = { userId: string; deviceId: string | null };
 export type Limiter = (userId: string, request: FastifyRequest) => void;
@@ -16,7 +17,7 @@ export const idParam = (request: FastifyRequest) => uuid.parse((request.params a
  * The one shape every thread route follows: authenticate (401 when it fails), rate limit, run the handler, and turn any
  * failure into a coded response. Anything that is not a deliberate ChatError becomes an opaque 500; no stack, no SQL.
  */
-export function makeRunner(config: AppConfig) {
+export function makeRunner(config: AppConfig,db?:Database) {
   const authenticate = createAuthenticator(config);
   return function run(scope: string, limit: Limiter, handler: (request: FastifyRequest, who: Who) => Promise<unknown>, success = 200) {
     return async (request: FastifyRequest, reply: FastifyReply) => {
@@ -24,6 +25,7 @@ export function makeRunner(config: AppConfig) {
       try { principal = await authenticate(request); requireScope(principal, scope); }
       catch (error) { request.log.warn({ err: error }, "thread route authentication rejected"); return reply.code(401).send({ error: { code: "UNAUTHENTICATED", requestId: request.id } }); }
       try {
+        if(db&&principal.deviceId){const active=await db.query("SELECT id FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL",[principal.deviceId,principal.userId]);if(!active.rowCount)throw new ChatError(401,'DEVICE_REQUIRED');}
         limit(principal.userId, request);
         const result = await handler(request, { userId: principal.userId, deviceId: (principal as { deviceId?: string }).deviceId ?? null });
         void reply.header("Cache-Control", "private, no-store");

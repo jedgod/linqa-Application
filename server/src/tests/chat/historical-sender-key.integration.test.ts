@@ -1,3 +1,8 @@
+import {ThreadAttachmentService} from "../../chat/thread-attachment.service.js";
+import {assertChatSchemaReady} from '../../db/chat-schema-readiness.js';
+import {registerThreadAttachmentRoutes} from "../../chat/thread-attachment.routes.js";
+import {registerChatFeatureRoutes} from "../../chat/chat-feature.routes.js";
+import {registerLiveScreenRoutes} from "../../chat/live-screen.routes.js";
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {randomBytes,randomUUID} from 'node:crypto';
 import Fastify from 'fastify';
@@ -14,7 +19,7 @@ import type {Database} from '../../db/pool.js';
 
 const database=await ensureTestDatabase();const suite=database?describe:describe.skip;
 const config=loadConfig();let db:Database;let app:ReturnType<typeof Fastify>;const users:string[]=[];
-beforeAll(async()=>{if(!database)return;db=new pg.Pool({connectionString:database.connectionString}) as unknown as Database;app=Fastify();await registerKeyPackageRoutes(app,config,db);await registerChatV2Routes(app,config,db,new RealtimeHub());await registerChatRoutes(app,config,db);await app.ready();});
+beforeAll(async()=>{if(!database)return;db=new pg.Pool({connectionString:database.connectionString}) as unknown as Database;app=Fastify();await registerKeyPackageRoutes(app,config,db);await registerChatV2Routes(app,config,db,new RealtimeHub());await registerChatRoutes(app,config,db);await registerThreadAttachmentRoutes(app,config,db);await registerChatFeatureRoutes(app,config,db);await registerLiveScreenRoutes(app,config,db);await app.ready();});
 afterAll(async()=>{if(!database)return;await app.close();await db.query('DELETE FROM conversations WHERE created_by_user_id=ANY($1::uuid[])',[users]);await db.query('DELETE FROM users WHERE id=ANY($1::uuid[])',[users]);await db.end();await database.stop();});
 async function fixture(){
  const user=randomUUID(),peer=randomUUID(),phone=randomUUID(),browser=randomUUID(),conversation=randomUUID(),signingKey=randomBytes(32);
@@ -32,6 +37,7 @@ async function fixture(){
  return {user,peer,phone,browser,conversation,signingKey,message,body,url,lookup,token};
 }
 suite('historical sender verification after unlink',()=>{
+ it('readiness rejects a reachable database missing the chat schema',async()=>{const client=await db.connect();try{await client.query('BEGIN');await client.query('SET LOCAL search_path TO pg_catalog');await expect(assertChatSchemaReady(client)).rejects.toMatchObject({code:'42P01'});}finally{await client.query('ROLLBACK');client.release();}await expect(assertChatSchemaReady(db)).resolves.toBeUndefined();});
  it('rejects inbox preview access with a revoked device token',async()=>{const f=await fixture();const response=await app.inject({method:'GET',url:'/v1/chats/inbox',headers:{authorization:'Bearer '+await f.token(f.browser)}});expect(response.statusCode).toBe(401);});
  it('returns only the public signing key for an accepted message after revocation',async()=>{const f=await fixture();const response=await f.lookup();expect(response.statusCode).toBe(200);expect(response.json()).toEqual({senderUserId:f.user,senderDeviceId:f.browser,signingPublicKey:Array.from(f.signingKey)});expect((await db.query('SELECT signing_public_key FROM devices WHERE id=$1',[f.browser])).rows[0].signing_public_key).toEqual(f.signingKey);const directory=await app.inject({method:'GET',url:`/v1/users/${f.user}/key-packages`,headers:{authorization:'Bearer '+await f.token(f.phone)}});expect(directory.statusCode).toBe(200);expect(directory.json().keyPackages).toEqual([]);});
  it('rejects changed ciphertext or forged sender identity',async()=>{const f=await fixture();expect((await f.lookup({ciphertextBase64:Buffer.from('new forgery').toString('base64')})).statusCode).toBe(404);expect((await f.lookup({senderDeviceId:f.phone})).statusCode).toBe(404);expect((await f.lookup({senderUserId:f.peer})).statusCode).toBe(404);});
@@ -72,5 +78,34 @@ suite('message deletion permissions and persistence',()=>{
   expect((await app.inject({method:'DELETE',url:`/v1/chats/${randomUUID()}/messages/${f.message.id}`,headers:{authorization},payload:{scope:'me'}})).statusCode).toBe(404);
   expect((await app.inject({method:'POST',url:path(f)+'/visibility',headers:{authorization},payload:{messageIds:Array(501).fill(f.message.id)}})).statusCode).toBe(422);
   expect((await f.lookup()).statusCode).toBe(200);
+ });
+});
+
+suite('attachment history, deletion and revoked-device feature access',()=>{
+ async function attachment(f:Awaited<ReturnType<typeof fixture>>){const id=randomUUID(),envelope=Buffer.alloc(64,9);await db.query("INSERT INTO thread_attachments(id,conversation_id,sender_user_id,sender_device_id,kind,envelope,byte_length,created_at) SELECT $1,$2,$3,$4,'EVENT',$5,64,created_at FROM chat_messages WHERE id=$6",[id,f.conversation,f.user,f.browser,envelope,f.message.id]);return {id,envelope,url:`/v1/chats/${f.conversation}/messages/${id}`};}
+ it('opens accepted old attachment senders after unlink and applies clear/delete-for-me only to this account',async()=>{
+  const f=await fixture(),a=await attachment(f),headers={authorization:'Bearer '+await f.token(f.phone)},service=new ThreadAttachmentService(db);
+  const lookup=()=>app.inject({method:'POST',url:a.url+'/sender-key',headers,payload:{...f.body,ciphertextBase64:a.envelope.toString('base64')}});
+  expect((await lookup()).statusCode).toBe(200);expect(await service.list(f.peer,f.conversation)).toHaveLength(1);
+  await db.query('UPDATE conversation_members SET cleared_at=now() WHERE conversation_id=$1 AND user_id=$2',[f.conversation,f.user]);
+  expect(await service.list(f.user,f.conversation)).toEqual([]);expect(await service.list(f.peer,f.conversation)).toHaveLength(1);expect((await lookup()).statusCode).toBe(404);
+  await db.query('UPDATE conversation_members SET cleared_at=NULL WHERE conversation_id=$1 AND user_id=$2',[f.conversation,f.user]);
+  expect((await app.inject({method:'DELETE',url:a.url,headers,payload:{scope:'me'}})).statusCode).toBe(200);
+  expect(await service.list(f.user,f.conversation)).toEqual([]);expect(await service.list(f.peer,f.conversation)).toHaveLength(1);expect((await lookup()).statusCode).toBe(404);
+  expect((await app.inject({method:'POST',url:`/v1/chats/${f.conversation}/messages/visibility`,headers,payload:{messageIds:[a.id]}})).json().visibleMessageIds).toEqual([]);
+ });
+ it('deletes an owned attachment for everyone without permitting deletion of another sender',async()=>{
+  const f=await fixture(),a=await attachment(f),headers={authorization:'Bearer '+await f.token(f.phone)},service=new ThreadAttachmentService(db);
+  await db.query('UPDATE thread_attachments SET sender_user_id=$1 WHERE id=$2',[f.peer,a.id]);
+  expect((await app.inject({method:'DELETE',url:a.url,headers,payload:{scope:'everyone'}})).statusCode).toBe(403);
+  await db.query('UPDATE thread_attachments SET sender_user_id=$1 WHERE id=$2',[f.user,a.id]);
+  expect((await app.inject({method:'DELETE',url:a.url,headers,payload:{scope:'everyone'}})).statusCode).toBe(200);
+  expect(await service.list(f.user,f.conversation)).toEqual([]);expect(await service.list(f.peer,f.conversation)).toEqual([]);expect((await db.query('SELECT envelope FROM thread_attachments WHERE id=$1',[a.id])).rows[0].envelope.length).toBe(0);
+ });
+ it('rejects revoked-device reads, new attachments and live-screen/AI capability access',async()=>{
+  const f=await fixture(),headers={authorization:'Bearer '+await f.token(f.browser)};
+  for(const suffix of ['attachments','features','screen-shares','media/'+randomUUID()])expect((await app.inject({method:'GET',url:`/v2/chats/${f.conversation}/${suffix}`,headers})).statusCode).toBe(401);
+  expect((await app.inject({method:'POST',url:`/v2/chats/${f.conversation}/attachments`,headers,payload:{id:randomUUID(),kind:'CONTACT',envelopeBase64:Buffer.alloc(64,1).toString('base64url')}})).statusCode).toBe(401);
+  await expect(new ThreadAttachmentService(db).accept({id:randomUUID(),conversationId:f.conversation,userId:f.user,deviceId:f.browser,kind:'EVENT',envelope:Buffer.alloc(64,1)})).rejects.toMatchObject({code:'DEVICE_REQUIRED'});
  });
 });

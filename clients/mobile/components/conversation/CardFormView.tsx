@@ -4,6 +4,9 @@ import type { Payload, Theme } from "../../services/conversation-engine";
 import { buildCardPayload, defaultCardForm, type CardForm } from "../../services/conversation-thread";
 import { SubHeader } from "./SubHeader";
 import { radius, space, type } from "./theme";
+import { useAccounts } from "../../account/AccountContext";
+import { addMyEvent } from "../../services/my-events";
+import { newId } from "../../features/conversation/content/codec";
 
 interface Props {
   theme: Theme;
@@ -17,19 +20,28 @@ interface Props {
 /** A small form for an event or a meeting. The date and time are read in the phone's own time zone. */
 export function CardFormView({ theme: t, kind, peerFirstName, onSend, onBack }: Props) {
   const meeting = kind === "MEETING";
+  const { active } = useAccounts();
   const [form, setForm] = useState<CardForm>(() => defaultCardForm());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const sending = useRef(false);
   const set = (patch: Partial<CardForm>) => setForm((old) => ({ ...old, ...patch }));
+  const preview = buildCardPayload(kind, form, new Date(), { allowPastEvent: true });
+  const pastEvent = preview.ok && preview.payload.type === "event" && Date.parse(preview.payload.startsAt) <= Date.now();
 
   async function submit() {
     if (sending.current) return;
-    const built = buildCardPayload(kind, form);
+    const built = buildCardPayload(kind, form, new Date(), { allowPastEvent: true });
     if (!built.ok) { setError(built.error); return; }
     sending.current = true;
     setError(null); setBusy(true);
     try {
+      if (built.payload.type === "event" && Date.parse(built.payload.startsAt) <= Date.now()) {
+        if (!active) { setError("Sign in to save past events."); return; }
+        await addMyEvent(active.userId, { id: newId("e"), kind: "event", title: built.payload.title, startsAt: built.payload.startsAt, endsAt: built.payload.startsAt, ...(built.payload.place ? { place: built.payload.place } : {}) });
+        onBack();
+        return;
+      }
       if (await onSend(built.payload)) onBack();
       else setError("Couldn't send it. Check your connection and try again.");
     } catch { setError("Couldn't send it. Check your connection and try again."); }
@@ -45,7 +57,7 @@ export function CardFormView({ theme: t, kind, peerFirstName, onSend, onBack }: 
 
   return (
     <View style={[styles.fill, { backgroundColor: t.background }]}>
-      <SubHeader theme={t} title={meeting ? "Schedule meeting" : "New event"} subtitle={`Shared with ${peerFirstName}, encrypted`} onBack={onBack} />
+      <SubHeader theme={t} title={meeting ? "Schedule meeting" : "New event"} subtitle={pastEvent ? "Saved privately in your past events" : `Shared with ${peerFirstName}, encrypted`} onBack={onBack} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {field("Title", form.title, (title) => set({ title }), { placeholder: meeting ? "Site walkthrough" : "Team dinner" })}
         <View style={styles.row}>
@@ -54,11 +66,11 @@ export function CardFormView({ theme: t, kind, peerFirstName, onSend, onBack }: 
         </View>
         {meeting ? field("Length in minutes", form.durationMinutes, (durationMinutes) => set({ durationMinutes: durationMinutes.replace(/\D/g, "") }), { keyboard: "numeric", max: 3 }) : field("Place (optional)", form.place, (place) => set({ place }), { placeholder: "Where is it?" })}
         {error ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[type.body, { color: t.danger }]}>{error}</Text> : null}
-        <Text style={[type.meta, { color: t.muted }]}>It is sealed on your phone before it is sent, so only you and {peerFirstName} can read it.</Text>
+        <Text style={[type.meta, { color: t.muted }]}>{pastEvent ? "This past event will be saved to your event log without sending an invitation, opening the calendar, or creating a reminder." : `It is sealed on your phone before it is sent, so only you and ${peerFirstName} can read it.`}</Text>
       </ScrollView>
       <View style={styles.footer}>
         <Pressable accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} onPress={() => void submit()} style={[styles.send, { backgroundColor: t.outgoing }]}>
-          <Text style={[type.title, { color: t.onOutgoing }]}>{busy ? "Sending…" : meeting ? "Share meeting" : "Share event"}</Text>
+          <Text style={[type.title, { color: t.onOutgoing }]}>{busy ? (pastEvent ? "Saving…" : "Sending…") : pastEvent ? "Save past event" : meeting ? "Share meeting" : "Share event"}</Text>
         </Pressable>
       </View>
     </View>

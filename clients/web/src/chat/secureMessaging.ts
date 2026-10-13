@@ -66,7 +66,7 @@ const fromJsonB64 = <T>(b64: string): T => JSON.parse(decoder.decode(base64ToByt
 
 export class SecureMessaging {
   /** The core refuses to open the same envelope twice, so what was opened stays here (memory only). */
-  private readonly opened = new Map<string, string>();
+  private readonly opened = new Map<string,{plaintext:string;ciphertext:string;senderUserId:string}>();
 
   constructor(private readonly deps: {
     core: ChatCore;
@@ -146,7 +146,10 @@ export class SecureMessaging {
   async open(ciphertextBase64: string, context: { conversationId: string; senderUserId: string; messageId: string }): Promise<string> {
     const key = `${context.conversationId}:${context.messageId}`;
     const known = this.opened.get(key);
-    if (known !== undefined) return known;
+    if(known!==undefined){
+      if(known.ciphertext!==ciphertextBase64||known.senderUserId!==context.senderUserId)return fail("MESSAGE_CONTEXT_MISMATCH");
+      return known.plaintext;
+    }
 
     const selfDevice = this.deps.deviceId();
     const bundle = fromJsonB64<Bundle>(ciphertextBase64);
@@ -167,7 +170,7 @@ export class SecureMessaging {
     const inner = JSON.parse(decoder.decode(plain)) as Inner;
     if (inner?.v !== 1 || inner.c !== context.conversationId || inner.s !== context.senderUserId || typeof inner.t !== "string") return fail("MESSAGE_CONTEXT_MISMATCH");
     if (this.opened.size >= CACHE_LIMIT) this.opened.delete(this.opened.keys().next().value as string);
-    this.opened.set(key, inner.t);
+    this.opened.set(key,{plaintext:inner.t,ciphertext:ciphertextBase64,senderUserId:context.senderUserId});
     return inner.t;
   }
 }

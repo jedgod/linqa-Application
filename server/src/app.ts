@@ -1,4 +1,6 @@
 import { registerCountrySecurity } from "./routes/countrylinqa/shared-security.js";
+import {assertChatSchemaReady} from './db/chat-schema-readiness.js';
+import {authenticatedRateLimitKey} from './auth/rate-limit-key.js';
 import Fastify from "fastify";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -55,6 +57,7 @@ export async function buildApp(config: AppConfig, db: Database) {
   // order, so a setErrorHandler() call placed textually "after" register()
   // can still lose to a plugin's internal handler set during boot).
   app.setErrorHandler((error, request, reply) => {
+    if(error&&typeof error==='object'&&'statusCode' in error&&error.statusCode===429){void reply.code(429).send({error:'RATE_LIMITED',requestId:request.id});return;}
     if (error instanceof ScopeAuthorizationError) {
       void reply.code(403).send({ error: "FORBIDDEN", requestId: request.id });
       return;
@@ -78,7 +81,8 @@ export async function buildApp(config: AppConfig, db: Database) {
 
   await app.register(rateLimit, {
     max: config.GLOBAL_RATE_LIMIT_PER_MINUTE ?? 120,
-    timeWindow: "1 minute"
+    timeWindow: "1 minute",
+    keyGenerator:authenticatedRateLimitKey(config,db)
   });
   await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
 
@@ -96,6 +100,7 @@ export async function buildApp(config: AppConfig, db: Database) {
   app.get("/health/ready", async (_request, reply) => {
     try {
       await db.query("SELECT 1");
+      await assertChatSchemaReady(db);
       if (config.NODE_ENV === "production") {
         await services.runtimeCapabilities.requireReady([
           "database", "secure-core", "delivery", "message-relay", "key-transparency"

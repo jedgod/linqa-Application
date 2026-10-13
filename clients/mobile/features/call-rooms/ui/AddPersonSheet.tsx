@@ -60,7 +60,7 @@ export function AddPersonSheet({
     );
 
   return (
-    <Sheet visible={visible} onClose={onClose} title="Add person" style={{ minHeight: '60%' }}>
+    <Sheet visible={visible} onClose={onClose} title="Add person" scrollable={false}>
       <TextInput
         value={q}
         onChangeText={setQ}
@@ -85,7 +85,7 @@ export function AddPersonSheet({
       <FlatList
         data={results}
         keyExtractor={(p) => p.userId}
-        style={{ flexGrow: 0, maxHeight: 360 }}
+        style={{ flexGrow: 0, flexShrink: 1, maxHeight: 360 }}
         keyboardShouldPersistTaps="handled"
         ListEmptyComponent={!loading ? <Text style={[k.dim, { paddingVertical: 16 }]}>No contacts found.</Text> : null}
         renderItem={({ item }) => {

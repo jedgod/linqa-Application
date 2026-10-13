@@ -13,7 +13,7 @@ const limits = {
 
 /** Signaling for a live screen share. Frames never come through here. */
 export async function registerLiveScreenRoutes(app: FastifyInstance, config: AppConfig, db: Database) {
-  const run = makeRunner(config);
+  const run = makeRunner(config,db);
   const screens = new LiveScreenService(db);
 
   app.post("/v2/chats/:id/screen-shares", run("messages:send", limits.write, async (request, who) => {

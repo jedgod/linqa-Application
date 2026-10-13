@@ -1,5 +1,15 @@
 import {randomBytes} from 'node:crypto';
 export const files=new Map<string,Buffer>();
+export const Paths={document:'file:///documents/'};
+export class Directory { constructor(readonly uri:string){} }
+export class File {
+  readonly uri:string;
+  constructor(directory:Directory,name:string){this.uri=directory.uri+name;}
+  get exists(){return files.has(this.uri);}
+  create(){files.set(this.uri,Buffer.alloc(0));}
+  async text(){return files.get(this.uri)?.toString('utf8')??'';}
+  write(value:string){files.set(this.uri,Buffer.from(value));}
+}
 export const cacheDirectory='file:///cache/';
 export const EncodingType={Base64:'base64'};
 export async function getInfoAsync(path:string){const data=files.get(path);return data?{exists:true,size:data.length,isDirectory:false}:{exists:false};}

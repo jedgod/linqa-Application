@@ -67,7 +67,7 @@ export function ReportSheet({
   };
 
   return (
-    <Sheet visible={visible} onClose={onClose} title="Report" style={{ maxHeight: '92%' }}>
+    <Sheet visible={visible} onClose={onClose} title="Report" scrollable={false}>
       <ScrollView keyboardShouldPersistTaps="handled">
         <Text style={[k.dim, { marginBottom: 12 }]}>
           Calls are end-to-end encrypted and never recorded, so Linqa can't hear or see what happened. We'll get who was

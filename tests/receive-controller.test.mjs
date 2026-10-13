@@ -8,6 +8,7 @@ function make(open, markRead = async()=>{}) {
  c.enter(scope,true); return c;
 }
 test('committed payload opens',async()=>{const c=make(async()=>'{"type":"text","text":"hello"}');await c.open(row);assert.equal(c.body('1').state,'open');});
+test('deletion drops a body and prevents a late decrypt from restoring it',async()=>{let resolve;let calls=0;const c=make(()=>{calls++;return new Promise(r=>resolve=r);});const opening=c.open(row);c.forget(row.id);resolve('{"type":"text","text":"deleted"}');await opening;await c.open(row);c.seed(row.id,{type:'text',text:'deleted'});assert.equal(c.bodies.size,0);assert.equal(c.failed(row.id),false);assert.equal(calls,1);});
 test('lock and unlock invalidates old decrypt',async()=>{let resolve;const c=make(()=>new Promise(r=>resolve=r));const p=c.open(row);c.enter(scope,false);c.enter(scope,true);resolve('{}');await p;assert.equal(c.bodies.size,0);});
 test('account switch invalidates old decrypt',async()=>{let resolve;const c=make(()=>new Promise(r=>resolve=r));const p=c.open(row);c.enter({...scope,accountId:'other'},true);resolve('{}');await p;assert.equal(c.bodies.size,0);});
 test('tampering remains blocked even with explicit retry',async()=>{let n=0;const c=make(async()=>{n++;throw {kind:'authentication'};});await c.open(row);await c.open(row,{explicit:true});assert.equal(n,1);});

@@ -24,7 +24,7 @@ export async function readProviderResponse(response: Response, max = 9_000_000):
   } finally { await reader.cancel().catch(() => undefined); }
 }
 export async function registerChatFeatureRoutes(app: FastifyInstance, config: AppConfig, db: Database) {
-  const run = makeRunner(config);
+  const run = makeRunner(config,db);
   const reads = simpleRateLimit({ windowMs: 60_000, max: 60, keyPrefix: "chat-features" });
   const images = simpleRateLimit({ windowMs: 3_600_000, max: 8, keyPrefix: "chat-ai-images" });
   const member = (userId: string, conversationId: string) => withTransaction(db, client => assertMember(client, userId, conversationId));

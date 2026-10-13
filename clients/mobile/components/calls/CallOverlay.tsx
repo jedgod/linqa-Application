@@ -1,10 +1,11 @@
 import { BoardView } from "./BoardView";
 import { CallContactPanel, CallLocationButton } from "./CallContactPanel";
+import { DoubleTapVideo, FloatingCallVideo } from "./FloatingCallVideo";
 import { buildMoreMenu, type MoreItem } from "../../services/call-actions/moreMenu";
 import React, { useEffect, useState, useSyncExternalStore } from "react";
-import { Alert, Platform, Modal, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Platform, Modal, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { callController, type CallState } from "../../services/call-controller";
 
 // Loaded lazily by name: the native video view only exists once the call engine is built into the app.
@@ -63,6 +64,10 @@ function NetworkPill({ network }: { network: CallState["network"] }) {
 /** The full-screen call: voice and video layouts, ringing, and the Return-to-call bar while minimised. */
 export function CallOverlay() {
   const call = useCallState();
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
+  const [videoBounds, setVideoBounds] = useState({ width: 0, height: 0 });
+  const [selfFullScreen, setSelfFullScreen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [boardVisible, setBoardVisible] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -71,7 +76,7 @@ export function CallOverlay() {
   const [reportCategory, setReportCategory] = useState("HARASSMENT");
   const [moreOpen, setMoreOpen] = useState(false);
   const [contactVisible, setContactVisible] = useState(false);
-  useEffect(() => { setContactVisible(false); }, [call.callId]);
+  useEffect(() => { setContactVisible(false); setSelfFullScreen(false); }, [call.callId]);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -100,6 +105,9 @@ export function CallOverlay() {
   const visible = (live && !call.minimized) || (!live && Boolean(call.note));
   const initial = (call.peerName || "?").trim().charAt(0).toUpperCase();
   const remoteShown = video && RTC && call.remoteStreamUrl;
+  const canSwap = !!(remoteShown && call.localStreamUrl && !call.cameraOff && !call.sharingScreen);
+  const selfIsMain = canSwap && selfFullScreen;
+  const swapVideos = canSwap ? () => setSelfFullScreen(value => !value) : undefined;
 
   const back = () => {
     if (call.phase === "ringing") void callController.decline();
@@ -190,7 +198,7 @@ export function CallOverlay() {
         {video && live ? (
           // ---------------------------------------------------------------- video layout
           <View style={[styles.root, { backgroundColor: "#000" }]}>
-            {remoteShown ? <RTC streamURL={call.remoteStreamUrl} style={StyleSheet.absoluteFill} objectFit="cover" /> : <View style={[StyleSheet.absoluteFill, { backgroundColor: "#1B1B1B" }]} />}
+            {remoteShown ? <RTC streamURL={selfIsMain ? call.localStreamUrl : call.remoteStreamUrl} style={StyleSheet.absoluteFill} objectFit="cover" mirror={selfIsMain} pointerEvents="none" /> : <View style={[StyleSheet.absoluteFill, { backgroundColor: "#1B1B1B" }]} />}
             <SafeAreaView style={styles.safe}>
               <View style={styles.videoTop}>
                 <Pressable accessibilityRole="button" accessibilityLabel="Minimise call" onPress={back} hitSlop={8} style={styles.videoMinimize}>
@@ -204,18 +212,19 @@ export function CallOverlay() {
                   <CallLocationButton flag={call.peerPlace?.flag} area={call.peerPlace?.name} onPress={() => setContactVisible(true)} />
                 </View>
                 <View style={styles.videoIdentity}>
-                  <Text style={styles.nameBig} numberOfLines={1}>{call.peerName || "Linqa call"}</Text>
-                  <Text style={styles.statusGreen}>ðŸ”’  {privacyLine}</Text>
+                  <Text style={styles.nameBig} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{call.peerName || "Linqa call"}</Text>
+                  <View style={styles.privacyRow}><Ionicons name="lock-closed" size={12} color={GREEN} /><Text style={[styles.statusGreen, { flexShrink: 1 }]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8}>{privacyLine}</Text></View>
                 </View>
               </View>
               <View style={{ alignItems: "center" }}>{recordingBanner}</View>
 
-              {call.localStreamUrl && call.phase !== "ringing" && RTC ? (
-                <View style={styles.self}>
-                  {call.cameraOff && !call.sharingScreen ? <View style={[StyleSheet.absoluteFill, { backgroundColor: "#333" }]} /> : <RTC streamURL={call.localStreamUrl} style={StyleSheet.absoluteFill} objectFit="cover" mirror={!call.sharingScreen} zOrder={1} />}
-                  {!call.sharingScreen ? <Pressable accessibilityRole="button" accessibilityLabel="Flip camera" onPress={() => callController.flipCamera()} style={styles.flip}><Ionicons name="camera-reverse-outline" size={18} color="#FFFFFF" /></Pressable> : null}
-                </View>
-              ) : null}
+              <View style={{ flex: 1 }} onLayout={event => { const { width, height: stageHeight } = event.nativeEvent.layout; setVideoBounds(previous => previous.width === width && previous.height === stageHeight ? previous : { width, height: stageHeight }); }}>
+                <DoubleTapVideo onSwap={swapVideos}><View style={{ flex: 1 }} /></DoubleTapVideo>
+                {call.localStreamUrl && call.phase !== "ringing" && RTC ? <FloatingCallVideo bounds={videoBounds} onSwap={swapVideos}>
+                  {call.cameraOff && !call.sharingScreen ? <View style={[StyleSheet.absoluteFill, { backgroundColor: "#333" }]} /> : <RTC streamURL={selfIsMain ? call.remoteStreamUrl : call.localStreamUrl} style={StyleSheet.absoluteFill} objectFit="cover" mirror={!selfIsMain && !call.sharingScreen} zOrder={1} pointerEvents="none" />}
+                  {!selfIsMain && !call.sharingScreen ? <Pressable accessibilityRole="button" accessibilityLabel="Flip camera" onPress={() => callController.flipCamera()} style={styles.flip}><Ionicons name="camera-reverse-outline" size={18} color="#FFFFFF" /></Pressable> : null}
+                </FloatingCallVideo> : null}
+              </View>
 
               <View style={styles.bottom}>
                 {consent}
@@ -294,11 +303,10 @@ export function CallOverlay() {
           </View></View>
         </Modal>
         <Modal visible={moreOpen} transparent animationType="slide" onRequestClose={() => setMoreOpen(false)}>
-          <Pressable accessibilityLabel="Close menu" onPress={() => setMoreOpen(false)} style={styles.sheetBackdrop}>
-            <Pressable accessible={false} onPress={() => undefined} style={styles.sheet}>
-              <ScrollView style={{ maxHeight: 340 }}>
+          <Pressable accessibilityLabel="Close menu" onPress={() => setMoreOpen(false)} style={[styles.sheetBackdrop, { paddingTop: insets.top + 12, paddingBottom: insets.bottom }]}>
+            <Pressable accessible={false} onPress={() => undefined} style={[styles.sheet, { maxHeight: height - insets.top - insets.bottom - 24 }]}>
+              <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} keyboardShouldPersistTaps="handled">
               {menu.map(item => <Pressable key={item.id} accessibilityRole="button" accessibilityState={{ disabled: item.disabled || call.phase !== "active" }} disabled={item.disabled || call.phase !== "active"} onPress={() => act(item)} style={[styles.sheetRow, item.disabled && { opacity: 0.45 }]}><View><Text style={[styles.sheetLabel, item.destructive && { color: RED }]}>{item.label}</Text>{item.hint ? <Text style={styles.sheetHint}>{item.hint}</Text> : null}</View></Pressable>)}
-              </ScrollView>
               {call.phase === "active" && call.recordingAvailable ? (
                 <Pressable accessibilityRole="button" onPress={toggleRecord} disabled={call.recording === "requesting" || call.recording === "asking"} style={styles.sheetRow}>
                   <Ionicons name={call.recording === "on" ? "stop-circle" : "radio-button-on"} size={24} color={call.recording === "on" ? RED : "#FFFFFF"} />
@@ -311,6 +319,7 @@ export function CallOverlay() {
                 <View style={styles.sheetRow}><Text style={styles.sheetHint}>Recording starts once the call is connected.</Text></View>
               )}
               <Pressable accessibilityRole="button" onPress={() => setMoreOpen(false)} style={styles.sheetRow}><Text style={[styles.sheetLabel, { textAlign: "center", flex: 1 }]}>Close</Text></Pressable>
+              </ScrollView>
             </Pressable>
           </Pressable>
         </Modal>
@@ -348,11 +357,12 @@ const styles = StyleSheet.create({
   endLabel: { color: RED, textAlign: "center", marginTop: 6, fontSize: 13, fontWeight: "600" },
   // video
   videoTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", paddingTop: 12, paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#000", gap: 8 },
-  metaCol: { width: 74 },
+  metaCol: { width: '23%', maxWidth: 100, minWidth: 0 },
   videoMinimize: { width: 24, minHeight: 36, justifyContent: "center" },
   metaLabel: { color: "#FFFFFF", fontSize: 11, letterSpacing: 1, marginBottom: 6 },
   location: { color: "#FFFFFF", fontSize: 12, fontWeight: "700" },
-  videoIdentity: { flex: 1, alignItems: "flex-end" },
+  videoIdentity: { flex: 1, minWidth: 0, alignItems: "flex-end" },
+  privacyRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   self: { position: "absolute", right: 16, bottom: 150, width: 132, height: 168, borderRadius: 18, overflow: "hidden", backgroundColor: "#333" },
   flip: { position: "absolute", right: 8, bottom: 8, width: 32, height: 32, borderRadius: 16, backgroundColor: "#111", alignItems: "center", justifyContent: "center" },
   bar: { marginHorizontal: 12, minHeight: 92, borderRadius: 28, backgroundColor: "#1C1E22", flexDirection: "row", alignItems: "center", justifyContent: "space-evenly", paddingVertical: 8 },

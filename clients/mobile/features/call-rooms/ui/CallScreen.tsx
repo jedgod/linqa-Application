@@ -19,6 +19,7 @@ import { ReportSheet } from './ReportSheet';
 import { BoardView } from './BoardView';
 import { ScreenSharePicker } from '../native/ScreenSharePicker';
 import { CallContactPanel, CallLocationButton } from '../../../components/calls/CallContactPanel';
+import { DoubleTapVideo, FloatingCallVideo } from '../../../components/calls/FloatingCallVideo';
 
 type Panel = 'more' | 'add' | 'switch' | 'info' | 'report' | null;
 interface PendingConfirm {
@@ -35,6 +36,8 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [boardVisible, setBoardVisible] = useState(false);
   const [selfMinimized, setSelfMinimized] = useState(false);
+  const [selfFullScreen, setSelfFullScreen] = useState(false);
+  const [stageBounds, setStageBounds] = useState({ width: 0, height: 0 });
   const [toast, setToast] = useState<string | null>(null);
   const now = useNow(1000, s.status === 'active');
   const insets = useSafeAreaInsets();
@@ -45,6 +48,7 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
   const [place, setPlace] = useState<CallerLocation | null>(null);
   const callId = s.callId;
   const joinedCount = Object.keys(s.peers).length;
+  React.useEffect(() => { setPlace(null); setContactVisible(false); setSelfFullScreen(false); setSelfMinimized(false); }, [callId]);
   React.useEffect(() => {
     if (!callId || joinedCount === 0 || place) return;
     let live = true;
@@ -164,6 +168,9 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
             : formatDuration(now - (s.connectedAt ?? now));
 
   const sharer = peers.find((p) => p.screenSharing);
+  const canSwap = videoLayout && peers.length === 1 && s.self.cameraOn && !selfMinimized && !sharer && !s.self.sharingScreen;
+  const selfIsMain = canSwap && selfFullScreen;
+  const swapVideos = canSwap ? () => setSelfFullScreen(value => !value) : undefined;
   const voiceSolo = !videoLayout && peers.length <= 1 && !sharer && !s.handoff;
   const avatarSize = Math.min(screenWidth * 0.5, 230);
 
@@ -196,10 +203,10 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
                 <CallLocationButton flag={location?.flag} area={location?.area} onPress={() => setContactVisible(true)} />
               </View>
               <View style={st.identity}>
-                <Text style={st.title} numberOfLines={1}>{title}</Text>
+                <Text style={st.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{title}</Text>
                 <View style={st.statusRow}>
                   <Icon name="lock" size={12} color={theme.ok} />
-                  <Text style={st.status}>End-to-end · {status}</Text>
+                  <Text style={st.status} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8}>End-to-end · {status}</Text>
                 </View>
               </View>
             </>
@@ -257,11 +264,16 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
         ) : null}
 
         {voiceSolo ? null : (
-        <View style={[st.stage, videoLayout && st.stageVideo]}>
+        <View style={[st.stage, videoLayout && st.stageVideo]} onLayout={event => {
+          const { width, height } = event.nativeEvent.layout;
+          setStageBounds(previous => previous.width === width && previous.height === height ? previous : { width, height });
+        }}>
           {sharer ? (
             <Tile peer={sharer} name={people.displayName(sharer.userId)} hand={handOrder.get(sharer.participantId)} large />
+          ) : selfIsMain ? (
+            <DoubleTapVideo onSwap={swapVideos}><SelfView engine={engine} minimized={false} onToggle={() => setSelfFullScreen(false)} full hand={handOrder.get(s.self.participantId)} /></DoubleTapVideo>
           ) : (
-            <View style={st.grid}>
+            <DoubleTapVideo onSwap={swapVideos}><View style={st.grid}>
               {peers.map((p) => (
                 <Tile
                   key={p.participantId}
@@ -275,16 +287,19 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
               {peers.length === 0
                 ? s.ringing.map((u) => <RingingTile key={u} name={people.displayName(u)} />)
                 : null}
-            </View>
+            </View></DoubleTapVideo>
           )}
 
           {s.self.cameraOn || s.self.sharingScreen ? (
-            <SelfView
+            <FloatingCallVideo bounds={stageBounds} minimized={selfMinimized} onSwap={swapVideos}>
+            {selfIsMain ? <Tile peer={peers[0]} name={people.displayName(peers[0].userId)} hand={handOrder.get(peers[0].participantId)} floating /> : <SelfView
               engine={engine}
               minimized={selfMinimized}
               onToggle={() => setSelfMinimized((m) => !m)}
               hand={handOrder.get(s.self.participantId)}
-            />
+              embedded
+            />}
+            </FloatingCallVideo>
           ) : s.self.handRaisedAt ? (
             <View style={st.selfHand}>
               <Icon name="hand" size={16} color={theme.warn} />
@@ -441,6 +456,7 @@ function Tile({
   large,
   count = 1,
   full,
+  floating,
 }: {
   peer: PeerView;
   name: string;
@@ -449,16 +465,19 @@ function Tile({
   count?: number;
   /** Video layout: one person fills the whole stage, edge to edge. */
   full?: boolean;
+  floating?: boolean;
 }) {
   const showVideo = peer.cameraOn && peer.streamUrl;
   const basis = large || count <= 1 ? '100%' : count <= 4 ? '48%' : '31%';
   return (
-    <View style={[st.tile, { flexBasis: basis, aspectRatio: large || count <= 1 ? undefined : 3 / 4 }, large && { flex: 1 }, full && count <= 1 && st.tileFull]}>
+    <View style={[st.tile, { flexBasis: basis, aspectRatio: large || count <= 1 ? undefined : 3 / 4 }, large && { flex: 1 }, full && count <= 1 && st.tileFull, floating && st.embeddedVideo]}>
       {showVideo ? (
         <RTCView
           streamURL={peer.streamUrl!}
           style={StyleSheet.absoluteFill}
           objectFit={peer.screenSharing ? 'contain' : 'cover'}
+          zOrder={floating ? 1 : 0}
+          pointerEvents="none"
         />
       ) : (
         <View style={st.avatar}>
@@ -503,29 +522,34 @@ function SelfView({
   minimized,
   onToggle,
   hand,
+  full,
+  embedded,
 }: {
   engine: CallEngine;
   minimized: boolean;
   onToggle: () => void;
   hand?: number;
+  full?: boolean;
+  embedded?: boolean;
 }) {
   const s = useEngineState(engine);
   if (minimized) {
     return (
-      <Pressable style={st.selfMini} onPress={onToggle} accessibilityLabel="Show self view">
+      <Pressable style={embedded ? st.selfMiniEmbedded : st.selfMini} onPress={onToggle} accessibilityLabel="Show self view">
         <Icon name="user" size={18} />
       </Pressable>
     );
   }
   return (
-    <View style={st.self}>
+    <View style={full || embedded ? st.embeddedVideo : st.self}>
       {s.self.previewUrl && !s.self.sharingScreen ? (
         <RTCView
           streamURL={s.self.previewUrl}
           style={StyleSheet.absoluteFill}
           objectFit="cover"
           mirror={s.self.facing === 'user'}
-          zOrder={1}
+          zOrder={full ? 0 : 1}
+          pointerEvents="none"
         />
       ) : (
         <View style={st.avatar}>
@@ -538,7 +562,7 @@ function SelfView({
           <Icon name="refresh-cw" size={16} />
         </Pressable>
       ) : null}
-      <Pressable style={st.selfBtnR} onPress={onToggle} accessibilityLabel="Hide self view" hitSlop={8}>
+      <Pressable style={st.selfBtnR} onPress={onToggle} accessibilityLabel={full ? "Show other person full screen" : "Hide self view"} hitSlop={8}>
         <Icon name="minimize-2" size={16} />
       </Pressable>
       {hand ? (
@@ -587,7 +611,7 @@ function BarButton({
   const bg = danger ? theme.danger : flat ? 'transparent' : active ? theme.text : theme.surfaceHi;
   const fg = danger ? '#fff' : flat ? (active ? '#3DCE7A' : '#FFFFFF') : active ? theme.bg : theme.text;
   return (
-    <View style={{ alignItems: 'center', gap: 6 }}>
+    <View style={{ flex: 1, minWidth: 0, maxWidth: 88, alignItems: 'center', gap: 6 }}>
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
@@ -597,7 +621,7 @@ function BarButton({
       >
         <Icon name={icon} size={flat && !danger ? 28 : 24} color={fg} />
       </Pressable>
-      <Text style={[st.barLabel, flat && st.barLabelFlat]}>{label}</Text>
+      <Text style={[st.barLabel, flat && st.barLabelFlat]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{label}</Text>
     </View>
   );
 }
@@ -616,16 +640,16 @@ const connText = (c: PeerView['connection']) =>
 const st = StyleSheet.create({
   root: { ...StyleSheet.absoluteFill, backgroundColor: theme.bg, zIndex: 100 },
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingTop: 12, paddingHorizontal: 14 },
-  signalBlock: { width: 78 },
-  locationBlock: { flex: 1, alignItems: 'center', paddingHorizontal: 6 },
-  identity: { alignItems: 'flex-end', maxWidth: 160 },
+  signalBlock: { width: '20%', maxWidth: 78, minWidth: 52 },
+  locationBlock: { width: '29%', maxWidth: 112, minWidth: 0, alignItems: 'center', paddingHorizontal: 4 },
+  identity: { flex: 1, minWidth: 0, alignItems: 'flex-end', paddingLeft: 6 },
   kicker: { color: theme.textDim, fontSize: 11, letterSpacing: 1, marginBottom: 4 },
   pill: { backgroundColor: '#ececec', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4 },
   pillText: { color: '#222', fontWeight: '600', fontSize: 13 },
   area: { color: theme.text, fontWeight: '700', fontSize: 13 },
   title: { color: theme.text, fontSize: 22, fontWeight: '700' },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-  status: { color: theme.ok, fontSize: 12, fontVariant: ['tabular-nums'] },
+  status: { color: theme.ok, fontSize: 12, fontVariant: ['tabular-nums'], flexShrink: 1 },
   minimize: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   identityCenter: { flex: 1, alignItems: 'center', paddingHorizontal: 6 },
   titleVoice: { color: '#FFFFFF', fontSize: 30, fontWeight: '700' },
@@ -660,6 +684,8 @@ const st = StyleSheet.create({
     minHeight: 140,
     flexGrow: 0,
   },
+  embeddedVideo: { flex: 1, width: '100%', height: '100%', minHeight: 0, flexBasis: undefined, borderRadius: 0, overflow: 'hidden', backgroundColor: theme.surfaceHi },
+  selfMiniEmbedded: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   avatar: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 120 },
   avatarText: { color: theme.text, fontSize: 34, fontWeight: '600' },
   tileFooter: {

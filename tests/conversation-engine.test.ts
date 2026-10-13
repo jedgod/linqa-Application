@@ -206,7 +206,7 @@ const apiPage = { messages: [
 ], nextCursor: "c" };
 
 test("history keeps only text messages with ciphertext and passes the cursor on", async () => {
-  const calls = stubFetch(() => apiPage);
+  const calls = stubFetch((url) => url.endsWith('/visibility') ? {visibleMessageIds:['m1','m3']} : apiPage);
   const page = await svc().loadHistory(conv, "abc");
   assert.deepEqual(page.rows.map((r) => r.id), ["m1", "m3"]);
   assert.equal(page.nextCursor, "c");

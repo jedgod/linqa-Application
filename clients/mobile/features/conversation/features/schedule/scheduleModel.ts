@@ -20,6 +20,20 @@ export function meetingEnd(m: MeetingContent): number {
   return Date.parse(m.startsAt) + m.durationMin * 60_000;
 }
 
+export function hasEventEnded(item: EventContent | MeetingContent, now = Date.now()): boolean {
+  const start = Date.parse(item.startsAt);
+  const end = item.type === "meeting" ? meetingEnd(item) : Date.parse(item.endsAt);
+  return Number.isFinite(start) && Number.isFinite(end) && end >= start && end <= now;
+}
+
+/** All-day ranges follow local calendar days, including 23/25-hour DST days. */
+export function eventRange(start: Date, minutes: number): { start: Date; end: Date } {
+  if (minutes !== 0) return { start: new Date(start), end: new Date(start.getTime() + minutes * 60_000) };
+  const day = new Date(start); day.setHours(0, 0, 0, 0);
+  const next = new Date(day); next.setDate(next.getDate() + 1);
+  return { start: day, end: new Date(next.getTime() - 1) };
+}
+
 export type JoinState =
   | { state: "upcoming"; opensInMin: number }
   | { state: "open" }

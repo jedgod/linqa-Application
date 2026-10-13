@@ -104,12 +104,14 @@ export class ConversationService implements ConversationServiceLike {
   private readonly attachmentSeals = new Map<string, { conversationId: string; plaintext: string; kind: string; sealed: string }>();
   private readonly sealedMedia = new Map<string, { envelope: string; key: string; descriptor: string; messageId: string }>();
   private readonly posting = new Map<string, Promise<{ id: string; createdAt?: string }>>();
+  private readonly transientSeals=new Map<string,string>();
   private readonly discarded = new Set<string>();
 
   async discardPending(messageId: string) {
     if (this.posting.has(messageId)) throw new Error("SEND_IN_PROGRESS");
     this.assertScope();
     this.discarded.add(messageId);
+    this.transientSeals.delete(messageId);
     try { await this.outbox?.remove(messageId); } catch (error) { this.discarded.delete(messageId); throw error; }
     for (const [id, entry] of this.sealedMedia) if (entry.messageId === messageId) this.sealedMedia.delete(id);
     this.attachmentSeals.delete(messageId);
@@ -127,6 +129,7 @@ export class ConversationService implements ConversationServiceLike {
     for(let i=0;i<ids.length;i+=500){
       const batch=ids.slice(i,i+500);
       const result=await this.request<{visibleMessageIds:string[]}>(`/v1/chats/${encodeURIComponent(conversationId)}/messages/visibility`,{method:'POST',body:JSON.stringify({messageIds:batch})});
+      if(!Array.isArray(result.visibleMessageIds)||result.visibleMessageIds.some(id=>typeof id!=='string'||!batch.includes(id)))throw new Error('INVALID_MESSAGE_VISIBILITY');
       const visible=new Set(result.visibleMessageIds);for(const id of batch)if(!visible.has(id))hidden.add(id);
     }
     this.hiddenMessages.set(conversationId,hidden);
@@ -163,7 +166,7 @@ export class ConversationService implements ConversationServiceLike {
       } catch { /* see above */ }
     }
     const known=this.knownMessages.get(conversationId)??new Set<string>();
-    for(const m of page.messages)known.add(m.id);this.knownMessages.set(conversationId,known);
+    for(const row of rows)known.add(row.id);this.knownMessages.set(conversationId,known);
     const removed=await this.removedMessages(conversationId);
     const hidden=new Set(removed.map(r=>r.id));
     return { rows:[...rows.filter(r=>!hidden.has(r.id)),...removed], ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) };
@@ -216,16 +219,17 @@ export class ConversationService implements ConversationServiceLike {
       ciphertext = sealed.descriptor;
     } else {
       // A retry reuses the bytes sealed the first time: the same ciphertext under the same message id, never a second seal.
-      const stored = payload.type === "media" ? null : await this.outbox?.find(clientMessageId) ?? null;
+      const stored = payload.type === "media" ? null : await this.outbox?.find(clientMessageId) ?? this.transientSeals.get(clientMessageId) ?? null;
       if (stored) ciphertext = stored;
       else {
         const transmitted = payload.type === "media" ? { ...payload, localUri: undefined } : payload;
         ciphertext = await this.secure.seal(JSON.stringify(transmitted), { conversationId, senderUserId: this.selfId, clientMessageId });
         assertSendableCiphertext(ciphertext);
-        if (payload.type !== "media") await this.outbox?.put(clientMessageId, conversationId, ciphertext);
+        if(payload.type!=="media"){if(this.outbox)await this.outbox.put(clientMessageId,conversationId,ciphertext);else {if(this.transientSeals.size>=500)throw new Error("QUEUE_FULL");this.transientSeals.set(clientMessageId,ciphertext);}}
       }
     }
     const message = await this.post(conversationId, clientMessageId, ciphertext);
+    this.transientSeals.delete(clientMessageId);
     if (payload.type === "media") this.sealedMedia.delete(payload.mediaId);
     return { id: message.id, senderId: this.selfId, sentAt: message.createdAt ?? new Date().toISOString(), ciphertext };
   }

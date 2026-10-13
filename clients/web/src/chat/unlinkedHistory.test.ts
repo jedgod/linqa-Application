@@ -26,6 +26,8 @@ it('both phone and browser reopen accepted polls and votes after unlink, without
   for(let i=0;i<payloads.length;i++){const bundle=await browser.seal(payloads[i],{conversationId:conversation,senderUserId:alice,clientMessageId:'old-'+i});accepted.set('old-'+i,bundle);}
   revoked=true;
   for(let i=0;i<payloads.length;i++){const context={conversationId:conversation,senderUserId:alice,messageId:'old-'+i};expect(await phone.open(accepted.get(context.messageId),context)).toBe(payloads[i]);expect(await other.open(accepted.get(context.messageId),context)).toBe(payloads[i]);}
+  await expect(phone.open(accepted.get("old-0")+"A",{conversationId:conversation,senderUserId:alice,messageId:"old-0"})).rejects.toThrow("MESSAGE_CONTEXT_MISMATCH");
+  await expect(phone.open(accepted.get("old-0"),{conversationId:conversation,senderUserId:bob,messageId:"old-0"})).rejects.toThrow("MESSAGE_CONTEXT_MISMATCH");
   await expect(browser.seal('new after unlink',{conversationId:conversation,senderUserId:alice,clientMessageId:'new'})).rejects.toThrow('OWN_DEVICE_NOT_PUBLISHED');
   await expect(phone.open(accepted.get('old-0'),{conversationId:conversation,senderUserId:alice,messageId:'not-accepted'})).rejects.toThrow('not accepted');
   const sender=new SecureMessaging({core:cores[0],directory,deviceId:()=>ids[0],members});const next=await sender.seal('new from phone',{conversationId:conversation,senderUserId:alice,clientMessageId:'phone-new'});const bundle=JSON.parse(new TextDecoder().decode(base64ToBytes(next)));expect(bundle.e[ids[2]]).toBeUndefined();

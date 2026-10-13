@@ -126,7 +126,7 @@ export function ForwardSheet({ visible, theme: t, targets, onClose, onConfirm }:
   const toggle = (id: string) => setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : c.length < 5 ? [...c, id] : c));
   const go = async () => {
     setBusy(true); setError(null);
-    try { await onConfirm(chosen); setChosen([]); onClose(); } catch { setError("It could not be forwarded to every chat. Try again."); } finally { setBusy(false); }
+    try { await onConfirm(chosen); setChosen([]); onClose(); } catch { setError("Some chats could not receive the message. Retry sends only to unfinished chats."); } finally { setBusy(false); }
   };
   const ok = chosen.length > 0 && !busy;
   return (

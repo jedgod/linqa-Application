@@ -34,16 +34,20 @@ export async function registerKeyPackageRoutes(
       const principal = await authenticate(request);
       requireScope(principal, 'messages:read');
       const params = z.object({conversationId:z.string().uuid(),messageId:z.string().uuid()}).parse(request.params);
-      const body = z.object({senderUserId:z.string().uuid(),senderDeviceId:z.string().uuid(),ciphertextBase64:z.string().min(1).max(87384).regex(/^[A-Za-z0-9+/_=-]+$/)}).strict().parse(request.body);
+      const body = z.object({senderUserId:z.string().uuid(),senderDeviceId:z.string().uuid(),ciphertextBase64:z.string().min(1).max(349528).regex(/^[A-Za-z0-9+/_=-]+$/)}).strict().parse(request.body);
       if (!principal.deviceId || !await devices.findActive(principal.deviceId, principal.userId)) return reply.code(403).send({error:'forbidden'});
       const ciphertext = Buffer.from(body.ciphertextBase64, 'base64');
-      const result = await db.query(`SELECT d.signing_public_key
-        FROM chat_messages m
+      const result = await db.query(`WITH visible AS (
+          SELECT id,conversation_id,sender_user_id,sender_device_id,body_ciphertext,created_at,expires_at,deleted_at FROM chat_messages m
+          WHERE NOT EXISTS (SELECT 1 FROM chat_message_deletions md WHERE md.message_id=m.id AND md.user_id=$1)
+          UNION ALL SELECT id,conversation_id,sender_user_id,sender_device_id,envelope,created_at,expires_at,deleted_at FROM thread_attachments a
+          WHERE NOT EXISTS (SELECT 1 FROM chat_attachment_deletions ad WHERE ad.attachment_id=a.id AND ad.user_id=$1)
+        ) SELECT d.signing_public_key
+        FROM visible m
         JOIN devices d ON d.id=m.sender_device_id AND d.user_id=m.sender_user_id
         JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.user_id=$1 AND cm.removed_at IS NULL
         WHERE m.conversation_id=$2 AND m.id=$3 AND m.sender_user_id=$4 AND m.sender_device_id=$5
           AND m.body_ciphertext=$6 AND m.deleted_at IS NULL
-          AND NOT EXISTS (SELECT 1 FROM chat_message_deletions md WHERE md.message_id=m.id AND md.user_id=$1)
           AND (m.expires_at IS NULL OR m.expires_at>now())
           AND m.created_at>COALESCE(cm.cleared_at,'-infinity'::timestamptz)
           AND (d.revoked_at IS NULL OR m.created_at<=d.revoked_at)`,

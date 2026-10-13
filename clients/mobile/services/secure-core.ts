@@ -1,4 +1,5 @@
 import type { SecureMessaging } from "./conversation.service";
+import { accountScopeGeneration } from "./account-scope";
 
 /**
  * Glue between the app and the Rust secure core: the device's key material, its published key package, and message
@@ -95,35 +96,44 @@ type KeyMaterial = { signing_key: number[]; encryption_secret: number[]; pq_encr
  * post-quantum key that this device draws once and keeps. The keys come from, and go back to, the account's secure storage.
  */
 export class SecureCoreDevice {
+  private readonly scopeGeneration=accountScopeGeneration();
+  private assertScope(){if(this.scopeGeneration!==accountScopeGeneration())throw new SecureCoreError('SECURE_CORE_UNAVAILABLE');}
   private ready: Promise<void> | null = null;
   constructor(private readonly bridge: CoreBridge, private readonly store: SecretStore, readonly userId: string, private readonly now: () => number = Date.now) {}
 
   /** Creates the core once; later calls wait for the same result. A failure is not remembered, so it can be retried. */
   ensure(): Promise<void> {
+    this.assertScope();
     this.ready ??= this.init().catch((e) => { this.ready = null; throw e; });
     return this.ready;
   }
 
   private async init(): Promise<void> {
     const [signing, encryption, deviceId] = await Promise.all([this.store.get("device.signingPrivateKey"), this.store.get("device.encryptionPrivateKey"), this.store.get("device.id")]);
+    this.assertScope();
     if (!signing || !encryption || !deviceId) return fail("DEVICE_NOT_ENROLLED");
     const signingKey = base64ToBytes(signing);
     const encryptionSecret = base64ToBytes(encryption);
     if (signingKey.length !== 32 || encryptionSecret.length !== 32) return fail("DEVICE_KEYS_INVALID");
 
     let pq = await this.store.get("device.pqSeed");
+    this.assertScope();
     if (!pq) {
       // Draw a fresh post-quantum key from a throwaway core, keep only that part, and remember it.
       await this.bridge.createCore(null);
+      this.assertScope();
       const drawn = fromJsonB64<KeyMaterial>(await this.bridge.exportKeyMaterial());
+      this.assertScope();
       pq = bytesToBase64(Uint8Array.from(drawn.pq_encryption_secret));
       await this.store.put("device.pqSeed", pq);
     }
     const material: KeyMaterial = { signing_key: nums(signingKey), encryption_secret: nums(encryptionSecret), pq_encryption_secret: nums(base64ToBytes(pq)) };
+    this.assertScope();
     await this.bridge.createCore(jsonB64(material));
+    this.assertScope();
   }
 
-  async deviceId(): Promise<string> { return (await this.store.get("device.id")) ?? fail("DEVICE_NOT_ENROLLED"); }
+  async deviceId(): Promise<string> { this.assertScope();const id=await this.store.get("device.id");this.assertScope();return id??fail("DEVICE_NOT_ENROLLED"); }
 
   /** What the messaging gate probes: it reports present only once the core really answers. */
   asNativeCore() {
@@ -174,7 +184,7 @@ type Inner = { v: 1; c: string; s: string; t: string };
  */
 export class SecureCoreMessaging implements SecureMessaging {
   /** Opening the same envelope twice is refused by the core as a replay, so what was opened stays here (memory only). */
-  private readonly opened = new Map<string, string>();
+  private readonly opened = new Map<string,{plaintext:string;ciphertext:string;senderUserId:string}>();
 
   constructor(private readonly deps: {
     bridge: CoreBridge; device: SecureCoreDevice; directory: PeerDirectory;
@@ -190,7 +200,7 @@ export class SecureCoreMessaging implements SecureMessaging {
     const out: PeerDevice[] = [];
     for (const entry of await this.deps.directory.keyPackages(userId, fresh)) {
       try {
-        await this.deps.bridge.verifyKeyPackage(entry.packageBase64);
+        if(!await this.deps.bridge.verifyKeyPackage(entry.packageBase64))continue;
         const pkg = fromJsonB64<KeyPackageJson>(entry.packageBase64);
         if (pkg.user_id !== userId || pkg.device_id !== entry.deviceId || pkg.signing_public_key.length !== 32 || pkg.encryption_public_key.length !== 32 || pkg.pq_encryption_public_key.length === 0) continue;
         out.push({ userId, deviceId: entry.deviceId, pkg });
@@ -220,6 +230,7 @@ export class SecureCoreMessaging implements SecureMessaging {
     const created = this.now();
     const e: Record<string, string> = {};
     for (const r of recipients) {
+      await this.deps.device.ensure();
       e[r.deviceId] = await this.deps.bridge.encryptMessage(JSON.stringify({
         recipient_encryption_public_key: r.pkg.encryption_public_key,
         recipient_pq_encryption_public_key: r.pkg.pq_encryption_public_key,
@@ -228,15 +239,20 @@ export class SecureCoreMessaging implements SecureMessaging {
         message_id: context.clientMessageId, plaintext: nums(utf8(JSON.stringify(inner))),
         created_at_unix: created, expires_at_unix: created + ENVELOPE_LIFETIME_S
       }));
+      await this.deps.device.ensure();
     }
     const bundle: Bundle = { v: 1, d: selfDevice, e };
     return jsonB64(bundle);
   }
 
   async open(ciphertextBase64: string, context: { conversationId: string; senderUserId: string; messageId: string }): Promise<string> {
+    await this.deps.device.ensure();
     const key = `${context.conversationId}:${context.messageId}`;
     const known = this.opened.get(key);
-    if (known !== undefined) return known;
+    if(known!==undefined){
+      if(known.ciphertext!==ciphertextBase64||known.senderUserId!==context.senderUserId)return fail("MESSAGE_CONTEXT_MISMATCH");
+      return known.plaintext;
+    }
 
     await this.deps.device.ensure();
     const selfDevice = await this.deps.device.deviceId();
@@ -250,13 +266,15 @@ export class SecureCoreMessaging implements SecureMessaging {
     const signingKey = sender?.pkg.signing_public_key ?? await this.deps.directory.historicalSenderKey?.({...context,senderDeviceId:bundle.d,ciphertextBase64});
     if (!signingKey || signingKey.length!==32 || !signingKey.every(n=>Number.isInteger(n)&&n>=0&&n<=255)) return fail("SENDER_UNKNOWN");
     const envelope = fromJsonB64<unknown>(mine);
+    await this.deps.device.ensure();
     const plain = await this.deps.bridge.decryptMessage(jsonB64({
       expected_recipient_device_id: selfDevice, sender_signing_public_key: signingKey, envelope, now_unix: this.now()
     }));
+    await this.deps.device.ensure();
     const inner = JSON.parse(text(base64ToBytes(plain))) as Inner;
     if (inner?.v !== 1 || inner.c !== context.conversationId || inner.s !== context.senderUserId || typeof inner.t !== "string") return fail("MESSAGE_CONTEXT_MISMATCH");
     if (this.opened.size >= CACHE_LIMIT) this.opened.delete(this.opened.keys().next().value as string);
-    this.opened.set(key, inner.t);
+    this.opened.set(key,{plaintext:inner.t,ciphertext:ciphertextBase64,senderUserId:context.senderUserId});
     return inner.t;
   }
 }

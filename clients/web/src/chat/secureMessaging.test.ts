@@ -101,6 +101,8 @@ describe("web secure messaging, with two people and a linked computer", () => {
       const bundle = await send(w.alicePhone, "once", "m7");
       expect(await open(w.bobPhone, bundle, ALICE, "m7")).toBe("once");
       expect(await open(w.bobPhone, bundle, ALICE, "m7")).toBe("once");
+      expect(await code(open(w.bobPhone,bundle,BOB,"m7"))).toBe("MESSAGE_CONTEXT_MISMATCH");
+      expect(await code(open(w.bobPhone,bundle+"A",ALICE,"m7"))).toBe("MESSAGE_CONTEXT_MISMATCH");
     } finally { w.dispose(); }
   });
 

@@ -9,11 +9,14 @@ import {
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
   ViewStyle,
+  useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { MaterialCommunityIcons as MCI } from '@expo/vector-icons';
 
@@ -45,25 +48,30 @@ export function Sheet({
   title,
   children,
   style,
+  scrollable = true,
 }: {
   visible: boolean;
   onClose: () => void;
   title?: string;
   children: React.ReactNode;
   style?: ViewStyle;
+  scrollable?: boolean;
 }) {
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
+  const maxHeight = Math.max(120, height - insets.top - insets.bottom - 24);
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <Pressable style={k.scrim} onPress={onClose} accessibilityLabel="Close" />
-        <View style={[k.sheet, style]}>
+      <KeyboardAvoidingView style={{ flex: 1, justifyContent: 'flex-end', paddingTop: insets.top + 12, paddingBottom: insets.bottom, paddingLeft: insets.left, paddingRight: insets.right }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <Pressable style={[StyleSheet.absoluteFill, k.scrim]} onPress={onClose} accessibilityLabel="Close menu" />
+        <View style={[k.sheet, style, { maxHeight, flexShrink: 1 }]} accessibilityViewIsModal>
           <View style={k.grabber} />
           {title ? (
             <Text style={k.sheetTitle} accessibilityRole="header">
               {title}
             </Text>
           ) : null}
-          {children}
+          {scrollable ? <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>{children}</ScrollView> : children}
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -83,12 +91,14 @@ export interface ConfirmProps {
 
 /** The single "ask once" before anything new is sent to the call. */
 export function ConfirmDialog(p: ConfirmProps) {
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   return (
     <Modal visible={p.visible} transparent animationType="fade" onRequestClose={p.onCancel}>
       <View style={k.center}>
-        <View style={k.dialog} accessibilityViewIsModal>
+        <View style={[k.dialog, { maxHeight: height - insets.top - insets.bottom - 48 }]} accessibilityViewIsModal>
           <Text style={k.dialogTitle}>{p.title}</Text>
-          <Text style={k.dialogBody}>{p.body}</Text>
+          <ScrollView style={{ flexGrow: 0, flexShrink: 1 }}><Text style={k.dialogBody}>{p.body}</Text></ScrollView>
           <View style={k.row}>
             <Button label="Cancel" kind="ghost" onPress={p.onCancel} style={{ flex: 1 }} />
             <Button
@@ -161,7 +171,7 @@ export const k = StyleSheet.create({
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     paddingHorizontal: 16,
-    paddingBottom: 32,
+    paddingBottom: 16,
     paddingTop: 8,
     maxHeight: '85%',
   },

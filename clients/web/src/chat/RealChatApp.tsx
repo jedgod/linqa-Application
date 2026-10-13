@@ -1,3 +1,4 @@
+import { ForwardBatch } from "../../../mobile/services/forward-batch";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeBrowser } from "../auth/deviceLinkClient";
 import { describeBody, type ChatListInfo, type InboxChat, type InboxCounts, type ServerMessage } from "./chatApi";
@@ -152,6 +153,8 @@ function ChatShell({ runtime }: { runtime: Ready }) {
   const [requestCount, setRequestCount] = useState(0);
   const threadHandle = useRef<ThreadHandle | null>(null);
   const [forwardText, setForwardText] = useState<string | null>(null);
+  const forwardBatch=useRef<ForwardBatch<string>|null>(null);
+  const beginForward=(text:string)=>{forwardBatch.current=null;setForwardText(text);};
   const [vaultOpen,setVaultOpen]=useState(false);
   const autoOpened = useRef(false);
   const [previews, setPreviews] = useState<Record<string, string>>({});
@@ -359,16 +362,10 @@ function ChatShell({ runtime }: { runtime: Ready }) {
   const forwardTo = async (conversationIds: string[]) => {
     const text = forwardText;
     if (!text) return;
-    let failed = 0;
-    for (const target of conversationIds) {
-      try {
-        const id = crypto.randomUUID();
-        const sealed = await messaging.seal(JSON.stringify({ type: "text", text, lane: "General", forwarded: true }), { conversationId: target, senderUserId: userId, clientMessageId: id });
-        await api.send(target, id, sealed);
-      } catch (cause) { console.warn("forward failed", cause); failed += 1; }
-    }
+    forwardBatch.current??=new ForwardBatch(()=>crypto.randomUUID(),(target,id)=>messaging.seal(JSON.stringify({type:'text',text,lane:'General',forwarded:true}),{conversationId:target,senderUserId:userId,clientMessageId:id}),(target,id,sealed)=>api.send(target,id,sealed));
+    const failed=await forwardBatch.current.send(conversationIds);
     void loadInbox();
-    if (failed > 0) throw new Error("FORWARD_FAILED");
+    if(failed.length>0)throw new Error('FORWARD_FAILED');
   };
   const afterChange = () => { previewCache.current.clear(); setHistoryVersion((v) => v + 1); refreshAll(); };
   const toggleMute = (c: InboxChat) => organize(() => api.setMuted(c.conversationId, !c.muted), "Could not change notifications. Try again.");
@@ -491,7 +488,7 @@ function ChatShell({ runtime }: { runtime: Ready }) {
               syncing={syncing}
               lists={lists}
               handle={threadHandle}
-              onForward={(text) => setForwardText(text)}
+              onForward={beginForward}
               onControl={(kind) => void openControl(kind)}
               onCloseChat={() => setActiveId(null)}
               onToggleMute={() => void toggleMute(active)}

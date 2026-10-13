@@ -78,7 +78,7 @@ function stubFetch(handler: (url: string, init?: RequestInit) => unknown, status
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
     calls.push({ url, ...(init ? { init } : {}) });
-    return { ok: status < 400, status, text: async () => JSON.stringify(handler(url, init)) } as unknown as Response;
+    return { ok: status < 400, status, text: async () => JSON.stringify(url.endsWith('/visibility')?{visibleMessageIds:JSON.parse(String(init?.body)).messageIds}:handler(url, init)) } as unknown as Response;
   };
   return calls;
 }
@@ -124,7 +124,7 @@ test("history brings events and meetings along, opened into cards; other attachm
 });
 
 test("if the attachments cannot be fetched the messages still load", async () => {
-  stubFetch((url) => { if (url.includes("/attachments")) throw new Error("down"); return { messages: [{ id: "m1", senderUserId: b, ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==", createdAt: "2026-01-01T10:00:00Z", kind: "TEXT" }], nextCursor: null }; });
+  stubFetch((url) => { if (url.includes("/attachments")) throw new Error("down"); if(url.endsWith('/visibility'))return {visibleMessageIds:['m1']};return { messages: [{ id: "m1", senderUserId: b, ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==", createdAt: "2026-01-01T10:00:00Z", kind: "TEXT" }], nextCursor: null }; });
   const page = await svc(fakeSecure()).loadHistory(conv);
   assert.deepEqual(page.rows.map((r) => r.id), ["m1"]);
 });

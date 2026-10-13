@@ -254,7 +254,15 @@ export async function registerChatV2Routes(
         const active=await client.query("SELECT id FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL FOR SHARE",[principal.deviceId,principal.userId]);
         if(!active.rowCount) throw new ChatError(401,'DEVICE_REQUIRED');
         const message=await client.query('SELECT sender_user_id FROM chat_messages WHERE id=$1 AND conversation_id=$2 FOR UPDATE',[params.messageId,params.conversationId]);
-        if(!message.rowCount) throw new ChatError(404,'MESSAGE_NOT_FOUND');
+        if(!message.rowCount){
+          const attachment=await client.query('SELECT sender_user_id FROM thread_attachments WHERE id=$1 AND conversation_id=$2 FOR UPDATE',[params.messageId,params.conversationId]);
+          if(!attachment.rowCount)throw new ChatError(404,'MESSAGE_NOT_FOUND');
+          if(body.scope==='everyone'){
+            if(attachment.rows[0].sender_user_id!==principal.userId)throw new ChatError(403,'MESSAGE_NOT_OWNED');
+            await client.query("UPDATE thread_attachments SET deleted_at=COALESCE(deleted_at,now()),envelope=''::bytea WHERE id=$1",[params.messageId]);
+          }else await client.query('INSERT INTO chat_attachment_deletions(attachment_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[params.messageId,principal.userId]);
+          return;
+        }
         if(body.scope==='everyone') {
           if(message.rows[0].sender_user_id!==principal.userId) throw new ChatError(403,'MESSAGE_NOT_OWNED');
           await client.query("UPDATE chat_messages SET deleted_at=COALESCE(deleted_at,now()),body_ciphertext=CASE WHEN kind IN ('CALL','SYSTEM') THEN NULL ELSE ''::bytea END WHERE id=$1",[params.messageId]);
@@ -281,7 +289,11 @@ export async function registerChatV2Routes(
         return client.query(`SELECT m.id FROM chat_messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.user_id=$1
           WHERE m.conversation_id=$2 AND m.id=ANY($3::uuid[]) AND m.deleted_at IS NULL
           AND (m.expires_at IS NULL OR m.expires_at>now()) AND m.created_at>COALESCE(cm.cleared_at,'-infinity'::timestamptz)
-          AND NOT EXISTS (SELECT 1 FROM chat_message_deletions md WHERE md.message_id=m.id AND md.user_id=$1)`,[principal.userId,params.conversationId,body.messageIds]);
+          AND NOT EXISTS (SELECT 1 FROM chat_message_deletions md WHERE md.message_id=m.id AND md.user_id=$1)
+          UNION ALL SELECT a.id FROM thread_attachments a JOIN conversation_members cm ON cm.conversation_id=a.conversation_id AND cm.user_id=$1
+          WHERE a.conversation_id=$2 AND a.id=ANY($3::uuid[]) AND a.deleted_at IS NULL
+          AND (a.expires_at IS NULL OR a.expires_at>now()) AND a.created_at>COALESCE(cm.cleared_at,'-infinity'::timestamptz)
+          AND NOT EXISTS (SELECT 1 FROM chat_attachment_deletions ad WHERE ad.attachment_id=a.id AND ad.user_id=$1)`,[principal.userId,params.conversationId,body.messageIds]);
       });
       return reply.header('Cache-Control','private, no-store').send({visibleMessageIds:visible.rows.map(r=>r.id)});
     } catch(error) {
@@ -501,7 +513,7 @@ export async function registerChatV2Routes(
       // returning the first campaign and dropping the new message.
       const fingerprint = createHash("sha256")
         .update(body.ciphertext)
-        .update(" ")
+        .update("\u0000")
         .update(uniqueRecipients.slice().sort().join(","))
         .digest();
 

@@ -1,3 +1,5 @@
+import { ForwardBatch } from "../../services/forward-batch";
+import type { Payload } from "../../services/conversation-engine";
 import { startSecureCall } from "../../services/secure-call-rooms";
 //conversation.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -86,6 +88,8 @@ function RealConversation() {
   const [contacts, setContacts] = useState<PickPerson[]>([]);
   const systemScheme = useColorScheme();
   const [forwardText, setForwardText] = useState<string | null>(null);
+  const forwardBatch=useRef<ForwardBatch<Payload>|null>(null);
+  const beginForward=(text:string)=>{forwardBatch.current=null;setForwardText(text);};
   const [otherChats, setOtherChats] = useState<Array<ForwardTarget & { peerUserId: string | null; memberUserIds?: string[] }>>([]);
   peerRef.current = peer.id;
 
@@ -186,20 +190,9 @@ function RealConversation() {
   async function forwardTo(conversationIds: string[]) {
     const text = forwardText;
     if (!text) return;
-    const keepPeer = sendPeer.current;
-    const keepGroup = sendGroup.current;
-    let failed = 0;
-    try {
-      for (const id of conversationIds) {
-        const target = otherChats.find((c) => c.conversationId === id);
-        if (!target) { failed += 1; continue; }
-        // Sealing uses whoever the current chat is with, so point it at the target chat for this message.
-        sendGroup.current = target.memberUserIds ? target.memberUserIds.filter((m) => m !== selfId) : null;
-        sendPeer.current = target.peerUserId;
-        try { await service.send(id, { type: "text", text, lane: "General", forwarded: true }, newId()); } catch { failed += 1; }
-      }
-    } finally { sendPeer.current = keepPeer; sendGroup.current = keepGroup; }
-    if (failed > 0) throw new Error("FORWARD_FAILED");
+    forwardBatch.current??=new ForwardBatch<Payload>(newId,async target=>{if(!otherChats.some(c=>c.conversationId===target))throw new Error('RECIPIENT_UNKNOWN');return {type:'text',text,lane:'General',forwarded:true};},(target,id,payload)=>service.send(target,payload,id));
+    const failed=await forwardBatch.current.send(conversationIds);
+    if(failed.length>0)throw new Error('FORWARD_FAILED');
     setNotice(null);
   }
 
@@ -268,7 +261,7 @@ function RealConversation() {
       notice={notice ?? rejectionNotice}
       rejectedOutbox={outbox?.failures}
       onCall={call}
-      onForward={(text) => setForwardText(text)}
+      onForward={beginForward}
       chatActions={{
         isGroup: controls?.isGroup ?? false,
         members: (controls?.members ?? []).map((m) => ({ name: m.displayName, role: m.role })),

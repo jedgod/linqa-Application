@@ -16,7 +16,7 @@ const limits = {
 
 /** Sealed attachments and live-location sharing for a conversation. Every handler: authenticate, rate limit, strict schema, member check. */
 export async function registerThreadAttachmentRoutes(app: FastifyInstance, config: AppConfig, db: Database) {
-  const run = makeRunner(config);
+  const run = makeRunner(config,db);
   const attachments = new ThreadAttachmentService(db);
 
   const mediaLimit = simpleRateLimit({ windowMs: 3_600_000, max: 30, keyPrefix: "thread-media" });

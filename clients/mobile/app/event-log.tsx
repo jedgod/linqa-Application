@@ -1,9 +1,10 @@
-import React from "react";
+import React, {useState} from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { removeMyEvent, upcomingOf, useMyEvents, type MyEvent } from "../services/my-events";
+import { useAccounts } from "../account/AccountContext";
+import { hasLegacyEvents, importLegacyEvents, removeMyEvent, pastOf, upcomingOf, useMyEvents, type MyEvent } from "../services/my-events";
 
 const when = (e: MyEvent) => {
   const s = new Date(e.startsAt);
@@ -13,9 +14,10 @@ const when = (e: MyEvent) => {
 };
 
 function Row({ e, past }: { e: MyEvent; past?: boolean }) {
+  const {active}=useAccounts();
   const confirmRemove = () => Alert.alert("Remove from the event log?", `"${e.title}" will be removed from Upcoming and the log. The message in your chat stays.`, [
     { text: "Cancel", style: "cancel" },
-    { text: "Remove", style: "destructive", onPress: () => { void removeMyEvent(e.id); } }
+    { text: "Remove", style: "destructive", onPress: () => { if(active)void removeMyEvent(active.userId,e.id).catch(()=>Alert.alert("Could not remove","Please try again.")); } }
   ]);
   return (
     <View style={[s.row, past && { opacity: 0.6 }]} accessible accessibilityLabel={`${e.kind === "meeting" ? "Meeting" : "Event"}: ${e.title}, ${when(e)}`}>
@@ -34,9 +36,11 @@ function Row({ e, past }: { e: MyEvent; past?: boolean }) {
 /** Every event and meeting added to Linqa from a chat: what is coming up, and what already happened. */
 export default function EventLogScreen() {
   const router = useRouter();
-  const { items, loaded } = useMyEvents();
-  const upcoming = upcomingOf(items);
-  const past = items.filter((e) => !upcoming.includes(e)).sort((a, b) => b.startsAt.localeCompare(a.startsAt));
+  const {active}=useAccounts();const [importing,setImporting]=useState(false);
+  const { items, loaded,error } = useMyEvents();
+  const now = Date.now();
+  const upcoming = upcomingOf(items, now);
+  const past = pastOf(items, now);
   return (
     <SafeAreaView style={s.screen}>
       <View style={s.head}>
@@ -44,8 +48,9 @@ export default function EventLogScreen() {
         <Text style={s.heading}>Event log</Text>
       </View>
       <ScrollView contentContainerStyle={s.content}>
+        {active&&hasLegacyEvents(active.userId)?<Pressable disabled={importing} accessibilityRole="button" onPress={()=>Alert.alert('Import older saved events?',`Add the events saved by an older Linqa version to ${active.displayName}'s event log?`,[{text:'Cancel',style:'cancel'},{text:'Import',onPress:()=>{setImporting(true);void importLegacyEvents(active.userId).catch(()=>Alert.alert('Could not import','Your original saved events are preserved. Please try again.')).finally(()=>setImporting(false));}}])} style={{paddingVertical:16}}><Text style={{color:'#4F46E5',fontWeight:'700'}}>{importing?'Importing…':'Import older saved events into this account'}</Text></Pressable>:null}
         <Text style={s.section}>UPCOMING</Text>
-        {upcoming.length === 0 ? <Text style={s.empty}>{loaded ? "Nothing coming up. Tap Add to calendar on an event or meeting in a chat to add it here." : "Loading…"}</Text> : upcoming.map((e) => <Row key={e.id} e={e} />)}
+        {upcoming.length === 0 ? <Text style={s.empty}>{error?"Could not load your events. Please try again.":loaded ? "Nothing coming up. Tap Add to calendar on an event or meeting in a chat to add it here." : "Loading…"}</Text> : upcoming.map((e) => <Row key={e.id} e={e} />)}
         {past.length > 0 ? (<><Text style={[s.section, { marginTop: 22 }]}>PAST</Text>{past.map((e) => <Row key={e.id} e={e} past />)}</>) : null}
       </ScrollView>
     </SafeAreaView>

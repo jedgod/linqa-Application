@@ -125,7 +125,7 @@ export function defaultCardForm(now = new Date()): CardForm {
  * Turns what was typed into an event or meeting payload, or says what is wrong. The date and time are read as the phone's
  * local time and stored as an exact instant. A time in the past is refused.
  */
-export function buildCardPayload(kind: "EVENT" | "MEETING", form: CardForm, now = new Date()): { ok: true; payload: { type: "event"; title: string; startsAt: string; place?: string } | { type: "meeting"; title: string; startsAt: string; durationMinutes: number } } | { ok: false; error: string } {
+export function buildCardPayload(kind: "EVENT" | "MEETING", form: CardForm, now = new Date(), options: { allowPastEvent?: boolean } = {}): { ok: true; payload: { type: "event"; title: string; startsAt: string; place?: string } | { type: "meeting"; title: string; startsAt: string; durationMinutes: number } } | { ok: false; error: string } {
   const title = form.title.trim();
   if (!title) return { ok: false, error: "Add a title." };
   if (title.length > 120) return { ok: false, error: "The title is too long." };
@@ -136,7 +136,7 @@ export function buildCardPayload(kind: "EVENT" | "MEETING", form: CardForm, now 
   const [h, mi] = [Number(time[1]), Number(time[2])];
   const when = new Date(y, mo - 1, da, h, mi, 0, 0);
   if (when.getFullYear() !== y || when.getMonth() !== mo - 1 || when.getDate() !== da || h > 23 || mi > 59) return { ok: false, error: "That date or time doesn't exist." };
-  if (when.getTime() <= now.getTime()) return { ok: false, error: "Pick a time that hasn't passed." };
+  if (when.getTime() <= now.getTime() && !(kind === "EVENT" && options.allowPastEvent)) return { ok: false, error: "Pick a time that hasn't passed." };
   if (kind === "EVENT") {
     const place = form.place.trim();
     if (place.length > 120) return { ok: false, error: "The place is too long." };

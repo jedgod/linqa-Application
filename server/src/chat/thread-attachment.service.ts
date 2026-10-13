@@ -24,7 +24,7 @@ export class ThreadAttachmentService {
   async storeMedia(input: { id: string; conversationId: string; userId: string; deviceId?: string; envelope: Buffer }): Promise<{ id: string }> {
     if (input.envelope.length < 32 || input.envelope.length > 25 * 1024 * 1024 + 40) throw new ChatError(422, "MEDIA_TOO_LARGE");
     return withTransaction(this.db, async client => {
-      if (input.deviceId) { const active = await client.query("SELECT id FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' FOR SHARE", [input.deviceId, input.userId]); if (!active.rowCount) throw new ChatError(401, "DEVICE_REQUIRED"); }
+      if (input.deviceId) { const active = await client.query("SELECT id FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL FOR SHARE", [input.deviceId, input.userId]); if (!active.rowCount) throw new ChatError(401, "DEVICE_REQUIRED"); }
       await assertMember(client, input.userId, input.conversationId);
       await client.query("DELETE FROM conversation_media WHERE expires_at <= now()");
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", ["conversation-media:" + input.userId]);
@@ -54,6 +54,7 @@ export class ThreadAttachmentService {
   async accept(input: { id: string; conversationId: string; userId: string; deviceId?: string | null; kind: AttachmentKind; vaultId?: string | null; envelope: Buffer }): Promise<{ id: string; accepted: true; duplicate: boolean }> {
     if (input.envelope.length < MIN_ENVELOPE || input.envelope.length > MAX_ENVELOPE) throw new ChatError(422, "ATTACHMENT_ENVELOPE_INVALID");
     return withTransaction(this.db, async (client) => {
+      if(input.deviceId){const active=await client.query("SELECT id FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL FOR SHARE",[input.deviceId,input.userId]);if(!active.rowCount)throw new ChatError(401,'DEVICE_REQUIRED');}
       await assertMember(client, input.userId, input.conversationId);
       await client.query(`DELETE FROM thread_attachments WHERE conversation_id = $1 AND expires_at IS NOT NULL AND expires_at <= now()`, [input.conversationId]);
       const setting = await client.query(`SELECT disappear_after_seconds AS "seconds" FROM conversations WHERE id = $1`, [input.conversationId]);
@@ -80,9 +81,11 @@ export class ThreadAttachmentService {
       const result = await client.query(
         `SELECT id, kind, vault_id AS "vaultId", envelope, created_at AS "createdAt", sender_user_id AS "senderUserId"
            FROM thread_attachments
-          WHERE conversation_id = $1 AND (expires_at IS NULL OR expires_at > now())
+          WHERE conversation_id = $1 AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+            AND created_at>COALESCE((SELECT cleared_at FROM conversation_members WHERE conversation_id=$1 AND user_id=$3),'-infinity'::timestamptz)
+            AND NOT EXISTS (SELECT 1 FROM chat_attachment_deletions ad WHERE ad.attachment_id=thread_attachments.id AND ad.user_id=$3)
           ORDER BY created_at DESC, id DESC LIMIT $2`,
-        [conversationId, n]
+        [conversationId, n,userId]
       );
       return (result.rows as Array<Attachment & { createdAt: Date }>).map((r) => ({ ...r, createdAt: iso(r.createdAt) }));
     });

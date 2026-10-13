@@ -375,6 +375,8 @@ function UpcomingCard({ onJoin }: { onJoin: () => void }) {
 }
 
 function CallRow({ call, last, onAudio, onVideo }: { call: Call; last: boolean; onAudio: () => void; onVideo: () => void }) {
+  const { width } = useWindowDimensions();
+  const timeWidth = Math.min(100, Math.max(72, width * 0.23));
   return (
     <View style={[styles.callRow, !last && styles.callRowDivider]}>
       <View style={styles.avatarWrap}>
@@ -403,8 +405,8 @@ function CallRow({ call, last, onAudio, onVideo }: { call: Call; last: boolean; 
         </View>
       </View>
 
-      <View style={styles.callTimeBlock}>
-        <Text style={[styles.callTime, call.missed && styles.callTimeMissed]}>{call.time}</Text>
+      <View style={[styles.callTimeBlock, { width: timeWidth }]}>
+        <Text style={[styles.callTime, call.missed && styles.callTimeMissed]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{call.time}</Text>
         <Ionicons name="lock-closed-outline" size={14} color={call.missed ? COLORS.red : COLORS.muted} style={styles.rowLock} />
       </View>
 
@@ -508,7 +510,7 @@ const styles = StyleSheet.create({
   recentHeading: { marginHorizontal: 15, marginTop: 18, marginBottom: 9, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   seeAll: { color: COLORS.cyan, fontSize: 13.5 },
   callList: { marginHorizontal: 15, borderRadius: 11, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surface, overflow: "hidden" },
-  callRow: { height: 65, flexDirection: "row", alignItems: "center", paddingHorizontal: 10 },
+  callRow: { minHeight: 65, paddingVertical: 9, flexDirection: "row", alignItems: "center", paddingHorizontal: 10 },
   callRowDivider: { borderBottomWidth: 1, borderBottomColor: "#1A2945" },
   avatarWrap: { width: 47, height: 47 },
   callAvatar: { width: 47, height: 47, borderRadius: 10, borderWidth: 1, borderColor: "#806C38" },
@@ -520,8 +522,8 @@ const styles = StyleSheet.create({
   countryLine: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
   flag: { fontSize: 13 },
   country: { color: COLORS.muted, fontSize: 12.5, flexShrink: 1 },
-  callTimeBlock: { width: 62, alignItems: "center" },
-  callTime: { color: COLORS.muted, fontSize: 12.5 },
+  callTimeBlock: { minWidth: 70, flexShrink: 0, alignItems: "center", paddingHorizontal: 4 },
+  callTime: { color: COLORS.muted, fontSize: 12.5, textAlign: "center" },
   callTimeMissed: { color: COLORS.red },
   rowLock: { marginTop: 8 },
   roundAction: { width: 37, height: 37, borderRadius: 19, backgroundColor: "#13284E", borderWidth: 1, borderColor: "#273B65", alignItems: "center", justifyContent: "center", marginLeft: 2 },

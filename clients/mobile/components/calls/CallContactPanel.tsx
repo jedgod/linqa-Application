@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
+import { LinearGradient } from "../LinearGradient";
 import * as ImagePicker from "expo-image-picker";
 import { useAccounts } from "../../account/AccountContext";
 import { ChatInboxService } from "../../services/chat-inbox.service";
@@ -16,8 +16,8 @@ import { wazePlaceLabel } from "../../config/waze";
 
 export function CallLocationButton({ flag, area, onPress }: { flag?: string; area?: string; onPress: () => void }) {
   return <Pressable accessibilityRole="button" accessibilityLabel={`Open contact info. ${area || "Location unavailable"}`} onPress={onPress} style={s.locationButton}>
-    <View style={s.flagRow}><Text style={s.flag}>{flag || "🌐"}</Text><Ionicons name="chevron-forward" size={14} color="#aaa" /></View>
-    <Text numberOfLines={2} style={s.area}>{area || "Location unavailable"}</Text>
+    <View style={s.flagRow}><Text style={s.flag} adjustsFontSizeToFit numberOfLines={1} minimumFontScale={0.75}>{flag || "🌐"}</Text><Ionicons name="chevron-forward" size={14} color="#aaa" /></View>
+    <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.75} style={s.area}>{area || "Location unavailable"}</Text>
   </Pressable>;
 }
 
@@ -113,7 +113,7 @@ export function CallContactPanel({ visible, onClose, name, peerId, flag, area, a
           <Pressable accessibilityRole="button" accessibilityLabel="Back to video call" onPress={onClose} style={s.back}><Ionicons name="chevron-back" color="white" size={30} /></Pressable>
           {avatarUrl ? <Image source={{ uri: avatarUrl }} style={s.avatar} /> : <View style={[s.avatar, s.initial]}><Text style={s.initialText}>{name.trim().charAt(0).toUpperCase()}</Text></View>}
           <Text accessibilityRole="header" style={s.name}>{name}</Text>
-          <View style={s.tabs}>{(["Info", "Backgrounds", "Photos", "Links"] as Tab[]).map(item => <Pressable key={item} accessibilityRole="tab" accessibilityState={{ selected: tab === item }} onPress={() => setTab(item)} style={[s.tab, tab === item && s.selectedTab]}><Text style={[s.tabText, tab === item && { color: "white", fontWeight: "600" }]}>{item}</Text></Pressable>)}</View>
+          <View style={s.tabs}>{(["Info", "Backgrounds", "Photos", "Links"] as Tab[]).map(item => <Pressable key={item} accessibilityRole="tab" accessibilityState={{ selected: tab === item }} onPress={() => setTab(item)} style={[s.tab, tab === item && s.selectedTab]}><Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={[s.tabText, tab === item && { color: "white", fontWeight: "600" }]}>{item}</Text></Pressable>)}</View>
           {tab === "Info" ? <View style={s.locationCard}>
             {sharedLocation ? <WazeLocationMap key={`${sharedLocation.latitude}:${sharedLocation.longitude}`} latitude={sharedLocation.latitude} longitude={sharedLocation.longitude} placeLabel={wazePlaceLabel(sharedLocation.address, sharedLocation.title, name)} /> : <View style={s.locationEmpty}>{busy ? <ActivityIndicator color="#00A6FF" /> : <Ionicons name="location" size={42} color="#00A6FF" />}<Text style={s.muted}>{busy ? "Loading shared location…" : "No shared location available."}</Text></View>}
             <View style={s.locationCaption}><Text style={s.heading}>{flag} {area || "Shared location"}</Text><Text style={s.muted}>{sharedLocation ? "Shared in chat · not a live location" : "A map appears when a location is shared in chat."}</Text>{message ? <Text accessibilityRole="alert" style={s.muted}>{message}</Text> : null}</View>
@@ -132,11 +132,11 @@ export function CallContactPanel({ visible, onClose, name, peerId, flag, area, a
 
 const s = StyleSheet.create({
   fill: { flex: 1 }, content: { padding: 20, gap: 20, paddingBottom: 40 },
-  locationButton: { borderRadius: 16, backgroundColor: "#222222", borderWidth: 1, borderColor: "#ffffff28", paddingHorizontal: 8, paddingVertical: 5, minHeight: 44, minWidth: 68, maxWidth: 110, alignItems: "center" },
-  flagRow: { flexDirection: "row", alignItems: "center", gap: 5 }, flag: { fontSize: 21 }, area: { color: "#B7B7B7", fontSize: 10, textAlign: "center" },
+  locationButton: { borderRadius: 16, backgroundColor: "#222222", borderWidth: 1, borderColor: "#ffffff28", paddingHorizontal: 6, paddingVertical: 5, minHeight: 44, minWidth: 0, width: "100%", maxWidth: 112, alignItems: "center", alignSelf: "center" },
+  flagRow: { flexDirection: "row", alignItems: "center", gap: 5 }, flag: { fontSize: 21 }, area: { color: "#B7B7B7", fontSize: 11, textAlign: "center", width: "100%" },
   back: { width: 44, height: 44, borderRadius: 22, backgroundColor: "#ffffff20", alignItems: "center", justifyContent: "center" },
   avatar: { width: 100, height: 100, borderRadius: 50, alignSelf: "center" }, initial: { backgroundColor: "#30343D", alignItems: "center", justifyContent: "center" }, initialText: { color: "white", fontSize: 42 },
-  name: { color: "white", fontSize: 34, fontWeight: "700", textAlign: "center" }, tabs: { flexDirection: "row", justifyContent: "space-between", gap: 2 }, tab: { paddingHorizontal: 8, paddingVertical: 10, borderRadius: 24 }, selectedTab: { backgroundColor: "#ffffff20", borderWidth: 1, borderColor: "#ffffff30" }, tabText: { color: "#b5b5b5", fontSize: 15 },
+  name: { color: "white", fontSize: 34, fontWeight: "700", textAlign: "center" }, tabs: { flexDirection: "row", justifyContent: "space-between", gap: 2 }, tab: { flexShrink: 1, minWidth: 0, paddingHorizontal: 8, paddingVertical: 10, borderRadius: 24 }, selectedTab: { backgroundColor: "#ffffff20", borderWidth: 1, borderColor: "#ffffff30" }, tabText: { color: "#b5b5b5", fontSize: 15 },
   card: { borderRadius: 28, backgroundColor: "#ffffff18", padding: 22, gap: 12 }, heading: { color: "white", fontSize: 23, fontWeight: "600" }, muted: { color: "#b5b5b5", fontSize: 15, lineHeight: 23 },
   locationCard: { borderRadius: 28, overflow: "hidden", backgroundColor: "#ffffff18" }, locationEmpty: { height: 230, alignItems: "center", justifyContent: "center", gap: 18, padding: 24 }, locationCaption: { padding: 22, gap: 10 },
   swatches: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 20 }, swatchWrap: { width: 80, alignItems: "center", gap: 8 }, swatch: { width: 76, height: 76, borderRadius: 38 }, chosen: { borderWidth: 3, borderColor: "#00A6FF" }, check: { position: "absolute", right: -2, bottom: -2 }, swatchImage: { width: "100%", height: "100%", borderRadius: 38 },

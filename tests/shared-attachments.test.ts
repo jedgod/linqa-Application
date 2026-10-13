@@ -39,6 +39,7 @@ test("contact and location use sealed relay envelopes, round trip, and reuse cip
   globalThis.fetch = async (url, init) => {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ url: String(url), body });
+    if(String(url).endsWith('/visibility'))return {ok:true,status:200,text:async()=>JSON.stringify({visibleMessageIds:body.messageIds})} as Response;
     if (body) attachment = body;
     return { ok: true, status: 200, text: async () => JSON.stringify(body ? { id, accepted: true } : String(url).includes("attachments") ? { attachments: [{ ...attachment, createdAt: "2026-10-09T10:00:00Z", senderUserId: self }] } : { messages: [], nextCursor: null }) } as Response;
   };

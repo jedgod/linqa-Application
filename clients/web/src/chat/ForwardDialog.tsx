@@ -14,7 +14,7 @@ export function ForwardDialog({ chats, preview, onClose, onForward }: { chats: I
   const toggle = (id: string) => setChosen((all) => (all.includes(id) ? all.filter((x) => x !== id) : all.length < MAX_TARGETS ? [...all, id] : all));
   const go = async () => {
     setBusy(true); setError(null);
-    try { await onForward(chosen); onClose(); } catch { setError("It could not be forwarded to every chat. Try again."); setBusy(false); }
+    try { await onForward(chosen); onClose(); } catch { setError("Some chats could not receive the message. Retry sends only to unfinished chats."); setBusy(false); }
   };
   return (
     <Dialog title="Forward message" onClose={onClose}>
