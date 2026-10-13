@@ -1,0 +1,40 @@
+Application Security Assessment — Page-by-Page Review
+Date: 2026-10-12
+
+Summary
+
+No new confirmed vulnerabilities were identified in the reviewed pages/screens and related API paths listed below. This is a static, scoped review, not a claim that every page, route, runtime behavior, or deployed configuration is secure.
+
+Findings
+
+| # | Severity | File | Lines | Vulnerability | Confidence |
+|---|----------|------|-------|---------------|------------|
+| 1 | 🟡 MEDIUM | linqaChat-And-iOS/linqa-signing.properties (historical; deleted from current tree) | 3, 5 | Release keystore and key passwords were committed in cleartext. Deleting the file does not remove it from Git history. If the matching keystore is obtained and the credentials remain valid, they could be used to sign a release. This is a previously reported historical exposure, not a newly confirmed flaw in the pages reviewed here. | 8/10 |
+
+Pages and screens assessed
+
+- Mobile conversation: `/modules/conversation`, `ConversationScreen`, and `ChatActionSheets`, including message forwarding and related conversation-service calls.
+- Mobile event scheduling: meeting/event composition, event cards in conversations, calendar export, reminders, and the Event log screen.
+- Web linked-browser chat: chat-screen message forwarding, `ForwardDialog`, and secure-message opening/caching.
+- Related mobile screens/flows: account context, vault access and checkout, and news-link handling.
+
+Related backend/API paths assessed
+
+- Chat message deletion and visibility, attachment deletion, and historical sender-key lookup.
+- Thread attachment/media upload and read paths, and location-share handlers and service authorization.
+- Key-package handling, global rate-limit key selection, and API bootstrap/schema-readiness checks.
+- Relevant vault, authentication, account-deletion, and LinqaSend route authorization patterns.
+
+Recommendations
+
+- Signing credentials: rotate the exposed release keystore and key passwords. If the keystore or credentials may have been accessed by an untrusted party, assess replacing the signing key. Verify rotation independently; removing the historical file or rewriting history does not invalidate credentials.
+- Conversation and forwarding: preserve server-side authorization checks for every read, delete, attachment, and forwarding operation; test that users cannot access another account's messages or media by changing identifiers.
+- Events and reminders: validate event ownership and participant permissions on the server, and test calendar export/reminder data for unauthorized access and unintended disclosure.
+- Web secure-message flow: test cache lifecycle and logout/account-switch behavior to ensure decrypted material is not exposed to a subsequent user or session.
+- Vault, account, and send flows: test authentication, account scoping, and authorization against direct API requests, not only the visible UI.
+- API and uploads: retain server-side type/size validation and access controls for attachments, media, and location data; verify rate limiting and key-package behavior under abuse scenarios.
+- Coverage: complete a route-by-route review of the remaining web/mobile screens and exercise authorization-sensitive paths with multiple test accounts before treating the application as fully assessed.
+
+Review scope and limitations
+
+The review was static. Conversation, scheduling, forwarding, and associated API paths received the most detailed examination; the reviewer did not individually trace every screen in the large mobile/web route inventory. Deployed configuration, provider behavior, credential validity/rotation, and runtime authorization with live accounts were not verified. The historical credential finding was reported previously; repository access history and whether the credentials remain valid were not verified.
