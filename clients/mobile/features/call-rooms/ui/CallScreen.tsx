@@ -18,6 +18,7 @@ import { CallInfoSheet } from './CallInfoSheet';
 import { ReportSheet } from './ReportSheet';
 import { BoardView } from './BoardView';
 import { ScreenSharePicker } from '../native/ScreenSharePicker';
+import { CallContactPanel, CallLocationButton } from '../../../components/calls/CallContactPanel';
 
 type Panel = 'more' | 'add' | 'switch' | 'info' | 'report' | null;
 interface PendingConfirm {
@@ -29,6 +30,7 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
   const s = useEngineState(engine);
   const { people } = useCalls();
   const [panel, setPanel] = useState<Panel>(null);
+  const [contactVisible, setContactVisible] = useState(false);
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [boardVisible, setBoardVisible] = useState(false);
@@ -191,15 +193,7 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
                 <View style={st.pill}><Text style={st.pillText}>{network}</Text></View>
               </View>
               <View style={st.locationBlock}>
-                <Text style={st.kicker}>LOCATION</Text>
-                {location ? (
-                  <View style={st.areaRow}>
-                    <Text style={st.flag}>{location.flag}</Text>
-                    <Text style={st.area} numberOfLines={2}>{location.area}</Text>
-                  </View>
-                ) : (
-                  <Text style={st.area}>—</Text>
-                )}
+                <CallLocationButton flag={location?.flag} area={location?.area} onPress={() => setContactVisible(true)} />
               </View>
               <View style={st.identity}>
                 <Text style={st.title} numberOfLines={1}>{title}</Text>
@@ -404,6 +398,7 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
 
       <SwitchDeviceSheet visible={panel === 'switch'} engine={engine} onClose={() => setPanel(null)} />
       <CallInfoSheet visible={panel === 'info'} engine={engine} onClose={() => setPanel(null)} />
+      <CallContactPanel visible={contactVisible} onClose={() => setContactVisible(false)} name={primaryPeerId ? people.displayName(primaryPeerId) : title} peerId={primaryPeerId} flag={location?.flag} area={location?.area} avatarUrl={primaryPeerId ? people.avatarUrl?.(primaryPeerId) : undefined} />
       <ReportSheet
         visible={panel === 'report'}
         engine={engine}

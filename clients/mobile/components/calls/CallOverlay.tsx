@@ -1,4 +1,5 @@
 import { BoardView } from "./BoardView";
+import { CallContactPanel, CallLocationButton } from "./CallContactPanel";
 import { buildMoreMenu, type MoreItem } from "../../services/call-actions/moreMenu";
 import React, { useEffect, useState, useSyncExternalStore } from "react";
 import { Alert, Platform, Modal, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from "react-native";
@@ -69,6 +70,8 @@ export function CallOverlay() {
   const [reportBusy, setReportBusy] = useState(false);
   const [reportCategory, setReportCategory] = useState("HARASSMENT");
   const [moreOpen, setMoreOpen] = useState(false);
+  const [contactVisible, setContactVisible] = useState(false);
+  useEffect(() => { setContactVisible(false); }, [call.callId]);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -198,8 +201,7 @@ export function CallOverlay() {
                   <NetworkPill network={call.network} />
                 </View>
                 <View style={styles.metaCol}>
-                  <Text style={styles.metaLabel}>LOCATION</Text>
-                  <Text style={styles.location} numberOfLines={2}>{call.peerPlace ? `${call.peerPlace.flag} ${call.peerPlace.name}`.trim() : "—"}</Text>
+                  <CallLocationButton flag={call.peerPlace?.flag} area={call.peerPlace?.name} onPress={() => setContactVisible(true)} />
                 </View>
                 <View style={styles.videoIdentity}>
                   <Text style={styles.nameBig} numberOfLines={1}>{call.peerName || "Linqa call"}</Text>
@@ -277,6 +279,7 @@ export function CallOverlay() {
         )}
 
         {boardVisible && call.board.open ? <BoardView onHide={() => setBoardVisible(false)} /> : null}
+        <CallContactPanel visible={contactVisible && live} onClose={() => setContactVisible(false)} name={call.peerName || "Linqa contact"} peerId={call.peerUserId} flag={call.peerPlace?.flag} area={call.peerPlace?.name} />
         <Modal visible={reportOpen} transparent animationType="slide" onRequestClose={() => { if (!reportBusy) setReportOpen(false); }}>
           <View style={styles.sheetBackdrop}><View style={styles.sheet}>
             <Text style={styles.sheetLabel}>Report this call</Text>

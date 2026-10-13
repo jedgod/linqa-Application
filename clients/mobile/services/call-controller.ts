@@ -23,6 +23,7 @@ export interface CallState {
   phase: CallPhase;
   callId: string | null;
   peerName: string;
+  peerUserId: string | null;
   callType: CallKind;
   incoming: boolean;
   muted: boolean;
@@ -62,7 +63,7 @@ export interface IncomingCall {
 }
 
 const IDLE: CallState = {
-  phase: "idle", callId: null, peerName: "", callType: "AUDIO", incoming: false, muted: false, speaker: false, cameraOff: false,
+  phase: "idle", callId: null, peerName: "", peerUserId: null, callType: "AUDIO", incoming: false, muted: false, speaker: false, cameraOff: false,
   localStreamUrl: null, remoteStreamUrl: null, note: null, connectedAt: null,
   recording: "off", recordingStartedAt: null, recordingNote: null, recordingAvailable: Boolean(NativeModules.LinqaCallRecorder),
   network: "Good", peerPlace: null, minimized: false, handRaised: false, peerHandRaised: false, board: emptyBoard(), sharingScreen: false, mediaBusy: false
@@ -141,7 +142,7 @@ export class CallController {
       await this.ensurePermissions(input.callType);
       const placed = await this.calls.placeCall({ recipientUserId: input.peerUserId, callType: input.callType, privacyMode: this.privacy });
       this.peerDeviceId = placed.calleeDeviceId;
-      this.set({ ...IDLE, phase: "calling", callId: placed.callId, peerName: input.peerName, callType: input.callType, speaker: input.callType === "VIDEO" });
+      this.set({ ...IDLE, phase: "calling", callId: placed.callId, peerName: input.peerName, peerUserId: input.peerUserId, callType: input.callType, speaker: input.callType === "VIDEO" });
       void this.loadPeerPlace(placed.callId);
       try {
         await this.prepareMedia(input.callType, true, placed.callId);
@@ -174,7 +175,7 @@ export class CallController {
     if (anotherCallActive("legacy") || this.state.phase !== "idle" || this.starting || this.finishing) return;
     this.peerDeviceId = call.callerDeviceId;
     this.privacy = call.privacyMode;
-    this.set({ ...IDLE, phase: "ringing", callId: call.callId, peerName: call.callerName, callType: call.callType, incoming: true, speaker: call.callType === "VIDEO" });
+    this.set({ ...IDLE, phase: "ringing", callId: call.callId, peerName: call.callerName, peerUserId: call.callerUserId, callType: call.callType, incoming: true, speaker: call.callType === "VIDEO" });
     void this.loadCallManager().then((m) => { if (this.isCurrent(call.callId) && this.state.phase === "ringing") m?.startRingtone?.("_DEFAULT_"); });
     void this.loadPeerPlace(call.callId);
     this.timer = setTimeout(() => void this.decline(), RING_TIMEOUT_MS);
