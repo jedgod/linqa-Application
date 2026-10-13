@@ -1,0 +1,20 @@
+// Shared Linqa colors. drawerItems.ts re-exports these as DRAWER_COLORS.
+export const COLORS = {
+  headerBg: '#0F1B3D',
+  headerText: '#FFFFFF',
+  headerSubtext: '#C5CEE6',
+  avatarBg: '#3D6BF0',
+  closeBtnBg: 'rgba(255,255,255,0.08)',
+  accent: '#1F4FD8',
+  accentText: '#FFFFFF',
+  surface: '#FFFFFF',
+  background: '#F6F7FA',
+  field: '#F1F3F8',
+  text: '#151A26',
+  muted: '#5B6478',
+  divider: '#E6E9F0',
+  pressed: '#F1F3F8',
+  danger: '#B42318',
+  success: '#067647',
+  overlay: 'rgba(12,16,28,0.48)',
+};

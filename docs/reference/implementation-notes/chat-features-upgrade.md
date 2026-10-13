@@ -50,6 +50,18 @@ For USB debug testing, run `npx expo start --lan --port 8081` from `clients/mobi
 
 Run `scripts/test-chat-feature-db.ps1` for isolated database verification. It requires Docker and a cached `postgres:16` image, creates a uniquely named disposable container bound to a random loopback port, supplies test-only configuration, applies the complete migration set, requires database tests, and removes the container and restores process environment variables in `finally`.
 
+## Protected photos
+
+A direct chat's "+" menu has **Protected photo**. The sender picks a photo and a rule, the app strips its metadata, encrypts it on the phone with a one-time key (XChaCha20-Poly1305) and uploads only the ciphertext to `POST /v1/protected-media`. The key goes to the recipient inside the end-to-end encrypted `protected_media` message, so the server never holds anything it can open.
+
+Rules (validated again on the server, `server/src/protected-media/policy.ts`): limited views (1 to 10, every view logged), a time window (30 to 60 s, from sending or from first open), or view once/twice (a screenshot or screen recording ends access at once and alerts the sender). Each view needs a server-issued single-use token. The final allowed view, an expired window, a revoke or a capture wipes the ciphertext from the database.
+
+The viewer asks Android for `FLAG_SECURE` through `expo-screen-capture`, which blocks screenshots and recordings on most devices, and detects screenshots. Screen recording is detected by the local `modules/screen-recording-detector` module on Android 15 and newer only; on older versions recordings are blocked rather than detected. iOS is not built or tested here. Recipients can still photograph the screen with another device; no app can prevent that.
+
+Every step is written to a hash-chained audit log (`protected_media_audit`, HMAC keyed by `PROTECTED_MEDIA_AUDIT_SECRET`, or a key derived from `JWT_HS256_SECRET` when unset). The sender sees it from the bubble, with an integrity check that fails if any row is edited. The sender's bubble polls the status every five seconds; the server also pushes `protected-media.alert` to the sender's connected devices.
+
+Limits of this build: one recipient (direct chats only), JPEG photos up to 15 MB of ciphertext, and the key stays in the message history of both people (harmless once the ciphertext is gone). Tests: `server/src/tests/protected-media.integration.test.ts`, which needs `DATABASE_URL`.
+
 ## Release gates
 
 Automated tests and the verified LG debug startup do not certify every native interaction. A release still needs two-account device send/open/retry flows, real TURN media and screen capture, actual AI-provider generation, native picker/save/calendar/notification permission cases, background/lock handling, release-binary startup across supported architectures, and iOS native validation. The server cannot infer hidden-control unread eligibility from encrypted message content; the local thread filters those controls, while server-derived chat badges may still count them.

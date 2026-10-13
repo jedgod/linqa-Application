@@ -64,6 +64,8 @@ import { registerRuntimeRoutes } from "../routes/runtime.js";
 import { registerSafetyRoutes } from "../routes/safety.js";
 import { registerSyncRoutes } from "../routes/sync.js";
 import { registerUsernameRoutes } from "../routes/usernames.js";
+import { registerProfileRoutes } from "../routes/profile.js";
+import { registerProtectedMediaRoutes } from "../routes/protected-media.js";
 import { registerLocalVaultBlobRoutes } from "../services/storage/local-vault-object-storage.js";
 import { registerAssistantRoutes } from "../ai/assistant.routes.js";
 import { registerVertical2Routes } from "../routes/vertical-2.routes.js";
@@ -117,6 +119,7 @@ export async function registerAll(
   await registerContactDiscoveryRoutes(app, config, services.contactDiscovery);
   await registerSafetyRoutes(app, config, services.trustSafety);
   await registerUsernameRoutes(app, config, services.usernames);
+  await registerProfileRoutes(app, config, db, services.usernames);
   await registerPrivacyRoutes(app, config, services.privacySettings);
   await registerEntitlementRoutes(app, config, services.entitlements);
   await registerProtocolCapabilityRoutes(
@@ -222,6 +225,7 @@ export async function registerAll(
   await registerSignaling(app, config, db, services.signaling, hub);
   await registerCallRooms(app, config, db);
   await registerMobileHubRoutes(app, config, db, hub);
+  await registerProtectedMediaRoutes(app, config, db, hub);
 
   // Cross-node chat fan-out. Without Redis this is a no-op and delivery falls
   // back to in-process sockets plus durable replay, which is correct on a

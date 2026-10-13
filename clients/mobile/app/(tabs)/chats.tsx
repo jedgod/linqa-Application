@@ -19,6 +19,11 @@ import { PeopleSheet, type PickPerson } from "../../components/conversation/Chat
 import { THEMES } from "../../services/conversation-engine";
 import { useAccounts } from "../../account/AccountContext";
 import { ACCOUNT_SWITCH_LANDING_ROUTE } from "../../account/landing";
+import { SideDrawer } from "../../components/drawer/SideDrawer";
+import { DrawerMenu } from "../../components/drawer/DrawerMenu";
+import type { DrawerItem } from "../../components/drawer/drawerItems";
+import { useProfile } from "../../hooks/useProfile";
+import { avatarUri } from "../../lib/profileApi";
 
 const API = getApiBaseUrl();
 
@@ -58,6 +63,8 @@ function ChatsInbox() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hubOpen, setHubOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const { profile, imageHeaders } = useProfile();
   const [composeOpen, setComposeOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [contacts, setContacts] = useState<HubContact[]>([]);
@@ -312,6 +319,16 @@ function ChatsInbox() {
     router.push(route as never);
   }
 
+  const openDrawer = useCallback(() => { setHubOpen(false); setDrawerOpen(true); }, []);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
+
+  function selectDrawerItem(item: DrawerItem) {
+    closeDrawer();
+    if (item.action === "new-group") setGroupOpen(true);
+    else if (item.action === "archived") { setListId(null); setFilter("archived"); }
+    else if (item.href) go(item.href);
+  }
+
   const hubActions: Array<[string, string, string, () => void]> = [
     ["New chat", "chatbubble-ellipses-outline", C.teal, openCompose],
     ["New group", "people-outline", C.blue, () => { setHubOpen(false); setGroupOpen(true); }],
@@ -322,9 +339,27 @@ function ChatsInbox() {
   ];
 
   return (
+    <SideDrawer
+      open={drawerOpen}
+      onOpen={openDrawer}
+      onClose={closeDrawer}
+      drawerContent={
+        <DrawerMenu
+          user={{
+            name: active?.label || active?.displayName || "Linqa",
+            username: profile?.username ?? null,
+            avatarUrl: avatarUri(profile?.avatarUrl) ?? active?.avatarUri ?? null,
+            avatarHeaders: imageHeaders
+          }}
+          onClose={closeDrawer}
+          onSelect={selectDrawerItem}
+          onProfilePress={() => { closeDrawer(); router.push("/account/manage" as never); }}
+        />
+      }
+    >
     <SafeAreaView edges={["top", "left", "right"]} style={s.screen}>
       <View style={s.header}>
-        <HeaderButton label="Open Linqa menu" icon="menu-outline" onPress={() => go("/(tabs)/linqa")} />
+        <HeaderButton label="Open Linqa menu" icon="menu-outline" onPress={openDrawer} />
         <Text style={[s.brand, { flexShrink: 1, maxWidth: 120 }]} numberOfLines={1}>
           {active?.label || active?.displayName || "Linqa"}
         </Text>
@@ -582,5 +617,6 @@ function ChatsInbox() {
         }}
       />
     </SafeAreaView>
+    </SideDrawer>
   );
 }

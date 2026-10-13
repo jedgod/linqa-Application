@@ -19,12 +19,13 @@ export interface ChatFeatures {
 export const DEFAULT_FEATURES: ChatFeatures = { media: true, voice: true, location: true, polls: true, meetings: true, screen: true, ai: false };
 
 export type AttachAction =
-  | "photos" | "camera" | "document" | "location" | "contact" | "poll"
+  | "photos" | "camera" | "protected" | "document" | "location" | "contact" | "poll"
   | "event" | "meeting" | "voice" | "video" | "screen" | "whiteboard" | "ai" | "design";
 
 const TILES: { action: AttachAction; label: string; feature: keyof ChatFeatures; d: string; warn?: boolean }[] = [
   { action: "photos", label: "Photos", feature: "media", d: "M3 5h18v14H3z M3 16l5-5 5 5 3-3 5 5" },
   { action: "camera", label: "Camera", feature: "media", d: "M4 7h3l2-2h6l2 2h3v12H4z M12 16a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" },
+  { action: "protected", label: "Protected photo", feature: "media", d: "M12 3l8 3v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z M9 12l2 2 4-4" },
   { action: "document", label: "Document", feature: "media", d: "M7 3h7l5 5v13H7z M14 3v5h5 M10 13h6 M10 17h6" },
   { action: "design", label: "Design / crop", feature: "media", d: "M6 3v15h15 M3 6h15v15" },
   { action: "location", label: "Location", feature: "location", d: "M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z M12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z" },

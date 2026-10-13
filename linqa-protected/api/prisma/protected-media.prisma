@@ -1,0 +1,112 @@
+// Protected media models. Paste into prisma/schema.prisma, then:
+//   npx prisma migrate dev --name protected_media
+//
+// The server stores ONLY ciphertext. The decryption key travels inside the
+// end-to-end encrypted linqa-core message and never reaches the API.
+
+enum ProtectedMediaMode {
+  MULTI_VIEW // N views, every view audited
+  TIMED      // unlimited views inside a short window
+  EPHEMERAL  // 1-2 views, screenshot/recording revokes access
+}
+
+enum ExpiryStart {
+  ON_SEND
+  ON_FIRST_VIEW
+}
+
+enum ProtectedMediaStatus {
+  ACTIVE
+  EXHAUSTED       // view limit used up
+  EXPIRED         // time window passed
+  REVOKED         // sender revoked it
+  CAPTURE_REVOKED // screenshot or recording detected
+}
+
+enum MediaAuditType {
+  CREATED
+  VIEW_GRANTED
+  BLOB_DELIVERED
+  VIEW_ENDED
+  ACCESS_DENIED
+  SCREENSHOT_DETECTED
+  SCREEN_RECORDING_DETECTED
+  EXHAUSTED
+  EXPIRED
+  REVOKED_BY_SENDER
+  CAPTURE_REVOKED
+  BLOB_DELETED
+}
+
+model ProtectedMedia {
+  id              String               @id @default(uuid())
+  senderId        String
+  recipientId     String
+  conversationId  String?
+
+  mode            ProtectedMediaMode
+  /// Null = unlimited (TIMED mode).
+  maxViews        Int?
+  /// TIMED mode window length in seconds.
+  windowSeconds   Int?
+  expiryStart     ExpiryStart?
+  /// How long one view stays on screen before the viewer closes.
+  viewSeconds     Int
+  notifyOnView    Boolean              @default(true)
+  revokeOnCapture Boolean              @default(false)
+
+  /// File name of the ciphertext in PROTECTED_MEDIA_DIR. Null once deleted.
+  blobKey         String?
+  sizeBytes       Int
+
+  viewCount       Int                  @default(0)
+  status          ProtectedMediaStatus @default(ACTIVE)
+  createdAt       DateTime             @default(now())
+  firstViewedAt   DateTime?
+  expiresAt       DateTime?
+  closedAt        DateTime?
+  closeReason     String?
+
+  views           MediaView[]
+  events          MediaAuditEvent[]
+
+  @@index([status, expiresAt])
+  @@index([senderId])
+  @@index([recipientId])
+}
+
+model MediaView {
+  id             String         @id @default(uuid())
+  mediaId        String
+  media          ProtectedMedia @relation(fields: [mediaId], references: [id])
+  viewerId       String
+  viewNumber     Int
+  /// SHA-256 of the single-use download token. The token itself is never stored.
+  tokenHash      String         @unique
+  tokenExpiresAt DateTime
+  blobFetchedAt  DateTime?
+  startedAt      DateTime       @default(now())
+  endedAt        DateTime?
+  endReason      String?
+
+  @@index([mediaId])
+}
+
+/// Append-only, hash-chained audit log. Rows are never updated or deleted,
+/// and they outlive the media itself so the trail stays available for review.
+model MediaAuditEvent {
+  id         String         @id @default(uuid())
+  mediaId    String
+  media      ProtectedMedia @relation(fields: [mediaId], references: [id])
+  seq        Int
+  type       MediaAuditType
+  actorId    String?
+  viewNumber Int?
+  at         DateTime
+  detail     Json?
+  prevHash   String?
+  hash       String
+
+  @@unique([mediaId, seq])
+  @@index([mediaId, at])
+}

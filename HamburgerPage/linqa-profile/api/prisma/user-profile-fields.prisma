@@ -1,0 +1,16 @@
+// Add these fields to your existing `model User` in prisma/schema.prisma,
+// then run:  npx prisma migrate dev --name user_username_avatar
+//
+// model User {
+//   ...your existing fields...
+
+  /// Lowercase handle without the "@", e.g. "keona_g". Null until the user picks one.
+  username        String?   @unique
+
+  /// File name of the stored avatar inside UPLOAD_DIR/avatars. Null = no photo.
+  avatarKey       String?
+
+  /// Bumped on every avatar change so clients can bust their image cache.
+  avatarUpdatedAt DateTime?
+
+// }

@@ -21,7 +21,7 @@ import type { CaptureKind } from "./CapturePanel";
 
 const storage = new AccountSecureStorage();
 const ACTIONS: Partial<Record<AttachAction, ConversationPrefs["features"][number]>> = {
-  photos: "PHOTO", camera: "PHOTO", document: "DOCUMENT", design: "DESIGN", location: "LOCATION", contact: "CONTACT", poll: "POLL", event: "EVENT", meeting: "MEETING", voice: "VOICE", video: "VIDEO", screen: "LIVE_SCREEN", whiteboard: "LIVE_SCREEN", ai: "AI_IMAGE"
+  photos: "PHOTO", camera: "PHOTO", protected: "PHOTO", document: "DOCUMENT", design: "DESIGN", location: "LOCATION", contact: "CONTACT", poll: "POLL", event: "EVENT", meeting: "MEETING", voice: "VOICE", video: "VIDEO", screen: "LIVE_SCREEN", whiteboard: "LIVE_SCREEN", ai: "AI_IMAGE"
 };
 
 export function useProductionFeatures(o: {
@@ -120,10 +120,10 @@ export function useProductionFeatures(o: {
     return results;
   } }), [o.service, o.conversationId]);
   const features: ChatFeatures = { media: true, voice: true, location: true, polls: true, meetings: true, screen: capabilities.live, ai: capabilities.aiImages };
-  const supported = (Object.keys(ACTIONS) as AttachAction[]).filter(action => (action !== "ai" || capabilities.aiImages) && (!["screen", "whiteboard"].includes(action) || capabilities.live) && (action !== "screen" || Platform.OS === "android"));
+  const supported = (Object.keys(ACTIONS) as AttachAction[]).filter(action => (action !== "ai" || capabilities.aiImages) && (action !== "protected" || !!o.peerId) && (!["screen", "whiteboard"].includes(action) || capabilities.live) && (action !== "screen" || Platform.OS === "android"));
   const featureSupport = [...new Set(supported.map(action => ACTIONS[action]!))];
   const allowedActions = supported.filter(action => o.prefs.features.includes(ACTIONS[action]!));
-  const flow = useAttachFlow({ conversationId: o.conversationId, peerName: o.peerName, live, features, allowedActions, transport, attachments, aiProvider, aiConsented: consented,
+  const flow = useAttachFlow({ conversationId: o.conversationId, peerId: o.peerId, peerName: o.peerName, live, features, allowedActions, transport, attachments, aiProvider, aiConsented: consented,
     onAiConsent: () => { setConsented(true); void storage.put(o.selfId, "chat-ai-consent-v1", "accepted").catch(() => undefined); }, showNotificationPreviews: false,
     onOpenSettings: o.onSettings, onCapture: kind => o.onCapture(kind), onStartLive: opts => { void startLive(opts); } });
   const openAI = () => {

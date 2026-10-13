@@ -28,6 +28,24 @@ export interface FileContent {
   aiPrompt?: string;
 }
 
+/**
+ * A photo with viewing rules (view limit, time window, view once). The ciphertext lives on the
+ * server and the key rides in this end-to-end encrypted message, so only the recipient can open it.
+ */
+export interface ProtectedMediaContent {
+  type: "protected_media";
+  v: 1;
+  mediaId: string;
+  secret: { key: string; nonce: string }; // base64
+  mime: "image/jpeg";
+  width: number;
+  height: number;
+  mode: "MULTI_VIEW" | "TIMED" | "EPHEMERAL";
+  maxViews: number | null;
+  windowSeconds: number | null;
+  expiryStart: "ON_SEND" | "ON_FIRST_VIEW" | null;
+}
+
 export interface TextContent {
   type: "text";
   text: string;
@@ -122,6 +140,7 @@ export interface RtcSignalContent {
 export type MessageContent =
   | TextContent
   | FileContent
+  | ProtectedMediaContent
   | LocationContent
   | ContactContent
   | PollContent

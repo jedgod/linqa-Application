@@ -57,6 +57,19 @@ function validate(c: Record<string, unknown>): MessageContent | null {
         ? (c as never)
         : null;
 
+    case "protected_media":
+      return c.v === 1 && typeof c.mediaId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c.mediaId) &&
+        isObj(c.secret) && typeof c.secret.key === "string" && /^[A-Za-z0-9+/]{43}=$/.test(c.secret.key) &&
+        typeof c.secret.nonce === "string" && /^[A-Za-z0-9+/]{32}$/.test(c.secret.nonce) &&
+        c.mime === "image/jpeg" && Number.isSafeInteger(c.width) && (c.width as number) > 0 && (c.width as number) <= 16384 &&
+        Number.isSafeInteger(c.height) && (c.height as number) > 0 && (c.height as number) <= 16384 &&
+        ["MULTI_VIEW", "TIMED", "EPHEMERAL"].includes(c.mode as string) &&
+        (c.maxViews === null || (Number.isSafeInteger(c.maxViews) && (c.maxViews as number) > 0 && (c.maxViews as number) <= 10)) &&
+        (c.windowSeconds === null || (Number.isSafeInteger(c.windowSeconds) && (c.windowSeconds as number) > 0 && (c.windowSeconds as number) <= 3600)) &&
+        (c.expiryStart === null || c.expiryStart === "ON_SEND" || c.expiryStart === "ON_FIRST_VIEW")
+        ? (c as never)
+        : null;
+
     case "location":
       return num(c.latitude) && Math.abs(c.latitude as number) <= 90 &&
         num(c.longitude) && Math.abs(c.longitude as number) <= 180 &&

@@ -11,6 +11,7 @@ import { EventCard, MeetingCard } from "../features/schedule/Schedule";
 import { LocationCard } from "../features/location/Location";
 import { ContactCard } from "../features/contact/Contact";
 import { VoicePlayer } from "../features/voice/Voice";
+import { ProtectedContentBubble } from "../../../components/protected/ProtectedContentBubble";
 import { palette as c, space } from "../ui/tokens";
 import { ThreadIndex, rsvpsFor, votesFor } from "./threadIndex";
 
@@ -43,6 +44,8 @@ export function ContentBubble(p: ContentBubbleProps) {
       );
     case "file":
       return <FileBubble file={content} outgoing={out} attachments={p.attachments} onOpen={() => p.onOpenFile(content)} />;
+    case "protected_media":
+      return <ProtectedContentBubble content={content} outgoing={out} />;
     case "location":
       return <LocationCard loc={content} outgoing={out} />;
     case "contact":

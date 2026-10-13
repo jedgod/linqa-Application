@@ -127,6 +127,8 @@ const EnvSchema = z.object({
   COUNTRYLINQA_DATA_KEY_V1: z.string().length(64).optional(),
   // Signs discovery pagination cursors. Falls back to a key derived from JWT_HS256_SECRET.
   COUNTRYLINQA_CURSOR_SECRET: z.string().min(32).optional(),
+  // Keys the protected-photo audit chain. Falls back to a key derived from JWT_HS256_SECRET.
+  PROTECTED_MEDIA_AUDIT_SECRET: z.string().min(32).optional(),
   SECURE_CORE_ARTIFACT_SHA256: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
   SECURE_CORE_ARTIFACT_PATH: z.string().min(1).optional(),
   COUNTRYLINQA_RISK_URL: z.string().url().optional(),

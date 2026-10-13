@@ -12,6 +12,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { ActivityIndicator, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import {
   useFonts,
   PlusJakartaSans_400Regular,
@@ -98,6 +99,7 @@ export default function RootLayout() {
   }
 
   return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <SafeAreaProvider>
       <AccountProvider>
         <AccountSessionBridge />
@@ -205,5 +207,6 @@ export default function RootLayout() {
         </Stack>
       </AccountProvider>
     </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

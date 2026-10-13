@@ -2,7 +2,7 @@ import type { Database } from "../db/pool.js";
 
 function normalizeUsername(value: string): string {
   const normalized = value.trim().toLowerCase();
-  if (!/^[a-z][a-z0-9_]{2,29}$/.test(normalized)) {
+  if (!/^[a-z][a-z0-9_.]{2,29}$/.test(normalized)) {
     throw new Error("invalid username");
   }
   return normalized;

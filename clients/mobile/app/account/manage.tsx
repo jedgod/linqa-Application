@@ -1,9 +1,10 @@
-import { StyleSheet, Text, Pressable, View } from "react-native";
+import { StyleSheet, Text, Pressable, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useAccounts } from "../../account/AccountContext";
 import { ScreenHeader } from "../../components/ScreenHeader";
+import { ProfileEditor } from "../../components/account/ProfileEditor";
 import { useMemo } from "react";
 import { avatarColorForSlot, radius, useTheme, type Palette } from "../../theme/tokens";
 import { ACCOUNT_SWITCH_LANDING_ROUTE } from "../../account/landing";
@@ -16,8 +17,10 @@ export default function ManageAccountsScreen() {
 
   return (
     <SafeAreaView style={s.screen}>
-      <View style={s.content}>
+      <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
         <ScreenHeader title="Manage Accounts" showBack />
+
+        <ProfileEditor name={active?.label || active?.displayName || "Linqa"} />
 
         {accounts.map((account) => {
           const isActive = account.userId === active?.userId;
@@ -72,7 +75,7 @@ export default function ManageAccountsScreen() {
           <Text style={s.addText}>Add Account</Text>
         </Pressable>
         <Text style={s.limit}>You can add up to 3 accounts</Text>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }

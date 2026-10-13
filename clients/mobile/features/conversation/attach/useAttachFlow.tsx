@@ -17,11 +17,14 @@ import { ContactComposer } from "../features/contact/Contact";
 import { AiImageComposer, AiImageProvider } from "../features/ai/AiImage";
 import { VoiceRecorder } from "../features/voice/Voice";
 import { newId } from "../content/codec";
+import { ProtectedPhotoComposer } from "../../../components/protected/ProtectedPhotoComposer";
 
-type Composer = "poll" | "event" | "meeting" | "location" | "contact" | "voice" | "ai" | null;
+type Composer = "protected" | "poll" | "event" | "meeting" | "location" | "contact" | "voice" | "ai" | null;
 
 interface Options {
   conversationId: string;
+  /** The other person in a one-to-one chat. Protected photos need exactly one recipient. */
+  peerId?: string | null;
   peerName: string;
   features: ChatFeatures;
   /** False while the messaging gate is LOCKED: nothing can be sent. */
@@ -130,7 +133,16 @@ export function useAttachFlow(o: Options) {
         onCustomize={() => (setSheet(false), o.onOpenSettings())}
         onClose={() => setSheet(false)}
       />
-      <Modal visible={composer !== null} animationType="slide" presentationStyle="fullScreen" onRequestClose={cancel}>
+      {o.peerId ? (
+        <ProtectedPhotoComposer
+          visible={composer === "protected"}
+          recipientId={o.peerId}
+          conversationId={o.conversationId}
+          onSent={async (payload) => { await sendContent(payload); }}
+          onClose={cancel}
+        />
+      ) : null}
+      <Modal visible={composer !== null && composer !== "protected"} animationType="slide" presentationStyle="fullScreen" onRequestClose={cancel}>
         {composer === "poll" ? <PollComposer onSend={done} onCancel={cancel} /> : null}
         {composer === "event" ? <ScheduleComposer initialKind="Event" onSend={done} onCancel={cancel} /> : null}
         {composer === "meeting" ? <ScheduleComposer initialKind="Meeting" onSend={done} onCancel={cancel} /> : null}
