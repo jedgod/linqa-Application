@@ -31,7 +31,9 @@ export function DrawerMenu({ user, onClose, onSelect, onProfilePress }: Props) {
       {/* Profile header */}
       <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
         <View style={styles.headerTop}>
-          <Avatar name={user.name} uri={user.avatarUrl} headers={user.avatarHeaders} size={60} />
+          <Pressable onPress={onProfilePress} accessibilityRole="button" accessibilityLabel="Edit profile photo">
+            <Avatar name={user.name} uri={user.avatarUrl} headers={user.avatarHeaders} size={60} />
+          </Pressable>
           <Pressable
             onPress={onClose}
             accessibilityRole="button"

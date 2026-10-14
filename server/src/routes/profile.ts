@@ -105,11 +105,23 @@ export async function registerProfileRoutes(app: FastifyInstance, config: AppCon
     return reply.send(await profileOf(userId));
   });
 
-  // Only signed-in Linqa users can see avatars.
+  // A photo is visible to its owner and to people connected to them on Linqa: a saved contact, or someone in a conversation
+  // with them. Blocked pairs and strangers get the same "No avatar" as a missing photo.
   app.get("/v1/profile/:id/avatar", async (request, reply) => {
-    if (!(await userOf(request))) return reply.code(401).send({ message: "Sign in again." });
+    const viewerId = await userOf(request);
+    if (!viewerId) return reply.code(401).send({ message: "Sign in again." });
     const { id } = request.params as { id: string };
     if (!UUID.test(id)) return reply.code(404).send({ message: "No avatar" });
+    if (id.toLowerCase() !== viewerId.toLowerCase()) {
+      const connected = await db.query(
+        `SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM blocked_users b
+                 WHERE (b.blocker_user_id = $1 AND b.blocked_user_id = $2) OR (b.blocker_user_id = $2 AND b.blocked_user_id = $1))
+           AND (EXISTS (SELECT 1 FROM chat_contacts cc WHERE (cc.owner_user_id = $1 AND cc.contact_user_id = $2) OR (cc.owner_user_id = $2 AND cc.contact_user_id = $1))
+             OR EXISTS (SELECT 1 FROM conversation_members mine JOIN conversation_members peer ON peer.conversation_id = mine.conversation_id
+                  WHERE mine.user_id = $1 AND mine.removed_at IS NULL AND peer.user_id = $2 AND peer.removed_at IS NULL))`,
+        [viewerId, id]);
+      if (!connected.rowCount) return reply.code(404).send({ message: "No avatar" });
+    }
     const result = await db.query("SELECT mime, image FROM user_avatars WHERE user_id = $1", [id]);
     if (!result.rowCount) return reply.code(404).send({ message: "No avatar" });
     return reply

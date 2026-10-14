@@ -2,6 +2,7 @@ import { accountScopeGeneration } from "./account-scope";
 import { base64ToBytes } from "./secure-core";
 import { sealMedia, decryptMediaBytes, mediaDigest } from "./conversation-file-crypto";
 import { readMedia, cacheMedia } from "./conversation-media";
+import { ingestProtectedMessage } from "../lib/protectedMedia/receive";
 import type { MediaPayload } from "./conversation-engine";
 import { validatePayload, type Payload } from "./conversation-engine";
 import { fromThreadPayload, toThreadPayload, assertPayload } from "./conversation-thread";
@@ -184,7 +185,7 @@ export class ConversationService implements ConversationServiceLike {
             : fromThreadPayload(parsed);
           if (card && (parsed.kind === "LOCATION" || parsed.kind === "CONTACT") && card.type.toUpperCase() !== parsed.kind) throw new Error("ATTACHMENT_KIND_MISMATCH");
           results.push(card ? { id: row.id, ok: true, text: JSON.stringify(card) } : { id: row.id, ok: false });
-        } else results.push({ id: row.id, ok: true, text });
+        } else results.push({ id: row.id, ok: true, text: await ingestProtectedMessage(text, row.senderId === this.selfId) });
       } catch (e) {
         // A missing secure core affects every row: let the caller lock the thread. Anything else is one bad row.
         if ((e as { code?: string })?.code === "SECURE_CORE_UNAVAILABLE") throw e;

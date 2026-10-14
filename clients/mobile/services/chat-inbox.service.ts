@@ -42,6 +42,8 @@ export type ChatSummary = {
   e2eeVerified: boolean;
   /** The other member, on direct conversations only. Null for groups. */
   peerUserId: string | null;
+  /** Path of the other person's profile photo on a direct chat; null when they have none. */
+  peerAvatarUrl?: string | null;
   /** Present only once a typing transport exists; never guessed client-side. */
   typingLabel?: string;
   previewKind?: PreviewKind;
@@ -69,6 +71,7 @@ export type PresenceContact = {
   displayName: string;
   initials: string;
   online: boolean;
+  avatarUrl?: string | null;
 };
 
 export type ScheduledCallCard = {
@@ -84,6 +87,7 @@ export type ChatInboxPayload = {
   unreadTotal: number;
   counts: Record<ChatFilter, number>;
   scheduledCall: ScheduledCallCard | null;
+  scheduledCallCount?: number;
   presence: PresenceContact[];
   conversations: ChatSummary[];
 };

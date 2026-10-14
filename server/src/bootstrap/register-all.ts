@@ -65,6 +65,7 @@ import { registerSafetyRoutes } from "../routes/safety.js";
 import { registerSyncRoutes } from "../routes/sync.js";
 import { registerUsernameRoutes } from "../routes/usernames.js";
 import { registerProfileRoutes } from "../routes/profile.js";
+import { registerSearchRoutes } from '../routes/search.js';
 import { registerProtectedMediaRoutes } from "../routes/protected-media.js";
 import { registerLocalVaultBlobRoutes } from "../services/storage/local-vault-object-storage.js";
 import { registerAssistantRoutes } from "../ai/assistant.routes.js";
@@ -120,6 +121,7 @@ export async function registerAll(
   await registerSafetyRoutes(app, config, services.trustSafety);
   await registerUsernameRoutes(app, config, services.usernames);
   await registerProfileRoutes(app, config, db, services.usernames);
+  await registerSearchRoutes(app, config, db);
   await registerPrivacyRoutes(app, config, services.privacySettings);
   await registerEntitlementRoutes(app, config, services.entitlements);
   await registerProtocolCapabilityRoutes(

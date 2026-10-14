@@ -49,6 +49,7 @@ interface ConversationRow {
   participantInitials: string[];
   e2eeVerified: boolean;
   peerUserId: string | null;
+  peerAvatarUrl?: string | null;
   archived?: boolean;
   listIds?: string[];
   memberUserIds?: string[] | null;
@@ -156,7 +157,16 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
                     WHERE peer.conversation_id = c.id
                       AND peer.user_id <> $1 AND peer.removed_at IS NULL
                     LIMIT 1
-                  ) END AS "peerUserId"
+                  ) END AS "peerUserId",
+                  -- The other person's profile photo, so a direct row shows who it is with.
+                  CASE WHEN c.conversation_type = 'DIRECT' THEN (
+                    SELECT '/v1/profile/' || peer.user_id || '/avatar?v=' || floor(extract(epoch FROM a.updated_at) * 1000)::bigint
+                    FROM conversation_members peer
+                    JOIN user_avatars a ON a.user_id = peer.user_id
+                    WHERE peer.conversation_id = c.id
+                      AND peer.user_id <> $1 AND peer.removed_at IS NULL
+                    LIMIT 1
+                  ) END AS "peerAvatarUrl"
            FROM conversations c
            JOIN conversation_members cm
              ON cm.conversation_id = c.id AND cm.user_id = $1 AND cm.removed_at IS NULL
@@ -182,7 +192,7 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
         // the card is labelled from the call type and time instead of from a
         // title nobody on this side can read.
         db.query(
-          `SELECT id AS "eventId", call_type AS "callType", scheduled_for AS "startsAt"
+          `SELECT id AS "eventId", call_type AS "callType", scheduled_for AS "startsAt", count(*) OVER()::int AS "scheduledCallCount"
            FROM scheduled_calls
            WHERE status='SCHEDULED'
              AND scheduled_for > now() - interval '10 minutes'
@@ -195,7 +205,9 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
           `SELECT DISTINCT p.user_id AS "userId", p.display_name AS "displayName",
                   EXISTS (SELECT 1 FROM devices d
                           WHERE d.user_id = p.user_id AND d.status='ACTIVE'
-                            AND d.last_seen_at > now() - interval '15 minutes') AS online
+                            AND d.last_seen_at > now() - interval '15 minutes') AS online,
+                  (SELECT '/v1/profile/' || p.user_id || '/avatar?v=' || floor(extract(epoch FROM a.updated_at) * 1000)::bigint
+                     FROM user_avatars a WHERE a.user_id = p.user_id) AS "avatarUrl"
            FROM conversation_members mine
            JOIN conversation_members peer
              ON peer.conversation_id = mine.conversation_id
@@ -244,7 +256,7 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
 
       const counts = (totals.rows[0] ?? {}) as Record<string, number>;
       const call = scheduled.rows[0] as
-        | { eventId: string; callType: string; startsAt: string }
+        | { eventId: string; callType: string; startsAt: string; scheduledCallCount?: number }
         | undefined;
 
       const rows = (conversations.rows as Array<ConversationRow & { participantNames: string[] }>).map(
@@ -267,7 +279,8 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
           ...(row.memberUserIds ? { memberUserIds: row.memberUserIds } : {}),
           online: Boolean(row.online),
           e2eeVerified: Boolean(row.e2eeVerified),
-          peerUserId: row.peerUserId ?? null
+          peerUserId: row.peerUserId ?? null,
+          peerAvatarUrl: row.peerAvatarUrl ?? null
           // `typingLabel` is deliberately absent. There is no typing transport
           // on this server yet, and a client-side guess would be a fabricated
           // presence signal about another person. The client renders the field
@@ -279,6 +292,7 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
       return reply.code(200).send({
         generatedAt: new Date().toISOString(),
         unreadTotal: Number(counts.unreadTotal ?? 0),
+        scheduledCallCount: call ? Number(call.scheduledCallCount ?? 1) : 0,
         counts: {
           all: Number(counts.all ?? 0),
           unread: Number(counts.unread ?? 0),
@@ -297,12 +311,13 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
               joinable: Date.parse(String(call.startsAt)) - Date.now() <= 15 * 60_000
             }
           : null,
-        presence: (presence.rows as Array<{ userId: string; displayName: string; online: boolean }>).map(
+        presence: (presence.rows as Array<{ userId: string; displayName: string; online: boolean; avatarUrl: string | null }>).map(
           (row) => ({
             userId: row.userId,
             displayName: row.displayName,
             initials: initialsOf(row.displayName),
-            online: Boolean(row.online)
+            online: Boolean(row.online),
+            avatarUrl: row.avatarUrl ?? null
           })
         ),
         conversations: rows

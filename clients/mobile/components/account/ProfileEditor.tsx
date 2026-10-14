@@ -98,7 +98,7 @@ export function ProfileEditor({ name }: Props) {
     setSavingName(true);
     try {
       const updated = await updateUsername(normalized);
-      setProfile(updated);
+      await setProfile(updated);
       setStatus({ kind: 'idle' });
     } catch (e) {
       setStatus({ kind: 'taken', message: e instanceof Error ? e.message : 'Could not save.' });
@@ -108,23 +108,24 @@ export function ProfileEditor({ name }: Props) {
   };
 
   const pickPhoto = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Photo access needed', 'Allow photo access in Settings to choose a profile photo.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-    if (result.canceled || !result.assets?.[0]) return;
-
-    const asset = result.assets[0];
+    if (savingPhoto) return;
     setSavingPhoto(true);
     try {
-      setProfile(await uploadAvatar(asset.uri, asset.mimeType ?? 'image/jpeg'));
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Photo access needed', 'Allow photo access in Settings to choose a profile photo.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+
+      const asset = result.assets[0];
+      await setProfile(await uploadAvatar(asset.uri, asset.mimeType ?? 'image/jpeg'));
     } catch (e) {
       Alert.alert('Upload failed', e instanceof Error ? e.message : 'Please try again.');
     } finally {
@@ -135,7 +136,7 @@ export function ProfileEditor({ name }: Props) {
   const deletePhoto = async () => {
     setSavingPhoto(true);
     try {
-      setProfile(await removeAvatar());
+      await setProfile(await removeAvatar());
     } catch (e) {
       Alert.alert('Could not remove photo', e instanceof Error ? e.message : 'Please try again.');
     } finally {
@@ -196,6 +197,9 @@ export function ProfileEditor({ name }: Props) {
         </View>
       </Pressable>
       <Text style={styles.name}>{name}</Text>
+      <Pressable onPress={onPhotoPress} disabled={savingPhoto} accessibilityRole="button" style={styles.photoButton}>
+        <Text style={styles.retryText}>{savingPhoto ? 'Uploading photo…' : profile?.avatarUrl ? 'Change profile photo' : 'Upload profile photo'}</Text>
+      </Pressable>
 
       {/* Username */}
       <Text style={styles.label} nativeID="usernameLabel">
@@ -277,6 +281,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   avatarWrap: { alignSelf: 'center', marginBottom: 6 },
+  photoButton: { alignSelf: 'center', padding: 12, marginBottom: 8 },
   cameraBadge: {
     position: 'absolute',
     right: 0,

@@ -3,7 +3,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { useAccounts } from '../account/AccountContext';
-import { registerAccountScopeReset } from '../services/account-scope';
+import { accountScopeGeneration, registerAccountScopeReset } from '../services/account-scope';
 import { fetchProfile, getAuthToken, type Profile } from '../lib/profileApi';
 
 type State = {
@@ -36,9 +36,12 @@ registerAccountScopeReset('profile', () => clearProfile());
 
 export async function refreshProfile() {
   if (state.loading) return;
+  const generation = accountScopeGeneration();
   setState({ loading: true, error: null });
   try {
-    const [profile, token] = await Promise.all([fetchProfile(), getAuthToken()]);
+    const profile = await fetchProfile();
+    const token = await getAuthToken();
+    if (generation !== accountScopeGeneration()) return;
     loadedFor = profile.id;
     setState({
       profile,
@@ -46,13 +49,18 @@ export async function refreshProfile() {
       loading: false,
     });
   } catch (e) {
+    if (generation !== accountScopeGeneration()) return;
     setState({ loading: false, error: e instanceof Error ? e.message : 'Could not load profile' });
   }
 }
 
 /** Replace the cached profile after a successful save. */
-export function setProfile(profile: Profile) {
-  setState({ profile });
+export async function setProfile(profile: Profile) {
+  const generation = accountScopeGeneration();
+  const token = await getAuthToken();
+  if (generation !== accountScopeGeneration()) return;
+  loadedFor = profile.id;
+  setState({ profile, imageHeaders: token ? { Authorization: `Bearer ${token}` } : undefined });
 }
 
 /** Call on sign-out so the next account does not see the old profile. */
@@ -69,10 +77,8 @@ export function useProfile() {
 
   useEffect(() => {
     if (!userId) return;
-    if (loadedFor !== userId && !state.loading) {
-      if (loadedFor) clearProfile();
-      void refreshProfile();
-    }
+    if (loadedFor && loadedFor !== userId) clearProfile();
+    void refreshProfile();
   }, [userId]);
 
   return { ...snapshot, refresh: refreshProfile, setProfile };

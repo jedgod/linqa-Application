@@ -17,11 +17,24 @@ export async function rememberMediaKey(mediaId: string, secret: MediaKey) {
   await SecureStore.setItemAsync(slot(mediaId), JSON.stringify(secret), OPTIONS);
 }
 
+const doneSlot = (mediaId: string) => `${slot(mediaId)}_done`;
+
+/**
+ * Saves the key the first time a message is opened. Once the key has been destroyed (viewed, expired or revoked)
+ * the message is decrypted again whenever the chat reloads, so a marker stops that from bringing the key back.
+ */
+export async function rememberMediaKeyOnce(mediaId: string, secret: MediaKey) {
+  if (await SecureStore.getItemAsync(doneSlot(mediaId), OPTIONS)) return;
+  if (await SecureStore.getItemAsync(slot(mediaId), OPTIONS)) return;
+  await rememberMediaKey(mediaId, secret);
+}
+
 export async function getMediaKey(mediaId: string): Promise<MediaKey | null> {
   const raw = await SecureStore.getItemAsync(slot(mediaId), OPTIONS);
   return raw ? (JSON.parse(raw) as MediaKey) : null;
 }
 
 export async function forgetMediaKey(mediaId: string) {
+  await SecureStore.setItemAsync(doneSlot(mediaId), '1', OPTIONS);
   await SecureStore.deleteItemAsync(slot(mediaId), OPTIONS);
 }

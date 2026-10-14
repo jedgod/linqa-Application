@@ -33,6 +33,8 @@ import { bytesToBase64, decryptMedia } from '../../lib/protectedMedia/crypto';
 import { forgetMediaKey, getMediaKey } from '../../lib/protectedMedia/keyStore';
 import {
   captureProtectionAvailable,
+  enableCaptureProtection,
+  disableCaptureProtection,
   isScreenBeingCaptured,
   prepareCaptureDetection,
   useCaptureGuard,
@@ -70,10 +72,12 @@ export function ProtectedMediaViewer({ mediaId, visible, onClose }: Props) {
   const grantRef = useRef<ViewGrant | null>(null);
   const endedRef = useRef(false);
   const aliveRef = useRef(false);
+  const interruptedRef = useRef(false);
 
   const reset = () => {
     grantRef.current = null;
     endedRef.current = false;
+    interruptedRef.current = false;
     setPhase({ k: 'starting' });
   };
 
@@ -102,6 +106,8 @@ export function ProtectedMediaViewer({ mediaId, visible, onClose }: Props) {
   const close = useCallback(
     (reason: EndReason = 'closed') => {
       // Drop the image from state first so it disappears immediately.
+      aliveRef.current = false;
+      interruptedRef.current = true;
       setPhase({ k: 'starting' });
       void finishView(reason).finally(() => {
         reset();
@@ -129,8 +135,19 @@ export function ProtectedMediaViewer({ mediaId, visible, onClose }: Props) {
         return;
       }
       await prepareCaptureDetection();
+      try {
+        await enableCaptureProtection();
+      } catch {
+        if (aliveRef.current) setPhase({ k: 'unavailable', message: 'Screenshot protection could not be enabled. Please update Linqa and try again.' });
+        return;
+      }
+      if (!aliveRef.current || interruptedRef.current) {
+        await disableCaptureProtection().catch(() => undefined);
+        return;
+      }
 
       const secret = await getMediaKey(mediaId);
+      if (!aliveRef.current || interruptedRef.current) return;
       if (!secret) {
         setPhase({ k: 'unavailable', message: 'This photo can no longer be opened on this device.' });
         return;
@@ -144,13 +161,13 @@ export function ProtectedMediaViewer({ mediaId, visible, onClose }: Props) {
         const plain = decryptMedia(cipher, secret);
         const uri = `data:image/jpeg;base64,${bytesToBase64(plain)}`;
         plain.fill(0);
-        if (!aliveRef.current) return;
+        if (!aliveRef.current || interruptedRef.current) return;
 
         let endsAt = Date.now() + grant.displaySeconds * 1000;
         if (grant.expiresAt) endsAt = Math.min(endsAt, new Date(grant.expiresAt).getTime());
         setPhase({ k: 'showing', uri, endsAt, total: Math.max(1, endsAt - Date.now()) });
       } catch (e) {
-        if (!aliveRef.current) return;
+        if (!aliveRef.current || interruptedRef.current) return;
         if (e instanceof MediaApiError && e.status === 410) {
           await forgetMediaKey(mediaId);
           setPhase({
@@ -167,13 +184,15 @@ export function ProtectedMediaViewer({ mediaId, visible, onClose }: Props) {
 
     return () => {
       aliveRef.current = false;
+      void disableCaptureProtection().catch(() => undefined);
     };
   }, [visible, mediaId]);
 
   // ----- capture detection -----------------------------------------------------
-  const guardActive = visible && (phase.k === 'loading' || phase.k === 'showing');
+  const guardActive = visible;
   useCaptureGuard(guardActive, (kind) => {
     // Remove the image from the screen first, then report.
+    interruptedRef.current = true;
     setPhase({ k: 'captured', kind, revoked: null });
     void (async () => {
       let revoked = false;
@@ -201,7 +220,7 @@ export function ProtectedMediaViewer({ mediaId, visible, onClose }: Props) {
 
   // ----- leaving the app ends the view -------------------------------------------
   useEffect(() => {
-    if (phase.k !== 'showing') return;
+    if (phase.k !== 'showing' && phase.k !== 'loading') return;
     const sub = AppState.addEventListener('change', (s) => {
       if (s !== 'active') close('background');
     });
@@ -214,7 +233,8 @@ export function ProtectedMediaViewer({ mediaId, visible, onClose }: Props) {
   const grant = grantRef.current;
 
   return (
-    <Modal visible={visible} animationType="fade" presentationStyle="fullScreen" onRequestClose={() => close('closed')}>
+    // Android dialogs inherit FLAG_SECURE when created, so mount only after native blocking succeeds.
+    <Modal visible={visible && phase.k !== 'starting'} animationType="fade" presentationStyle="fullScreen" onRequestClose={() => close('closed')}>
       <StatusBar barStyle="light-content" />
       <View style={styles.root}>
         {phase.k === 'showing' && (

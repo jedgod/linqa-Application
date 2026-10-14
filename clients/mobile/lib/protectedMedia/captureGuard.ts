@@ -29,6 +29,16 @@ import {
 
 const KEY = 'linqa-protected-viewer';
 
+/** Await native blocking before fetching or displaying protected media. */
+export async function enableCaptureProtection(): Promise<void> {
+  if (!ScreenCapture) throw new Error('Capture protection unavailable');
+  await ScreenCapture.preventScreenCaptureAsync(KEY);
+}
+
+export async function disableCaptureProtection(): Promise<void> {
+  await ScreenCapture?.allowScreenCaptureAsync(KEY);
+}
+
 export type CaptureKind = 'screenshot' | 'recording';
 
 /** Call before opening the viewer. On Android 13 and older, screenshot detection needs a media permission. */
@@ -61,7 +71,6 @@ export function useCaptureGuard(active: boolean, onCapture: (kind: CaptureKind) 
       handler.current(kind);
     };
 
-    void guard.preventScreenCaptureAsync(KEY);
     const shot = guard.addScreenshotListener(() => fire('screenshot'));
     const rec = addCaptureListener((captured) => {
       if (captured) fire('recording');
@@ -72,7 +81,6 @@ export function useCaptureGuard(active: boolean, onCapture: (kind: CaptureKind) 
     return () => {
       shot.remove();
       rec.remove();
-      void guard.allowScreenCaptureAsync(KEY);
     };
   }, [active]);
 }

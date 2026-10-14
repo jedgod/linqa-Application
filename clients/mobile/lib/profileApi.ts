@@ -2,6 +2,8 @@
 
 import { getApiBaseUrl } from '../config/api';
 import { accessTokenProvider } from '../services/session';
+import { File } from 'expo-file-system';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 export const API_URL = getApiBaseUrl();
 
@@ -77,16 +79,21 @@ export function updateUsername(username: string) {
   });
 }
 
-export async function uploadAvatar(uri: string, mimeType = 'image/jpeg') {
-  const type = mimeType === 'image/png' || mimeType === 'image/webp' ? mimeType : 'image/jpeg';
-  // The server takes the raw image bytes as the request body. Raw bytes, not a Blob: React Native
-  // lets a Blob's own type override the Content-Type header.
-  const bytes = new Uint8Array(await (await fetch(uri)).arrayBuffer());
-  return request<Profile>('/v1/profile/avatar', {
-    method: 'PUT',
-    headers: { 'Content-Type': type },
-    body: bytes,
-  });
+export async function uploadAvatar(uri: string, _mimeType = 'image/jpeg') {
+  // Normalize HEIC and large camera images, and read local URIs through the native filesystem.
+  const image = await manipulateAsync(uri, [{ resize: { width: 768 } }], { compress: 0.8, format: SaveFormat.JPEG });
+  const file = new File(image.uri);
+  try {
+    const bytes = await file.bytes();
+    if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw new Error('Choose a profile photo under 5 MB.');
+    return await request<Profile>('/v1/profile/avatar', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'image/jpeg' },
+      body: bytes,
+    });
+  } finally {
+    if (image.uri !== uri && file.exists) file.delete();
+  }
 }
 
 export function removeAvatar() {

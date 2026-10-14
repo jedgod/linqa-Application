@@ -1,4 +1,6 @@
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useAvatarImage } from '../account/Avatar';
+import { avatarUri } from '../../lib/profileApi';
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "../LinearGradient";
 import { chatTimeLabel, scheduledCallLabel, scheduledCallWhen, type ChatFilter, type ChatInboxPayload, type ChatSummary, type PresenceContact } from "../../services/chat-inbox.service";
@@ -33,15 +35,19 @@ export function Avatar({
   initials,
   size = 54,
   online = false,
-  ring
+  ring,
+  photoUri
 }: {
   seed: string;
   initials: string;
   size?: number;
   online?: boolean;
   ring?: string;
+  /** The person's uploaded photo; the initials show until it loads, or when there is none. */
+  photoUri?: string | null;
 }) {
   const [from, to] = gradientFor(seed);
+  const { displayUri, onError } = useAvatarImage(photoUri);
   return (
     <View style={ring ? [s.avatarRing, { borderColor: ring, borderRadius: size / 2 + 5 }] : undefined}>
       <LinearGradient
@@ -49,6 +55,14 @@ export function Avatar({
         style={[s.avatar, { width: size, height: size, borderRadius: size / 2 }]}
       >
         <Text style={[s.avatarText, { fontSize: size * 0.34 }]}>{initials || "?"}</Text>
+        {displayUri ? (
+          <Image
+            source={{ uri: displayUri }}
+            style={[StyleSheet.absoluteFill, { borderRadius: size / 2 }]}
+            onError={onError}
+            accessibilityIgnoresInvertColors
+          />
+        ) : null}
       </LinearGradient>
       {online ? <View style={[s.onlineDot, { right: size * 0.02, bottom: size * 0.02 }]} /> : null}
     </View>
@@ -111,25 +125,36 @@ export function HeaderButton({
 export function SummaryCard({
   unreadTotal,
   scheduledCall,
+  scheduledCallCount,
+  photoUri,
+  photoHeaders,
+  status,
   onJoin
 }: {
-  unreadTotal: number;
+  unreadTotal: number | null;
   scheduledCall: ChatInboxPayload["scheduledCall"];
+  scheduledCallCount: number | null;
+  photoUri?: string | null;
+  photoHeaders?: Record<string, string>;
+  status: 'loading' | 'ready' | 'stale' | 'error';
   onJoin: () => void;
 }) {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const { displayUri, onError } = useAvatarImage(photoUri, photoHeaders);
+  const scheduleLabel = scheduledCallCount === null ? 'schedule unavailable' : scheduledCallCount === 0 ? 'no calls scheduled' : `${scheduledCallCount} call${scheduledCallCount === 1 ? '' : 's'} scheduled`;
   return (
     <View style={s.summary}>
+      {displayUri ? <Image source={{ uri: displayUri }} style={StyleSheet.absoluteFill} resizeMode="cover" onError={onError} accessible={false} /> : null}
+      {displayUri ? <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(3,24,36,0.68)' }]} pointerEvents="none" /> : null}
       <View style={s.summaryTop}>
-        <Avatar seed="me" initials="YO" size={62} online />
         <View style={s.summaryBody}>
           <Text style={s.greeting}>{greeting}</Text>
           <Text style={s.welcome}>Welcome back</Text>
           <Text style={s.summaryMeta}>
-            {unreadTotal} unread
-            {scheduledCall ? " · 1 call scheduled" : " · no calls scheduled"}
+            {unreadTotal === null ? (status === 'error' ? 'Unable to load your activity' : 'Loading your activity…') : `${unreadTotal} unread · ${scheduleLabel}`}
           </Text>
+          {status === 'stale' ? <Text style={s.greeting}>Activity may be out of date. Pull down to refresh.</Text> : null}
         </View>
       </View>
 
@@ -196,6 +221,7 @@ export function PresenceStrip({
             size={58}
             online={contact.online}
             ring={contact.online ? C.teal : C.border}
+            photoUri={avatarUri(contact.avatarUrl)}
           />
           <Text numberOfLines={1} style={s.presenceName}>
             {contact.displayName.split(" ")[0]}
@@ -242,7 +268,7 @@ export function ConversationRow({
       {item.isGroup && item.participantInitials.length > 1 ? (
         <GroupAvatar seed={item.conversationId} members={item.participantInitials} />
       ) : (
-        <Avatar seed={item.conversationId} initials={item.initials} online={item.online} />
+        <Avatar seed={item.conversationId} initials={item.initials} online={item.online} photoUri={avatarUri(item.peerAvatarUrl)} />
       )}
 
       <View style={s.rowBody}>

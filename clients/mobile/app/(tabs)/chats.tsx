@@ -140,6 +140,13 @@ function ChatsInbox() {
     return () => { clearInterval(timer); subscription.remove(); };
   }, [error, load]);
 
+  useFocusEffect(useCallback(() => {
+    const refresh = () => { if (mounted.current && AppState.currentState === 'active' && !loadInFlight.current) void load(undefined, true); };
+    const timer = setInterval(refresh, 30_000);
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') refresh(); });
+    return () => { clearInterval(timer); subscription.remove(); };
+  }, [load]));
+
   /**
    * Live inbox.
    *
@@ -430,8 +437,12 @@ function ChatsInbox() {
         ListHeaderComponent={
           <View>
             <SummaryCard
-              unreadTotal={data?.unreadTotal ?? 0}
+              unreadTotal={data?.unreadTotal ?? null}
               scheduledCall={scheduledCall}
+              scheduledCallCount={data ? (data.scheduledCallCount ?? (scheduledCall ? 1 : 0)) : null}
+              status={error ? (data ? 'stale' : 'error') : data ? 'ready' : 'loading'}
+              photoUri={avatarUri(profile?.avatarUrl)}
+              photoHeaders={imageHeaders}
               onJoin={() => void joinScheduledCall()}
             />
             <PresenceStrip

@@ -1,4 +1,5 @@
-import { Image, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { useEffect, useRef } from "react";
+import { AccessibilityInfo, Animated, Easing, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
@@ -6,6 +7,24 @@ import { useRouter } from "expo-router";
 
 export default function WelcomeScreen() {
   const router = useRouter();
+  const rotation = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    let disposed = false;
+    let animation: Animated.CompositeAnimation | undefined;
+    const update = (reduceMotion: boolean) => {
+      animation?.stop();
+      rotation.setValue(0);
+      if (disposed || reduceMotion) return;
+      animation = Animated.loop(Animated.timing(rotation, {
+        toValue: 1, duration: 180_000, easing: Easing.linear, useNativeDriver: true,
+        isInteraction: false,
+      }));
+      animation.start();
+    };
+    void AccessibilityInfo.isReduceMotionEnabled().then(update).catch(() => update(false));
+    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", update);
+    return () => { disposed = true; animation?.stop(); subscription.remove(); };
+  }, [rotation]);
   const { width, height } = useWindowDimensions();
   const compact = height < 720;
   const globeSize = Math.max(220, Math.min(width - 12, height * (compact ? 0.3 : 0.39), 360));
@@ -22,11 +41,11 @@ export default function WelcomeScreen() {
             <Text adjustsFontSizeToFit numberOfLines={1} style={[styles.tagline, compact && styles.taglineCompact]}>Connect Locally. Connect Globally.</Text>
             <Text style={[styles.promise, compact && styles.promiseCompact]}>Secure, Private, Yours</Text>
             <View style={styles.globeWrap}>
-              <Image
+              <Animated.Image
                 accessibilityLabel="Dotted map of the world"
                 source={require("../assets/welcome-globe.png")}
                 resizeMode="cover"
-                style={{ width: globeSize, height: globeSize * (358 / 388) }}
+                style={{ width: globeSize, height: globeSize * (358 / 388), transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "-360deg"] }) }] }}
               />
             </View>
             <Text accessibilityRole="header" style={[styles.title, compact && styles.titleCompact]}>Welcome To Linqa</Text>

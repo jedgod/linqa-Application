@@ -279,6 +279,12 @@ describe("chat inbox: filters", () => {
 });
 
 describe("chat inbox: scheduled call", () => {
+  it('returns the complete scheduled count alongside the next call', async () => {
+    const { app } = await buildApp({ scheduled: [{ eventId: '33333333-3333-4333-8333-333333333333', callType: 'VIDEO', startsAt: new Date(Date.now() + 60_000).toISOString(), scheduledCallCount: 4 }] });
+    const response = await app.inject({ method: 'GET', url: '/v1/chats/inbox', headers: { authorization: `Bearer ${await token('messages:read')}` } });
+    expect(response.json().scheduledCallCount).toBe(4);
+    await app.close();
+  });
   it("labels the card without a title the server cannot read", async () => {
     const startsAt = new Date(Date.now() + 5 * 60_000).toISOString();
     const { app } = await buildApp({

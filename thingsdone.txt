@@ -1,0 +1,121 @@
+LINQA - THINGS DONE (work session, Oct 11-12, 2026)
+Branch: agent/production-module-hardening
+Commits: 8d1d2ba (main work), d852fcb (stop tracking signing-passwords file)
+
+"Verified" = I saw it work (browser, server tests, or on a phone).
+"Written, not tested" = code is in and type-checks, but I did not see it run.
+
+=====================================================================
+1. DESKTOP (WEB) CHAT - LINKED COMPUTER
+=====================================================================
+- Link a computer to the account by QR code; the phone approves. Verified.
+- Messages both ways between the Galaxy and the browser. Verified.
+- Unlink a computer from the phone's Linked devices. Verified.
+- Redesign to the supplied mockups: sidebar, header, composer, status bar. Verified.
+- UX review pass: compact layout; "Desktop connected" label; contact "Online" only when
+  true; disabled call icons with a tooltip; history banner made compact; resizable
+  sidebar (drag, arrow keys, double-click reset); empty-chat guidance; Send disabled
+  until there is text; Retry on failed messages; Enter to send / Shift+Enter new
+  line / Esc closes menus; "Enter to send" setting. Verified in a browser.
+- Older-history sync from the phone (real, end to end): the computer asks, the phone
+  approves and sends sealed chunks, the computer opens them. Steps shown:
+  waiting for phone approval, transferring, opening messages, complete; with Cancel,
+  Retry, phone-offline, declined and expired states. Verified on the Galaxy
+  (12 older messages opened).
+- Filters (All, Unread, Favorites, Groups, Lists), Archived, "My lists", + menu
+  (create list, create group, add people, manage lists). Verified in a browser.
+- Settings as a right-hand panel (computer name, chat organization shortcuts,
+  Enter to send, desktop notifications switch). Verified in a browser.
+- Chat menu: Contact info, Search, Select messages (copy), Mute, Disappearing
+  messages, Add to favorites, Archive, Add to list, Close chat, Report, Block,
+  Clear chat, Delete chat. Verified (mute, contact info, select, report validation,
+  clear dialog); block/delete covered by server tests.
+- Linqa Menu panel: Polls (works), Message requests, Blocked people; items that need
+  a phone are labelled "On your phone".
+- Polls: send and vote from the desktop. Verified.
+- Reply and Forward and Copy on the desktop: hover buttons; drag a message (or swipe
+  on a trackpad) to reply; reply bar; quote in the reply; "Forwarded" label;
+  forward to up to 5 chats. Direction rule: received messages swipe right, your own
+  messages swipe left. Verified in a browser.
+
+=====================================================================
+2. PHONE (ANDROID; SAME CODE FOR iOS - iOS NOT BUILT OR RUN HERE)
+=====================================================================
+- Device linking screens; send older history to a computer (approve prompt with
+  progress and cancel). Verified.
+- Chats tab: Favorites and Archived chips, list chips, New list, long-press a chat for
+  favorite / archive / add to list. Verified (chips); long-press written.
+- Report, Clear chat, Delete chat, People list for groups, Add people, New group
+  picker, Rename list. Report sheet and the settings rows verified on the Galaxy;
+  the rest written, not tested.
+- Enter key sends setting (Settings > Messaging) and a header search icon.
+  Header icon verified; setting written, not tested.
+- Reply (swipe right on received messages, swipe left on your own), long-press menu
+  with Reply / Forward / Copy, forward picker, reply bar. Swipe both directions and
+  the long-press menu verified on the Galaxy; the forward picker opens (only one
+  chat to forward to).
+- Two-phone test (LG to Galaxy and back): message, reply with quote, own-message
+  reply. Verified.
+- Incoming-call ring: repeating vibration plus ringtone while a call waits. The
+  vibration was verified on the LG; the ringtone itself was not heard (phones were
+  silent).
+- Add to calendar fixed (retired library functions, missing time zone, no duplicates,
+  "Added" confirmation, remembers across restarts). Verified on the Galaxy.
+- Events and meetings now also go into Linqa: Upcoming on Home and Calls, and a new
+  Event log screen (Home > "Event log"). Written, not tested.
+
+=====================================================================
+3. SERVER
+=====================================================================
+- History transfer service and routes (migration 067). 10 tests.
+- Chat organization: lists, archive, groups, add people (migration 068). Tests.
+- Chat controls: controls, clear, delete, report (migration 069). Tests.
+- Inbox: archived, favorites, per-list filter, counts, group member lists.
+- Global rate limit made configurable (GLOBAL_RATE_LIMIT_PER_MINUTE; set to 600 in the
+  local .env only; default stays 120).
+- Fixes: "mark as read" query used a missing parameter (500 on every call); chat
+  controls returned no members for direct chats, which stopped both phones from
+  sending (the cause of "This conversation is no longer available").
+- Applied Codex's migration 070 (message deletions) that was missing from the
+  database and was breaking message history.
+
+=====================================================================
+4. PROBLEMS FOUND AND SOLVED
+=====================================================================
+- LG could not send (and, as it turned out, neither could the Galaxy after a recent
+  change): fixed on the server (see above). Verified on both phones.
+- Poll and other Add-menu items "registered but could not post": same cause. Poll,
+  event and text verified on the Galaxy.
+- Two phones sharing one local address hit the rate limit: made configurable.
+- LG signed out; signed back in with +14056671120 using the one-time code the
+  development server prints.
+- Add to calendar failing: found and fixed (see section 2).
+- Messages from a browser that was later unlinked showed "Can't open this message":
+  fixed by Codex's change; confirmed on the Galaxy.
+
+=====================================================================
+5. GIT
+=====================================================================
+- 8d1d2ba pushed to jedgod/linqa-Application (everything in the working folder,
+  including Codex's in-progress work).
+- d852fcb: stopped tracking linqaChat-And-iOS/linqa-signing.properties and ignored it.
+  NOTE: the passwords are still in GitHub history. If the repository is public or
+  shared, change the keystore passwords or make a new keystore.
+
+=====================================================================
+6. NOT DONE / STILL OPEN
+=====================================================================
+- Add-menu items not individually tested: Photos, Camera, Document, Location,
+  Contact, Meeting, Voice, Video clip, Share screen, Whiteboard.
+- Linqa Upcoming / Event log: not yet tested on a phone.
+- LG phone has an older build (no calendar fix, no Event log). It also has no calendar
+  app that can save events. Copying builds to it over Wi-Fi takes about 20 minutes.
+- Desktop calls, photos/videos/voice/attachments, whiteboard and screen share: not
+  built by me (Codex has work in progress on desktop calls and attachments).
+  The Linqa Menu still labels some of these "On your phone".
+- Send call link: greyed out on the desktop; does not exist on the phone.
+- Desktop notifications, forward picker with a second target, and the LG
+  re-login side effects (older messages showing as "Encrypted message") not examined.
+- Galaxy briefly showed several "Encrypted message" entries after an app restart;
+  cause not investigated.
+- iOS: not built or run.

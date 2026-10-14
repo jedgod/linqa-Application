@@ -33,3 +33,21 @@ The key
 - Details: RSA 4096, alias linqa-dev, valid until 2126.
 - SHA-256: EF:51:4E:2C:E3:36:FB:C3:15:FD:8C:CA:C3:B0:D3:9C:56:CC:B4:C1:E0:C1:EB:D5:63:AA:39:07:FA:6D:99:A2.
 - The passwords are in C:\Users\cj_wo\.linqa-signing\signing.properties, which I generated randomly. I did not print them here. The same four values are in ~/.gradle/gradle.properties, which Gradle reads on this PC.
+
+
+Confirmed and kept:
+- LG: Wi-Fi at 10.0.0.27:5555
+- Galaxy: USB cable
+Linqa’s backend and Metro routes are restored for both.
+
+
+things to do: check from what claude code implemented and work on the following;
+1. at the main welcome screen mAKE The globe rotate very-slowly, right to left or any rotation applicable. 
+2. At the hamburger profile, picture doesn't upload and there is no avatar 
+as referred for the profile
+3. The picture upload at the hamburger-profile is not activating as supposed to
+4. Check the photo-protection (C:\Users\cj_wo\OneDrive - Bowie State\Desktop\linqa\linqa-protected) is implemented
+5  Still to do
+    LG: the install is still going, since the APK is 470 MB. I'll confirm when it lands.
+    Galaxy sign-in: its session is still revoked and it shows the Welcome screen. Until you sign in again there, I can't send a protected photo from one phone to the other.
+    Real check: once both phones are signed in, send a "view once" photo from one to the other and try a screenshot on the receiving phone. Passing tests don't replace that.

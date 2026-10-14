@@ -79,6 +79,8 @@ export const s = StyleSheet.create({
   list: { paddingHorizontal: 14, paddingBottom: 32, gap: 9 },
 
   summary: {
+    overflow: 'hidden',
+    minHeight: 128,
     marginTop: 6,
     padding: 13,
     borderRadius: 14,
@@ -88,7 +90,7 @@ export const s = StyleSheet.create({
   },
   summaryTop: { flexDirection: "row", alignItems: "center", gap: 12 },
   summaryBody: { flex: 1 },
-  greeting: { color: C.muted, fontSize: 12.5, fontFamily: fonts.regular },
+  greeting: { color: '#D5E6EC', fontSize: 12.5, fontFamily: fonts.regular },
   welcome: { color: C.white, fontSize: 21, fontFamily: fonts.extrabold, marginTop: 1 },
   summaryMeta: { color: C.teal, marginTop: 3, fontSize: 12, fontFamily: fonts.semibold },
   scheduleCard: {
