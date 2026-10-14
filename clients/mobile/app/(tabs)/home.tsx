@@ -1,3 +1,4 @@
+import { BottomInsetSpacer, ModalSafe } from "../../components/common/ModalSafe";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccessibilityInfo, AppState, ActivityIndicator, Image, ImageBackground, Linking, Modal, Pressable, RefreshControl, ScrollView, Switch, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -1017,8 +1018,8 @@ function AccountHome() {
         ) : null}
       </ScrollView>
 
-      <Modal visible={statusModal} transparent animationType="fade" onRequestClose={() => setStatusModal(false)}>
-        <View style={s.modalBackdrop}>
+      <Modal visible={statusModal} transparent animationType="fade" onRequestClose={() => setStatusModal(false)} statusBarTranslucent navigationBarTranslucent>
+        <ModalSafe><View style={s.modalBackdrop}>
           <View style={s.modalCard}>
             <Text style={s.modalTitle}>My status</Text>
             <TextInput
@@ -1037,14 +1038,20 @@ function AccountHome() {
                 <Text style={[s.modalConfirm, !statusDraft.trim() && { opacity: 0.4 }]}>Post</Text>
               </Pressable>
             </View>
+            <BottomInsetSpacer min={0} extra={8} />
           </View>
-        </View>
+        </View></ModalSafe>
       </Modal>
 
-      <Modal visible={composeModal} transparent animationType="fade" onRequestClose={() => setComposeModal(false)}>
-        <View style={s.modalBackdrop}>
+      <Modal visible={composeModal} transparent animationType="fade" onRequestClose={() => setComposeModal(false)} statusBarTranslucent navigationBarTranslucent>
+        <ModalSafe><View style={s.modalBackdrop}>
           <View style={s.modalCard}>
-            <Text style={s.modalTitle}>New conversation</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <Text style={s.modalTitle}>New conversation</Text>
+              <Pressable onPress={() => setComposeModal(false)} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close" style={{ marginBottom: spacing.md }}>
+                <Ionicons name="close" size={26} color={colors.text} />
+              </Pressable>
+            </View>
             {contactsBusy ? <ActivityIndicator color={colors.accent} /> : null}
             {error ? <Text style={s.muted}>{error}</Text> : null}
             {(hub?.contacts ?? []).map((contact) => (
@@ -1058,12 +1065,13 @@ function AccountHome() {
             <Pressable onPress={() => setComposeModal(false)} style={{ marginTop: spacing.md }}>
               <Text style={s.modalCancel}>Cancel</Text>
             </Pressable>
+            <BottomInsetSpacer min={0} extra={8} />
           </View>
-        </View>
+        </View></ModalSafe>
       </Modal>
 
-      <Modal visible={customizeModal} transparent animationType="slide" onRequestClose={() => setCustomizeModal(false)}>
-        <View style={s.modalBackdrop}>
+      <Modal visible={customizeModal} transparent animationType="slide" onRequestClose={() => setCustomizeModal(false)} statusBarTranslucent navigationBarTranslucent>
+        <ModalSafe><View style={s.modalBackdrop}>
           <ScrollView style={[s.modalCard, { maxHeight: '85%' }]} keyboardShouldPersistTaps="handled">
             <Text style={s.modalTitle}>Customize Home</Text>
             <Text style={s.modalCopy}>
@@ -1113,8 +1121,9 @@ function AccountHome() {
             <Pressable onPress={() => setCustomizeModal(false)} style={{ marginTop: spacing.md }}>
               <Text style={s.modalCancel}>Done</Text>
             </Pressable>
+            <BottomInsetSpacer min={0} extra={8} />
           </ScrollView>
-        </View>
+        </View></ModalSafe>
       </Modal>
     </SafeAreaView>
   );
