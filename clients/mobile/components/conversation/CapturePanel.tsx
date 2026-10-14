@@ -8,7 +8,7 @@ import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
 import * as Crypto from "expo-crypto";
 import { assertMediaSignature, actualVideoDuration } from "../../services/media-validation";
-import { MAX_MEDIA_BYTES, discardLocalMedia } from "../../services/conversation-media";
+import { MAX_MEDIA_BYTES, adoptCapture, discardLocalMedia } from "../../services/conversation-media";
 import { validatePayload, type MediaPayload, type Theme } from "../../services/conversation-engine";
 import { MediaPreview } from "./MediaPreview";
 export type CaptureKind = "VOICE" | "VIDEO" | "GIF" | "PHOTO" | "DESIGN" | "GALLERY";
@@ -73,7 +73,10 @@ export function CapturePanel({ kind, theme: t, canSend, onSend, onClose, onAttac
       if (video && (!asset.duration || asset.duration > 60_000)) throw new Error("Choose a video of 60 seconds or less.");
       const mime = asset.mimeType ?? (video ? /\.mov$/i.test(asset.uri) ? "video/quicktime" : "video/mp4" : /\.gif$/i.test(asset.uri) ? "image/gif" : "image/jpeg");
       if (kind === "GIF" && mime !== "image/gif") throw new Error("Select a GIF file from your phone.");
-      await keep({ type: "media", mediaId: Crypto.randomUUID(), mediaKind: video ? "VIDEO" : kind === "GIF" ? "GIF" : "PHOTO", mimeType: mime, ...(asset.duration ? { durationMs: asset.duration } : {}), localUri: asset.uri });
+      // The picker leaves its copy in the app's cache folder, which Android clears on its own (the photo was gone by the
+      // time it was sent). Keep our own copy straight away, as the camera paths do.
+      const kept = await adoptCapture(asset.uri, video ? (mime === "video/quicktime" ? "mov" : "mp4") : "jpg");
+      await keep({ type: "media", mediaId: Crypto.randomUUID(), mediaKind: video ? "VIDEO" : kind === "GIF" ? "GIF" : "PHOTO", mimeType: mime, ...(asset.duration ? { durationMs: asset.duration } : {}), localUri: kept });
     } catch (e) { fail(e); } finally { busyRef.current = false; if (alive.current) setBusy(false); }
   };
   const send = async () => {
