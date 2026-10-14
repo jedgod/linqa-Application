@@ -77,7 +77,7 @@ function PlannerSheet({ visible, initialMode, onClose, onScheduled }: PlannerPro
   const [people, setPeople] = useState<Person[] | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [when, setWhen] = useState("1h");
-  const [open, setOpen] = useState<"mode" | "when" | null>(null);
+  const [open, setOpen] = useState<"mode" | "when" | "kind" | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const presets = useMemo(() => (visible ? schedulePresets() : []), [visible]);
@@ -152,15 +152,15 @@ function PlannerSheet({ visible, initialMode, onClose, onScheduled }: PlannerPro
             onSelect={(key) => { setWhen(key); setOpen(null); }}
           />
 
-          <Text style={styles.heading}>Call type</Text>
-          <View style={styles.segment}>
-            {(["VIDEO", "AUDIO"] as const).map((k) => (
-              <Pressable key={k} onPress={() => setKind(k)} style={[styles.segItem, kind === k && styles.segOn]} accessibilityRole="tab" accessibilityState={{ selected: kind === k }}>
-                <Ionicons name={k === "VIDEO" ? "videocam" : "call"} size={16} color={kind === k ? "#fff" : MUTED} />
-                <Text style={[styles.segText, kind === k && styles.segTextOn]}>{k === "VIDEO" ? "Video" : "Voice"}</Text>
-              </Pressable>
-            ))}
-          </View>
+          <Dropdown
+            heading="Call type"
+            open={open === "kind"}
+            onToggle={() => setOpen(open === "kind" ? null : "kind")}
+            value={kind === "VIDEO" ? "Video" : "Voice"}
+            options={[{ key: "VIDEO", label: "Video" }, { key: "AUDIO", label: "Voice" }]}
+            selectedKey={kind}
+            onSelect={(key) => { setKind(key as "AUDIO" | "VIDEO"); setOpen(null); }}
+          />
 
           <Text style={styles.section}>{mode === "now" ? "Who to call" : "Who to invite"}</Text>
           <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
