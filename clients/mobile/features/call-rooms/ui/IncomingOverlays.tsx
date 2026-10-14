@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { StyleSheet, Text, Vibration, View } from 'react-native';
 import { errorText } from '../signaling';
 import { useCalls, useManagerState } from './CallProvider';
+import { PersonAvatar } from '../../../components/account/PersonAvatar';
 import { Button, Icon, theme } from './kit';
 
 /**
@@ -52,7 +53,7 @@ export function IncomingOverlays() {
     const r = s.incoming;
     return (
       <View style={st.card} accessibilityViewIsModal accessibilityLiveRegion="assertive">
-        <Icon name={r.kind === 'video' ? 'video' : 'phone'} size={28} />
+        <PersonAvatar name={people.displayName(r.fromUserId)} userId={r.fromUserId} size={72} />
         <Text style={st.title}>{people.displayName(r.fromUserId)}</Text>
         <Text style={st.body}>Linqa {r.kind} call</Text>
         {err ? <Text style={st.err}>{err}</Text> : null}

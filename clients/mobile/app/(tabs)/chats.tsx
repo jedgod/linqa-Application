@@ -388,6 +388,7 @@ function ChatsInbox() {
             seed={active?.userId ?? "linqa"}
             initials={(active?.label || active?.displayName || "L").slice(0, 2).toUpperCase()}
             size={32}
+            photoUri={avatarUri(profile?.avatarUrl)}
           />
         </Pressable>
       </View>

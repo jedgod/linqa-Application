@@ -31,6 +31,16 @@ function PersonPhoto({ person, size = 44 }: { person: Person; size?: number }) {
   );
 }
 
+/**
+ * One clear label per time. A relative preset ("In 30 min") gets its clock time beside it; a preset that already
+ * names the day ("Tomorrow 9:00") shows just the formatted time ("Tomorrow 9:00 AM"), so nothing is said twice.
+ */
+function presetText(p: { key: string; label: string; at: Date }): { label: string; sub?: string; joined: string } {
+  const clock = formatScheduledFor(p.at.toISOString());
+  if (p.key.startsWith("tomorrow")) return { label: clock, joined: clock };
+  return { label: p.label, sub: clock, joined: `${p.label} · ${clock}` };
+}
+
 type Option = { key: string; label: string; sub?: string };
 
 /** A labelled drop-down: the heading, the current choice, and the choices listed under it when opened. */
@@ -146,8 +156,8 @@ function PlannerSheet({ visible, initialMode, onClose, onScheduled }: PlannerPro
             disabled={mode === "now"}
             open={open === "when"}
             onToggle={() => setOpen(open === "when" ? null : "when")}
-            value={mode === "now" ? "Right now" : (() => { const p = presets.find((x) => x.key === when); return p ? `${p.label} · ${formatScheduledFor(p.at.toISOString())}` : "Choose a time"; })()}
-            options={presets.map((p) => ({ key: p.key, label: p.label, sub: formatScheduledFor(p.at.toISOString()) }))}
+            value={mode === "now" ? "Right now" : (() => { const p = presets.find((x) => x.key === when); return p ? presetText(p).joined : "Choose a time"; })()}
+            options={presets.map((p) => ({ key: p.key, label: presetText(p).label, sub: presetText(p).sub }))}
             selectedKey={when}
             onSelect={(key) => { setWhen(key); setOpen(null); }}
           />

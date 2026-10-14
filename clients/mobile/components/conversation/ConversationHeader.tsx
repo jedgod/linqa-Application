@@ -3,6 +3,7 @@ import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { Theme } from "../../services/conversation-engine";
 import type { ConversationPeer, GateState } from "../../services/conversation-types";
+import { PersonAvatar } from "../account/PersonAvatar";
 import { space, type } from "./theme";
 
 interface Props {
@@ -39,9 +40,7 @@ export function ConversationHeader({ peer, gate, theme: t, onBack, onOpenSetting
         <Ionicons name="chevron-back" size={30} color={t.ink} />
       </Pressable>
       <Pressable onPress={onOpenSettings} accessibilityRole="button" accessibilityLabel={`${peer.displayName}, ${status.label}. Open conversation settings`} style={styles.identity}>
-        <View style={[styles.avatar, { backgroundColor: t.background, borderColor: status.color }]}>
-          <Text style={[styles.avatarText, { color: t.ink }]}>{initials(peer.displayName)}</Text>
-        </View>
+        <PersonAvatar name={peer.displayName} userId={peer.id} size={44} textColor={t.ink} backgroundColor={t.background} style={[styles.avatar, { borderColor: status.color }]} />
         <View style={styles.names}>
           <Text style={[type.title, { color: t.ink }]} numberOfLines={1}>{peer.displayName}</Text>
           <View style={styles.statusRow}>
@@ -65,8 +64,7 @@ const styles = StyleSheet.create({
   call: { width: 38, height: 38, borderRadius: 19, backgroundColor: "#050505", alignItems: "center", justifyContent: "center", marginLeft: 6 },
   glyph: { fontSize: 26, lineHeight: 28 },
   identity: { flex: 1, flexDirection: "row", alignItems: "center", minWidth: 0 },
-  avatar: { width: 44, height: 44, borderRadius: 22, borderWidth: 1.5, alignItems: "center", justifyContent: "center", marginRight: 9 },
-  avatarText: { fontSize: 18, fontWeight: "500" },
+  avatar: { borderWidth: 1.5, marginRight: 9 },
   names: { flex: 1, minWidth: 0 },
   statusRow: { flexDirection: "row", alignItems: "center", marginTop: 2 },
   dot: { width: 7, height: 7, borderRadius: 4, marginRight: space.xs + 2 },
