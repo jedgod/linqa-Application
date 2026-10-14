@@ -92,6 +92,9 @@ export default function LinqaSendHome() {
             <View style={s.logoMark}><Ionicons name="paper-plane" size={18} color={send.primary} /></View>
             <Text style={s.brand}>LinqaSend</Text>
           </View>
+          <Pressable onPress={() => router.replace("/(tabs)/home")} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close LinqaSend" style={{ marginLeft: "auto", marginRight: 10, padding: 4 }}>
+            <Ionicons name="close" size={26} color={send.text ?? "#0F172A"} />
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={incoming ? `Requests, ${incoming} waiting` : "Requests"}

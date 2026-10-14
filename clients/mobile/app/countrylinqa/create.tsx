@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import { useCountryClient } from "../../components/CountryLinqaUI";
 
 export default function CountryLinqaCreateScreen() {
@@ -24,11 +26,33 @@ export default function CountryLinqaCreateScreen() {
     setSaving(false);
   }, [client, title, cityParam, startsAtParam]);
   const canPublish = body.trim().length > 0 && !saving;
+  // Closing (the X, or the phone's back button) returns to Home, wherever this page was opened from.
+  const close = () => router.replace("/(tabs)/home");
+  const startDate = new Date(Number.isFinite(Date.parse(startsAt)) ? startsAt : Date.now() + 86_400_000);
+  const dateLabel = startDate.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  const timeLabel = startDate.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  // Pick the day first, then the time; the result is kept as the ISO timestamp the server expects.
+  function pickDate() {
+    if (Platform.OS !== "android") return;
+    DateTimePickerAndroid.open({ value: startDate, mode: "date", minimumDate: new Date(), onChange: (_event, picked) => {
+      if (!picked) return;
+      const next = new Date(startDate); next.setFullYear(picked.getFullYear(), picked.getMonth(), picked.getDate());
+      setStartsAt(next.toISOString());
+    } });
+  }
+  function pickTime() {
+    if (Platform.OS !== "android") return;
+    DateTimePickerAndroid.open({ value: startDate, mode: "time", onChange: (_event, picked) => {
+      if (!picked) return;
+      const next = new Date(startDate); next.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
+      setStartsAt(next.toISOString());
+    } });
+  }
 
   async function submit() {
     if (!body.trim()) return;
     if (event && (!Number.isFinite(Date.parse(startsAt)) || Date.parse(startsAt) <= Date.now())) {
-      Alert.alert("Check the date", "Enter a valid future date and time in ISO format.");
+      Alert.alert("Check the date", "Choose a date and time in the future.");
       return;
     }
     setSaving(true);
@@ -46,7 +70,9 @@ export default function CountryLinqaCreateScreen() {
   return (
     <SafeAreaView style={s.screen}>
       <View style={s.header}>
-        <Pressable onPress={() => router.back()}><Text style={s.cancel}>Cancel</Text></Pressable>
+        <Pressable onPress={close} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close" style={s.closeButton}>
+          <Ionicons name="close" size={28} color="#171A35" />
+        </Pressable>
         <Text style={s.title}>{event ? "Create event" : "Create post"}</Text>
         <Pressable
           accessibilityRole="button"
@@ -71,8 +97,15 @@ export default function CountryLinqaCreateScreen() {
       />
       {event ? (
         <View style={s.eventFields}>
-          <Text style={s.label}>Starts at (ISO date and time)</Text>
-          <TextInput value={startsAt} onChangeText={setStartsAt} autoCapitalize="none" style={s.input} />
+          <Text style={s.label}>Starts</Text>
+          <View style={s.pickRow}>
+            <Pressable onPress={pickDate} accessibilityRole="button" accessibilityLabel={`Date, ${dateLabel}`} style={[s.input, s.pick]}>
+              <Ionicons name="calendar-outline" size={20} color="#5B4CFF" /><Text style={s.pickText}>{dateLabel}</Text>
+            </Pressable>
+            <Pressable onPress={pickTime} accessibilityRole="button" accessibilityLabel={`Time, ${timeLabel}`} style={[s.input, s.pick, { flex: 0, minWidth: 130 }]}>
+              <Ionicons name="time-outline" size={20} color="#5B4CFF" /><Text style={s.pickText}>{timeLabel}</Text>
+            </Pressable>
+          </View>
           <Text style={s.label}>City (optional)</Text>
           <TextInput value={city} onChangeText={setCity} maxLength={120} placeholder="City" placeholderTextColor="#8B90A5" style={s.input} />
         </View>
@@ -85,7 +118,10 @@ export default function CountryLinqaCreateScreen() {
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#F7F8FC", padding: 18 },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 14 },
-  cancel: { color: "#596078", fontWeight: "700" },
+  closeButton: { minWidth: 44, minHeight: 44, justifyContent: "center" },
+  pickRow: { flexDirection: "row", gap: 10 },
+  pick: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8 },
+  pickText: { color: "#171A35", fontWeight: "700" },
   title: { color: "#171A35", fontSize: 18, fontWeight: "900" },
   publishButton: {
     minWidth: 92,
