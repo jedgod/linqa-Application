@@ -119,7 +119,9 @@ export async function registerCallsV2Routes(
                 ch.created_at AS "createdAt",
                 COALESCE(p.display_name, 'Linqa user') AS "peerName",
                 u.verified_country_code AS "peerCountryCode",
-                c.name AS "peerCountryName"
+                c.name AS "peerCountryName",
+                (SELECT '/v1/profile/' || ch.peer_user_id || '/avatar?v=' || floor(extract(epoch FROM a.updated_at) * 1000)::bigint
+                   FROM user_avatars a WHERE a.user_id = ch.peer_user_id) AS "peerAvatarUrl"
            FROM call_history ch
            LEFT JOIN users u ON u.id = ch.peer_user_id
            LEFT JOIN user_profiles p ON p.user_id = ch.peer_user_id

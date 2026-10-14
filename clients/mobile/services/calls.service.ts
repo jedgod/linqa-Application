@@ -6,6 +6,8 @@ export type CallHistoryItem = {
   /** ISO-3166 alpha-2 of the peer's *verified* country, never an IP guess. */
   peerCountryCode?: string | null;
   peerCountryName?: string | null;
+  /** Path of the caller's profile photo; null when they have none. */
+  peerAvatarUrl?: string | null;
   id: string;
   peerUserId: string;
   peerDisplayName: string;
@@ -149,7 +151,8 @@ export class CallsService {
         durationSeconds: Number(item.durationSeconds ?? item.duration_seconds ?? 0),
         createdAt: String(item.createdAt ?? item.created_at ?? new Date().toISOString()),
         peerCountryCode: (item.peerCountryCode as string | null) ?? null,
-        peerCountryName: (item.peerCountryName as string | null) ?? null
+        peerCountryName: (item.peerCountryName as string | null) ?? null,
+        peerAvatarUrl: (item.peerAvatarUrl as string | null) ?? null
       };
     });
   }

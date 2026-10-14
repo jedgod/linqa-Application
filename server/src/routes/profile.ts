@@ -117,6 +117,7 @@ export async function registerProfileRoutes(app: FastifyInstance, config: AppCon
         `SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM blocked_users b
                  WHERE (b.blocker_user_id = $1 AND b.blocked_user_id = $2) OR (b.blocker_user_id = $2 AND b.blocked_user_id = $1))
            AND (EXISTS (SELECT 1 FROM chat_contacts cc WHERE (cc.owner_user_id = $1 AND cc.contact_user_id = $2) OR (cc.owner_user_id = $2 AND cc.contact_user_id = $1))
+             OR EXISTS (SELECT 1 FROM call_history ch WHERE ch.user_id = $1 AND ch.peer_user_id = $2)
              OR EXISTS (SELECT 1 FROM conversation_members mine JOIN conversation_members peer ON peer.conversation_id = mine.conversation_id
                   WHERE mine.user_id = $1 AND mine.removed_at IS NULL AND peer.user_id = $2 AND peer.removed_at IS NULL))`,
         [viewerId, id]);

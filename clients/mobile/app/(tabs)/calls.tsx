@@ -1,5 +1,5 @@
 // Calls screen for the mobile app, displaying call history, scheduled calls, and contact interactions.
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Image,
@@ -21,12 +21,20 @@ import { LinearGradient } from "../../components/LinearGradient";
 import { RecordingsSection } from "../../components/calls/RecordingsSection";
 import { useRouter } from "expo-router";
 import { upcomingOf, useMyEvents } from "../../services/my-events";
+import { CallsService, callDateBucket, type CallHistoryItem } from "../../services/calls.service";
+import { accessTokenProvider } from "../../services/session";
+import { getApiBaseUrl } from "../../config/api";
+import { useProfile } from "../../hooks/useProfile";
+import { avatarUri } from "../../lib/profileApi";
+import { useAvatarImage } from "../../components/account/Avatar";
+import { PhotoZoom } from "../../components/account/PhotoZoom";
 
 type Filter = "All" | "Missed" | "Audio" | "Video";
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
 type Call = {
   id: string;
+  peerUserId?: string;
   name: string;
   country?: string;
   flag?: string;
@@ -34,7 +42,8 @@ type Call = {
   missed?: boolean;
   direction: "incoming" | "outgoing";
   kind: "audio" | "video" | "group";
-  avatar?: ImageSourcePropType;
+  /** Full URL of the caller's profile photo, when they have one. */
+  photoUrl?: string | null;
 };
 
 const COLORS = {
@@ -52,56 +61,32 @@ const COLORS = {
 const AVATARS = {
   profile: require("../../assets/avatars/profile.png"),
   placeholder: require("../../assets/avatars/placeholder.png"),
-  michael: require("../../assets/avatars/michael.png"),
-  ama: require("../../assets/avatars/ama.png"),
-  david: require("../../assets/avatars/david.png"),
   p1: require("../../assets/avatars/p1.png"),
   p2: require("../../assets/avatars/p2.png"),
   p3: require("../../assets/avatars/p3.png"),
   p4: require("../../assets/avatars/p4.png"),
 } satisfies Record<string, ImageSourcePropType>;
 
-const CALLS: Call[] = [
-  {
-    id: "michael",
-    name: "Michael Greene",
-    country: "United States",
-    flag: "🇺🇸",
-    time: "9:20 AM",
-    direction: "outgoing",
-    kind: "video",
-    avatar: AVATARS.michael,
-  },
-  {
-    id: "ama",
-    name: "Ama Mensah",
-    country: "Ghana",
-    flag: "🇬🇭",
-    time: "Yesterday",
-    direction: "incoming",
-    kind: "video",
-    avatar: AVATARS.ama,
-  },
-  {
-    id: "david",
-    name: "David Chen",
-    country: "Singapore",
-    flag: "🇸🇬",
-    time: "Yesterday",
-    missed: true,
-    direction: "incoming",
-    kind: "audio",
-    avatar: AVATARS.david,
-  },
-  {
-    id: "family",
-    name: "Family Circle",
-    country: "Group call",
-    time: "May 18",
-    direction: "outgoing",
-    kind: "group",
-  },
-];
+const flagOf = (code?: string | null) =>
+  code && /^[A-Za-z]{2}$/.test(code) ? String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1a5 + c.charCodeAt(0))) : undefined;
+
+function toCall(item: CallHistoryItem): Call {
+  const when = new Date(item.createdAt);
+  const today = callDateBucket(item.createdAt) === "Today";
+  return {
+    id: item.id,
+    peerUserId: item.peerUserId,
+    name: item.peerDisplayName,
+    country: item.peerCountryName ?? undefined,
+    flag: flagOf(item.peerCountryCode),
+    time: today ? when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : callDateBucket(item.createdAt),
+    missed: item.status === "MISSED",
+    direction: item.direction === "INCOMING" ? "incoming" : "outgoing",
+    kind: item.callType === "VIDEO" ? "video" : "audio",
+    photoUrl: avatarUri(item.peerAvatarUrl),
+  };
+}
+
 
 const FILTERS: Array<{ label: Filter; icon?: IoniconName }> = [
   { label: "All" },
@@ -117,10 +102,22 @@ export default function CallsScreen() {
   const [filter, setFilter] = useState<Filter>("All");
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [history, setHistory] = useState<Call[]>([]);
+  const [zoom, setZoom] = useState<{ uri: string; name: string } | null>(null);
+  const router = useRouter();
+  const { profile } = useProfile();
+  const myPhoto = avatarUri(profile?.avatarUrl);
+
+  useEffect(() => {
+    let alive = true;
+    const service = new CallsService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
+    service.listHistory(30).then((items) => { if (alive) setHistory(items.map(toCall)); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [profile?.id]);
 
   const visibleCalls = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return CALLS.filter((call) => {
+    return history.filter((call) => {
       const filterMatches =
         filter === "All" ||
         (filter === "Missed" && call.missed) ||
@@ -128,7 +125,7 @@ export default function CallsScreen() {
         (filter === "Video" && call.kind === "video");
       return filterMatches && (!needle || call.name.toLowerCase().includes(needle));
     });
-  }, [filter, query]);
+  }, [filter, query, history]);
 
   const startCall = (name = "a contact", kind: "audio" | "video" = "audio") => {
     Alert.alert(kind === "video" ? "Video call" : "New call", `Starting ${kind} call with ${name}.`);
@@ -143,6 +140,8 @@ export default function CallsScreen() {
           contentContainerStyle={styles.scrollContent}
         >
           <Header
+            photoUri={myPhoto}
+            onPhoto={() => (myPhoto ? setZoom({ uri: myPhoto, name: "Your" }) : router.push("/account/manage" as never))}
             onSearch={() => setSearchOpen(true)}
             onSchedule={() => Alert.alert("Schedule", "Open the call scheduler here.")}
           />
@@ -174,6 +173,7 @@ export default function CallsScreen() {
                   last={index === visibleCalls.length - 1}
                   onAudio={() => startCall(call.name)}
                   onVideo={() => startCall(call.name, "video")}
+                  onPhoto={() => call.photoUrl && setZoom({ uri: call.photoUrl, name: call.name })}
                 />
               ))
             ) : (
@@ -215,11 +215,13 @@ export default function CallsScreen() {
         onChange={setQuery}
         onClose={() => setSearchOpen(false)}
       />
+      <PhotoZoom uri={zoom?.uri} name={zoom?.name ?? ""} visible={!!zoom} onClose={() => setZoom(null)} />
     </View>
   );
 }
 
-function Header({ onSearch, onSchedule }: { onSearch: () => void; onSchedule: () => void }) {
+function Header({ photoUri, onPhoto, onSearch, onSchedule }: { photoUri: string | null; onPhoto: () => void; onSearch: () => void; onSchedule: () => void }) {
+  const { displayUri } = useAvatarImage(photoUri);
   return (
     <View style={styles.header}>
       <LinearGradient colors={["#10D8EA", "#0786FF"]} style={styles.brandMark}>
@@ -229,8 +231,8 @@ function Header({ onSearch, onSchedule }: { onSearch: () => void; onSchedule: ()
       <View style={styles.headerSpacer} />
       <IconPressable icon="search-outline" label="Search calls" onPress={onSearch} size={29} />
       <IconPressable icon="calendar-outline" label="Scheduled calls" onPress={onSchedule} size={27} />
-      <Pressable style={styles.profileRing} onPress={() => Alert.alert("Profile")} accessibilityRole="button" accessibilityLabel="Open profile">
-        <Image source={AVATARS.profile} style={styles.profileImage} />
+      <Pressable style={styles.profileRing} onPress={onPhoto} accessibilityRole="button" accessibilityLabel={photoUri ? "View your profile photo" : "Open profile"}>
+        <Image source={displayUri ? { uri: displayUri } : AVATARS.profile} style={styles.profileImage} resizeMode="cover" />
       </Pressable>
     </View>
   );
@@ -374,19 +376,22 @@ function UpcomingCard({ onJoin }: { onJoin: () => void }) {
   );
 }
 
-function CallRow({ call, last, onAudio, onVideo }: { call: Call; last: boolean; onAudio: () => void; onVideo: () => void }) {
+function CallRow({ call, last, onAudio, onVideo, onPhoto }: { call: Call; last: boolean; onAudio: () => void; onVideo: () => void; onPhoto: () => void }) {
   const { width } = useWindowDimensions();
+  const { displayUri } = useAvatarImage(call.photoUrl);
   const timeWidth = Math.min(100, Math.max(72, width * 0.23));
   return (
     <View style={[styles.callRow, !last && styles.callRowDivider]}>
       <View style={styles.avatarWrap}>
-        {call.avatar ? (
-          <Image source={call.avatar} style={styles.callAvatar} />
-        ) : (
-          <LinearGradient colors={["#2E47CE", "#5512A8"]} style={styles.callAvatarFallback}>
-            <Ionicons name="people" size={27} color="#FFFFFF" />
-          </LinearGradient>
-        )}
+        <Pressable onPress={onPhoto} disabled={!displayUri} accessibilityRole="imagebutton" accessibilityLabel={`${call.name} photo`}>
+          {displayUri ? (
+            <Image source={{ uri: displayUri }} style={styles.callAvatar} resizeMode="cover" />
+          ) : (
+            <LinearGradient colors={["#2E47CE", "#5512A8"]} style={styles.callAvatarFallback}>
+              <Text style={styles.callInitial}>{call.name.trim().charAt(0).toUpperCase() || "?"}</Text>
+            </LinearGradient>
+          )}
+        </Pressable>
         <View style={[styles.directionBadge, call.missed && styles.directionBadgeMissed]}>
           <Ionicons
             name={call.direction === "outgoing" ? "arrow-up" : "arrow-down"}
@@ -412,7 +417,7 @@ function CallRow({ call, last, onAudio, onVideo }: { call: Call; last: boolean; 
 
       <Pressable style={styles.roundAction} onPress={onAudio} accessibilityRole="button" accessibilityLabel={`Voice call ${call.name}`}>
         <Ionicons name="call" size={21} color="#FFFFFF" />
-        {call.id === "michael" ? <Ionicons name="wifi" size={8} color="#FFFFFF" style={styles.callSignal} /> : null}
+        
       </Pressable>
       {call.kind !== "audio" ? (
         <Pressable style={styles.videoAction} onPress={onVideo} accessibilityRole="button" accessibilityLabel={`Video call ${call.name}`}>
@@ -514,6 +519,7 @@ const styles = StyleSheet.create({
   callRowDivider: { borderBottomWidth: 1, borderBottomColor: "#1A2945" },
   avatarWrap: { width: 47, height: 47 },
   callAvatar: { width: 47, height: 47, borderRadius: 10, borderWidth: 1, borderColor: "#806C38" },
+  callInitial: { color: "#FFFFFF", fontSize: 21, fontWeight: "700" },
   callAvatarFallback: { width: 47, height: 47, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   directionBadge: { position: "absolute", right: -1, bottom: -1, width: 17, height: 17, borderRadius: 9, backgroundColor: "#179460", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.surface },
   directionBadgeMissed: { backgroundColor: COLORS.red },
