@@ -214,15 +214,10 @@ function RealConversation() {
   function call(kind: "AUDIO" | "VIDEO") {
     if (!peer.id || blocked || placingCall.current) return;
     const recipientUserId = peer.id;
-    Alert.alert(`${kind === "AUDIO" ? "Audio" : "Video"} call`, `Call ${peer.displayName}?`, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Call", onPress: () => {
-        if (placingCall.current) return;
-        placingCall.current = true;
-        setNotice(null);
-        void startSecureCall(conversationId!, kind, [recipientUserId]).then((problem) => { if (problem) setNotice(problem); }).finally(() => { placingCall.current = false; });
-      } }
-    ]);
+    // Calls connect straight away: no "Call X?" prompt.
+    placingCall.current = true;
+    setNotice(null);
+    void startSecureCall(conversationId!, kind, [recipientUserId]).then((problem) => { if (problem) setNotice(problem); }).finally(() => { placingCall.current = false; });
   }
 
   if (!conversationId || !selfId) {

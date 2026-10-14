@@ -11,6 +11,9 @@ import { colors, spacing } from "../../theme/tokens";
 import { getApiBaseUrl } from "../../config/api";
 import { useLinqaSendAvailability } from "../../services/linqasend-availability";
 import { GUTTER, s } from "../../components/home/styles";
+import { PersonAvatar } from "../../components/account/PersonAvatar";
+import { useProfile } from "../../hooks/useProfile";
+import { avatarUri } from "../../lib/profileApi";
 import { HERO_SLOTS, WORLD_PER_PAGE, WORLD_PAGES, HomeUpcomingCard, UPCOMING_SUGGESTIONS, SECTION_LABELS, DEGRADED_LABELS, VAULT_LABELS, VAULT_ICONS, greeting, initialsOf, humanizeCategory, countryFlag, categoryColor, chunk, clampPage, pageTracker, eventPlace, updatedLabel, byteLabel, compactCount, moneyLabel, transferStatusLabel } from "../../components/home/helpers";
 
 const API = getApiBaseUrl();
@@ -33,6 +36,7 @@ const API = getApiBaseUrl();
 export default function HomeScreen() {
   const moneyAvailable = useLinqaSendAvailability() === true;
   const router = useRouter();
+  const { profile } = useProfile();
   const { width } = useWindowDimensions();
   const homeClient = useMemo(
     () => new HomeFeedService(API, () => accessTokenProvider.getAccessToken()),
@@ -340,9 +344,7 @@ export default function HomeScreen() {
               ) : null}
             </Pressable>
             <Pressable style={s.avatarButton} onPress={() => router.push("/account/switcher")} accessibilityLabel="Switch account">
-              <View style={s.avatarMini}>
-                <Text style={s.avatarMiniText}>{initialsOf(feed?.profile?.displayName ?? "Linqa User")}</Text>
-              </View>
+              <PersonAvatar name={feed?.profile?.displayName ?? "Linqa User"} photoUri={avatarUri(profile?.avatarUrl)} size={30} textColor="#0F172A" backgroundColor="#F5D0FE" />
               <View style={s.onlineDot} />
             </Pressable>
           </View>

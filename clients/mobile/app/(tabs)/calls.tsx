@@ -106,6 +106,7 @@ export default function CallsScreen() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [history, setHistory] = useState<Call[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [zoom, setZoom] = useState<{ uri: string; name: string } | null>(null);
   const router = useRouter();
   const { profile } = useProfile();
@@ -114,7 +115,7 @@ export default function CallsScreen() {
   useEffect(() => {
     let alive = true;
     const service = new CallsService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
-    service.listHistory(30).then((items) => { if (alive) setHistory(items.map(toCall)); }).catch(() => undefined);
+    service.listHistory(30).then((items) => { if (alive) setHistory(items.map(toCall)); }).catch(() => undefined).finally(() => { if (alive) setHistoryLoaded(true); });
     return () => { alive = false; };
   }, [profile?.id]);
 
@@ -187,7 +188,7 @@ export default function CallsScreen() {
               ))
             ) : (
               <View style={styles.emptyState}>
-                <Text style={styles.emptyText}>No calls match this filter.</Text>
+                <Text style={styles.emptyText}>{historyLoaded ? "No calls match this filter." : "Loading calls…"}</Text>
               </View>
             )}
           </View>

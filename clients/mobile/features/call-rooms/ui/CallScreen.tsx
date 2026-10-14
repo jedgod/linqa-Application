@@ -1,3 +1,4 @@
+import { PersonAvatar } from '../../../components/account/PersonAvatar';
 import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -250,9 +251,7 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
 
         {voiceSolo ? (
           <View style={st.voiceStage}>
-            <View style={[st.voiceAvatar, { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 }]}>
-              <Text style={st.voiceAvatarText}>{initials(peers[0] ? people.displayName(peers[0].userId) : title)}</Text>
-            </View>
+            <PersonAvatar name={peers[0] ? people.displayName(peers[0].userId) : title} userId={peers[0]?.userId} size={avatarSize} textColor="#243041" backgroundColor="#D4D6DA" />
             {peers[0] && peers[0].connection !== 'connected' ? <Text style={st.tileState}>{connText(peers[0].connection)}</Text> : null}
             {s.self.handRaisedAt ? (
               <View style={st.selfHandInline}>
@@ -285,7 +284,7 @@ export function CallScreen({ engine }: { engine: CallEngine }) {
                 />
               ))}
               {peers.length === 0
-                ? s.ringing.map((u) => <RingingTile key={u} name={people.displayName(u)} />)
+                ? s.ringing.map((u) => <RingingTile key={u} userId={u} name={people.displayName(u)} />)
                 : null}
             </View></DoubleTapVideo>
           )}
@@ -481,7 +480,7 @@ function Tile({
         />
       ) : (
         <View style={st.avatar}>
-          <Text style={st.avatarText}>{initials(name)}</Text>
+          <PersonAvatar name={name} userId={peer.userId} size={large ? 160 : 120} />
         </View>
       )}
       <View style={st.tileFooter}>
@@ -504,11 +503,11 @@ function Tile({
   );
 }
 
-function RingingTile({ name }: { name: string }) {
+function RingingTile({ name, userId }: { name: string; userId: string }) {
   return (
     <View style={[st.tile, { flexBasis: '100%' }]}>
       <View style={st.avatar}>
-        <Text style={st.avatarText}>{initials(name)}</Text>
+        <PersonAvatar name={name} userId={userId} size={120} />
       </View>
       <View style={st.tileFooter}>
         <Text style={st.tileName}>{name} · ringing</Text>
