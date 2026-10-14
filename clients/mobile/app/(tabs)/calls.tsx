@@ -24,7 +24,7 @@ import { upcomingOf, useMyEvents } from "../../services/my-events";
 import { CallsService, callDateBucket, formatScheduledFor, type CallHistoryItem, type ScheduledCall } from "../../services/calls.service";
 import { CallPlanner, type PlannerMode } from "../../components/calls/CallPlanner";
 import { startSecureCallForPeer } from "../../services/secure-call-rooms";
-import { joinScheduledCallNow } from "../../services/scheduled-call-join";
+import { isJoinLocked, joinScheduledCallNow, onJoinLockChange } from "../../services/scheduled-call-join";
 import { accessTokenProvider } from "../../services/session";
 import { getApiBaseUrl } from "../../config/api";
 import { useProfile } from "../../hooks/useProfile";
@@ -345,6 +345,8 @@ function MyUpcoming({ fallback }: { fallback: React.ReactElement }) {
 function ScheduledCalls({ version, onSchedule }: { version: number; onSchedule: () => void }) {
   const [items, setItems] = useState<ScheduledCall[] | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [, relock] = useState(0);
+  useEffect(() => onJoinLockChange(() => relock((n) => n + 1)), []);
   useEffect(() => {
     let alive = true;
     const service = new CallsService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
@@ -397,9 +399,9 @@ function ScheduledCalls({ version, onSchedule }: { version: number; onSchedule: 
                 <Text style={styles.upcomingTime}>{formatScheduledFor(c.scheduledFor)}</Text>
               </View>
               <View style={{ alignItems: "center", gap: 8 }}>
-                <Pressable onPress={() => join(c)} disabled={!c.joinable} style={[styles.joinWrap, !c.joinable && { opacity: 0.4 }]} accessibilityRole="button" accessibilityState={{ disabled: !c.joinable }} accessibilityLabel={c.joinable ? "Join call" : "Join opens 10 minutes before the call"}>
+                <Pressable onPress={() => join(c)} disabled={!c.joinable || isJoinLocked(c.id)} style={[styles.joinWrap, (!c.joinable || isJoinLocked(c.id)) && { opacity: 0.4 }]} accessibilityRole="button" accessibilityState={{ disabled: !c.joinable || isJoinLocked(c.id) }} accessibilityLabel={c.joinable ? "Join call" : "Join opens 10 minutes before the call"}>
                   <LinearGradient colors={["#11C9EC", "#0879FF"]} style={styles.joinButton}>
-                    <Text style={styles.joinText}>Join</Text>
+                    <Text style={styles.joinText}>{isJoinLocked(c.id) ? "Joining…" : "Join"}</Text>
                   </LinearGradient>
                 </Pressable>
                 {c.isOrganizer ? (
