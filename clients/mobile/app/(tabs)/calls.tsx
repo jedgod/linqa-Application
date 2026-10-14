@@ -191,22 +191,6 @@ export default function CallsScreen() {
           </View>
         </ScrollView>
 
-        <Pressable
-          style={({ pressed }) => [styles.fabWrap, pressed && styles.pressed]}
-          onPress={() => startCall()}
-          accessibilityRole="button"
-          accessibilityLabel="Start a new call"
-        >
-          <LinearGradient
-            colors={["#08D4F2", "#0878FF"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.fab}
-          >
-            <Ionicons name="add" size={27} color="#FFFFFF" style={styles.fabPlus} />
-            <Ionicons name="call" size={30} color="#FFFFFF" style={styles.fabPhone} />
-          </LinearGradient>
-        </Pressable>
       </SafeAreaView>
 
       <SearchModal
@@ -542,10 +526,6 @@ const styles = StyleSheet.create({
   encryptionRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 20 },
   encryptionText: { color: "#697DAE", fontSize: 12.5 },
 
-  fabWrap: { position: "absolute", right: 21, bottom: 94, width: 63, height: 63, borderRadius: 32, overflow: "hidden", zIndex: 20, elevation: 12, shadowColor: COLORS.cyan, shadowOpacity: 0.28, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
-  fab: { flex: 1, borderRadius: 32, alignItems: "center", justifyContent: "center" },
-  fabPlus: { position: "absolute", left: 16, top: 12 },
-  fabPhone: { marginTop: 10, marginLeft: 8 },
   bottomNav: { position: "absolute", left: 0, right: 0, bottom: 0, height: 82, flexDirection: "row", backgroundColor: "#061027", borderTopWidth: 1, borderTopColor: "#172644", paddingBottom: Platform.OS === "ios" ? 8 : 4 },
   navItem: { flex: 1, alignItems: "center", justifyContent: "center", gap: 6 },
   navIndicator: { position: "absolute", top: 0, width: 41, height: 2, backgroundColor: COLORS.cyan },
