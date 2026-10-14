@@ -139,6 +139,7 @@ function AccountHome() {
   const diverseUrls = new Set(diverseStories.map(story => story.canonicalUrl));
   const heroStories = [...diverseStories, ...orderedStories.filter(story => !diverseUrls.has(story.canonicalUrl))].slice(0, HERO_SLOTS);
   const heroUrls = new Set(heroStories.map((story) => story.canonicalUrl));
+  const currentHero = heroStories.length ? heroStories[clampPage(heroPage, heroStories.length)] : null;
   useFocusEffect(useCallback(() => {
     if (reducedMotion || !appActive || heroTouched || heroStories.length < 2 || customizeModal || composeModal || statusModal) return;
     const timer = setInterval(() => {
@@ -453,57 +454,67 @@ function AccountHome() {
 
         {hiddenSections.has("breakingAroundWorld") ? null : (
           <View style={s.heroWrap}>
-            {/* One slide per breaking story, paged, with a dot per slide —
-                the rest of the front page is reachable without scrolling
-                down to the world rail. */}
-            <ScrollView
-              ref={heroScroll}
-              onTouchStart={() => setHeroTouched(true)}
-              onTouchEnd={() => setHeroTouched(false)}
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              onMomentumScrollEnd={pageTracker(cardWidth, setHeroPage)}
-              scrollEnabled={heroStories.length > 1}
-            >
-              {(heroStories.length > 0 ? heroStories : [null]).map((story, index) => (
-                <ImageBackground
-                  key={story?.canonicalUrl ?? `hero-empty-${index}`}
-                  source={story?.imageUrl ? { uri: story.imageUrl } : undefined}
-                  style={[s.heroCard, { width: cardWidth }]}
-                  imageStyle={s.heroImage}
-                >
-                  <View style={[s.heroGradient, { backgroundColor: "rgba(3,7,28,0.76)" }]}>
-                    <View style={s.heroContent}>
-                      <View style={s.kickerRow}>
-                        <Ionicons name="flash" size={13} color="#FF3B4E" />
-                        {/* Only a publisher cleared for breaking coverage may be
-                            presented under a BREAKING kicker. */}
-                        <Text style={s.heroKicker}>
-                          {story?.breakingEligible ? "BREAKING NEWS" : "WORLD NEWS"}
+            {/* A fixed frame. Only the picture and the story's headline and source slide; the BREAKING NEWS / WORLD NEWS label,
+                the LIVE pill and the Read Full Story button stay put and always describe the story currently showing. */}
+            <View style={[s.heroFrame, { width: cardWidth }]}>
+              <ScrollView
+                ref={heroScroll}
+                onTouchStart={() => setHeroTouched(true)}
+                onTouchEnd={() => setHeroTouched(false)}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={pageTracker(cardWidth, setHeroPage)}
+                scrollEnabled={heroStories.length > 1}
+              >
+                {(heroStories.length > 0 ? heroStories : [null]).map((story, index) => (
+                  <ImageBackground
+                    key={story?.canonicalUrl ?? `hero-empty-${index}`}
+                    source={story?.imageUrl ? { uri: story.imageUrl } : undefined}
+                    style={{ width: cardWidth, height: 194 }}
+                    imageStyle={s.heroImage}
+                  >
+                    {/* Light at the top so the picture shows; darker only low down, behind the words. */}
+                    <View style={s.heroScrim}>
+                      {/* A vertical fade built from stacked translucent bands (the gradient component here is only a flat stand-in). */}
+                      <View style={s.heroFade} pointerEvents="none">
+                        {[150, 135, 120, 105, 90, 76, 62, 48, 34].map((height) => (
+                          <View key={height} style={{ position: "absolute", left: 0, right: 0, bottom: 0, height, backgroundColor: "rgba(3,7,28,0.1)" }} />
+                        ))}
+                      </View>
+                      <View style={s.heroInfo}>
+                        <Text style={s.heroTitle} numberOfLines={2}>
+                          {story?.title ?? (loading ? "Global news is refreshing" : stateCopy.detail)}
+                        </Text>
+                        <Text style={s.heroCopy} numberOfLines={2}>
+                          {story ? attributionFor(story) : stateCopy.detail}
                         </Text>
                       </View>
-                      <Text style={s.heroTitle} numberOfLines={3}>
-                        {story?.title ?? (loading ? "Global news is refreshing" : stateCopy.detail)}
-                      </Text>
-                      <Text style={s.heroCopy} numberOfLines={2}>
-                        {story ? attributionFor(story) : stateCopy.detail}
-                      </Text>
-                      <Pressable
-                        style={s.heroButton}
-                        onPress={() => (story ? void openLink(story.canonicalUrl) : load())}
-                      >
-                        <Text style={s.heroButtonText}>{story ? "Read Full Story" : "Retry"}</Text>
-                        <Ionicons name="chevron-forward" size={14} color="#FFFFFF" />
-                      </Pressable>
                     </View>
-                    <View style={[s.livePill, newsState !== "LIVE" && s.stalePill]}>
-                      <Text style={s.livePillText}>{stateCopy.label}</Text>
-                    </View>
-                  </View>
-                </ImageBackground>
-              ))}
-            </ScrollView>
+                  </ImageBackground>
+                ))}
+              </ScrollView>
+
+              {/* Fixed: does not move when the story changes. */}
+              <View style={s.heroFixedTop} pointerEvents="none">
+                <View style={s.kickerRowChip}>
+                  <Ionicons name="flash" size={13} color="#FF3B4E" />
+                  {/* Only a publisher cleared for breaking coverage may be presented under a BREAKING kicker. */}
+                  <Text style={s.heroKicker}>{currentHero?.breakingEligible ? "BREAKING NEWS" : "WORLD NEWS"}</Text>
+                </View>
+                <View style={[s.livePillFixed, newsState !== "LIVE" && s.stalePill]}>
+                  <Text style={s.livePillText}>{stateCopy.label}</Text>
+                </View>
+              </View>
+              <Pressable
+                style={s.heroButtonFixed}
+                accessibilityRole="button"
+                onPress={() => (currentHero ? void openLink(currentHero.canonicalUrl) : load())}
+              >
+                <Text style={s.heroButtonText}>{currentHero ? "Read Full Story" : "Retry"}</Text>
+                <Ionicons name="chevron-forward" size={14} color="#FFFFFF" />
+              </Pressable>
+            </View>
 
             {heroStories.length > 1 ? (
               <View style={s.dotRow} pointerEvents="none">
