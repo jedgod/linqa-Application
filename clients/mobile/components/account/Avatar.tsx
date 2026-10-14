@@ -16,19 +16,24 @@ type Props = {
 
 export function useAvatarImage(uri?: string | null, headers?: Record<string, string>) {
   const [failed, setFailed] = useState(false);
+  // A load that fails right after the app starts (sign-in not ready, network still joining) is retried a couple of times.
+  const [attempt, setAttempt] = useState(0);
   const [loaded, setLoaded] = useState<{ source: string; data: string } | null>(null);
   const authorization = headers?.Authorization;
   const privateAvatar = !!uri && uri.startsWith(`${API_URL}/v1/profile/`);
+  useEffect(() => { setAttempt(0); }, [uri, authorization]);
   useEffect(() => {
     setFailed(false);
     setLoaded(null);
     if (!uri || !privateAvatar) return;
     const generation = accountScopeGeneration();
     const controller = new AbortController();
+    let retry: ReturnType<typeof setTimeout> | undefined;
     void (async () => {
       try {
         const token = await getAuthToken();
-        if (!token || controller.signal.aborted || generation !== accountScopeGeneration()) return;
+        if (controller.signal.aborted || generation !== accountScopeGeneration()) return;
+        if (!token) throw new Error('Not signed in yet');
         const response = await fetch(uri, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
         if (!response.ok) throw new Error('Avatar unavailable');
         const mime = response.headers.get('content-type')?.split(';')[0];
@@ -39,11 +44,13 @@ export function useAvatarImage(uri?: string | null, headers?: Record<string, str
         bytes.fill(0);
         if (!controller.signal.aborted && generation === accountScopeGeneration()) setLoaded({ source: uri, data });
       } catch {
-        if (!controller.signal.aborted && generation === accountScopeGeneration()) setFailed(true);
+        if (controller.signal.aborted || generation !== accountScopeGeneration()) return;
+        if (attempt < 2) retry = setTimeout(() => setAttempt(attempt + 1), attempt === 0 ? 2500 : 7000);
+        else setFailed(true);
       }
     })();
-    return () => controller.abort();
-  }, [uri, authorization, privateAvatar]);
+    return () => { controller.abort(); if (retry) clearTimeout(retry); };
+  }, [uri, authorization, privateAvatar, attempt]);
   const displayUri = privateAvatar ? (loaded?.source === uri ? loaded.data : null) : uri;
   return { displayUri: failed ? null : displayUri, privateAvatar, onError: () => setFailed(true) };
 }
