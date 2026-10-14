@@ -4,6 +4,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { getApiBaseUrl } from "../../config/api";
 import { avatarUri } from "../../lib/profileApi";
 import { accessTokenProvider } from "../../services/session";
@@ -30,7 +31,21 @@ function PersonPhoto({ person, size = 44 }: { person: Person; size?: number }) {
   );
 }
 
-export function CallPlanner({ visible, initialMode, onClose, onScheduled }: { visible: boolean; initialMode: PlannerMode; onClose: () => void; onScheduled: () => void }) {
+type PlannerProps = { visible: boolean; initialMode: PlannerMode; onClose: () => void; onScheduled: () => void };
+
+// A Modal is its own window on Android, so it needs its own safe-area provider to know where the system bars are.
+export function CallPlanner(props: PlannerProps) {
+  return (
+    <Modal visible={props.visible} transparent animationType="slide" onRequestClose={props.onClose} statusBarTranslucent navigationBarTranslucent>
+      <SafeAreaProvider>
+        <PlannerSheet {...props} />
+      </SafeAreaProvider>
+    </Modal>
+  );
+}
+
+function PlannerSheet({ visible, initialMode, onClose, onScheduled }: PlannerProps) {
+  const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<PlannerMode>(initialMode);
   const [kind, setKind] = useState<"AUDIO" | "VIDEO">("VIDEO");
   const [people, setPeople] = useState<Person[] | null>(null);
@@ -80,10 +95,10 @@ export function CallPlanner({ visible, initialMode, onClose, onScheduled }: { vi
 
   const ready = picked.length > 0 && !busy;
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
+    <>
       <View style={styles.backdrop}>
         <Pressable style={styles.dismiss} onPress={onClose} accessibilityLabel="Close" />
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 16, maxHeight: "92%" }]}>
           <View style={styles.head}>
             <Text style={styles.title}>{mode === "now" ? "New call" : "Schedule a call"}</Text>
             <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close"><Ionicons name="close" size={24} color={INK} /></Pressable>
@@ -139,7 +154,7 @@ export function CallPlanner({ visible, initialMode, onClose, onScheduled }: { vi
           </Pressable>
         </View>
       </View>
-    </Modal>
+    </>
   );
 }
 
