@@ -25,15 +25,16 @@ export function PersonAvatar({ name, userId, photoUri, size = 44, style, textCol
   const { displayUri, onError } = useAvatarImage(uri);
   const round = { width: size, height: size, borderRadius: size / 2 };
   return (
-    <View style={[styles.base, round, { backgroundColor }, style]} accessible accessibilityLabel={`${name} profile photo`} accessibilityRole="image">
-      <Text style={{ color: textColor, fontSize: size * 0.38, fontWeight: '600' }}>{initialsOf(name)}</Text>
+    <View collapsable={false} style={[styles.base, round, { backgroundColor }, style]} accessible accessibilityLabel={`${name} profile photo`} accessibilityRole="image">
       {displayUri ? (
-        <Image source={{ uri: displayUri }} style={[StyleSheet.absoluteFill, round]} resizeMode="cover" onError={onError} accessibilityIgnoresInvertColors />
-      ) : null}
+        <Image source={{ uri: displayUri }} style={round} resizeMode="cover" onError={onError} fadeDuration={0} accessibilityIgnoresInvertColors />
+      ) : (
+        <Text style={{ color: textColor, fontSize: size * 0.38, fontWeight: '600' }}>{initialsOf(name)}</Text>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  base: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  base: { alignItems: 'center', justifyContent: 'center' },
 });

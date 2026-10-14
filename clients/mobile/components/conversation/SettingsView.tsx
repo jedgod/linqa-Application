@@ -1,3 +1,4 @@
+import { PersonAvatar } from "../account/PersonAvatar";
 import React from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { BACKGROUNDS, BACKGROUND_CHOICES, THREAD_ACTIONS, unavailableReason, type ChatBackground, type ThreadAction } from "../../services/conversation-thread";
@@ -9,6 +10,8 @@ import { SubHeader } from "./SubHeader";
 interface Props {
   theme: Theme;
   peerName: string;
+  /** Their Linqa user id, to show their profile photo. */
+  peerId?: string | null;
   peerFirstName: string;
   gate: GateState;
   prefs: ConversationPrefs;
@@ -33,7 +36,7 @@ const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2)
 const LABEL: Record<ThemeChoice, string> = { system: "System", light: "Light", dark: "Dark" };
 
 /** Conversation settings: privacy, appearance, notifications, block. Only settings that really do something are live. */
-export function SettingsView({ theme: t, peerName, peerFirstName, gate, prefs, featureSupport, blocked, pinned, disappearAfterSeconds, onPinnedChange, onDisappearChange, onChange, onVerify, onBlock, onUnblock, onAskAi, chat, onBack }: Props) {
+export function SettingsView({ theme: t, peerName, peerId, peerFirstName, gate, prefs, featureSupport, blocked, pinned, disappearAfterSeconds, onPinnedChange, onDisappearChange, onChange, onVerify, onBlock, onUnblock, onAskAi, chat, onBack }: Props) {
   const status = blocked ? "Blocked" : gate.mode === "LIVE" ? "End-to-end encrypted" : gate.mode === "CHECKING" ? "Checking encryption" : "Messages sealed on this device";
   const section = (label: string) => <Text style={[type.meta, styles.section, { color: t.muted }]}>{label.toUpperCase()}</Text>;
   const card = [styles.card, { backgroundColor: t.surface }];
@@ -59,7 +62,7 @@ export function SettingsView({ theme: t, peerName, peerFirstName, gate, prefs, f
       <SubHeader theme={t} title="Conversation settings" onBack={onBack} />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.identity}>
-          <View style={[styles.avatar, { backgroundColor: t.surface }]}><Text style={[styles.avatarText, { color: t.accent }]}>{initials(peerName)}</Text></View>
+          <PersonAvatar name={peerName} userId={peerId} size={96} textColor={t.accent} backgroundColor={t.surface} />
           <Text accessibilityRole="header" style={[styles.name, { color: t.ink }]}>{peerName}</Text>
           <Text style={[type.body, { color: t.muted }]}>{status}</Text>
         </View>

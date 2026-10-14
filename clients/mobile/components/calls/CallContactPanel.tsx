@@ -1,3 +1,4 @@
+import { PersonAvatar } from "../account/PersonAvatar";
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -111,7 +112,7 @@ export function CallContactPanel({ visible, onClose, name, peerId, flag, area, a
       <SafeAreaView style={s.fill}>
         <ScrollView contentContainerStyle={s.content}>
           <Pressable accessibilityRole="button" accessibilityLabel="Back to video call" onPress={onClose} style={s.back}><Ionicons name="chevron-back" color="white" size={30} /></Pressable>
-          {avatarUrl ? <Image source={{ uri: avatarUrl }} style={s.avatar} /> : <View style={[s.avatar, s.initial]}><Text style={s.initialText}>{name.trim().charAt(0).toUpperCase()}</Text></View>}
+          <PersonAvatar name={name} userId={peerId} photoUri={avatarUrl} size={100} backgroundColor="#30343D" style={{ alignSelf: "center" }} />
           <Text accessibilityRole="header" style={s.name}>{name}</Text>
           <View style={s.tabs}>{(["Info", "Backgrounds", "Photos", "Links"] as Tab[]).map(item => <Pressable key={item} accessibilityRole="tab" accessibilityState={{ selected: tab === item }} onPress={() => setTab(item)} style={[s.tab, tab === item && s.selectedTab]}><Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={[s.tabText, tab === item && { color: "white", fontWeight: "600" }]}>{item}</Text></Pressable>)}</View>
           {tab === "Info" ? <View style={s.locationCard}>

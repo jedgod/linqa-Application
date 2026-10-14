@@ -224,7 +224,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
     return (
       <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}
         {noticeEl}
-        <SettingsView theme={t} peerName={peer.displayName} peerFirstName={firstName} gate={c.gateState} prefs={prefs} featureSupport={features.featureSupport} blocked={Boolean(blocked)} pinned={props.pinned} disappearAfterSeconds={props.disappearAfterSeconds} onPinnedChange={props.onPinnedChange} onDisappearChange={props.onDisappearChange} onChange={props.onPrefsChange} onVerify={() => setView("verify")} onBlock={confirmBlock} onUnblock={props.onUnblock} onAskAi={props.onAskAi && live ? askAi : undefined} chat={props.chatActions} onBack={() => setView("chat")} />
+        <SettingsView theme={t} peerName={peer.displayName} peerId={peer.id} peerFirstName={firstName} gate={c.gateState} prefs={prefs} featureSupport={features.featureSupport} blocked={Boolean(blocked)} pinned={props.pinned} disappearAfterSeconds={props.disappearAfterSeconds} onPinnedChange={props.onPinnedChange} onDisappearChange={props.onDisappearChange} onChange={props.onPrefsChange} onVerify={() => setView("verify")} onBlock={confirmBlock} onUnblock={props.onUnblock} onAskAi={props.onAskAi && live ? askAi : undefined} chat={props.chatActions} onBack={() => setView("chat")} />
       </SafeAreaView>
     );
   }
