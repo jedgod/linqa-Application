@@ -1,3 +1,4 @@
+import { withSystemUi } from "../../services/system-ui-guard";
 import { PhotoCapture } from "./PhotoCapture";
 import { VideoCapture } from "./VideoCapture";
 import React, { useEffect, useRef, useState } from "react";
@@ -65,7 +66,7 @@ export function CapturePanel({ kind, theme: t, canSend, onSend, onClose, onAttac
     if (busyRef.current) return;
     busyRef.current = true; setBusy(true); setError(null);
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: kind === "GALLERY" ? ["images", "videos"] : ["images"], quality: kind === "GIF" ? 1 : 0.85, allowsEditing: kind === "DESIGN" });
+      const result = await withSystemUi(() => ImagePicker.launchImageLibraryAsync({ mediaTypes: kind === "GALLERY" ? ["images", "videos"] : ["images"], quality: kind === "GIF" ? 1 : 0.85, allowsEditing: kind === "DESIGN" }));
       if (result.canceled) return;
       const asset = result.assets[0];
       const video = asset.type === "video";

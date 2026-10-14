@@ -67,8 +67,11 @@ export function useConversation({ conversationId, selfId, deviceId = "", service
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; clearDrafts(); }; }, []);
 
   // Gate: any exception is a lock, never a pass.
-  const evaluateGate = useCallback(async () => {
-    setGateState({ mode: "CHECKING" });
+  // `quiet` is for coming back to a thread that was already LIVE (after a photo or file picker, a permission prompt, a
+  // call): the check runs again, but the thread is not torn down while it runs. Drafts and an open attachment sheet
+  // survive. A failed or different answer still locks the thread straight away, exactly as before.
+  const evaluateGate = useCallback(async (quiet = false) => {
+    if (!quiet) setGateState({ mode: "CHECKING" });
     try {
       const result = await gate.evaluate();
       if (mounted.current) setGateState(result);
@@ -79,7 +82,7 @@ export function useConversation({ conversationId, selfId, deviceId = "", service
 
   useEffect(() => {
     void evaluateGate();
-    const sub = AppState.addEventListener("change", (s) => { if (s === "active") void evaluateGate(); });
+    const sub = AppState.addEventListener("change", (s) => { if (s === "active") void evaluateGate(gateRef.current.mode === "LIVE"); });
     return () => sub.remove();
   }, [evaluateGate]);
 
@@ -211,5 +214,5 @@ export function useConversation({ conversationId, selfId, deviceId = "", service
 
   const messages = useMemo(() => buildMessages({ live, rows, opened, pending, selfId }), [live, opened, pending, rows, selfId]);
 
-  return { gateState, messages, loading, loadError, hasMore, loadOlder, reload: () => loadPage(), recheck: evaluateGate, send, retry, discard, retryOpen, deleteMessage };
+  return { gateState, messages, loading, loadError, hasMore, loadOlder, reload: () => loadPage(), recheck: () => evaluateGate(), send, retry, discard, retryOpen, deleteMessage };
 }

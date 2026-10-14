@@ -6,6 +6,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-nati
 import * as Contacts from "expo-contacts/legacy";
 import { ContactContent } from "../../content/types";
 import { FormShell } from "../../ui/Form";
+import { withSystemUi } from "../../../../services/system-ui-guard";
 import { palette as c, space } from "../../ui/tokens";
 
 export function ContactComposer({ onSend, onCancel }: { onSend: (k: ContactContent) => Promise<void>; onCancel: () => void }) {
@@ -16,13 +17,13 @@ export function ContactComposer({ onSend, onCancel }: { onSend: (k: ContactConte
   useEffect(() => {
     let active = true;
     (async () => {
-      const perm = await Contacts.requestPermissionsAsync();
+      const perm = await withSystemUi(() => Contacts.requestPermissionsAsync());
       if (!active) return;
       if (!perm.granted) {
         Alert.alert("Contacts access is off", "Allow access in Settings to share a contact.", [{ text: "OK", onPress: onCancel }]);
         return;
       }
-      const picked = await Contacts.presentContactPickerAsync();
+      const picked = await withSystemUi(() => Contacts.presentContactPickerAsync());
       if (!active) return;
       if (!picked) return onCancel();
       setContact(picked);

@@ -3,6 +3,7 @@ import { Alert, AppState, Modal, Platform, Pressable, Text, View } from "react-n
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import * as FS from "expo-file-system/legacy";
 import { AccountSecureStorage } from "../../account/AccountSecureStorage";
+import { systemUiOpen } from "../../services/system-ui-guard";
 import { createFeatureAttachments } from "../../features/conversation/attachments/production-adapter";
 import { useAttachFlow } from "../../features/conversation/attach/useAttachFlow";
 import type { AttachAction, ChatFeatures } from "../../features/conversation/attach/AttachSheet";
@@ -62,7 +63,12 @@ export function useProductionFeatures(o: {
   }, [attachments, stopLive]);
   useEffect(() => {
     alive.current = true;
-    const sub = AppState.addEventListener("change", state => { if (state !== "active") { liveRef.current = false; wipe(); } setForeground(state === "active"); });
+    const sub = AppState.addEventListener("change", state => {
+      // Opening one of the phone's own pickers takes focus for a moment; that is not the person leaving the app.
+      if (state !== "active" && systemUiOpen()) return;
+      if (state !== "active") { liveRef.current = false; wipe(); }
+      setForeground(state === "active");
+    });
     return () => { alive.current = false; liveRef.current = false; sub.remove(); wipe(); };
   }, [wipe]);
   useEffect(() => { if (!live) wipe(); }, [live, wipe]);

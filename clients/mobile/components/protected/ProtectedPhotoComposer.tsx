@@ -22,6 +22,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import { withSystemUi } from '../../services/system-ui-guard';
 import { ImagePlus, Lock, X } from './icons';
 import { COLORS as C } from '../../constants/theme';
 import { DEFAULT_POLICIES, type ProtectionPolicy } from '../../lib/protectedMedia/policy';
@@ -55,12 +56,12 @@ export function ProtectedPhotoComposer({ visible, recipientId, conversationId, o
   }, [visible]);
 
   const pick = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const perm = await withSystemUi(() => ImagePicker.requestMediaLibraryPermissionsAsync());
     if (!perm.granted) {
       Alert.alert('Photo access needed', 'Allow photo access in Settings to send a photo.');
       return;
     }
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1, exif: false });
+    const res = await withSystemUi(() => ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1, exif: false }));
     if (res.canceled || !res.assets?.[0]) return;
     const a = res.assets[0];
     if (photo) discardPickedCopy(photo.uri);
