@@ -53,7 +53,10 @@ export const DEFAULT_RSS_FEEDS: RssFeedSource[] = [
   { url: "https://www.theverge.com/rss/index.xml", category: "TECHNOLOGY", countryCode: "US" },
   { url: "https://feeds.npr.org/1004/rss.xml", category: "WORLD", countryCode: "US" },
   { url: "https://feeds.npr.org/1128/rss.xml", category: "HEALTH", countryCode: "US" },
-  { url: "https://www.aljazeera.com/xml/rss/all.xml", category: "WORLD", countryCode: "QA" }
+  { url: "https://www.aljazeera.com/xml/rss/all.xml", category: "WORLD", countryCode: "QA" },
+  { url: 'https://www.pbs.org/newshour/feeds/rss/headlines', category: 'WORLD', countryCode: 'US' },
+  { url: 'https://www.lemonde.fr/en/international/rss_full.xml', category: 'WORLD', countryCode: 'FR' },
+  { url: 'https://rss.dw.com/rdf/rss-en-all', category: 'WORLD', countryCode: 'DE' }
 ];
 
 /**
@@ -243,7 +246,8 @@ export class PublisherRssProvider implements NewsProvider {
     const rss = document.rss as XmlNode | undefined;
     const channel = rss?.channel as XmlNode | undefined;
     const feedRoot = document.feed as XmlNode | undefined;
-    const items = channel ? asArray(channel.item) : asArray(feedRoot?.entry);
+    const rdf = document['rdf:RDF'] as XmlNode | undefined;
+    const items = channel ? asArray(channel.item) : rdf ? asArray(rdf.item) : asArray(feedRoot?.entry);
 
     const articles: RawNewsArticle[] = [];
     for (const item of items) {

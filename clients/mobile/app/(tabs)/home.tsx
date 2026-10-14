@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Image, ImageBackground, Linking, Modal, Pressable, RefreshControl, ScrollView, Switch, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AccessibilityInfo, AppState, ActivityIndicator, Image, ImageBackground, Linking, Modal, Pressable, RefreshControl, ScrollView, Switch, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useAccounts } from '../../account/AccountContext';
+import { accountScopeGeneration } from '../../services/account-scope';
 import { upcomingOf, useMyEvents } from "../../services/my-events";
 import { MobileHubService, type HubContact, type HubSnapshot } from "../../services/mobile-hub.service";
 import { HIDEABLE_HOME_SECTIONS, HomeFeedService, JurisdictionRequiredError, attributionFor, newsStateLabel, relativeAge, type HideableHomeSection, type HomeFeedPayload, type HomeNewsItem } from "../../services/home-feed.service";
@@ -34,6 +36,11 @@ const API = getApiBaseUrl();
  *    rest of Home carries on.
  */
 export default function HomeScreen() {
+  const { active } = useAccounts();
+  return <AccountHome key={active?.userId ?? 'signed-out'} />;
+}
+
+function AccountHome() {
   const moneyAvailable = useLinqaSendAvailability() === true;
   const router = useRouter();
   const { profile } = useProfile();
@@ -59,14 +66,33 @@ export default function HomeScreen() {
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [heroPage, setHeroPage] = useState(0);
   const [worldPage, setWorldPage] = useState(0);
+  const heroScroll = useRef<ScrollView>(null);
+  const [heroTouched, setHeroTouched] = useState(false);
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  const [reducedMotion, setReducedMotion] = useState(true);
+  const [actionDraft, setActionDraft] = useState<string[]>([]);
+  const [preferenceError, setPreferenceError] = useState<string | null>(null);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [contactsBusy, setContactsBusy] = useState(false);
+  const [startingContact, setStartingContact] = useState<string | null>(null);
+  const creatingConversation = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then(value => { if (alive) setReducedMotion(value); });
+    const motion = AccessibilityInfo.addEventListener('reduceMotionChanged', setReducedMotion);
+    const app = AppState.addEventListener('change', state => setAppActive(state === 'active'));
+    return () => { alive = false; motion.remove(); app.remove(); };
+  }, []);
 
   const load = useCallback(() => {
+    const generation = accountScopeGeneration();
     setLoading(true);
     setError(null);
     // The Home feed and the hub snapshot are independent: the hub only backs
     // the compose sheet, so a hub failure must not stop Home rendering.
     Promise.allSettled([homeClient.loadFeed(), hubClient.loadHub()])
       .then(([feedResult, hubResult]) => {
+        if (generation !== accountScopeGeneration()) return;
         if (feedResult.status === "fulfilled") {
           setFeed(feedResult.value);
           setJurisdictionRequired(false);
@@ -83,7 +109,7 @@ export default function HomeScreen() {
         }
         if (hubResult.status === "fulfilled") setHub(hubResult.value);
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (generation === accountScopeGeneration()) setLoading(false); });
   }, [homeClient, hubClient]);
 
   useEffect(load, [load]);
@@ -103,11 +129,24 @@ export default function HomeScreen() {
   const stories = feed?.breakingAroundWorld ?? [];
   // The hero is image-led, so image-bearing stories are promoted into it, but
   // a text-only story is still shown rather than leaving a slot empty.
-  const heroStories = [
+  const orderedStories = [
     ...stories.filter((story) => story.imageUrl),
     ...stories.filter((story) => !story.imageUrl)
-  ].slice(0, HERO_SLOTS);
+  ];
+  const heroPublishers = new Set<string>();
+  const diverseStories = orderedStories.filter(story => { if (heroPublishers.has(story.publisherDomain)) return false; heroPublishers.add(story.publisherDomain); return true; });
+  const diverseUrls = new Set(diverseStories.map(story => story.canonicalUrl));
+  const heroStories = [...diverseStories, ...orderedStories.filter(story => !diverseUrls.has(story.canonicalUrl))].slice(0, HERO_SLOTS);
   const heroUrls = new Set(heroStories.map((story) => story.canonicalUrl));
+  useFocusEffect(useCallback(() => {
+    if (reducedMotion || !appActive || heroTouched || heroStories.length < 2 || customizeModal || composeModal || statusModal) return;
+    const timer = setInterval(() => {
+      const next = (clampPage(heroPage, heroStories.length) + 1) % heroStories.length;
+      heroScroll.current?.scrollTo({ x: next * cardWidth, animated: true });
+      setHeroPage(next);
+    }, 9000);
+    return () => clearInterval(timer);
+  }, [reducedMotion, appActive, heroTouched, heroStories.length, heroPage, cardWidth, customizeModal, composeModal, statusModal]));
   const worldStories = stories
     .filter((story) => !heroUrls.has(story.canonicalUrl))
     .slice(0, WORLD_PER_PAGE * WORLD_PAGES);
@@ -178,13 +217,27 @@ export default function HomeScreen() {
   }
 
   async function startConversation(contact: HubContact) {
+    if (creatingConversation.current) return;
+    creatingConversation.current = true; setStartingContact(contact.id);
+    const generation = accountScopeGeneration();
     try {
-      await hubClient.createConversation(contact.id);
+      const conversation = await hubClient.createConversation(contact.id);
+      if (generation !== accountScopeGeneration()) return;
       setComposeModal(false);
-      load();
+      router.push({ pathname: '/modules/conversation', params: { conversationId: conversation.id, name: contact.displayName, peerId: contact.id } });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to start that conversation.");
+    } finally {
+      creatingConversation.current = false; setStartingContact(null);
     }
+  }
+
+  async function openChat() {
+    setComposeModal(true); setContactsBusy(true); setError(null);
+    const generation = accountScopeGeneration();
+    try { const result = await hubClient.loadHub(); if (generation === accountScopeGeneration()) setHub(result); }
+    catch { if (generation === accountScopeGeneration()) setError('Unable to load your connections. Try again.'); }
+    finally { if (generation === accountScopeGeneration()) setContactsBusy(false); }
   }
 
   async function toggleSection(section: HideableHomeSection, visible: boolean) {
@@ -224,7 +277,7 @@ export default function HomeScreen() {
       // Conversations waiting, not messages waiting: the tile is a shortcut to
       // "how many threads need me", which is what the Chats tab total is not.
       badge: notifications?.unreadConversations ?? 0,
-      onPress: () => setComposeModal(true)
+      onPress: () => void openChat()
     },
     {
       key: "call",
@@ -233,7 +286,7 @@ export default function HomeScreen() {
       accent: "#E4F7EE",
       tint: "#16A46A",
       badge: 0,
-      onPress: () => router.push("/(tabs)/calls")
+      onPress: () => router.push({ pathname: '/(tabs)/calls', params: { action: 'new', request: String(Date.now()) } })
     },
     {
       key: "send",
@@ -242,7 +295,7 @@ export default function HomeScreen() {
       accent: "#FFF0E6",
       tint: "#FF7A29",
       badge: 0,
-      onPress: () => router.push("/linqasend/index")
+      onPress: () => router.push("/linqasend")
     },
     {
       key: "vault",
@@ -251,7 +304,7 @@ export default function HomeScreen() {
       accent: "#E8EDFF",
       tint: "#2563EB",
       badge: 0,
-      onPress: () => router.push("/modules/file-vault")
+      onPress: () => router.push("/vault/upload")
     },
     {
       key: "event",
@@ -269,7 +322,7 @@ export default function HomeScreen() {
       accent: "#E3F6F3",
       tint: "#14B8A6",
       badge: 0,
-      onPress: () => setStatusModal(true)
+      onPress: () => router.push('/countrylinqa/create?type=post' as never)
     },
     {
       key: "more",
@@ -281,7 +334,24 @@ export default function HomeScreen() {
       onPress: () => router.push("/(tabs)/linqa")
     }
   ] as const;
-  const quickActions = allQuickActions.filter((item) => moneyAvailable || item.key !== "send");
+  const configuredKeys = (feed?.quickActions ?? []).map(item => item.key).filter((key): key is string => typeof key === 'string');
+  const defaultKeys = allQuickActions.map(item => item.key);
+  const selectedKeys = configuredKeys.length ? configuredKeys : defaultKeys;
+  const quickActions = selectedKeys.map(key => allQuickActions.find(item => item.key === key)).filter((item): item is typeof allQuickActions[number] => !!item && (moneyAvailable || item.key !== 'send'));
+  async function openCustomize() {
+    setPreferenceError(null); setPreferencesLoaded(false); setActionDraft([...selectedKeys]); setCustomizeModal(true);
+    try { const { preferences } = await homeClient.loadPreferences(); setActionDraft(preferences.quickActions.length ? preferences.quickActions.map(item => item.key).filter((key): key is string => !!key && defaultKeys.includes(key as never)) : [...defaultKeys]); setPreferencesLoaded(true); }
+    catch { setPreferenceError('Could not load your saved layout. Close and try again.'); }
+  }
+  async function saveActions() {
+    setSavingPreferences(true); setPreferenceError(null);
+    try {
+      const { preferences } = await homeClient.savePreferences({ quickActions: actionDraft.map(key => ({ key })) });
+      setFeed(current => current ? { ...current, quickActions: preferences.quickActions } : current);
+      setCustomizeModal(false);
+    } catch { setPreferenceError('Unable to save your shortcuts. Try again.'); }
+    finally { setSavingPreferences(false); }
+  }
 
   if (jurisdictionRequired) {
     // Jurisdiction is server-authoritative: Home is country-scoped, so there
@@ -386,6 +456,9 @@ export default function HomeScreen() {
                 the rest of the front page is reachable without scrolling
                 down to the world rail. */}
             <ScrollView
+              ref={heroScroll}
+              onTouchStart={() => setHeroTouched(true)}
+              onTouchEnd={() => setHeroTouched(false)}
               horizontal
               pagingEnabled
               showsHorizontalScrollIndicator={false}
@@ -446,7 +519,7 @@ export default function HomeScreen() {
 
         <View style={s.sectionHeader}>
           <Text style={s.sectionTitle}>QUICK ACTIONS</Text>
-          <Pressable onPress={() => setCustomizeModal(true)}><Text style={s.sectionLink}>Customize</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Customize Quick Actions" onPress={() => void openCustomize()}><Text style={s.sectionLink}>Customize</Text></Pressable>
         </View>
 
         <View style={s.quickGrid}>
@@ -972,12 +1045,14 @@ export default function HomeScreen() {
         <View style={s.modalBackdrop}>
           <View style={s.modalCard}>
             <Text style={s.modalTitle}>New conversation</Text>
+            {contactsBusy ? <ActivityIndicator color={colors.accent} /> : null}
+            {error ? <Text style={s.muted}>{error}</Text> : null}
             {(hub?.contacts ?? []).map((contact) => (
-              <Pressable key={contact.id} style={s.contactRow} onPress={() => startConversation(contact)}>
-                <Text style={s.contactRowText}>{contact.displayName}</Text>
+              <Pressable key={contact.id} style={s.contactRow} disabled={startingContact !== null} onPress={() => void startConversation(contact)}>
+                <Text style={s.contactRowText}>{contact.displayName}{startingContact === contact.id ? ' · Opening…' : ''}</Text>
               </Pressable>
             ))}
-            {(hub?.contacts.length ?? 0) === 0 ? (
+            {!contactsBusy && (hub?.contacts.length ?? 0) === 0 ? (
               <Text style={s.muted}>No contacts are available to message yet.</Text>
             ) : null}
             <Pressable onPress={() => setComposeModal(false)} style={{ marginTop: spacing.md }}>
@@ -989,11 +1064,24 @@ export default function HomeScreen() {
 
       <Modal visible={customizeModal} transparent animationType="slide" onRequestClose={() => setCustomizeModal(false)}>
         <View style={s.modalBackdrop}>
-          <View style={s.modalCard}>
+          <ScrollView style={[s.modalCard, { maxHeight: '85%' }]} keyboardShouldPersistTaps="handled">
             <Text style={s.modalTitle}>Customize Home</Text>
             <Text style={s.modalCopy}>
-              Hidden sections are not fetched at all, so hiding one also stops the work behind it.
+              Choose your shortcuts, change their order, and show the sections you use.
             </Text>
+            {preferenceError ? <Text style={{ color: '#B42318', marginVertical: 8 }}>{preferenceError}</Text> : null}
+            <Text style={s.preferenceLabel}>Quick Actions</Text>
+            {allQuickActions.map(item => <View key={item.key} style={s.preferenceRow}>
+              <Text style={[s.preferenceLabel, { flex: 1 }]}>{item.label.replace('\n', ' ')}</Text>
+              <Switch value={actionDraft.includes(item.key)} disabled={savingPreferences || (!moneyAvailable && item.key === 'send')} onValueChange={value => setActionDraft(current => value ? [...current, item.key] : current.filter(key => key !== item.key))} />
+            </View>)}
+            <Text style={[s.preferenceHint, { marginVertical: 10 }]}>Shortcut order</Text>
+            {actionDraft.map((key, index) => <View key={key} style={s.preferenceRow}>
+              <Text style={[s.preferenceLabel, { flex: 1 }]}>{index + 1}. {allQuickActions.find(item => item.key === key)?.label.replace('\n', ' ')}</Text>
+              {(['up', 'down'] as const).map(direction => <Pressable key={direction} disabled={savingPreferences || (direction === 'up' ? index === 0 : index === actionDraft.length - 1)} accessibilityRole="button" accessibilityLabel={`Move ${key} ${direction}`} onPress={() => setActionDraft(current => { const next = [...current]; const other = direction === 'up' ? index - 1 : index + 1; [next[index], next[other]] = [next[other]!, next[index]!]; return next; })} style={{ padding: 10 }}><Ionicons name={direction === 'up' ? 'arrow-up' : 'arrow-down'} size={18} color='#4F46E5' /></Pressable>)}
+            </View>)}
+            <Pressable accessibilityRole="button" disabled={savingPreferences} onPress={() => setActionDraft([...defaultKeys])}><Text style={s.modalConfirm}>Reset shortcuts</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={savingPreferences || !actionDraft.length || !preferencesLoaded} onPress={() => void saveActions()} style={{ marginVertical: 14 }}><Text style={s.modalConfirm}>{savingPreferences ? 'Saving…' : 'Save Quick Actions'}</Text></Pressable>
 
             <View style={s.preferenceRow}>
               <View style={s.preferenceCopy}>
@@ -1025,7 +1113,7 @@ export default function HomeScreen() {
             <Pressable onPress={() => setCustomizeModal(false)} style={{ marginTop: spacing.md }}>
               <Text style={s.modalCancel}>Done</Text>
             </Pressable>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
     </SafeAreaView>

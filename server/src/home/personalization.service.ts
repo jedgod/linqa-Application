@@ -16,6 +16,16 @@ const DEFAULT_PREFERENCES: HomePreferences = {
 
 const MAX_LIST_ENTRIES = 24;
 const MAX_TOPIC_LENGTH = 48;
+const ACTION_KEYS = new Set(['chat', 'call', 'send', 'vault', 'event', 'post', 'more']);
+function quickActions(value: unknown): Array<{ key: string }> {
+  if (!Array.isArray(value)) return [];
+  const keys: string[] = [];
+  for (const item of value) {
+    const key = item && typeof item === 'object' ? (item as { key?: unknown }).key : undefined;
+    if (typeof key === 'string' && ACTION_KEYS.has(key) && !keys.includes(key)) keys.push(key);
+  }
+  return keys.map(key => ({ key }));
+}
 
 function uniqueStrings(values: unknown, transform: (value: string) => string | null): string[] {
   if (!Array.isArray(values)) return [];
@@ -55,7 +65,7 @@ export function sanitizeHomePreferences(input: unknown): HomePreferences {
       const trimmed = value.trim().slice(0, MAX_TOPIC_LENGTH);
       return trimmed.length >= 2 ? trimmed : null;
     }),
-    quickActions: Array.isArray(source.quickActions) ? source.quickActions.slice(0, 12) : [],
+    quickActions: quickActions(source.quickActions),
     personalizationEnabled: source.personalizationEnabled === true
   };
 }
@@ -87,7 +97,7 @@ export class HomePersonalizationService {
       // CHAR(2)[] comes back space-padded if anything ever wrote a short value.
       followedCountries: (row.followed_countries ?? []).map((code) => code.trim().toUpperCase()),
       followedTopics: row.followed_topics ?? [],
-      quickActions: row.quick_actions ?? [],
+      quickActions: quickActions(row.quick_actions),
       personalizationEnabled: Boolean(row.personalization_enabled)
     };
   }

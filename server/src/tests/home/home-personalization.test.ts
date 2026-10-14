@@ -28,6 +28,10 @@ const items: Item[] = [
 ];
 
 describe("home personalization: preference sanitization", () => {
+  it('keeps ordered known shortcuts and removes duplicates, arbitrary routes and malformed data', () => {
+    const result = sanitizeHomePreferences({ quickActions: [{ key: 'vault', route: 'https://example.com' }, { key: 'chat' }, { key: 'vault' }, { key: 'unknown' }, null] });
+    expect(result.quickActions).toEqual([{ key: 'vault' }, { key: 'chat' }]);
+  });
   it("drops unknown hideable sections", () => {
     const result = sanitizeHomePreferences({ hiddenSections: ["spotlight", "notARealSection", "profile"] });
     expect(result.hiddenSections).toEqual(["spotlight"]);

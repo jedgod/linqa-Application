@@ -11,7 +11,7 @@ const SOURCES: Source[] = [
   { key: "social", icon: "chatbubble-ellipses", color: "#16A34A", title: "From Linqa Social", subtitle: "Save posts, attachments", ready: (s) => !!s?.socialImport, why: "Saving from Linqa Social needs the social import service, which is not connected yet." },
   { key: "messages", icon: "chatbubbles", color: "#2563EB", title: "From Messages", subtitle: "Save message attachments", ready: () => false, why: "Saving message attachments is not connected to the vault yet." },
   { key: "business", icon: "briefcase", color: "#7C3AED", title: "From Client / Business", subtitle: "Save files from clients", ready: () => false, why: "Business intake is not connected yet." },
-  { key: "device", icon: "phone-portrait", color: "#16A34A", title: "From Device", subtitle: "Upload from this device", ready: () => false, why: "Uploads must be encrypted on your device before they leave it. The on-device encryption and file picker are not part of this app build yet, so uploading is turned off rather than sending files unprotected." },
+  { key: "device", icon: "phone-portrait", color: "#16A34A", title: "From Device", subtitle: "Encrypt and upload from this device", ready: (s) => !!s?.encryptedStorage, why: "Vault storage is temporarily unavailable. Try again later." },
   { key: "link", icon: "link", color: "#7C3AED", title: "From External Link", subtitle: "Secure link or shared file", ready: () => false, why: "Saving from a shared link is not connected yet." },
   { key: "scan", icon: "scan", color: "#EA580C", title: "Scan Document", subtitle: "Scan and save to vault", ready: () => false, why: "Document scanning needs the on-device encryption step and is not available yet." }
 ];
@@ -38,7 +38,7 @@ export default function VaultIntake() {
               subtitle={source.subtitle}
               disabled={!ready}
               trailing={ready ? undefined : <Badge text="Not available" tone="off" />}
-              onPress={() => { if (ready && source.key === "social") router.push("/vault/social"); else setWhy(source.why); }}
+              onPress={() => { if (ready && source.key === 'device') router.push('/vault/upload'); else if (ready && source.key === "social") router.push("/vault/social"); else setWhy(source.why); }}
             />
           );
         })}

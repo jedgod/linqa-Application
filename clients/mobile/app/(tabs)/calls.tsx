@@ -19,7 +19,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "../../components/LinearGradient";
 import { RecordingsSection } from "../../components/calls/RecordingsSection";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { upcomingOf, useMyEvents } from "../../services/my-events";
 import { CallsService, callDateBucket, formatScheduledFor, type CallHistoryItem, type ScheduledCall } from "../../services/calls.service";
 import { CallPlanner, type PlannerMode } from "../../components/calls/CallPlanner";
@@ -132,6 +132,8 @@ export default function CallsScreen() {
   }, [filter, query, history]);
 
   const [planner, setPlanner] = useState<PlannerMode | null>(null);
+  const params = useLocalSearchParams<{ action?: string; request?: string }>();
+  useEffect(() => { if (params.action === 'new') setPlanner('now'); }, [params.action, params.request]);
   const [scheduleVersion, setScheduleVersion] = useState(0);
 
   const startCall = (call: Call, kind: "audio" | "video") => {

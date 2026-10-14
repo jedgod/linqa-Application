@@ -3,6 +3,7 @@ import { AccountSecureStorage } from "../account/AccountSecureStorage";
 import { base64ToBytes, bytesToBase64 } from "./secure-core";
 import { accessTokenProvider } from "./session";
 import { sealVaultItem, type VaultItemDetails } from "./vault-crypto";
+import { accountScopeGeneration } from './account-scope';
 
 const storage = new AccountSecureStorage();
 const VAULT_KEY = "vault.key.v1";
@@ -28,12 +29,15 @@ export class VaultSaveError extends Error {}
  * The vault key stays on this phone, so these files can only be opened here (or on a device the key is later restored to).
  */
 export async function saveToVault(input: { accountId: string; plainBase64: string; details: Omit<VaultItemDetails, "size" | "createdAt"> }): Promise<string> {
+  const generation = accountScopeGeneration();
+  const assertScope = () => { if (generation !== accountScopeGeneration()) throw new VaultSaveError('Account changed. Choose the file again.'); };
   const { getRandomBytes } = await import("expo-crypto");
   const random = (n: number) => getRandomBytes(n);
   const plain = base64ToBytes(input.plainBase64);
   const vaultKey = await vaultKeyFor(input.accountId, random);
   let sealed;
   try {
+    assertScope();
     sealed = sealVaultItem(plain, { ...input.details, size: plain.length, createdAt: new Date().toISOString() }, vaultKey, random);
   } finally {
     plain.fill(0);
@@ -43,6 +47,7 @@ export async function saveToVault(input: { accountId: string; plainBase64: strin
   const base = getApiBaseUrl();
   let token: string;
   try { token = await accessTokenProvider.getAccessToken(); } catch { throw new VaultSaveError("Sign in again to save to your vault."); }
+  assertScope();
 
   let begin: Response;
   try {
@@ -66,6 +71,7 @@ export async function saveToVault(input: { accountId: string; plainBase64: strin
     throw new VaultSaveError(begin.status === 403 || begin.status === 401 ? "This account is not allowed to use the vault." : "The vault could not accept this file right now.");
   }
   const ticket = (await begin.json()) as { itemId: string; uploadUrl: string; headers?: Record<string, string> };
+  assertScope();
 
   let put: Response;
   try {
