@@ -31,6 +31,32 @@ function PersonPhoto({ person, size = 44 }: { person: Person; size?: number }) {
   );
 }
 
+type Option = { key: string; label: string; sub?: string };
+
+/** A labelled drop-down: the heading, the current choice, and the choices listed under it when opened. */
+function Dropdown({ heading, value, options, selectedKey, open, disabled, onToggle, onSelect }: { heading: string; value: string; options: Option[]; selectedKey: string; open: boolean; disabled?: boolean; onToggle: () => void; onSelect: (key: string) => void }) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.heading}>{heading}</Text>
+      <Pressable onPress={onToggle} disabled={disabled} style={[styles.select, open && styles.selectOpen, disabled && { opacity: 0.5 }]} accessibilityRole="button" accessibilityLabel={`${heading}: ${value}`} accessibilityState={{ expanded: open, disabled: !!disabled }}>
+        <Text numberOfLines={1} style={styles.selectText}>{value}</Text>
+        <Ionicons name={open ? "chevron-up" : "chevron-down"} size={20} color={MUTED} />
+      </Pressable>
+      {open ? (
+        <View style={styles.menu}>
+          {options.map((o) => (
+            <Pressable key={o.key} onPress={() => onSelect(o.key)} style={[styles.menuItem, o.key === selectedKey && styles.menuItemOn]} accessibilityRole="menuitem" accessibilityState={{ selected: o.key === selectedKey }}>
+              <Text style={styles.menuLabel}>{o.label}</Text>
+              {o.sub ? <Text style={styles.menuSub}>{o.sub}</Text> : null}
+              {o.key === selectedKey ? <Ionicons name="checkmark" size={18} color={BLUE} style={{ marginLeft: "auto" }} /> : null}
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 type PlannerProps = { visible: boolean; initialMode: PlannerMode; onClose: () => void; onScheduled: () => void };
 
 // A Modal is its own window on Android, so it needs its own safe-area provider to know where the system bars are.
@@ -51,13 +77,14 @@ function PlannerSheet({ visible, initialMode, onClose, onScheduled }: PlannerPro
   const [people, setPeople] = useState<Person[] | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [when, setWhen] = useState("1h");
+  const [open, setOpen] = useState<"mode" | "when" | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const presets = useMemo(() => (visible ? schedulePresets() : []), [visible]);
 
   useEffect(() => {
     if (!visible) return;
-    setMode(initialMode); setPicked([]); setMessage(null); setPeople(null);
+    setMode(initialMode); setPicked([]); setMessage(null); setPeople(null); setOpen(null);
     let alive = true;
     const inbox = new ChatInboxService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
     inbox.inbox("all").then((data) => {
@@ -104,14 +131,28 @@ function PlannerSheet({ visible, initialMode, onClose, onScheduled }: PlannerPro
             <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close"><Ionicons name="close" size={24} color={INK} /></Pressable>
           </View>
 
-          <View style={styles.segment}>
-            {(["now", "schedule"] as const).map((m) => (
-              <Pressable key={m} onPress={() => { setMode(m); setPicked((p) => (m === "now" ? p.slice(0, 1) : p)); }} style={[styles.segItem, mode === m && styles.segOn]} accessibilityRole="tab" accessibilityState={{ selected: mode === m }}>
-                <Text style={[styles.segText, mode === m && styles.segTextOn]}>{m === "now" ? "Call now" : "Schedule"}</Text>
-              </Pressable>
-            ))}
-          </View>
+          <Dropdown
+            heading="Schedule"
+            open={open === "mode"}
+            onToggle={() => setOpen(open === "mode" ? null : "mode")}
+            value={mode === "now" ? "Call now" : "Schedule"}
+            options={[{ key: "now", label: "Call now" }, { key: "schedule", label: "Schedule" }]}
+            selectedKey={mode}
+            onSelect={(key) => { const m = key as PlannerMode; setMode(m); setPicked((p) => (m === "now" ? p.slice(0, 1) : p)); setOpen(null); }}
+          />
 
+          <Dropdown
+            heading="Time / Period"
+            disabled={mode === "now"}
+            open={open === "when"}
+            onToggle={() => setOpen(open === "when" ? null : "when")}
+            value={mode === "now" ? "Right now" : (() => { const p = presets.find((x) => x.key === when); return p ? `${p.label} · ${formatScheduledFor(p.at.toISOString())}` : "Choose a time"; })()}
+            options={presets.map((p) => ({ key: p.key, label: p.label, sub: formatScheduledFor(p.at.toISOString()) }))}
+            selectedKey={when}
+            onSelect={(key) => { setWhen(key); setOpen(null); }}
+          />
+
+          <Text style={styles.heading}>Call type</Text>
           <View style={styles.segment}>
             {(["VIDEO", "AUDIO"] as const).map((k) => (
               <Pressable key={k} onPress={() => setKind(k)} style={[styles.segItem, kind === k && styles.segOn]} accessibilityRole="tab" accessibilityState={{ selected: kind === k }}>
@@ -120,17 +161,6 @@ function PlannerSheet({ visible, initialMode, onClose, onScheduled }: PlannerPro
               </Pressable>
             ))}
           </View>
-
-          {mode === "schedule" ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
-              {presets.map((p) => (
-                <Pressable key={p.key} onPress={() => setWhen(p.key)} style={[styles.chip, when === p.key && styles.chipOn]} accessibilityRole="button" accessibilityState={{ selected: when === p.key }}>
-                  <Text style={[styles.chipLabel, when === p.key && { color: "#fff" }]}>{p.label}</Text>
-                  <Text style={styles.chipSub}>{formatScheduledFor(p.at.toISOString())}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          ) : null}
 
           <Text style={styles.section}>{mode === "now" ? "Who to call" : "Who to invite"}</Text>
           <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
@@ -159,6 +189,16 @@ function PlannerSheet({ visible, initialMode, onClose, onScheduled }: PlannerPro
 }
 
 const styles = StyleSheet.create({
+  field: { marginBottom: 10 },
+  heading: { color: MUTED, fontSize: 12, fontWeight: "700", letterSpacing: 0.8, marginBottom: 6, textTransform: "uppercase" },
+  select: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, backgroundColor: "#0A1935", borderWidth: 1, borderColor: "#203357", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  selectOpen: { borderColor: BLUE },
+  selectText: { flex: 1, color: INK, fontSize: 15, fontWeight: "600" },
+  menu: { marginTop: 6, backgroundColor: "#0A1935", borderWidth: 1, borderColor: "#203357", borderRadius: 12, overflow: "hidden" },
+  menuItem: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 12 },
+  menuItemOn: { backgroundColor: "#0D2347" },
+  menuLabel: { color: INK, fontSize: 15, fontWeight: "600" },
+  menuSub: { color: MUTED, fontSize: 12 },
   backdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(2,10,29,0.7)" },
   dismiss: { flex: 1 },
   sheet: { backgroundColor: "#07142C", borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 18, paddingBottom: 26, maxHeight: "86%", borderColor: "#203357", borderWidth: 1 },
@@ -174,7 +214,7 @@ const styles = StyleSheet.create({
   chipLabel: { color: INK, fontWeight: "600", fontSize: 14 },
   chipSub: { color: MUTED, fontSize: 11, marginTop: 2 },
   section: { color: MUTED, fontSize: 12, fontWeight: "700", letterSpacing: 0.8, marginTop: 10, marginBottom: 4, textTransform: "uppercase" },
-  list: { minHeight: 120, maxHeight: 320 },
+  list: { minHeight: 96, maxHeight: 220 },
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8, paddingHorizontal: 8, borderRadius: 12 },
   rowOn: { backgroundColor: "#0D2347" },
   name: { flex: 1, color: INK, fontSize: 16, fontWeight: "600" },
