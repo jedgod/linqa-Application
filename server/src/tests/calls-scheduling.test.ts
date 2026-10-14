@@ -140,13 +140,14 @@ describe("callable device resolution", () => {
 });
 
 describe("scheduled calls: listing", () => {
-  it("returns only future, still-scheduled calls the user is party to", async () => {
+  it("returns upcoming (or still joinable), still-scheduled calls the user is party to", async () => {
     const { db, statements } = fakePool({ rows: [] });
     await new CallService(db).listScheduled(CALLER);
 
     const sql = statements[0]?.sql ?? "";
     expect(sql).toContain("sc.status = 'SCHEDULED'");
-    expect(sql).toContain("sc.scheduled_for > now()");
+    expect(sql).toContain("sc.scheduled_for > now() - interval '60 minutes'");
+    expect(sql).toContain('AS "joinable"');
     // Invitees must see it too, not just the organizer.
     expect(sql).toContain("sc.organizer_user_id = $1 OR $1 = ANY(sc.participant_user_ids)");
     expect(sql).toContain("ORDER BY sc.scheduled_for ASC");

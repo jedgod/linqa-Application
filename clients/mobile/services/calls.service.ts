@@ -25,8 +25,12 @@ export type ScheduledCall = {
   scheduledFor: string;
   status: string;
   isOrganizer: boolean;
+  organizerUserId: string;
   organizerName: string;
+  participantUserIds: string[];
   participantNames: string[];
+  /** Server-owned: true from 10 minutes before the start until an hour after. */
+  joinable: boolean;
   participantCount: number;
 };
 
@@ -219,6 +223,9 @@ export class CallsService {
         scheduledFor: String(item.scheduledFor),
         status: String(item.status ?? "SCHEDULED"),
         isOrganizer: Boolean(item.isOrganizer),
+        organizerUserId: String(item.organizerUserId ?? ""),
+        participantUserIds: Array.isArray(item.participantUserIds) ? (item.participantUserIds as unknown[]).map((id) => String(id)) : [],
+        joinable: Boolean(item.joinable),
         organizerName: String(item.organizerName ?? "Linqa user"),
         participantNames: Array.isArray(item.participantNames)
           ? (item.participantNames as unknown[]).map((name) => String(name))

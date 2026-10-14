@@ -24,6 +24,7 @@ import { upcomingOf, useMyEvents } from "../../services/my-events";
 import { CallsService, callDateBucket, formatScheduledFor, type CallHistoryItem, type ScheduledCall } from "../../services/calls.service";
 import { CallPlanner, type PlannerMode } from "../../components/calls/CallPlanner";
 import { startSecureCallForPeer } from "../../services/secure-call-rooms";
+import { joinScheduledCallNow } from "../../services/scheduled-call-join";
 import { accessTokenProvider } from "../../services/session";
 import { getApiBaseUrl } from "../../config/api";
 import { useProfile } from "../../hooks/useProfile";
@@ -347,8 +348,11 @@ function ScheduledCalls({ version, onSchedule }: { version: number; onSchedule: 
   useEffect(() => {
     let alive = true;
     const service = new CallsService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
-    service.listScheduled(10).then((rows) => { if (alive) setItems(rows.filter((r) => r.status === "SCHEDULED" && Date.parse(r.scheduledFor) > Date.now() - 10 * 60_000)); }).catch(() => { if (alive) setItems([]); });
-    return () => { alive = false; };
+    const load = () => service.listScheduled(10).then((rows) => { if (alive) setItems(rows.filter((r) => r.status === "SCHEDULED")); }).catch(() => { if (alive) setItems((now) => now ?? []); });
+    void load();
+    // The server owns the join window; asking again every 30 s opens the Join button on time.
+    const timer = setInterval(() => void load(), 30_000);
+    return () => { alive = false; clearInterval(timer); };
   }, [version, refresh]);
 
   const cancel = (id: string) => {
@@ -357,6 +361,10 @@ function ScheduledCalls({ version, onSchedule }: { version: number; onSchedule: 
       { text: "Keep it", style: "cancel" },
       { text: "Cancel call", style: "destructive", onPress: () => void service.cancelScheduled(id).then(() => setRefresh((n) => n + 1)).catch(() => Alert.alert("Not cancelled", "Try again.")) },
     ]);
+  };
+
+  const join = (call: ScheduledCall) => {
+    void joinScheduledCallNow(call).then((problem) => { if (problem) Alert.alert("Call", problem); });
   };
 
   if (!items?.length) {
@@ -388,11 +396,18 @@ function ScheduledCalls({ version, onSchedule }: { version: number; onSchedule: 
                 <Text style={styles.upcomingTitle} numberOfLines={2}>{c.callType === "VIDEO" ? "Video" : "Voice"} call with {who || "your contacts"}</Text>
                 <Text style={styles.upcomingTime}>{formatScheduledFor(c.scheduledFor)}</Text>
               </View>
-              {c.isOrganizer ? (
-                <Pressable onPress={() => cancel(c.id)} hitSlop={10} accessibilityRole="button" accessibilityLabel="Cancel scheduled call">
-                  <Ionicons name="close-circle-outline" size={26} color={COLORS.muted} />
+              <View style={{ alignItems: "center", gap: 8 }}>
+                <Pressable onPress={() => join(c)} disabled={!c.joinable} style={[styles.joinWrap, !c.joinable && { opacity: 0.4 }]} accessibilityRole="button" accessibilityState={{ disabled: !c.joinable }} accessibilityLabel={c.joinable ? "Join call" : "Join opens 10 minutes before the call"}>
+                  <LinearGradient colors={["#11C9EC", "#0879FF"]} style={styles.joinButton}>
+                    <Text style={styles.joinText}>Join</Text>
+                  </LinearGradient>
                 </Pressable>
-              ) : null}
+                {c.isOrganizer ? (
+                  <Pressable onPress={() => cancel(c.id)} hitSlop={10} accessibilityRole="button" accessibilityLabel="Cancel scheduled call">
+                    <Ionicons name="close-circle-outline" size={22} color={COLORS.muted} />
+                  </Pressable>
+                ) : null}
+              </View>
             </View>
           </View>
         );

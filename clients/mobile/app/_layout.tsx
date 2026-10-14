@@ -29,6 +29,7 @@ import { createSessionRefresher } from "../services/session-refresh";
 import { useTheme } from "../theme/tokens";
 import { getApiBaseUrl } from "../config/api";
 import { CallOverlay } from "../components/calls/CallOverlay";
+import { ScheduledCallToast } from "../components/calls/ScheduledCallToast";
 import { startIncomingCallListener } from "../services/incoming-call-listener";
 
 const sessionStore = new AccountSessionStore(new AccountSecureStorage());
@@ -65,7 +66,7 @@ function CallHost() {
     if (!loaded || !active) return;
     return startIncomingCallListener();
   }, [active, loaded]);
-  return <><CallOverlay /><SecureCallHost /><HistoryTransferHost /></>;
+  return <><CallOverlay /><SecureCallHost /><HistoryTransferHost /><ScheduledCallToast /></>;
 }
 
 export default function RootLayout() {

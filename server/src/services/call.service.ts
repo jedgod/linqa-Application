@@ -182,8 +182,9 @@ export class CallService {
 
   /**
    * Upcoming scheduled calls the user is party to, as organizer or invitee.
-   * Only future, still-SCHEDULED entries: this backs a "what's next" view, not
-   * an audit log.
+   * Still-SCHEDULED entries that are upcoming or whose join window is still open
+   * (a call stays listed for an hour after its start): this backs a "what's next"
+   * view, not an audit log.
    */
   async listScheduled(userId: string, limit = 50) {
     const result = await this.db.query(
@@ -195,6 +196,10 @@ export class CallService {
          sc.status,
          sc.created_at       AS "createdAt",
          (sc.organizer_user_id = $1) AS "isOrganizer",
+         sc.organizer_user_id AS "organizerUserId",
+         sc.participant_user_ids AS "participantUserIds",
+         -- The join window belongs to the server: opens 10 minutes before the start and closes an hour after.
+         (now() >= sc.scheduled_for - interval '10 minutes' AND now() <= sc.scheduled_for + interval '60 minutes') AS "joinable",
          COALESCE(organizer.display_name, 'Linqa user') AS "organizerName",
          COALESCE(
            (SELECT array_agg(COALESCE(p.display_name, 'Linqa user') ORDER BY p.display_name)
@@ -206,7 +211,7 @@ export class CallService {
        FROM scheduled_calls sc
        LEFT JOIN user_profiles organizer ON organizer.user_id = sc.organizer_user_id
        WHERE sc.status = 'SCHEDULED'
-         AND sc.scheduled_for > now()
+         AND sc.scheduled_for > now() - interval '60 minutes'
          AND (sc.organizer_user_id = $1 OR $1 = ANY(sc.participant_user_ids))
        ORDER BY sc.scheduled_for ASC
        LIMIT $2`,
