@@ -3,6 +3,7 @@
 // message goes through MLS like any text. Render {flow.overlays} once on the
 // conversation screen and call flow.open() from the attach button.
 
+import { ModalSafe } from "../../../components/common/ModalSafe";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Modal } from "react-native";
 import { AttachAction, AttachSheet, ChatFeatures } from "./AttachSheet";
@@ -82,6 +83,12 @@ export function useAttachFlow(o: Options) {
     [o.attachments, sendContent, o.onUploadProgress]
   );
 
+  // A system picker that was dismissed without choosing anything leads back to the "Share with" sheet.
+  const sendOrReopen = useCallback(async (inputs: PrepareInput[]) => {
+    if (!inputs.length) { if (liveRef.current) setSheet(true); return; }
+    await sendFiles(inputs);
+  }, [sendFiles]);
+
   const pick = useCallback(
     async (a: AttachAction) => {
       if (!liveRef.current || (o.allowedActions && !o.allowedActions.includes(a))) return;
@@ -89,14 +96,14 @@ export function useAttachFlow(o: Options) {
       if (o.onCapture && ["photos", "camera", "video", "voice", "design"].includes(a)) return o.onCapture(a === "photos" ? "GALLERY" : a === "camera" ? "PHOTO" : a === "video" ? "VIDEO" : a === "design" ? "DESIGN" : "VOICE");
       switch (a) {
         case "photos":
-          return sendFiles(await pickPhotos());
+          return sendOrReopen(await pickPhotos());
         case "camera":
         case "video":
-          return sendFiles(await takePhotoOrVideo());
+          return sendOrReopen(await takePhotoOrVideo());
         case "document":
-          return sendFiles(await pickDocuments());
+          return sendOrReopen(await pickDocuments());
         case "design":
-          return sendFiles(await pickPhotos());
+          return sendOrReopen(await pickPhotos());
         case "screen":
           return o.onStartLive({ sessionId: newId("live"), screen: true });
         case "whiteboard":
@@ -105,7 +112,7 @@ export function useAttachFlow(o: Options) {
           setComposer(a);
       }
     },
-    [sendFiles, o.onStartLive, o.onCapture, o.allowedActions]
+    [sendFiles, sendOrReopen, o.onStartLive, o.onCapture, o.allowedActions]
   );
 
   const done = async (content: MessageContent) => {
@@ -119,7 +126,10 @@ export function useAttachFlow(o: Options) {
     await sendFiles([input]);
     setComposer(null);
   };
-  const cancel = () => setComposer(null);
+  // Leaving a page without sending (Cancel, Back, the system back button) returns to the "Share with" sheet it was opened from.
+  const reopenSheet = useCallback(() => { if (liveRef.current) setSheet(true); }, []);
+  const cancel = () => { setComposer(null); reopenSheet(); };
+  const sentProtected = useRef(false);
 
   // Returned as an element (not a component) so composers keep their state across re-renders.
   const overlays = (
@@ -138,11 +148,12 @@ export function useAttachFlow(o: Options) {
           visible={composer === "protected"}
           recipientId={o.peerId}
           conversationId={o.conversationId}
-          onSent={async (payload) => { await sendContent(payload); }}
-          onClose={cancel}
+          onSent={async (payload) => { await sendContent(payload); sentProtected.current = true; }}
+          onClose={() => { if (sentProtected.current) { sentProtected.current = false; setComposer(null); } else cancel(); }}
         />
       ) : null}
-      <Modal visible={composer !== null && composer !== "protected"} animationType="slide" presentationStyle="fullScreen" onRequestClose={cancel}>
+      <Modal visible={composer !== null && composer !== "protected"} animationType="slide" presentationStyle="fullScreen" onRequestClose={cancel} navigationBarTranslucent>
+        <ModalSafe>
         {composer === "poll" ? <PollComposer onSend={done} onCancel={cancel} /> : null}
         {composer === "event" ? <ScheduleComposer initialKind="Event" onSend={done} onCancel={cancel} /> : null}
         {composer === "meeting" ? <ScheduleComposer initialKind="Meeting" onSend={done} onCancel={cancel} /> : null}
@@ -152,12 +163,14 @@ export function useAttachFlow(o: Options) {
         {composer === "ai" ? (
           <AiImageComposer provider={o.aiProvider} consented={o.aiConsented} onConsent={o.onAiConsent} onSend={doneFile} onCancel={cancel} />
         ) : null}
+        </ModalSafe>
       </Modal>
     </>
   );
 
   return {
     open: () => o.live && setSheet(true),
+    reopen: reopenSheet,
     pickAction: (action: AttachAction) => pick(action),
     sendContent,
     sendFiles,

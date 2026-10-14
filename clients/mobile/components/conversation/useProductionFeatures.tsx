@@ -138,7 +138,7 @@ export function useProductionFeatures(o: {
     void flow.pickAction("ai").catch(() => Alert.alert("Couldn't open", "Try again after unlocking secure messaging."));
   };
   return {
-    open: flow.open, openAI, featureSupport,
+    open: flow.open, reopen: flow.reopen, openAI, featureSupport,
     render: (item: Extract<TimelineItem, {kind:"feature"}>) => <View style={{ padding: 12, alignItems: item.message.outgoing ? "flex-end" : "flex-start" }}>
       <ContentBubble message={{ id: item.message.id, senderId: item.message.senderId, sentAt: item.message.sentAt, outgoing: item.message.outgoing, content: item.payload.content }} index={index} selfId={o.selfId} peerName={o.peerName} nameOf={id => id === o.selfId ? "You" : o.peerName} attachments={attachments} send={async content => { await flow.sendContent(content); }} onOpenFile={file => { if (liveRef.current) setFile(file); }} onJoinLive={id => {
         if (sessionRef.current) return;

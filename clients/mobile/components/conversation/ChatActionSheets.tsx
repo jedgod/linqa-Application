@@ -1,3 +1,4 @@
+import { BottomInsetSpacer, ModalSafe } from "../common/ModalSafe";
 import React, { useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import type { Theme } from "../../services/conversation-engine";
@@ -11,13 +12,16 @@ const CATEGORIES: Array<{ id: ReportCategory; label: string }> = [
 
 function Sheet({ visible, theme: t, title, onClose, children }: { visible: boolean; theme: Theme; title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
+      <ModalSafe>
       <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,.4)" }}>
-        <View style={{ backgroundColor: t.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 36, maxHeight: "85%" }}>
+        <View style={{ backgroundColor: t.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 8, maxHeight: "85%" }}>
           <Text accessibilityRole="header" style={{ color: t.ink, fontSize: 20, fontWeight: "700", marginBottom: 12 }}>{title}</Text>
           {children}
+          <BottomInsetSpacer min={0} extra={8} />
         </View>
       </View>
+      </ModalSafe>
     </Modal>
   );
 }

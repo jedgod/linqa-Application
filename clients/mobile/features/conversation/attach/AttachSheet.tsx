@@ -1,6 +1,7 @@
 // The "+" menu. Shows only the features turned on for this chat in
 // Conversation settings > Chat features.
 
+import { BottomInsetSpacer, ModalSafe } from "../../../components/common/ModalSafe";
 import React from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import Svg, { Path } from "react-native-svg";
@@ -53,7 +54,8 @@ interface Props {
 export function AttachSheet({ visible, peerName, features, onPick, onCustomize, onClose, allowedActions }: Props) {
   const tiles = TILES.filter((t) => features[t.feature] && (!allowedActions || allowedActions.includes(t.action)));
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
+      <ModalSafe>
       <Pressable style={styles.scrim} onPress={onClose} accessibilityLabel="Close menu" />
       <View style={styles.sheet} accessibilityViewIsModal>
         <View style={styles.grip} />
@@ -78,14 +80,16 @@ export function AttachSheet({ visible, peerName, features, onPick, onCustomize, 
         <Text style={styles.note}>
           Everything here is encrypted on your phone before it's sent.{features.ai ? " AI image prompts are the one exception." : ""}
         </Text>
+        <BottomInsetSpacer min={0} extra={0} />
       </View>
+      </ModalSafe>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   scrim: { flex: 1, backgroundColor: "rgba(20,27,34,0.45)" },
-  sheet: { backgroundColor: c.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: space.l, paddingBottom: 34, paddingTop: space.s, gap: space.l },
+  sheet: { backgroundColor: c.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: space.l, paddingBottom: 6, paddingTop: space.s, gap: space.l },
   grip: { alignSelf: "center", width: 40, height: 5, borderRadius: 3, backgroundColor: c.line },
   head: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   title: { fontSize: 17, fontWeight: "600", color: c.ink },

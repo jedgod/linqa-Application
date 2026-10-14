@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { palette as c, space } from "./tokens";
+import { BottomInsetSpacer } from "../../../components/common/ModalSafe";
 
 /** Header with Cancel, scrollable body, sticky primary button. Used by every composer. */
 export function FormShell(props: {
@@ -46,6 +47,7 @@ export function FormShell(props: {
         >
           <Text style={[styles.ctaText, props.ctaDisabled && { color: c.muted }]}>{props.cta}</Text>
         </Pressable>
+        <BottomInsetSpacer min={0} extra={0} />
       </View>
     </KeyboardAvoidingView>
   );
@@ -74,7 +76,7 @@ const styles = StyleSheet.create({
   cancelText: { fontSize: 16, color: c.ink },
   title: { flex: 1, textAlign: "center", fontSize: 17, fontWeight: "600", color: c.ink },
   body: { flex: 1 },
-  footer: { backgroundColor: c.surface, padding: space.l, paddingBottom: 34, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.line },
+  footer: { backgroundColor: c.surface, padding: space.l, paddingBottom: space.m, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.line },
   cta: { height: 48, borderRadius: 24, backgroundColor: c.secure, alignItems: "center", justifyContent: "center" },
   ctaOff: { backgroundColor: c.line },
   ctaText: { color: "#fff", fontSize: 16, fontWeight: "600" },

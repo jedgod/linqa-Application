@@ -81,6 +81,10 @@ export function ConversationScreen(props: ConversationScreenProps) {
   // The lane picker is not on this screen yet, so the lane stays All; typed as Lane so the other branches stay checked.
   const [lane] = useState<Lane>("All");
   const [capture, setCapture] = useState<CaptureKind | null>(null);
+  // Pages opened from the "Share with" sheet (Customize, capture panels) lead back to it unless something was attached or sent.
+  const returnToShare = useRef(false);
+  const captureDone = useRef(false);
+  const captureFromShare = useRef(false);
   // A photo or video waits in the composer (with an optional caption) until it is sent or removed. Everything here is scoped to
   // this account and conversation, and a lock or a switch throws the draft away.
   const scopeKey = JSON.stringify([selfId, conversationId]);
@@ -160,7 +164,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
   const canUseActions = live && !blocked;
   const features = useProductionFeatures({ conversationId, selfId, peerId: peer.id, peerName: peer.displayName, service, live: canUseActions, prefs, messages: c.messages,
     send: (payload, id) => canUseActions ? c.send(payload, id) : Promise.resolve(false), retry: c.retry, discard: c.discard,
-    onSettings: () => setView("settings"), onCapture: setCapture });
+    onSettings: () => { returnToShare.current = true; setView("settings"); }, onCapture: kind => { captureFromShare.current = true; setCapture(kind); } });
   const pickAction = useCallback((action: ThreadAction) => {
     if (["VOICE", "VIDEO", "PHOTO", "DESIGN"].includes(action)) { setCapture(action as CaptureKind); }
     else if (action === "POLL") { setStartDecision(true); setView("decisions"); }
@@ -224,7 +228,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
     return (
       <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}
         {noticeEl}
-        <SettingsView theme={t} peerName={peer.displayName} peerId={peer.id} peerFirstName={firstName} gate={c.gateState} prefs={prefs} featureSupport={features.featureSupport} blocked={Boolean(blocked)} pinned={props.pinned} disappearAfterSeconds={props.disappearAfterSeconds} onPinnedChange={props.onPinnedChange} onDisappearChange={props.onDisappearChange} onChange={props.onPrefsChange} onVerify={() => setView("verify")} onBlock={confirmBlock} onUnblock={props.onUnblock} onAskAi={props.onAskAi && live ? askAi : undefined} chat={props.chatActions} onBack={() => setView("chat")} />
+        <SettingsView theme={t} peerName={peer.displayName} peerId={peer.id} peerFirstName={firstName} gate={c.gateState} prefs={prefs} featureSupport={features.featureSupport} blocked={Boolean(blocked)} pinned={props.pinned} disappearAfterSeconds={props.disappearAfterSeconds} onPinnedChange={props.onPinnedChange} onDisappearChange={props.onDisappearChange} onChange={props.onPrefsChange} onVerify={() => setView("verify")} onBlock={confirmBlock} onUnblock={props.onUnblock} onAskAi={props.onAskAi && live ? askAi : undefined} chat={props.chatActions} onBack={() => { setView("chat"); if (returnToShare.current) { returnToShare.current = false; features.reopen(); } }} />
       </SafeAreaView>
     );
   }
@@ -232,7 +236,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
   return (
     <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>
       {statusBar}
-      <ConversationHeader peer={peer} gate={c.gateState} theme={t} blocked={Boolean(blocked)} onBack={props.onBack} onOpenSettings={() => setView("settings")} onSearch={() => { setSearchOpen(true); setSelecting(false); }} onCall={props.onCall} />
+      <ConversationHeader peer={peer} gate={c.gateState} theme={t} blocked={Boolean(blocked)} onBack={props.onBack} onOpenSettings={() => { returnToShare.current = false; setView("settings"); }} onSearch={() => { setSearchOpen(true); setSelecting(false); }} onCall={props.onCall} />
 
       {searchOpen ? <View style={{ flexDirection: "row", backgroundColor: t.surface, padding: 10, alignItems: "center", gap: 10 }}><TextInput autoFocus accessibilityLabel="Search opened messages" value={search} onChangeText={setSearch} placeholder="Search messages" placeholderTextColor={t.muted} style={{ flex: 1, color: t.ink, padding: 8 }} /><Pressable onPress={() => { setSearchOpen(false); setSearch(""); }}><Text style={{ color: t.accent, padding: 10 }}>Done</Text></Pressable></View> : null}
       {selecting ? <View style={{ flexDirection: "row", justifyContent: "space-between", padding: 12, backgroundColor: t.surface }}><Text style={{ color: t.ink }}>{selected.length} selected</Text><Pressable onPress={() => void copySelection()}><Text style={{ color: t.accent }}>Copy text</Text></Pressable><Pressable onPress={() => { setSelecting(false); setSelected([]); }}><Text style={{ color: t.accent }}>Done</Text></Pressable></View> : null}
@@ -286,7 +290,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
           </>
         )}
       </KeyboardAvoidingView>
-      {capture ? <CapturePanel key={scopeKey + capture} onAttach={capture === "PHOTO" || capture === "VIDEO" || capture === "GALLERY" ? payload => { removeMedia(); draftRef.current = payload; setMediaDraft(payload); } : undefined} kind={capture} theme={t} canSend={canUseActions} onSend={create} onClose={() => setCapture(null)} /> : null}
+      {capture ? <CapturePanel key={scopeKey + capture} onAttach={capture === "PHOTO" || capture === "VIDEO" || capture === "GALLERY" ? payload => { captureDone.current = true; removeMedia(); draftRef.current = payload; setMediaDraft(payload); } : undefined} kind={capture} theme={t} canSend={canUseActions} onSend={async payload => { captureDone.current = true; return create(payload); }} onClose={() => { setCapture(null); if (captureFromShare.current && !captureDone.current) features.reopen(); captureDone.current = false; captureFromShare.current = false; }} /> : null}
       {features.overlays}
       <AddSheet localActions={["VOICE", "VIDEO", "PHOTO", "DESIGN"]} visible={addOpen} theme={t} enabled={prefs.features} canUse={canUseActions} onPick={pickAction} onClose={() => setAddOpen(false)} />
     </SafeAreaView>
