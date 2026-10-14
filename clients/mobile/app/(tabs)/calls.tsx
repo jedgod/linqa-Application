@@ -21,7 +21,9 @@ import { LinearGradient } from "../../components/LinearGradient";
 import { RecordingsSection } from "../../components/calls/RecordingsSection";
 import { useRouter } from "expo-router";
 import { upcomingOf, useMyEvents } from "../../services/my-events";
-import { CallsService, callDateBucket, type CallHistoryItem } from "../../services/calls.service";
+import { CallsService, callDateBucket, formatScheduledFor, type CallHistoryItem, type ScheduledCall } from "../../services/calls.service";
+import { CallPlanner, type PlannerMode } from "../../components/calls/CallPlanner";
+import { startSecureCallForPeer } from "../../services/secure-call-rooms";
 import { accessTokenProvider } from "../../services/session";
 import { getApiBaseUrl } from "../../config/api";
 import { useProfile } from "../../hooks/useProfile";
@@ -127,8 +129,14 @@ export default function CallsScreen() {
     });
   }, [filter, query, history]);
 
-  const startCall = (name = "a contact", kind: "audio" | "video" = "audio") => {
-    Alert.alert(kind === "video" ? "Video call" : "New call", `Starting ${kind} call with ${name}.`);
+  const [planner, setPlanner] = useState<PlannerMode | null>(null);
+  const [scheduleVersion, setScheduleVersion] = useState(0);
+
+  const startCall = (call: Call, kind: "audio" | "video") => {
+    if (!call.peerUserId) return;
+    void startSecureCallForPeer(call.peerUserId, kind === "video" ? "VIDEO" : "AUDIO").then((problem) => {
+      if (problem) Alert.alert("Call", problem);
+    });
   };
 
   return (
@@ -143,19 +151,19 @@ export default function CallsScreen() {
             photoUri={myPhoto}
             onPhoto={() => (myPhoto ? setZoom({ uri: myPhoto, name: "Your" }) : router.push("/account/manage" as never))}
             onSearch={() => setSearchOpen(true)}
-            onSchedule={() => Alert.alert("Schedule", "Open the call scheduler here.")}
+            onSchedule={() => setPlanner("schedule")}
           />
 
           <Hero
             scale={scale}
-            onNewCall={() => startCall()}
-            onSchedule={() => Alert.alert("Schedule call", "Choose contacts and a time.")}
+            onNewCall={() => setPlanner("now")}
+            onSchedule={() => setPlanner("schedule")}
           />
 
           <FilterBar selected={filter} onChange={setFilter} />
 
           <SectionTitle title="Upcoming" />
-          <MyUpcoming fallback={<UpcomingCard onJoin={() => startCall("Global Team Sync", "video")} />} />
+          <MyUpcoming fallback={<ScheduledCalls version={scheduleVersion} onSchedule={() => setPlanner("schedule")} />} />
 
           <View style={styles.recentHeading}>
             <SectionTitle title="Recent calls" compact />
@@ -171,8 +179,8 @@ export default function CallsScreen() {
                   key={call.id}
                   call={call}
                   last={index === visibleCalls.length - 1}
-                  onAudio={() => startCall(call.name)}
-                  onVideo={() => startCall(call.name, "video")}
+                  onAudio={() => startCall(call, "audio")}
+                  onVideo={() => startCall(call, "video")}
                   onPhoto={() => call.photoUrl && setZoom({ uri: call.photoUrl, name: call.name })}
                 />
               ))
@@ -199,6 +207,7 @@ export default function CallsScreen() {
         onChange={setQuery}
         onClose={() => setSearchOpen(false)}
       />
+      <CallPlanner visible={planner !== null} initialMode={planner ?? "now"} onClose={() => setPlanner(null)} onScheduled={() => setScheduleVersion((v) => v + 1)} />
       <PhotoZoom uri={zoom?.uri} name={zoom?.name ?? ""} visible={!!zoom} onClose={() => setZoom(null)} />
     </View>
   );
@@ -332,31 +341,63 @@ function MyUpcoming({ fallback }: { fallback: React.ReactElement }) {
   );
 }
 
-function UpcomingCard({ onJoin }: { onJoin: () => void }) {
-  const people = [AVATARS.p1, AVATARS.p2, AVATARS.p3, AVATARS.p4];
-  return (
-    <Pressable onPress={onJoin} accessibilityRole="button" accessibilityLabel="Join Global Team Sync call">
-      <View style={styles.upcomingCard}>
-        <LinearGradient colors={["#245EDA", "#172C9B"]} style={styles.groupAvatar}>
-          <Ionicons name="people" size={33} color="#FFFFFF" />
-        </LinearGradient>
-        <View style={styles.upcomingCopy}>
-          <Text style={styles.upcomingTitle}>Global Team Sync</Text>
-          <Text style={styles.upcomingTime}>Today · 8:30 PM</Text>
-          <View style={styles.participants}>
-            {people.map((source, index) => (
-              <Image key={index} source={source} style={[styles.participant, index > 0 && styles.participantOverlap]} />
-            ))}
-            <View style={[styles.morePeople, styles.participantOverlap]}><Text style={styles.morePeopleText}>+3</Text></View>
+function ScheduledCalls({ version, onSchedule }: { version: number; onSchedule: () => void }) {
+  const [items, setItems] = useState<ScheduledCall[] | null>(null);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const service = new CallsService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
+    service.listScheduled(10).then((rows) => { if (alive) setItems(rows.filter((r) => r.status === "SCHEDULED" && Date.parse(r.scheduledFor) > Date.now() - 10 * 60_000)); }).catch(() => { if (alive) setItems([]); });
+    return () => { alive = false; };
+  }, [version, refresh]);
+
+  const cancel = (id: string) => {
+    const service = new CallsService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
+    Alert.alert("Cancel this call?", "The people invited will no longer see it.", [
+      { text: "Keep it", style: "cancel" },
+      { text: "Cancel call", style: "destructive", onPress: () => void service.cancelScheduled(id).then(() => setRefresh((n) => n + 1)).catch(() => Alert.alert("Not cancelled", "Try again.")) },
+    ]);
+  };
+
+  if (!items?.length) {
+    return (
+      <Pressable onPress={onSchedule} accessibilityRole="button" accessibilityLabel="Schedule a call">
+        <View style={styles.upcomingCard}>
+          <View style={[styles.groupAvatar, { backgroundColor: "#245EDA", alignItems: "center", justifyContent: "center" }]}>
+            <Ionicons name="calendar-outline" size={30} color="#FFFFFF" />
+          </View>
+          <View style={styles.upcomingCopy}>
+            <Text style={styles.upcomingTitle}>{items === null ? "Loading…" : "No calls scheduled"}</Text>
+            <Text style={styles.upcomingTime}>Tap to schedule one</Text>
           </View>
         </View>
-        <Pressable onPress={onJoin} style={styles.joinWrap}>
-          <LinearGradient colors={["#11C9EC", "#0879FF"]} style={styles.joinButton}>
-            <Text style={styles.joinText}>Join</Text>
-          </LinearGradient>
-        </Pressable>
-      </View>
-    </Pressable>
+      </Pressable>
+    );
+  }
+  return (
+    <View>
+      {items.slice(0, 3).map((c) => {
+        const who = c.isOrganizer ? c.participantNames.join(", ") : c.organizerName;
+        return (
+          <View key={c.id} style={{ marginBottom: 8 }}>
+            <View style={styles.upcomingCard}>
+              <View style={[styles.groupAvatar, { backgroundColor: "#245EDA", alignItems: "center", justifyContent: "center" }]}>
+                <Ionicons name={c.callType === "VIDEO" ? "videocam" : "call"} size={30} color="#FFFFFF" />
+              </View>
+              <View style={styles.upcomingCopy}>
+                <Text style={styles.upcomingTitle} numberOfLines={2}>{c.callType === "VIDEO" ? "Video" : "Voice"} call with {who || "your contacts"}</Text>
+                <Text style={styles.upcomingTime}>{formatScheduledFor(c.scheduledFor)}</Text>
+              </View>
+              {c.isOrganizer ? (
+                <Pressable onPress={() => cancel(c.id)} hitSlop={10} accessibilityRole="button" accessibilityLabel="Cancel scheduled call">
+                  <Ionicons name="close-circle-outline" size={26} color={COLORS.muted} />
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        );
+      })}
+    </View>
   );
 }
 

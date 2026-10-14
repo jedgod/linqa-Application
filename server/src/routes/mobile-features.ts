@@ -79,6 +79,22 @@ export async function registerMobileFeatureRoutes(
         return reply.code(400).send({ error: "scheduled_time_in_past" });
       }
 
+      // Only people the organizer is connected to (a saved contact or a shared chat) can be invited, and never a blocked one.
+      const invitees = [...new Set(body.participantUserIds)].filter((id) => id !== principal.userId);
+      const allowed = invitees.length
+        ? await db.query(
+            `SELECT p.id FROM unnest($2::uuid[]) AS p(id)
+              WHERE NOT EXISTS (SELECT 1 FROM blocked_users b
+                      WHERE (b.blocker_user_id = $1 AND b.blocked_user_id = p.id) OR (b.blocker_user_id = p.id AND b.blocked_user_id = $1))
+                AND (EXISTS (SELECT 1 FROM chat_contacts cc WHERE cc.owner_user_id = $1 AND cc.contact_user_id = p.id)
+                  OR EXISTS (SELECT 1 FROM conversation_members mine JOIN conversation_members peer ON peer.conversation_id = mine.conversation_id
+                       WHERE mine.user_id = $1 AND mine.removed_at IS NULL AND peer.user_id = p.id AND peer.removed_at IS NULL))`,
+            [principal.userId, invitees])
+        : { rows: [] as Array<{ id: string }> };
+      if (!invitees.length || allowed.rows.length !== invitees.length) {
+        return reply.code(403).send({ error: "participant_not_connected" });
+      }
+
       const result = await db.query(
         `INSERT INTO scheduled_calls (
            organizer_user_id,participant_user_ids,call_type,
