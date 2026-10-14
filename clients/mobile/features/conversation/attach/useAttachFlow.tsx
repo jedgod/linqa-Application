@@ -127,7 +127,8 @@ export function useAttachFlow(o: Options) {
     setComposer(null);
   };
   // Leaving a page without sending (Cancel, Back, the system back button) returns to the "Share with" sheet it was opened from.
-  const reopenSheet = useCallback(() => { if (liveRef.current) setSheet(true); }, []);
+  // Reopened a moment after the page above it has finished closing: two sheets changing at once can drop the second one.
+  const reopenSheet = useCallback(() => { setTimeout(() => { if (liveRef.current) setSheet(true); }, 350); }, []);
   const cancel = () => { setComposer(null); reopenSheet(); };
   const sentProtected = useRef(false);
 
