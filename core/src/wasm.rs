@@ -49,28 +49,42 @@ struct CallSealRequest {
     aad: Vec<u8>,
 }
 #[derive(Deserialize)]
-struct CallOpenRequest { sealed: Vec<u8>, aad: Vec<u8> }
+struct CallOpenRequest {
+    sealed: Vec<u8>,
+    aad: Vec<u8>,
+}
 #[derive(Deserialize)]
-struct CallSignRequest { message: Vec<u8> }
+struct CallSignRequest {
+    message: Vec<u8>,
+}
 
 #[no_mangle]
 pub extern "C" fn linqa_core_call_seal(handle: u32, pointer: u32, length: u32) -> u64 {
     match read_json::<CallSealRequest>(pointer, length) {
-        Ok(r) => with_core(handle, |c| c.seal_call_key(r.x25519, r.mlkem768, &r.plaintext, &r.aad).map_err(crate::LinqaError::InvalidInput)),
+        Ok(r) => with_core(handle, |c| {
+            c.seal_call_key(r.x25519, r.mlkem768, &r.plaintext, &r.aad)
+                .map_err(crate::LinqaError::InvalidInput)
+        }),
         Err(e) => respond::<Vec<u8>>(Err(e)),
     }
 }
 #[no_mangle]
 pub extern "C" fn linqa_core_call_open(handle: u32, pointer: u32, length: u32) -> u64 {
     match read_json::<CallOpenRequest>(pointer, length) {
-        Ok(r) => with_core(handle, |c| c.open_call_key(&r.sealed, &r.aad).map_err(crate::LinqaError::InvalidInput)),
+        Ok(r) => with_core(handle, |c| {
+            c.open_call_key(&r.sealed, &r.aad)
+                .map_err(crate::LinqaError::InvalidInput)
+        }),
         Err(e) => respond::<Vec<u8>>(Err(e)),
     }
 }
 #[no_mangle]
 pub extern "C" fn linqa_core_call_sign(handle: u32, pointer: u32, length: u32) -> u64 {
     match read_json::<CallSignRequest>(pointer, length) {
-        Ok(r) => with_core(handle, |c| c.sign_call_message(&r.message).map_err(crate::LinqaError::InvalidInput)),
+        Ok(r) => with_core(handle, |c| {
+            c.sign_call_message(&r.message)
+                .map_err(crate::LinqaError::InvalidInput)
+        }),
         Err(e) => respond::<Vec<u8>>(Err(e)),
     }
 }
@@ -247,7 +261,9 @@ pub extern "C" fn linqa_core_decrypt(handle: u32, pointer: u32, length: u32) -> 
 #[no_mangle]
 pub extern "C" fn linqa_verify_key_package(pointer: u32, length: u32) -> u64 {
     match read_json::<VerifyKeyPackageRequest>(pointer, length) {
-        Ok(request) => respond(validate_key_package(&request.package, request.now_unix).map(|_| true)),
+        Ok(request) => {
+            respond(validate_key_package(&request.package, request.now_unix).map(|_| true))
+        }
         Err(error) => respond::<bool>(Err(error)),
     }
 }

@@ -96,22 +96,63 @@ impl NativeSecureCore {
             .map_err(|_| NativeCoreError::AuthenticationFailed)
     }
 
-    pub fn seal_call_key(&self, x25519: String, mlkem768: String, plaintext: String, aad: String) -> Result<String, NativeCoreError> {
-        let decode = |s: String| { if s.len() > 90000 { return Err(NativeCoreError::InvalidInput); } STANDARD.decode(s).map_err(|_| NativeCoreError::InvalidInput) };
-        let classical: [u8;32] = decode(x25519)?.try_into().map_err(|_| NativeCoreError::InvalidInput)?;
-        let result = self.inner.seal_call_key(classical,decode(mlkem768)?,&decode(plaintext)?,&decode(aad)?).map_err(|_| NativeCoreError::AuthenticationFailed)?;
+    pub fn seal_call_key(
+        &self,
+        x25519: String,
+        mlkem768: String,
+        plaintext: String,
+        aad: String,
+    ) -> Result<String, NativeCoreError> {
+        let decode = |s: String| {
+            if s.len() > 90000 {
+                return Err(NativeCoreError::InvalidInput);
+            }
+            STANDARD
+                .decode(s)
+                .map_err(|_| NativeCoreError::InvalidInput)
+        };
+        let classical: [u8; 32] = decode(x25519)?
+            .try_into()
+            .map_err(|_| NativeCoreError::InvalidInput)?;
+        let result = self
+            .inner
+            .seal_call_key(
+                classical,
+                decode(mlkem768)?,
+                &decode(plaintext)?,
+                &decode(aad)?,
+            )
+            .map_err(|_| NativeCoreError::AuthenticationFailed)?;
         Ok(STANDARD.encode(result))
     }
     pub fn open_call_key(&self, sealed: String, aad: String) -> Result<String, NativeCoreError> {
-        if sealed.len() > 90000 || aad.len() > 1024 { return Err(NativeCoreError::InvalidInput); }
-        let sealed = STANDARD.decode(sealed).map_err(|_| NativeCoreError::InvalidInput)?;
-        let aad = STANDARD.decode(aad).map_err(|_| NativeCoreError::InvalidInput)?;
-        Ok(STANDARD.encode(self.inner.open_call_key(&sealed,&aad).map_err(|_| NativeCoreError::AuthenticationFailed)?))
+        if sealed.len() > 90000 || aad.len() > 1024 {
+            return Err(NativeCoreError::InvalidInput);
+        }
+        let sealed = STANDARD
+            .decode(sealed)
+            .map_err(|_| NativeCoreError::InvalidInput)?;
+        let aad = STANDARD
+            .decode(aad)
+            .map_err(|_| NativeCoreError::InvalidInput)?;
+        Ok(STANDARD.encode(
+            self.inner
+                .open_call_key(&sealed, &aad)
+                .map_err(|_| NativeCoreError::AuthenticationFailed)?,
+        ))
     }
     pub fn sign_call_message(&self, message: String) -> Result<String, NativeCoreError> {
-        if message.len() > 90000 { return Err(NativeCoreError::InvalidInput); }
-        let message = STANDARD.decode(message).map_err(|_| NativeCoreError::InvalidInput)?;
-        Ok(STANDARD.encode(self.inner.sign_call_message(&message).map_err(|_| NativeCoreError::InvalidInput)?))
+        if message.len() > 90000 {
+            return Err(NativeCoreError::InvalidInput);
+        }
+        let message = STANDARD
+            .decode(message)
+            .map_err(|_| NativeCoreError::InvalidInput)?;
+        Ok(STANDARD.encode(
+            self.inner
+                .sign_call_message(&message)
+                .map_err(|_| NativeCoreError::InvalidInput)?,
+        ))
     }
 
     pub fn encrypt_message(&self, request_json: String) -> Result<String, NativeCoreError> {

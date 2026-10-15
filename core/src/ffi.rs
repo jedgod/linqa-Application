@@ -95,16 +95,37 @@ impl FfiCore {
         self.secrets.public_identity().pq_encryption_public_key
     }
 
-    pub fn seal_call_key(&self, x25519: [u8;32], mlkem768: Vec<u8>, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, &'static str> {
-        crate::call_crypto::seal(&crate::crypto::hybrid_kem::HybridPublicKey { classical:x25519, pq:mlkem768 }, plaintext, aad)
+    pub fn seal_call_key(
+        &self,
+        x25519: [u8; 32],
+        mlkem768: Vec<u8>,
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>, &'static str> {
+        crate::call_crypto::seal(
+            &crate::crypto::hybrid_kem::HybridPublicKey {
+                classical: x25519,
+                pq: mlkem768,
+            },
+            plaintext,
+            aad,
+        )
     }
     pub fn open_call_key(&self, sealed: &[u8], aad: &[u8]) -> Result<Vec<u8>, &'static str> {
-        let secret = crate::crypto::hybrid_kem::HybridSecretKey { classical:self.secrets.encryption_secret().to_bytes(), pq:self.secrets.pq_encryption_secret().to_vec() };
-        crate::call_crypto::open(&secret,sealed,aad)
+        let secret = crate::crypto::hybrid_kem::HybridSecretKey {
+            classical: self.secrets.encryption_secret().to_bytes(),
+            pq: self.secrets.pq_encryption_secret().to_vec(),
+        };
+        crate::call_crypto::open(&secret, sealed, aad)
     }
     pub fn sign_call_message(&self, message: &[u8]) -> Result<Vec<u8>, &'static str> {
         use ed25519_dalek::Signer;
-        if message.len() > 65536 || !(message.starts_with(b"linqa-call-env-v1{") || message.starts_with(b"linqa-call-sig-v1{")) { return Err("invalid call signing context"); }
+        if message.len() > 65536
+            || !(message.starts_with(b"linqa-call-env-v1{")
+                || message.starts_with(b"linqa-call-sig-v1{"))
+        {
+            return Err("invalid call signing context");
+        }
         Ok(self.secrets.signing_key().sign(message).to_bytes().to_vec())
     }
 

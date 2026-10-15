@@ -21,7 +21,7 @@ it('both phone and browser reopen accepted polls and votes after unlink, without
   }};
   const members=async()=>[alice,bob];const browser=new SecureMessaging({core:cores[2],directory,deviceId:()=>ids[2],members});
   const bridge={verifyKeyPackage:async b=>{await cores[0].verifyKeyPackage(JSON.parse(new TextDecoder().decode(base64ToBytes(b))));return true;},decryptMessage:async b=>bytesToBase64(await cores[0].decryptRaw(JSON.parse(new TextDecoder().decode(base64ToBytes(b)))))};
-  const phone=new SecureCoreMessaging({bridge,device:{ensure:async()=>{},deviceId:async()=>ids[0]},directory,members});const other=new SecureMessaging({core:cores[1],directory,deviceId:()=>ids[1],members});
+  const phone=new SecureCoreMessaging({bridge,device:{ensure:async()=>{},deviceId:async()=>ids[0],asNativeCore:()=>({version:async()=>'test',protectionLevel:async()=>'OS_PROTECTED' as const})},directory,members});const other=new SecureMessaging({core:cores[1],directory,deviceId:()=>ids[1],members});
   const payloads=[JSON.stringify({type:'decision',title:'Pick a day',options:['Monday','Tuesday']}),JSON.stringify({type:'vote',decisionId:'poll',optionId:'Monday'})];
   for(let i=0;i<payloads.length;i++){const bundle=await browser.seal(payloads[i],{conversationId:conversation,senderUserId:alice,clientMessageId:'old-'+i});accepted.set('old-'+i,bundle);}
   revoked=true;

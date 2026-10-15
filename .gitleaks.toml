@@ -1,0 +1,32 @@
+title = "Linqa gitleaks config"
+
+[extend]
+useDefault = true
+
+# Reviewed 2026-10-15: every default-rule hit in history was a test fixture, a storage key name or documentation.
+# Keep this list narrow; do not allowlist whole source directories.
+[allowlist]
+description = "Reviewed false positives"
+regexTarget = "line"
+regexes = [
+  # Non-secret placeholder values used by tests and CI (never valid outside test environments)
+  '''(?i)(JWT_HS256_SECRET|TURN_SHARED_SECRET)["']?\s*[:=]\s*["']?(test-)?(secret|turn-secret)-that-is-at-least-32-bytes[\w-]*''',
+  '''JWT_HS256_SECRET["']?\s*[:=]\s*["']?countrylinqa-test-secret-at-least-32-bytes''',
+  # Storage key names, not key material
+  '''(KEY_ED_PRIVATE|KEY_X_PRIVATE|KEY_MATERIAL)\s*=\s*"[a-z0-9_]+"''',
+  # Storage-key name and comment text
+  '''NOTIFY_KEY\s*=\s*"[\w.:-]+"''',
+  '''fresh random 256-bit key per photo''',
+  # Public example PKCS#8 key from vendor docs, used as a signing fixture in provider tests
+  '''MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj''',
+]
+paths = [
+  # Design notes and pasted implementation packs: prose/schema column names, no live credentials
+  '''^docs/reference/''',
+  '''^E2EE_Transport/''',
+  '''^linqa-calls_video/SETUP\.md$''',
+  '''(^|/)Linqa_Production_Gap_Closure_v1\.0_NOTEPAD\.txt$''',
+  '''(^|/)Linqa_Exact_Repository_Integration.*\.txt$''',
+  '''(^|/)Linqa_.*Vertical_Integration_Milestone_1_Code_Notepad\.txt$''',
+  '''(^|/)codex-assess\.txt$''',
+]
