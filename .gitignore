@@ -75,3 +75,4 @@ clients/mobile/android/app/src/main/assets/vosk-model-en/
 
 # Local release signing (keystore passwords): never commit
 **/linqa-signing.properties
+server/.local-publishing/

@@ -30,6 +30,7 @@ import { useTheme } from "../theme/tokens";
 import { getApiBaseUrl } from "../config/api";
 import { CallOverlay } from "../components/calls/CallOverlay";
 import { ScheduledCallToast } from "../components/calls/ScheduledCallToast";
+import { usePublishingSync } from "../hooks/usePublishingSync";
 import { startIncomingCallListener } from "../services/incoming-call-listener";
 
 const sessionStore = new AccountSessionStore(new AccountSecureStorage());
@@ -62,6 +63,7 @@ function AccountSessionBridge() {
 /** Keeps this device reachable for calls while an account is signed in, and shows the call screen when one is live. */
 function CallHost() {
   const { active, loaded } = useAccounts();
+  usePublishingSync();
   useEffect(() => {
     if (!loaded || !active) return;
     return startIncomingCallListener();

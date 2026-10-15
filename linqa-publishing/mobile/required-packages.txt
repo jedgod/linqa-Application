@@ -1,0 +1,1 @@
+npx expo install expo-sqlite expo-crypto expo-file-system expo-image-picker react-native-maps @react-native-community/datetimepicker
