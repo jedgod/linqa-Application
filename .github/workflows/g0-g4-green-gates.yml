@@ -33,6 +33,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
         working-directory: server
+      - name: Install mobile dependencies (server tests import shared mobile code)
+        run: npm ci --ignore-scripts
+        working-directory: clients/mobile
       - run: npm ci
         working-directory: clients/web
       - run: npm run db:migrate

@@ -57,6 +57,9 @@ jobs:
 
       - run: npm ci
         working-directory: server
+      - name: Install mobile dependencies (server tests import shared mobile code)
+        run: npm ci --ignore-scripts
+        working-directory: clients/mobile
       - run: npm run db:migrate
         working-directory: server
       - run: npm test -- --run
