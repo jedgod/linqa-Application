@@ -1,0 +1,97 @@
+Deploying Your Own OSRM Server
+OSRM (Open Source Routing Machine) is a popular open-source routing engine optimized for speed.
+
+Prerequisites
+A Linux server (Ubuntu 20.04+ recommended)
+Docker installed (optional but recommended for easy deployment)
+Sufficient disk space (depends on map data size)
+Step 1: Download Map Data
+Download the OpenStreetMap extract for your region from Geofabrik.
+
+Example for New York City:
+
+wget http://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf
+Step 2: Prepare OSRM Data
+You can run OSRM commands directly or use Docker images.
+
+Using Docker:
+
+# Extract routing data with the car profile
+docker run -t -v $(pwd):/data osrm/osrm-backend osrm-extract -p /opt/car.lua /data/new-york-latest.osm.pbf
+
+# Partition the data for multi-level Dijkstra routing
+docker run -t -v $(pwd):/data osrm/osrm-backend osrm-partition /data/new-york-latest.osrm
+
+# Customize the routing graph
+docker run -t -v $(pwd):/data osrm/osrm-backend osrm-customize /data/new-york-latest.osrm
+Step 3: Run the OSRM Routing Server
+docker run -d -p 5000:5000 -v $(pwd):/data osrm/osrm-backend osrm-routed --algorithm mld /data/new-york-latest.osrm
+This starts the OSRM server on port 5000.
+
+Step 4: Test Your Server
+Test with curl:
+
+curl "http://localhost:5000/route/v1/driving/-73.9857,40.7484;-73.9851,40.7589?overview=full&geometries=geojson"
+You should get a JSON response with route geometry.
+
+Deploying Your Own Valhalla Server
+Valhalla is a routing engine supporting multimodal routing and advanced features.
+
+Prerequisites
+Ubuntu 20.04+ server
+Docker installed
+Step 1: Download Map Data
+Example for New York City:
+
+wget http://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf
+Step 2: Prepare Valhalla Tiles
+
+Create a config file valhalla.json (example minimal config):
+
+{
+  "mjolnir": {
+    "tile_dir": "/data/valhalla_tiles",
+    "concurrency": 2
+  },
+  "loki": {
+    "actions": ["route"]
+  },
+  "thor": {},
+  "service": {
+    "proxy": false,
+    "service_defaults": {
+      "auto": true
+    }
+  }
+}
+Step 3: Build Tiles and Run Valhalla Docker
+mkdir -p valhalla_tiles
+
+# Import OSM data and build tiles
+docker run --rm -v $(pwd):/data valhalla/valhalla:latest valhalla_build_tiles -c /data/valhalla.json /data/new-york-latest.osm.pbf
+
+# Run Valhalla service
+docker run -d -p 8002:8002 -v $(pwd):/data valhalla/valhalla:latest valhalla_service /data/valhalla.json
+Step 4: Test Valhalla Server
+Test with curl:
+
+curl -X POST http://localhost:8002/route -H "Content-Type: application/json" -d '{
+  "locations":[
+    {"lat":40.7484,"lon":-73.9857},
+    {"lat":40.7589,"lon":-73.9851}
+  ],
+  "costing":"auto"
+}'
+LINQA IMPLEMENTATION UPDATE — OCTOBER 15, 2026
+The runnable adaptation is in infra/routing/README.md, compose.yaml and Start-Routing.ps1.
+Target requested: worldwide routes, stored locally on C: using Docker Desktop.
+The original New York example is regional coverage, not worldwide coverage.
+Use the maintained ghcr.io/project-osrm/osrm-backend and ghcr.io/valhalla/valhalla-scripted images.
+The Valhalla scripted image generates the full configuration missing from the minimal example above.
+The Linqa mobile route adapter now supports OSRM and native Valhalla separately.
+Merge the settings in clients/mobile/.env.routing.example only after the selected routing graph is ready.
+Measured on this workstation: 31.7 GB system RAM, about 15.5 GiB Docker RAM, 195.8 GiB C: free.
+The World launcher stops at a conservative capacity check; no planet download has been started.
+Use -Coverage Smoke only to test Monaco. It must not be described or configured as worldwide coverage.
+See infra/routing/README.md for exact commands, limits, validation and deployment requirements.
+

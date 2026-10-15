@@ -1,0 +1,29 @@
+name: linqa-routing
+services:
+  osrm:
+    profiles: [osrm]
+    image: ${OSRM_IMAGE:-ghcr.io/project-osrm/osrm-backend:latest}
+    command: [osrm-routed, --algorithm, mld, /data/map.osrm]
+    ports: ["127.0.0.1:${OSRM_PORT:-5000}:5000"]
+    volumes: ["${ROUTING_DATA_ROOT:-../../.runtime/routing}/osrm:/data:ro"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  valhalla:
+    profiles: [valhalla]
+    image: ${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla-scripted:latest}
+    ports: ["127.0.0.1:${VALHALLA_PORT:-8002}:8002"]
+    volumes: ["${ROUTING_DATA_ROOT:-../../.runtime/routing}/valhalla:/custom_files"]
+    environment:
+      server_threads: ${ROUTING_THREADS:-2}
+      use_tiles_ignore_pbf: "True"
+      build_elevation: "False"
+      build_admins: "True"
+      build_time_zones: "True"
+      build_tar: "True"
+      serve_tiles: "True"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}

@@ -28,6 +28,7 @@ Cargo.lock  # decide later whether to commit
 .env.*
 !.env.example
 !**/.env.example
+!clients/mobile/.env.routing.example
 *.pem
 *.key
 secrets/

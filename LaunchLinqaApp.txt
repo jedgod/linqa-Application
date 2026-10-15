@@ -1,0 +1,147 @@
+﻿LAUNCH LINQA APP â€” WINDOWS, GALAXY AND LG
+Saved October 14, 2026
+
+Project folder:
+C:\Users\cj_wo\OneDrive - Bowie State\Desktop\linqa
+
+Galaxy: USB, device ID R9TT703HH0Y
+LG: Wi-Fi, 10.0.0.27:5555 (LM-X320)
+Android package: com.linqa.mobile
+
+Use PowerShell for the commands below. These steps launch the installed development app; they do not build or install an APK. Keep the computer awake and connected to the same network as the LG.
+
+1. CONNECT THE PHONES
+
+Unlock both phones. Connect the Galaxy by USB, enable USB debugging, and accept any USB debugging authorization prompt. The LG must already have network debugging enabled on port 5555.
+
+Open PowerShell and run:
+
+Set-Location -LiteralPath 'C:\Users\cj_wo\OneDrive - Bowie State\Desktop\linqa'
+$linqaAdb = 'C:\Users\cj_wo\AppData\Local\Android\Sdk\platform-tools\adb.exe'
+& $linqaAdb start-server
+& $linqaAdb connect 10.0.0.27:5555
+& $linqaAdb devices -l
+
+Both entries must say "device":
+R9TT703HH0Y
+10.0.0.27:5555
+
+If an entry says "unauthorized", accept the debugging prompt on that phone.
+
+2. START THE LINQA API â€” POWERSHELL WINDOW 2
+
+The phone uses the API for sign-in, session restoration, chats, profile photos, search and scheduled-call counts. Metro alone is not enough.
+
+First check whether the API is already running:
+
+Invoke-RestMethod -Uri 'http://127.0.0.1:8088/health/ready' -TimeoutSec 5
+
+If it succeeds, leave the existing API running and skip starting another copy. If it fails, run the following in a separate PowerShell window:
+
+Set-Location -LiteralPath 'C:\Users\cj_wo\OneDrive - Bowie State\Desktop\linqa\server'
+$env:HOST = '127.0.0.1'
+$env:PORT = '8088'
+$env:LINQA_API_PORT = '8088'
+& 'C:\Program Files\nodejs\node.exe' --env-file=.env --import tsx src/index.ts
+
+Keep this window open. Wait for "Server listening at http://127.0.0.1:8088". The configured database must be running, and server\.env must contain the existing development configuration.
+
+This command intentionally does not use --watch. The watched API repeatedly restarted in the previous session. After changing server code, press Ctrl+C in this API window and run the same command again.
+
+3. START METRO â€” POWERSHELL WINDOW 3
+
+Check whether Metro is already running:
+
+Invoke-RestMethod -Uri 'http://127.0.0.1:8081/status' -TimeoutSec 5
+
+If it returns "packager-status:running", keep it running. Otherwise, start Metro in another PowerShell window:
+
+Set-Location -LiteralPath 'C:\Users\cj_wo\OneDrive - Bowie State\Desktop\linqa\clients\mobile'
+$env:EXPO_PUBLIC_API_URL = 'http://127.0.0.1:8080'
+$env:EXPO_OFFLINE = '1'
+$env:REACT_NATIVE_PACKAGER_HOSTNAME = '127.0.0.1'
+$env:NODE_OPTIONS = '--dns-result-order=ipv4first'
+& 'C:\Program Files\nodejs\node.exe' node_modules/expo/bin/cli start --host localhost --port 8081
+
+Keep this window open. Wait for Metro to say it is waiting on http://localhost:8081.
+
+4. FORWARD THE PHONE PORTS â€” BACK IN WINDOW 1
+
+Phone port 8080 goes to the computer's API on 8088. Phone port 8081 goes to Metro on 8081.
+
+foreach ($linqaPhone in @('R9TT703HH0Y', '10.0.0.27:5555')) {
+    & $linqaAdb -s $linqaPhone reverse tcp:8080 tcp:8088
+    & $linqaAdb -s $linqaPhone reverse tcp:8081 tcp:8081
+}
+
+Check the mappings:
+
+& $linqaAdb -s R9TT703HH0Y reverse --list
+& $linqaAdb -s 10.0.0.27:5555 reverse --list
+
+Reapply step 4 after disconnecting/reconnecting either phone or restarting ADB. If your existing servers use different ports, adjust the computer-side ports in these mappings.
+
+5. OPEN LINQA ON BOTH PHONES
+
+& $linqaAdb -s R9TT703HH0Y shell am start -n com.linqa.mobile/.MainActivity
+& $linqaAdb -s 10.0.0.27:5555 shell am start -n com.linqa.mobile/.MainActivity
+
+"Intent has been delivered to currently running top-most instance" means Android brought an existing Linqa activity forward; it is not an error. Check the actual screen on each phone to confirm that the app loaded.
+
+If needed, restart only Linqa on a phone, without deleting its account data:
+
+& $linqaAdb -s R9TT703HH0Y shell am force-stop com.linqa.mobile
+& $linqaAdb -s R9TT703HH0Y shell am start -n com.linqa.mobile/.MainActivity
+
+For the LG, substitute 10.0.0.27:5555 for R9TT703HH0Y.
+
+6. SIGN IN WHEN REQUIRED
+
+If the phone reaches Home or Chats, its session resumed successfully.
+If it shows "Could not resume session", verify API readiness and the port mappings first.
+If it shows Welcome or a revoked/expired session, choose Log In and verify the intended account's phone number.
+
+Existing development accounts from the previous session:
+Galaxy: +12409403101 (Deshante)
+LG: +14056671120 (Greene)
+
+Use the correct account for each phone. The local development server currently logs verification codes in its API output. Use the newest code issued for that phone number. Real production environments use their configured delivery provider. Never reuse an old code or post verification codes publicly.
+
+7. RELOAD AFTER MOBILE SOURCE CHANGES
+
+On a development build, open the React Native menu:
+
+& $linqaAdb -s R9TT703HH0Y shell input keyevent 82
+
+Tap Reload. If the app cannot reach its bundler, choose Change Bundle Location, enter localhost:8081, apply changes, and verify step 4. Use the LG device address instead to open its menu.
+
+Changes to native modules require a new APK; a JavaScript reload is not enough for those changes.
+
+OPTIONAL AUTOMATED LAUNCHER
+
+After connecting both phones, the repository also provides:
+
+Set-Location -LiteralPath 'C:\Users\cj_wo\OneDrive - Bowie State\Desktop\linqa'
+$env:PATH = 'C:\Program Files\nodejs;' + $env:PATH
+& 'C:\Program Files\nodejs\node.exe' scripts/start-mobile-usb.mjs
+
+It checks the installed app, starts/reuses local servers, forwards ports, launches connected phones and starts a route watcher. If it starts a watched API that repeatedly restarts, use the manual API command in step 2. Its logs and port selections are in .runtime\mobile-launch\.
+
+TROUBLESHOOTING
+
+- LG connection refused: verify its current Wi-Fi IP. To re-enable port 5555, connect the LG by USB, identify its USB ID with "adb devices -l", run "adb -s <LG-USB-ID> tcpip 5555", then reconnect over Wi-Fi. Replace the placeholder with the actual device ID. Accept phone prompts.
+- ADB hangs: first make sure no installation or file transfer is in progress. Run "& $linqaAdb kill-server", then "& $linqaAdb start-server", reconnect the LG and repeat step 4.
+- Port already in use: check the existing service before starting another copy. Do not terminate unrelated processes.
+- Blank/loading/error screen: verify both API and Metro, then port forwarding and bundle location. Inspect API/Metro terminal output.
+- "Could not resume session" while API is healthy: sign in again if the session is revoked. Do not clear app storage or uninstall merely to relaunch; that can remove local keys and history.
+
+LAUNCH CHECKLIST
+
+[ ] Galaxy connected by USB and authorized.
+[ ] LG connected at its current Wi-Fi debugging address.
+[ ] Linqa API ready on computer port 8088.
+[ ] Metro running on computer port 8081.
+[ ] Both phones forward 8080 -> 8088 and 8081 -> 8081.
+[ ] Linqa is visibly loaded on both screens.
+[ ] Both accounts are signed in before two-phone messaging or protected-photo tests.
+
