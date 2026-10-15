@@ -169,24 +169,25 @@ function DirectionsBar({ nav, onStart, onStop }: { nav: Nav; onStart: () => void
   );
 }
 
-function CloseButton({ onClose }: { onClose: () => void }) {
+function CloseButton({ onClose, embedded }: { onClose: () => void; embedded?: boolean }) {
   const insets = useSafeAreaInsets();
   return (
-    <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close map" hitSlop={12} style={[styles.close, { top: insets.top + 10 }]}>
+    <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close map" hitSlop={12} style={[styles.close, { top: embedded ? 12 : insets.top + 10 }]}>
       <Ionicons name="close" size={26} color="#17151C" />
     </Pressable>
   );
 }
 
 /** The enlarged map: movable and zoomable, with the Directions button. `autoStart` begins the route as soon as it opens. */
-function EnlargedMap({ latitude, longitude, zoom, directions, autoStart, onClose }: { latitude: number; longitude: number; zoom: number; directions: boolean; autoStart: boolean; onClose: () => void }) {
+export function EnlargedMap({ latitude, longitude, zoom = 15, directions = true, autoStart = false, label, embedded = false, onClose }: { latitude: number; longitude: number; zoom?: number; directions?: boolean; autoStart?: boolean; /** The place name, shown on the map. */ label?: string; /** Inside a screen (under its heading) instead of full screen. */ embedded?: boolean; onClose: () => void }) {
   const { nav, me, start, stop } = useDirections(latitude, longitude);
   useEffect(() => { if (autoStart && directions) void start(); }, [autoStart, directions, start]);
   return (
     <View style={styles.full}>
       <MapFrame latitude={latitude} longitude={longitude} height="100%" zoom={zoom} interactive route={nav.state === "active" ? nav.route : null} me={me} />
+      {label ? <View style={[styles.place, { top: embedded ? 12 : 56 }]} pointerEvents="none"><Ionicons name="location" size={16} color="#D84A59" /><Text numberOfLines={1} style={styles.placeText}>{label}</Text></View> : null}
       {directions ? <DirectionsBar nav={nav} onStart={() => void start()} onStop={stop} /> : null}
-      <CloseButton onClose={onClose} />
+      <CloseButton onClose={onClose} embedded={embedded} />
     </View>
   );
 }
@@ -195,25 +196,25 @@ function EnlargedMap({ latitude, longitude, zoom, directions, autoStart, onClose
  * A small, plain map. Tapping it opens a full-screen map that can be moved and zoomed; the same component is used for the
  * publisher (while writing) and for anyone reading the post. `enlargeable={false}` keeps it fixed.
  */
-export function PlainLocationMap({ latitude, longitude, height = 200, zoom = 15, enlargeable = true, label, directions = true }: { latitude: number; longitude: number; height?: number; zoom?: number; enlargeable?: boolean; /** The place name, shown in the directions prompt. */ label?: string; /** Show the Directions buttons (default). */ directions?: boolean }) {
+export function PlainLocationMap({ latitude, longitude, height = 200, zoom = 15, enlargeable = true, label, directions = true, onEnlarge }: { latitude: number; longitude: number; height?: number; zoom?: number; enlargeable?: boolean; /** The place name, shown in the directions prompt. */ label?: string; /** Show the Directions buttons (default). */ directions?: boolean; /** Open the enlarged map somewhere else (e.g. inside a screen, under its heading) instead of full screen. */ onEnlarge?: (request: { latitude: number; longitude: number; label?: string; autoStart: boolean }) => void }) {
   const [open, setOpen] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
   return (
     <View style={{ height }}>
       <MapFrame latitude={latitude} longitude={longitude} height={height} zoom={zoom} interactive={false} />
       {enlargeable ? (
-        <Pressable style={StyleSheet.absoluteFill} onPress={() => { setAutoStart(false); setOpen(true); }} accessibilityRole="button" accessibilityLabel="Enlarge map">
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => { if (onEnlarge) onEnlarge({ latitude, longitude, label, autoStart: false }); else { setAutoStart(false); setOpen(true); } }} accessibilityRole="button" accessibilityLabel="Enlarge map">
           <View style={styles.expand}><Ionicons name="expand" size={16} color="#17151C" /></View>
         </Pressable>
       ) : null}
       {directions ? (
-        <Pressable onPress={() => { setAutoStart(true); setOpen(true); }} accessibilityRole="button" accessibilityLabel="Get driving directions" hitSlop={6} style={styles.navMini}>
+        <Pressable onPress={() => { if (onEnlarge) onEnlarge({ latitude, longitude, label, autoStart: true }); else { setAutoStart(true); setOpen(true); } }} accessibilityRole="button" accessibilityLabel="Get driving directions" hitSlop={6} style={styles.navMini}>
           <Ionicons name="navigate" size={16} color="#FFFFFF" />
         </Pressable>
       ) : null}
       <Modal visible={open} animationType="fade" onRequestClose={() => setOpen(false)} statusBarTranslucent navigationBarTranslucent>
         <SafeAreaProvider>
-          {open ? <EnlargedMap latitude={latitude} longitude={longitude} zoom={zoom} directions={directions} autoStart={autoStart} onClose={() => setOpen(false)} /> : <View style={styles.full} />}
+          {open ? <EnlargedMap latitude={latitude} longitude={longitude} zoom={zoom} directions={directions} autoStart={autoStart} label={label} onClose={() => setOpen(false)} /> : <View style={styles.full} />}
         </SafeAreaProvider>
       </Modal>
     </View>
@@ -223,6 +224,8 @@ export function PlainLocationMap({ latitude, longitude, height = 200, zoom = 15,
 const styles = StyleSheet.create({
   full: { flex: 1, backgroundColor: "#E9EBE8" },
   close: { position: "absolute", right: 16, width: 44, height: 44, borderRadius: 22, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center", elevation: 6, shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  place: { position: "absolute", left: 16, right: 76, flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", backgroundColor: "rgba(255,255,255,0.95)", borderRadius: 18, paddingHorizontal: 12, paddingVertical: 8, elevation: 4 },
+  placeText: { flexShrink: 1, color: "#17151C", fontWeight: "700", fontSize: 14 },
   dirBar: { position: "absolute", left: 16, right: 16, alignItems: "center" },
   dirCard: { flexDirection: "row", alignItems: "center", alignSelf: "stretch", backgroundColor: "#FFFFFF", borderRadius: 18, padding: 16, elevation: 6, shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
   dirMain: { fontSize: 22, fontWeight: "800", color: "#17151C" },

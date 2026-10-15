@@ -6,7 +6,7 @@
 //  - posts come from the publishing server instead of sample data, and each shows its tagged people and feeling.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, RefreshControl, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, BackHandler, FlatList, Image, RefreshControl, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,7 +14,7 @@ import { getApiBaseUrl } from '../../config/api';
 import { accessTokenProvider } from '../../services/session';
 import { bytesToBase64 } from '../../services/secure-core';
 import { PersonAvatar } from '../account/PersonAvatar';
-import { PlainLocationMap } from './PlainLocationMap';
+import { EnlargedMap, PlainLocationMap } from './PlainLocationMap';
 
 interface FeedPost {
   id: string;
@@ -76,6 +76,13 @@ export default function PostsFeedScreen() {
   const [posts, setPosts] = useState<FeedPost[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // An enlarged map opens inside this screen, under the "Linqa Discover" heading, so the heading stays in view.
+  const [bigMap, setBigMap] = useState<{ latitude: number; longitude: number; label?: string; autoStart: boolean } | null>(null);
+  useEffect(() => {
+    if (!bigMap) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { setBigMap(null); return true; });
+    return () => sub.remove();
+  }, [bigMap]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -126,7 +133,7 @@ export default function PostsFeedScreen() {
       {/* Post map: plain Linqa map, tap to enlarge */}
       {item.location ? (
         <View style={styles.mapBox}>
-          <PlainLocationMap latitude={item.location.latitude} longitude={item.location.longitude} height={176} label={item.location.title} />
+          <PlainLocationMap latitude={item.location.latitude} longitude={item.location.longitude} height={176} label={item.location.title} onEnlarge={setBigMap} />
           <View style={styles.hud} pointerEvents="none">
             <View style={styles.hudDot} />
             <Text numberOfLines={1} style={styles.hudText}>{item.location.title}</Text>
@@ -147,6 +154,7 @@ export default function PostsFeedScreen() {
         </TouchableOpacity>
       </View>
 
+      <View style={{ flex: 1 }}>
       {posts === null ? <ActivityIndicator style={{ marginTop: 40 }} color="#6041B8" /> : (
         <FlatList
           data={posts}
@@ -158,6 +166,13 @@ export default function PostsFeedScreen() {
           ListEmptyComponent={<Text style={[styles.muted, { textAlign: 'center', marginTop: 40 }]}>{error ?? 'No posts yet. Use Post on Home to share the first one.'}</Text>}
         />
       )}
+      {bigMap ? (
+        <View style={styles.embedded}>
+          <EnlargedMap latitude={bigMap.latitude} longitude={bigMap.longitude} label={bigMap.label} autoStart={bigMap.autoStart} embedded onClose={() => setBigMap(null)} />
+        </View>
+      ) : null}
+
+      </View>
     </SafeAreaView>
   );
 }
@@ -171,6 +186,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F9FAFB' },
   topBar: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   heading: { fontSize: 20, fontWeight: '900', letterSpacing: -0.4, color: '#111827' },
+  embedded: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10, backgroundColor: '#E9EBE8' },
   closeBtn: { padding: 8, backgroundColor: '#EFF6FF', borderRadius: 20 },
   card: { backgroundColor: '#FFFFFF', marginBottom: 16, borderRadius: 16, borderWidth: 1, borderColor: '#F3F4F6', overflow: 'hidden', elevation: 1 },
   cardHead: { flexDirection: 'row', alignItems: 'center', padding: 16 },
