@@ -16,25 +16,25 @@ import LinqaMapFollowScreen from "./LinqaMapFollowScreen";
  * A small, plain map. Tapping it opens a full-screen map that can be moved and zoomed; the same component is used for the
  * publisher (while writing) and for anyone reading the post. `enlargeable={false}` keeps it fixed.
  */
-export function PlainLocationMap({ latitude, longitude, height = 200, zoom = 15, enlargeable = true, label, directions = true, onEnlarge }: { latitude: number; longitude: number; height?: number; zoom?: number; enlargeable?: boolean; /** The place name, shown in the directions prompt. */ label?: string; /** Show the Directions buttons (default). */ directions?: boolean; /** Open the enlarged map somewhere else (e.g. inside a screen, under its heading) instead of full screen. */ onEnlarge?: (request: { latitude: number; longitude: number; label?: string; autoStart: boolean }) => void }) {
+export function PlainLocationMap({ latitude, longitude, height = 200, zoom = 15, enlargeable = true, label, name, directions = true, onEnlarge }: { latitude: number; longitude: number; height?: number; zoom?: number; enlargeable?: boolean; /** The place name, shown in the directions prompt. */ label?: string; /** The program / event name, shown above the address on the enlarged map. */ name?: string; /** Show the Directions buttons (default). */ directions?: boolean; /** Open the enlarged map somewhere else (e.g. inside a screen, under its heading) instead of full screen. */ onEnlarge?: (request: { latitude: number; longitude: number; label?: string; name?: string; autoStart: boolean }) => void }) {
   const [open, setOpen] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
   return (
     <View style={{ height }}>
       <MapFrame latitude={latitude} longitude={longitude} height={height} zoom={zoom} interactive={false} />
       {enlargeable ? (
-        <Pressable style={StyleSheet.absoluteFill} onPress={() => { if (onEnlarge) onEnlarge({ latitude, longitude, label, autoStart: false }); else { setAutoStart(false); setOpen(true); } }} accessibilityRole="button" accessibilityLabel="Enlarge map">
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => { if (onEnlarge) onEnlarge({ latitude, longitude, label, name, autoStart: false }); else { setAutoStart(false); setOpen(true); } }} accessibilityRole="button" accessibilityLabel="Enlarge map">
           <View style={styles.expand}><Ionicons name="expand" size={16} color="#17151C" /></View>
         </Pressable>
       ) : null}
       {directions ? (
-        <Pressable onPress={() => { if (onEnlarge) onEnlarge({ latitude, longitude, label, autoStart: true }); else { setAutoStart(true); setOpen(true); } }} accessibilityRole="button" accessibilityLabel="Get driving directions" hitSlop={6} style={styles.navMini}>
+        <Pressable onPress={() => { if (onEnlarge) onEnlarge({ latitude, longitude, label, name, autoStart: true }); else { setAutoStart(true); setOpen(true); } }} accessibilityRole="button" accessibilityLabel="Get driving directions" hitSlop={6} style={styles.navMini}>
           <Ionicons name="navigate" size={16} color="#FFFFFF" />
         </Pressable>
       ) : null}
       <Modal visible={open} animationType="fade" onRequestClose={() => setOpen(false)} statusBarTranslucent navigationBarTranslucent>
         <SafeAreaProvider>
-          {open ? <LinqaMapFollowScreen destination={{ latitude, longitude }} destinationTitle={label} autoStart={autoStart} showDirections={directions} onClose={() => setOpen(false)} /> : <View style={styles.full} />}
+          {open ? <LinqaMapFollowScreen destination={{ latitude, longitude }} destinationTitle={label} destinationName={name} autoStart={autoStart} showDirections={directions} onClose={() => setOpen(false)} /> : <View style={styles.full} />}
         </SafeAreaProvider>
       </Modal>
     </View>

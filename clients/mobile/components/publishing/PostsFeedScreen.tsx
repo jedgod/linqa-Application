@@ -78,7 +78,7 @@ export default function PostsFeedScreen() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   // An enlarged map opens inside this screen, under the "Linqa Discover" heading, so the heading stays in view.
-  const [bigMap, setBigMap] = useState<{ latitude: number; longitude: number; label?: string; autoStart: boolean } | null>(null);
+  const [bigMap, setBigMap] = useState<{ latitude: number; longitude: number; label?: string; name?: string; autoStart: boolean } | null>(null);
   useEffect(() => {
     if (!bigMap) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => { setBigMap(null); return true; });
@@ -134,7 +134,7 @@ export default function PostsFeedScreen() {
       {/* Post map: plain Linqa map, tap to enlarge */}
       {item.location ? (
         <View style={styles.mapBox}>
-          <PlainLocationMap latitude={item.location.latitude} longitude={item.location.longitude} height={176} label={item.location.title} onEnlarge={setBigMap} />
+          <PlainLocationMap latitude={item.location.latitude} longitude={item.location.longitude} height={176} label={item.location.title} name={item.title} onEnlarge={setBigMap} />
           <View style={styles.hud} pointerEvents="none">
             <View style={styles.hudDot} />
             <Text numberOfLines={1} style={styles.hudText}>{item.location.title}</Text>
@@ -169,7 +169,7 @@ export default function PostsFeedScreen() {
       )}
       {bigMap ? (
         <View style={styles.embedded}>
-          <LinqaMapFollowScreen destination={{ latitude: bigMap.latitude, longitude: bigMap.longitude }} destinationTitle={bigMap.label} autoStart={bigMap.autoStart} embedded onClose={() => setBigMap(null)} />
+          <LinqaMapFollowScreen destination={{ latitude: bigMap.latitude, longitude: bigMap.longitude }} destinationTitle={bigMap.label} destinationName={bigMap.name} autoStart={bigMap.autoStart} embedded onClose={() => setBigMap(null)} />
         </View>
       ) : null}
 

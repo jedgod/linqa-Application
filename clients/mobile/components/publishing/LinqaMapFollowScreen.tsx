@@ -2,7 +2,7 @@
 // with these changes so it runs in this app:
 //  - the Google Maps view (react-native-maps, which needs a Google key and a native build this app does not have) is the Linqa map
 //    (Leaflet on OpenStreetMap tiles). The route line, destination pin and live dot are drawn on it and it follows the person;
-//  - the route comes from the routing service in ./route (OSRM) instead of the placeholder address, and when no route can be
+//  - the route comes from the routing service in ./route (OSRM or native Valhalla) instead of the placeholder address, and when no route can be
 //    found it says so instead of drawing a straight line, which would pass for a driving route;
 //  - extra props so it can open inside Linqa Discover: autoStart, showDirections, onClose, embedded;
 //  - SafeAreaView comes from react-native-safe-area-context, and a duplicated indicator dot is removed.
@@ -32,7 +32,10 @@ interface Coordinate {
 
 interface LinqaMapFollowScreenProps {
   destination?: Coordinate;
+  /** The address (or place) text. */
   destinationTitle?: string;
+  /** The program / event name, shown on the first line above the address. */
+  destinationName?: string;
   /** Start directions as soon as the screen opens (the directions icon on a post's map). */
   autoStart?: boolean;
   /** Show the Start Directions controls. */
@@ -43,9 +46,19 @@ interface LinqaMapFollowScreenProps {
   embedded?: boolean;
 }
 
+/** Shows a typed address the way it is normally written: "2817 ruckert av baltimore md 21214" -> "2817 Ruckert Av Baltimore MD 21214". */
+export function prettyAddress(text: string): string {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  return words.map((w, i) => {
+    if (/^[a-z]{2}$/i.test(w) && /^\d{5}(-\d{4})?$/.test(words[i + 1] ?? '')) return w.toUpperCase();
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  }).join(' ');
+}
+
 export default function LinqaMapFollowScreen({
   destination = { latitude: 38.8970, longitude: -77.0400 }, // Default fallback to post cords
   destinationTitle = "Linqa Destination",
+  destinationName,
   autoStart = false,
   showDirections = true,
   onClose,
@@ -199,8 +212,11 @@ export default function LinqaMapFollowScreen({
 
       {/* Where this is: the destination's name, so it is never forgotten */}
       <View style={styles.placeLabel} pointerEvents="none">
-        <Ionicons name="location" size={16} color="#D84A59" />
-        <Text numberOfLines={1} style={styles.placeLabelText}>{destinationTitle}</Text>
+        <Ionicons name="location" size={18} color="#D84A59" />
+        <View style={{ flexShrink: 1 }}>
+          {destinationName ? <Text numberOfLines={1} style={styles.placeLabelText}>{destinationName}</Text> : null}
+          <Text numberOfLines={2} style={destinationName ? styles.placeLabelAddress : styles.placeLabelText}>{prettyAddress(destinationTitle)}</Text>
+        </View>
       </View>
       {onClose ? (
         <TouchableOpacity style={styles.closeButton} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close map" hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
@@ -278,10 +294,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   placeLabel: {
-    position: 'absolute', top: 12, left: 16, right: 76, flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 18, paddingHorizontal: 12, paddingVertical: 8, elevation: 4,
+    position: 'absolute', top: 12, left: 16, right: 76, flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 8, elevation: 4,
   },
-  placeLabelText: { flexShrink: 1, color: '#17151C', fontWeight: '700', fontSize: 14 },
+  placeLabelText: { flexShrink: 1, color: '#17151C', fontWeight: '700', fontSize: 15 },
+  placeLabelAddress: { color: '#4B5563', fontSize: 13, marginTop: 1 },
   closeButton: {
     position: 'absolute', top: 12, right: 16, width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFFFFF',
     alignItems: 'center', justifyContent: 'center', elevation: 6,
