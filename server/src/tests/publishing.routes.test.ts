@@ -89,7 +89,22 @@ describe("location belongs to the publisher", () => {
     expect(sql).toContain("latitude=");
     // The row is matched on the caller being its creator, so any other person changes nothing and is told "not found".
     expect(sql).toMatch(/creator_id=\$\d+ AND status='published'/);
-    expect(call?.[1]).toContain(user);
+    expect((call as unknown as [string, unknown[]])?.[1]).toContain(user);
+  });
+});
+
+describe("tags and GIFs", () => {
+  const base = { title: "Hello", startsAt: "2030-01-01T10:00:00Z", timezone: "UTC" };
+  it("accepts up to 20 tagged people and refuses more or invalid ids", () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    expect(eventInput.safeParse({ ...base, taggedUserIds: ids(20) }).success).toBe(true);
+    expect(eventInput.safeParse({ ...base, taggedUserIds: ids(21) }).success).toBe(false);
+    expect(eventInput.safeParse({ ...base, taggedUserIds: ["not-a-uuid"] }).success).toBe(false);
+  });
+  it("accepts a GIF upload only when the bytes are a GIF", () => {
+    expect(uploadInput.safeParse({ mimeType: "image/gif", bytes: 10 }).success).toBe(true);
+    expect(looksLike("image/gif", Buffer.from("GIF89a000000"))).toBe(true);
+    expect(looksLike("image/gif", Buffer.from("AAAAAAAAAAAA"))).toBe(false);
   });
 });
 

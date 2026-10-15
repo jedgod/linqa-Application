@@ -8,6 +8,9 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { PlainLocationMap } from './PlainLocationMap';
 import { adoptCapture } from '../../services/conversation-media';
 import LinqaCreateEvent, { type EventPayload } from './LinqaCreateEvent';
+import { ChatInboxService } from '../../services/chat-inbox.service';
+import { getApiBaseUrl } from '../../config/api';
+import { accessTokenProvider } from '../../services/session';
 import { publishOrQueue, type PublishingConfig } from '../../lib/publishing/publishing';
 
 /** Finds a city or venue with the phone's own geocoder. Returns null when nothing matches. */
@@ -17,13 +20,35 @@ async function resolveLocation(query: string) {
   return first ? { latitude: first.latitude, longitude: first.longitude } : null;
 }
 
+/** The people this person can tag: everyone they have a one-to-one chat with. */
+async function loadPeople() {
+  const inbox = new ChatInboxService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
+  const data = await inbox.inbox('all');
+  const seen = new Set<string>();
+  return data.conversations.flatMap((c) => {
+    if (c.isGroup || !c.peerUserId || seen.has(c.peerUserId)) return [];
+    seen.add(c.peerUserId);
+    return [{ id: c.peerUserId, name: c.title }];
+  });
+}
+
+/** Where the phone is now, with a readable place name. Null when location access is off. */
+async function currentPlace() {
+  const permission = await Location.requestForegroundPermissionsAsync();
+  if (!permission.granted) return null;
+  const here = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+  const [place] = await Location.reverseGeocodeAsync(here.coords).catch(() => []);
+  const label = [place?.name && place.name !== place.city ? place.name : null, place?.city, place?.region].filter(Boolean).join(', ') || 'Current location';
+  return { coordinates: { latitude: here.coords.latitude, longitude: here.coords.longitude }, label };
+}
+
 /** Moves a picked file out of the picker's cache, which Android clears on its own, into the app's permanent storage. */
-async function keepFile(uri: string, type: 'image' | 'video', base64?: string | null) {
+async function keepFile(uri: string, type: 'image' | 'video', base64?: string | null, ext?: 'gif') {
   const stamp = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   if (type === 'image') {
     // The picker's own file can be cleared by Android within moments, so the image data it handed over is used when present.
     if (base64) {
-      const target = `${FileSystem.documentDirectory}linqa-publish-${stamp}.jpg`;
+      const target = `${FileSystem.documentDirectory}linqa-publish-${stamp}.${ext ?? 'jpg'}`;
       await FileSystem.writeAsStringAsync(target, base64, { encoding: FileSystem.EncodingType.Base64 });
       const info = await FileSystem.getInfoAsync(target);
       if (!info.exists || !('size' in info) || !info.size) throw new Error('The photo was not saved.');
@@ -48,7 +73,7 @@ export default function CreateEventConnected({ config, onClose, heading, onPubli
   /** Called only when the server confirmed the item; queued (offline) items are reported later by the sync. */
   onPublished?: (info: PublishedInfo) => void | Promise<void>;
 }) {
-  return <LinqaCreateEvent onClose={onClose} heading={heading} resolveLocation={resolveLocation} keepFile={keepFile} renderMap={(coords) => <PlainLocationMap latitude={coords.latitude} longitude={coords.longitude} height={200} />} onPublish={async event => {
+  return <LinqaCreateEvent onClose={onClose} heading={heading} resolveLocation={resolveLocation} keepFile={keepFile} loadPeople={loadPeople} currentPlace={currentPlace} renderMap={(coords) => <PlainLocationMap latitude={coords.latitude} longitude={coords.longitude} height={200} />} onPublish={async event => {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const result = await publishOrQueue(config, event, timezone);
     const noun = (heading ?? 'event').toLowerCase().includes('post') ? 'post' : 'event';

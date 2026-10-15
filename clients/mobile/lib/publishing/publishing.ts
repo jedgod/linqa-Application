@@ -61,7 +61,9 @@ async function syncOnce(config:PublishingConfig){
    for(const attachment of row.payload.attachments)uploadIds.push(await upload(config,attachment));
    const payload={title:row.payload.title,startsAt:row.payload.startsAt,location:row.payload.location,
     coordinates:row.payload.coordinates,description:row.payload.description,timezone:row.timezone,
-    visibility:'public',uploadIds};
+    visibility:'public',uploadIds,
+    ...(row.payload.feelingActivity?{feelingActivity:row.payload.feelingActivity}:{}),
+    ...(row.payload.taggedUserIds?.length?{taggedUserIds:row.payload.taggedUserIds}:{})};
    const result=await request(config,'/api/publishing/events','POST',payload,row.id);
    await d.runAsync("UPDATE publishing_outbox SET status='published',remote_id=?,last_error=NULL,updated_at=? WHERE id=?",result.id,new Date().toISOString(),row.id);
    results.push({id:row.id,status:'published'});

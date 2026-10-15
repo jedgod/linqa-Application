@@ -32,14 +32,15 @@ const eventBase = z
     coordinates: z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }).nullable().optional(),
     visibility: z.enum(["public", "country", "community", "private"]).default("public"),
     feelingActivity: z.string().max(120).nullable().optional(),
-    uploadIds: z.array(uuid).max(10).default([])
+    uploadIds: z.array(uuid).max(10).default([]),
+    taggedUserIds: z.array(uuid).max(20).default([])
   })
   .strict();
 export const eventInput = eventBase.refine((x) => !x.endsAt || Date.parse(x.endsAt) > Date.parse(x.startsAt), { message: "endsAt must follow startsAt" });
 
 export const uploadInput = z
   .object({
-    mimeType: z.enum(["image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime"]),
+    mimeType: z.enum(["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/quicktime"]),
     bytes: z.number().int().positive().max(100 * 1024 * 1024)
   })
   .strict();
@@ -72,6 +73,7 @@ function verify(secret: string, token: string): Claim | null {
 export function looksLike(mime: string, head: Buffer): boolean {
   if (mime === "image/jpeg") return head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
   if (mime === "image/png") return head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (mime === "image/gif") return head.subarray(0, 4).toString("ascii") === "GIF8";
   if (mime === "image/webp") return head.subarray(0, 4).toString("ascii") === "RIFF" && head.subarray(8, 12).toString("ascii") === "WEBP";
   if (mime === "video/mp4" || mime === "video/quicktime") return head.subarray(4, 8).toString("ascii") === "ftyp";
   return false;
@@ -104,7 +106,7 @@ export async function registerPublishingRoutes(app: FastifyInstance, config: App
   // Uploaded bytes arrive as raw bodies (the address itself is the credential), so no multipart parser is needed.
   await app.register(async (scope) => {
     // The avatar upload registers the image types on the root with a 5 MB limit; inside this scope they are replaced.
-    const types = ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime"];
+    const types = ["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/quicktime"];
     for (const type of types) if (scope.hasContentTypeParser(type)) scope.removeContentTypeParser(type);
     scope.addContentTypeParser(types, { parseAs: "buffer", bodyLimit: 100 * MB }, (_request, body, done) => done(null, body));
 
@@ -177,6 +179,19 @@ export async function registerPublishingRoutes(app: FastifyInstance, config: App
           if (size !== Number(u.bytes) || Number(u.received_bytes) !== Number(u.bytes)) { await client.query("ROLLBACK"); return fail(reply, 409, "upload_not_verified"); }
         }
       }
+      // Only people the publisher is connected to (a saved contact or a shared chat) and not blocked can be tagged.
+      const tagged = [...new Set(e.taggedUserIds)].filter((id) => id !== userId);
+      if (tagged.length) {
+        const ok = await client.query(
+          `SELECT p.id FROM unnest($2::uuid[]) AS p(id)
+            WHERE NOT EXISTS (SELECT 1 FROM blocked_users b WHERE (b.blocker_user_id=$1 AND b.blocked_user_id=p.id) OR (b.blocker_user_id=p.id AND b.blocked_user_id=$1))
+              AND (EXISTS (SELECT 1 FROM chat_contacts cc WHERE cc.owner_user_id=$1 AND cc.contact_user_id=p.id)
+                OR EXISTS (SELECT 1 FROM conversation_members mine JOIN conversation_members peer ON peer.conversation_id=mine.conversation_id
+                     WHERE mine.user_id=$1 AND mine.removed_at IS NULL AND peer.user_id=p.id AND peer.removed_at IS NULL))`,
+          [userId, tagged]
+        );
+        if (ok.rowCount !== tagged.length) { await client.query("ROLLBACK"); return fail(reply, 403, "tag_not_connected"); }
+      }
       const r = await client.query(
         `INSERT INTO publishing_events(creator_id,title,description,starts_at,ends_at,timezone,venue_name,latitude,longitude,visibility,status,feeling_activity)
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'published',$11) RETURNING id,status`,
@@ -187,6 +202,7 @@ export async function registerPublishingRoutes(app: FastifyInstance, config: App
         await client.query("INSERT INTO publishing_media(event_id,object_key,mime_type,bytes,kind) VALUES($1,$2,$3,$4,$5)", [event.id, u.object_key, u.mime_type, u.bytes, u.kind]);
         await client.query("UPDATE publishing_uploads SET consumed_event_id=$1 WHERE id=$2", [event.id, u.id]);
       }
+      for (const id of tagged) await client.query("INSERT INTO publishing_event_tags(event_id,user_id) VALUES($1,$2)", [event.id, id]);
       await client.query("INSERT INTO publishing_idempotency(owner_id,idempotency_key,event_id) VALUES($1,$2,$3)", [userId, key, event.id]);
       await client.query("COMMIT");
       return reply.code(201).send(event);
@@ -206,7 +222,8 @@ export async function registerPublishingRoutes(app: FastifyInstance, config: App
     if (!uuid.safeParse(id).success) return fail(reply, 400, "invalid_id");
     const r = await db.query(
       `SELECT e.id,e.creator_id,e.title,e.description,e.starts_at,e.ends_at,e.timezone,e.venue_name,e.latitude,e.longitude,e.visibility,e.status,e.feeling_activity,e.created_at,
-              COALESCE((SELECT json_agg(json_build_object('id',m.id,'kind',m.kind,'mimeType',m.mime_type) ORDER BY m.created_at) FROM publishing_media m WHERE m.event_id=e.id),'[]'::json) AS media
+              COALESCE((SELECT json_agg(json_build_object('id',m.id,'kind',m.kind,'mimeType',m.mime_type) ORDER BY m.created_at) FROM publishing_media m WHERE m.event_id=e.id),'[]'::json) AS media,
+              COALESCE((SELECT json_agg(json_build_object('userId',t.user_id,'name',COALESCE(tp.display_name,'Linqa user')) ORDER BY tp.display_name) FROM publishing_event_tags t LEFT JOIN user_profiles tp ON tp.user_id=t.user_id WHERE t.event_id=e.id),'[]'::json) AS tagged
          FROM publishing_events e WHERE e.id=$1 AND (e.creator_id=$2 OR (e.visibility='public' AND e.status='published'))`,
       [id, userId]
     );

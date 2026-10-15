@@ -1,39 +1,46 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Alert, ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, ScrollView,
+  Alert, ActivityIndicator, Keyboard, Modal, Pressable, TextInput as RNTextInput, KeyboardAvoidingView, Platform, ScrollView,
   StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { Ionicons, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
+import { BottomInsetSpacer, ModalSafe } from '../common/ModalSafe';
 
 type Coordinates = { latitude: number; longitude: number };
 type Attachment = { uri: string; type: 'image' | 'video'; mimeType?: string };
 export type EventPayload = {
   title: string; startsAt: string; location: string; coordinates: Coordinates | null;
   description: string; attachments: Attachment[];
+  /** "feeling happy", "watching a game"... shown beside the post. */
+  feelingActivity?: string | null;
+  /** People tagged in the post (people the publisher is connected to). */
+  taggedUserIds?: string[];
 };
+export type TagPerson = { id: string; name: string };
 type Props = {
   onClose: () => void;
   onPublish: (event: EventPayload) => Promise<void>;
   /** Resolve a selected city/venue through your authenticated backend, not a client API key. */
   resolveLocation?: (query: string) => Promise<Coordinates | null>;
-  onTagPeople?: () => void;
-  onFeelingActivity?: () => void;
-  onGif?: () => void;
+  /** The people this publisher can tag. Without it the Tag People button explains that tagging is unavailable. */
+  loadPeople?: () => Promise<TagPerson[]>;
+  /** The phone's current position, for the Location button. */
+  currentPlace?: () => Promise<{ coordinates: Coordinates; label: string } | null>;
   /** Screen title; the supplied default is "Create Event". */
   heading?: string;
   /** Draws the verified location (a Waze map in the app). Without it a plain "Location verified" panel is shown. */
   renderMap?: (coords: Coordinates, place: string) => React.ReactNode;
   /** Copies a picked file somewhere that lasts (Android clears the picker's cache within seconds). Default: use it as picked. */
-  keepFile?: (uri: string, type: 'image' | 'video', base64?: string | null) => Promise<string>;
+  keepFile?: (uri: string, type: 'image' | 'video', base64?: string | null, ext?: 'gif') => Promise<string>;
 };
 const purple = '#6041B8';
 // The supplied reference started at Oct 15, 2026 to match its screenshot; a new item starts an hour from now.
 const initialDate = (() => { const d = new Date(Date.now() + 60 * 60_000); d.setMinutes(Math.ceil(d.getMinutes() / 5) * 5, 0, 0); return d; })();
 
 export default function LinqaCreateEvent({
-  onClose, onPublish, resolveLocation, onTagPeople, onFeelingActivity, onGif, heading = 'Create Event', keepFile, renderMap,
+  onClose, onPublish, resolveLocation, loadPeople, currentPlace, heading = 'Create Event', keepFile, renderMap,
 }: Props) {
   const [title, setTitle] = useState('');
   const [startsAt, setStartsAt] = useState(initialDate);
@@ -44,6 +51,11 @@ export default function LinqaCreateEvent({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
   const [finding, setFinding] = useState(false);
+  const [feeling, setFeeling] = useState<string | null>(null);
+  const [tagged, setTagged] = useState<TagPerson[]>([]);
+  const [sheet, setSheet] = useState<'feeling' | 'people' | 'place' | null>(null);
+  const [people, setPeople] = useState<TagPerson[] | null>(null);
+  const locationInput = React.useRef<RNTextInput>(null);
   // On Android the window does not shrink for the keyboard, so the toolbar would sit underneath it. Lift it by the keyboard's height.
   const [keyboard, setKeyboard] = useState(0);
   useEffect(() => {
@@ -67,6 +79,40 @@ export default function LinqaCreateEvent({
       } catch { Alert.alert('Could not attach', 'That file could not be read. Please try again.'); }
     }
   }
+  /** GIFs come from the phone's library: only real GIF files are accepted. */
+  async function chooseGif() {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) { Alert.alert('Permission required', 'Allow photo library access to attach a GIF.'); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: false, quality: 1, base64: Boolean(keepFile) });
+    if (result.canceled || !result.assets[0]) return;
+    const a = result.assets[0];
+    const isGif = a.mimeType === 'image/gif' || /\.gif$/i.test(a.fileName ?? a.uri);
+    if (!isGif) { Alert.alert('Not a GIF', 'Choose a GIF file from your phone.'); return; }
+    try {
+      const uri = keepFile ? await keepFile(a.uri, 'image', a.base64, 'gif') : a.uri;
+      setAttachments(prev => [...prev, { uri, type: 'image', mimeType: 'image/gif' }]);
+    } catch { Alert.alert('Could not attach', 'That GIF could not be read. Please try again.'); }
+  }
+  async function openPeople() {
+    if (!loadPeople) { Alert.alert('Tagging unavailable', 'People can not be tagged on this screen.'); return; }
+    setSheet('people'); setPeople(null);
+    try { setPeople(await loadPeople()); } catch { setPeople([]); Alert.alert('Could not load people', 'Check your connection and try again.'); }
+  }
+  async function useCurrentPlace() {
+    setSheet(null);
+    if (!currentPlace) return;
+    setFinding(true);
+    try {
+      const here = await currentPlace();
+      if (!here) { Alert.alert('Location unavailable', 'Turn on location access for Linqa, or type a place instead.'); return; }
+      setLocation(here.label); setCoords(here.coordinates);
+    } catch { Alert.alert('Location unavailable', 'Please try again.'); }
+    finally { setFinding(false); }
+  }
+  function locationButton() {
+    if (location.trim() && !coords) { void lookupLocation(); return; }
+    setSheet('place');
+  }
   async function lookupLocation() {
     if (!location.trim() || !resolveLocation) return;
     setFinding(true);
@@ -84,7 +130,7 @@ export default function LinqaCreateEvent({
     if (busy) return;
     setBusy(true);
     try {
-      await onPublish({ title: title.trim(), startsAt: startsAt.toISOString(), location: location.trim(), coordinates: coords, description: description.trim(), attachments });
+      await onPublish({ title: title.trim(), startsAt: startsAt.toISOString(), location: location.trim(), coordinates: coords, description: description.trim(), attachments, feelingActivity: feeling, taggedUserIds: tagged.map(t => t.id) });
     } catch { Alert.alert('Unable to post', 'Your event was not confirmed. Please retry.'); }
     finally { setBusy(false); }
   }
@@ -92,10 +138,10 @@ export default function LinqaCreateEvent({
   const timeText = startsAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   const tools = [
     { label: 'Photo/\nVideo', icon: 'camera' as const, tint: '#D7F4DC', color: '#24964E', action: chooseMedia },
-    { label: 'Tag People', icon: 'person-add' as const, tint: '#DDEFFF', color: '#2475C7', action: () => onTagPeople?.() },
-    { label: 'Feeling/\nActivity', icon: 'happy-outline' as const, tint: '#FFF5D6', color: '#C7A01A', action: () => onFeelingActivity?.() },
-    { label: 'Location', icon: 'location' as const, tint: '#FFE3E5', color: '#D84A59', action: lookupLocation },
-    { label: 'GIFs', icon: 'images-outline' as const, tint: '#F1DDF7', color: '#A04BB8', action: () => onGif?.() },
+    { label: 'Tag People', icon: 'person-add' as const, tint: '#DDEFFF', color: '#2475C7', action: () => { void openPeople(); } },
+    { label: 'Feeling/\nActivity', icon: 'happy-outline' as const, tint: '#FFF5D6', color: '#C7A01A', action: () => setSheet('feeling') },
+    { label: 'Location', icon: 'location' as const, tint: '#FFE3E5', color: '#D84A59', action: locationButton },
+    { label: 'GIFs', icon: 'images-outline' as const, tint: '#F1DDF7', color: '#A04BB8', action: chooseGif },
   ];
   return (
     <KeyboardAvoidingView style={[styles.root, { paddingBottom: keyboard }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -133,7 +179,7 @@ export default function LinqaCreateEvent({
               <View style={styles.mapPlaceholder}><Ionicons name="map-outline" size={34} color="#9A97A6" /><Text style={styles.mapHint}>Search for a city or venue</Text></View>}
             <View style={styles.locationRow}>
               <Ionicons name="location" size={23} color="#2478B7" />
-              <TextInput style={styles.locationInput} placeholder="City or Venue" value={location} onChangeText={v => { setLocation(v); setCoords(null); }} onSubmitEditing={lookupLocation} returnKeyType="search" />
+              <TextInput ref={locationInput} style={styles.locationInput} placeholder="City or Venue" value={location} onChangeText={v => { setLocation(v); setCoords(null); }} onSubmitEditing={lookupLocation} returnKeyType="search" />
               <TouchableOpacity onPress={lookupLocation} disabled={!resolveLocation || finding} accessibilityLabel="Find location">
                 {finding ? <ActivityIndicator /> : <Ionicons name="search" size={21} color={purple} />}
               </TouchableOpacity>
@@ -144,15 +190,42 @@ export default function LinqaCreateEvent({
           <TextInput style={styles.description} placeholder="Add event description..." placeholderTextColor="#777" multiline value={description} onChangeText={setDescription} maxLength={5000} textAlignVertical="top" />
           <Text style={styles.counter}>{description.length}/5000</Text>
         </View>
+        {(feeling || tagged.length > 0) && <View style={styles.chips}>
+          {feeling && <TouchableOpacity style={styles.chip} onPress={() => setFeeling(null)} accessibilityLabel={`Remove ${feeling}`}><Text style={styles.chipTextSmall}>{feeling}</Text><Ionicons name="close" size={14} color={purple} /></TouchableOpacity>}
+          {tagged.map(t => <TouchableOpacity key={t.id} style={styles.chip} onPress={() => setTagged(prev => prev.filter(x => x.id !== t.id))} accessibilityLabel={`Remove tag ${t.name}`}><Text style={styles.chipTextSmall}>with {t.name}</Text><Ionicons name="close" size={14} color={purple} /></TouchableOpacity>)}
+        </View>}
         {attachments.length > 0 && <Text style={styles.attached}>{attachments.length} media attachment(s) selected</Text>}
       </ScrollView>
       <View style={styles.toolbar}>{tools.map(t => <TouchableOpacity key={t.label} style={styles.tool} onPress={t.action} accessibilityLabel={t.label.replace('\n', ' ')}>
         <View style={[styles.toolIcon, { backgroundColor: t.tint }]}><Ionicons name={t.icon} size={23} color={t.color} /></View>
         <Text style={styles.toolLabel}>{t.label}</Text>
       </TouchableOpacity>)}</View>
+      <Modal visible={sheet !== null} transparent animationType="slide" onRequestClose={() => setSheet(null)} statusBarTranslucent navigationBarTranslucent>
+        <ModalSafe>
+        <Pressable style={styles.scrim} onPress={() => setSheet(null)} accessibilityLabel="Close" />
+        <View style={styles.sheet}>
+          <View style={styles.sheetHead}>
+            <Text style={styles.sheetTitle}>{sheet === 'feeling' ? 'Feeling / Activity' : sheet === 'people' ? 'Tag people' : 'Location'}</Text>
+            <TouchableOpacity onPress={() => setSheet(null)} accessibilityLabel="Close" hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}><Ionicons name="close" size={24} color="#17151C" /></TouchableOpacity>
+          </View>
+          <ScrollView style={{ maxHeight: 380 }} keyboardShouldPersistTaps="handled">
+            {sheet === 'feeling' && FEELINGS.map(f => <TouchableOpacity key={f} style={styles.row} onPress={() => { setFeeling(f); setSheet(null); }}><Text style={styles.rowText}>{f}</Text>{feeling === f && <Ionicons name="checkmark" size={20} color={purple} />}</TouchableOpacity>)}
+            {sheet === 'people' && (people === null ? <ActivityIndicator style={{ margin: 24 }} color={purple} /> : people.length === 0 ? <Text style={styles.empty}>Start a chat with someone first. You can tag people you are connected to.</Text> :
+              people.map(p => { const on = tagged.some(t => t.id === p.id); return <TouchableOpacity key={p.id} style={styles.row} onPress={() => setTagged(prev => on ? prev.filter(t => t.id !== p.id) : prev.length >= 20 ? prev : [...prev, p])}><Text style={styles.rowText}>{p.name}</Text><Ionicons name={on ? 'checkmark-circle' : 'ellipse-outline'} size={22} color={on ? purple : '#9A97A6'} /></TouchableOpacity>; }))}
+            {sheet === 'place' && <>
+              {currentPlace && <TouchableOpacity style={styles.row} onPress={() => void useCurrentPlace()}><Ionicons name="navigate" size={20} color="#2478B7" /><Text style={[styles.rowText, { marginLeft: 10 }]}>Use my current location</Text></TouchableOpacity>}
+              <TouchableOpacity style={styles.row} onPress={() => { setSheet(null); setTimeout(() => locationInput.current?.focus(), 350); }}><Ionicons name="search" size={20} color={purple} /><Text style={[styles.rowText, { marginLeft: 10 }]}>Search for a city or venue</Text></TouchableOpacity>
+            </>}
+          </ScrollView>
+          {sheet === 'people' && <TouchableOpacity style={styles.sheetDone} onPress={() => setSheet(null)}><Text style={styles.sheetDoneText}>Done{tagged.length ? ` (${tagged.length})` : ''}</Text></TouchableOpacity>}
+          <BottomInsetSpacer min={0} extra={4} />
+        </View>
+        </ModalSafe>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
+const FEELINGS = ['😊 feeling happy', '🥳 feeling excited', '🙏 feeling blessed', '😍 feeling loved', '😎 feeling cool', '🤔 feeling thoughtful', '😴 feeling tired', '🎉 celebrating', '✈️ traveling', '🎵 listening to music', '🍽️ eating out', '⚽ watching a game', '📚 studying', '💼 working', '🏋️ working out'];
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#F8F8F6' },
   header: { height: 72, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -177,6 +250,18 @@ const styles = StyleSheet.create({
   locationInput: { flex: 1, fontSize: 16, color: '#201C24' },
   descriptionWrap: { borderRadius: 17, borderWidth: 1, borderColor: '#D2D2D0', backgroundColor: '#F1F1EF', minHeight: 98, padding: 14 },
   description: { minHeight: 55, fontSize: 16, color: '#201C24' }, counter: { textAlign: 'right', color: '#6C6870', fontSize: 12 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#EAE5F8', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6 },
+  chipTextSmall: { color: purple, fontWeight: '600', fontSize: 13 },
+  scrim: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
+  sheet: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 8 },
+  sheetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  sheetTitle: { fontSize: 19, fontWeight: '700', color: '#19151F' },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#EEE' },
+  rowText: { fontSize: 16, color: '#201C24', flex: 1 },
+  empty: { color: '#6C6870', textAlign: 'center', padding: 20, lineHeight: 20 },
+  sheetDone: { marginTop: 12, backgroundColor: purple, borderRadius: 24, paddingVertical: 13, alignItems: 'center' },
+  sheetDoneText: { color: 'white', fontWeight: '700', fontSize: 16 },
   attached: { fontSize: 13, color: purple },
   toolbar: { flexDirection: 'row', justifyContent: 'space-around', backgroundColor: 'white', paddingTop: 9, paddingBottom: 12, borderTopWidth: 1, borderTopColor: '#E4E4E4' },
   tool: { flex: 1, alignItems: 'center', gap: 4 }, toolIcon: { width: 42, height: 42, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
