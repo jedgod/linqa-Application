@@ -24,5 +24,12 @@ jobs:
           cache-dependency-path: ${{ matrix.directory }}/package-lock.json
       - run: npm ci --ignore-scripts
         working-directory: ${{ matrix.directory }}
-      - run: npm audit --audit-level=high
-        working-directory: ${{ matrix.directory }}
+      - name: Audit server dependencies
+        if: matrix.directory == 'server'
+        run: npm audit --audit-level=high
+        working-directory: server
+      # Mobile uses an explicit, reviewed accepted-risk list (clients/mobile/audit-ci.jsonc); any new high/critical advisory fails.
+      - name: Audit mobile dependencies
+        if: matrix.directory == 'clients/mobile'
+        run: npx --yes audit-ci@7.1.0 --config audit-ci.jsonc
+        working-directory: clients/mobile

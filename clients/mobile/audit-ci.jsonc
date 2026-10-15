@@ -1,0 +1,20 @@
+{
+  // Mobile dependency audit gate. Any NEW high or critical advisory fails CI; only the advisories below are accepted.
+  // All of them are in build-time tooling (Metro, Expo CLI, code-signing helpers) and are not bundled into the app
+  // that runs on phones. Accepted 2026-10-15 by the repository owner. Review each entry by 2027-04-15 or sooner,
+  // and remove it as soon as an upstream fix exists (check `npm view <package> versions`).
+  "high": true,
+  "report-type": "important",
+  "allowlist": [
+    // braces <=3.0.3: stack-exhaustion DoS in glob matching during builds. No patched release on npm (3.0.3 is latest).
+    "GHSA-vfj7-8cjw-p6xm",
+    // node-forge <=1.4.0: RSA PKCS#1 v1.5 verification flaw, reached through expo-updates code-signing tooling.
+    // No patched release on npm (1.4.0 is latest).
+    "GHSA-86w9-cpqp-85rv",
+    // image-size 1.2.1: JXL/HEIF parser DoS in Metro/Expo build tooling. Fixed in 2.0.3+, but that is a major bump of a
+    // transitive build dependency not yet validated against Expo 57; tracked for follow-up.
+    "GHSA-5p2g-fcmc-qvqq",
+    // image-size 1.2.1: ICNS parser DoS in Metro/Expo build tooling. Same fix path as GHSA-5p2g-fcmc-qvqq.
+    "GHSA-w3rx-r6r6-pgpr"
+  ]
+}
