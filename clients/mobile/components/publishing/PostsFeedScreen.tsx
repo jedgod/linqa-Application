@@ -14,7 +14,8 @@ import { getApiBaseUrl } from '../../config/api';
 import { accessTokenProvider } from '../../services/session';
 import { bytesToBase64 } from '../../services/secure-core';
 import { PersonAvatar } from '../account/PersonAvatar';
-import { EnlargedMap, PlainLocationMap } from './PlainLocationMap';
+import { PlainLocationMap } from './PlainLocationMap';
+import LinqaMapFollowScreen from './LinqaMapFollowScreen';
 
 interface FeedPost {
   id: string;
@@ -168,7 +169,7 @@ export default function PostsFeedScreen() {
       )}
       {bigMap ? (
         <View style={styles.embedded}>
-          <EnlargedMap latitude={bigMap.latitude} longitude={bigMap.longitude} label={bigMap.label} autoStart={bigMap.autoStart} embedded onClose={() => setBigMap(null)} />
+          <LinqaMapFollowScreen destination={{ latitude: bigMap.latitude, longitude: bigMap.longitude }} destinationTitle={bigMap.label} autoStart={bigMap.autoStart} embedded onClose={() => setBigMap(null)} />
         </View>
       ) : null}
 
