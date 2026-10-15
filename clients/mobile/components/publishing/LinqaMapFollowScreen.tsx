@@ -224,7 +224,7 @@ export default function LinqaMapFollowScreen({
       />
 
       {/* Where this is: the destination's name, so it is never forgotten */}
-      <View style={styles.placeLabel} pointerEvents="none">
+      <View style={[styles.placeLabel, onClose ? { right: 76 } : null]} pointerEvents="none">
         <Ionicons name="location" size={18} color="#D84A59" />
         <View style={{ flexShrink: 1 }}>
           {destinationName ? <Text numberOfLines={1} style={styles.placeLabelText}>{destinationName}</Text> : null}
@@ -307,7 +307,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   placeLabel: {
-    position: 'absolute', top: 12, left: 16, right: 76, flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start',
+    position: 'absolute', top: 12, left: 16, right: 16, flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start',
     backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 8, elevation: 4,
   },
   placeLabelText: { flexShrink: 1, color: '#17151C', fontWeight: '700', fontSize: 15 },

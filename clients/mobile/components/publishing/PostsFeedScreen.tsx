@@ -150,7 +150,7 @@ export default function PostsFeedScreen() {
       {/* Top banner navigation row */}
       <View style={styles.topBar}>
         <Text style={styles.heading}>Linqa Discover</Text>
-        <TouchableOpacity onPress={() => router.replace('/(tabs)/home')} accessibilityRole="button" accessibilityLabel="Close" style={styles.closeBtn}>
+        <TouchableOpacity onPress={() => { if (bigMap) setBigMap(null); else router.replace('/(tabs)/home'); }} accessibilityRole="button" accessibilityLabel={bigMap ? 'Close map' : 'Close'} style={styles.closeBtn}>
           <Ionicons name="close" size={22} color="#1D4ED8" />
         </TouchableOpacity>
       </View>
@@ -169,7 +169,7 @@ export default function PostsFeedScreen() {
       )}
       {bigMap ? (
         <View style={styles.embedded}>
-          <LinqaMapFollowScreen destination={{ latitude: bigMap.latitude, longitude: bigMap.longitude }} destinationTitle={bigMap.label} destinationName={bigMap.name} autoStart={bigMap.autoStart} embedded onClose={() => setBigMap(null)} />
+          <LinqaMapFollowScreen destination={{ latitude: bigMap.latitude, longitude: bigMap.longitude }} destinationTitle={bigMap.label} destinationName={bigMap.name} autoStart={bigMap.autoStart} embedded />
         </View>
       ) : null}
 
