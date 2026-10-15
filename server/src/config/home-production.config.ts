@@ -21,7 +21,7 @@ export const homeProductionConfig = {
   },
   feed: {
     snapshotTtlSeconds: positiveNumber(process.env.HOME_FEED_SNAPSHOT_TTL, 120),
-    maxNewsItems: positiveNumber(process.env.HOME_FEED_MAX_NEWS, 20),
+    maxNewsItems: positiveNumber(process.env.HOME_FEED_MAX_NEWS, 40),
     maxUpcomingItems: 10,
     maxContinueItems: 12,
     maxLiveUpdateItems: positiveNumber(process.env.HOME_FEED_MAX_LIVE_UPDATES, 6),
