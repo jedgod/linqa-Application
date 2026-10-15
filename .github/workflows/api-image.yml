@@ -77,7 +77,8 @@ jobs:
           image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           format: table
           exit-code: "1"
-          ignore-unfixed: false
+          # Fail on every HIGH/CRITICAL that has a vendor fix; findings with no fix yet cannot be remediated by rebuilding.
+          ignore-unfixed: true
           scanners: vuln
           severity: CRITICAL,HIGH
       - name: Verify runtime user and packaged entry point
