@@ -8,6 +8,7 @@ import React, { useMemo, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import { openDirections } from "./directions";
 import { WebView } from "react-native-webview";
 
 const LEAFLET = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4";
@@ -78,12 +79,20 @@ function MapFrame({ latitude, longitude, height, zoom, interactive }: { latitude
   );
 }
 
-function EnlargedBar({ onClose }: { onClose: () => void }) {
+function EnlargedBar({ onClose, onDirections }: { onClose: () => void; onDirections?: () => void }) {
   const insets = useSafeAreaInsets();
   return (
+    <>
+    {onDirections ? (
+      <Pressable onPress={onDirections} accessibilityRole="button" accessibilityLabel="Get driving directions" style={[styles.directions, { bottom: insets.bottom + 24 }]}>
+        <Ionicons name="navigate" size={20} color="#FFFFFF" />
+        <Text style={styles.directionsText}>Directions</Text>
+      </Pressable>
+    ) : null}
     <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close map" hitSlop={12} style={[styles.close, { top: insets.top + 10 }]}>
       <Ionicons name="close" size={26} color="#17151C" />
     </Pressable>
+    </>
   );
 }
 
@@ -91,7 +100,7 @@ function EnlargedBar({ onClose }: { onClose: () => void }) {
  * A small, plain map. Tapping it opens a full-screen map that can be moved and zoomed; the same component is used for the
  * publisher (while writing) and for anyone reading the post. `enlargeable={false}` keeps it fixed.
  */
-export function PlainLocationMap({ latitude, longitude, height = 200, zoom = 15, enlargeable = true }: { latitude: number; longitude: number; height?: number; zoom?: number; enlargeable?: boolean }) {
+export function PlainLocationMap({ latitude, longitude, height = 200, zoom = 15, enlargeable = true, label, directions = true }: { latitude: number; longitude: number; height?: number; zoom?: number; enlargeable?: boolean; /** The place name, shown in the directions prompt. */ label?: string; /** Show the Directions buttons (default). */ directions?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <View style={{ height }}>
@@ -101,11 +110,16 @@ export function PlainLocationMap({ latitude, longitude, height = 200, zoom = 15,
           <View style={styles.expand}><Ionicons name="expand" size={16} color="#17151C" /></View>
         </Pressable>
       ) : null}
+      {directions ? (
+        <Pressable onPress={() => openDirections(latitude, longitude, label)} accessibilityRole="button" accessibilityLabel="Get driving directions" hitSlop={6} style={styles.navMini}>
+          <Ionicons name="navigate" size={16} color="#FFFFFF" />
+        </Pressable>
+      ) : null}
       <Modal visible={open} animationType="fade" onRequestClose={() => setOpen(false)} statusBarTranslucent navigationBarTranslucent>
         <SafeAreaProvider>
           <View style={styles.full}>
             {open ? <MapFrame latitude={latitude} longitude={longitude} height="100%" zoom={zoom} interactive /> : null}
-            <EnlargedBar onClose={() => setOpen(false)} />
+            <EnlargedBar onClose={() => setOpen(false)} onDirections={directions ? () => openDirections(latitude, longitude, label) : undefined} />
           </View>
         </SafeAreaProvider>
       </Modal>
@@ -116,6 +130,9 @@ export function PlainLocationMap({ latitude, longitude, height = 200, zoom = 15,
 const styles = StyleSheet.create({
   full: { flex: 1, backgroundColor: "#E9EBE8" },
   close: { position: "absolute", right: 16, width: 44, height: 44, borderRadius: 22, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center", elevation: 6, shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  directions: { position: "absolute", alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#2478B7", borderRadius: 26, paddingHorizontal: 22, paddingVertical: 14, elevation: 6, shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  directionsText: { color: "#FFFFFF", fontWeight: "700", fontSize: 16 },
+  navMini: { position: "absolute", top: 44, right: 8, width: 30, height: 30, borderRadius: 15, backgroundColor: "#2478B7", alignItems: "center", justifyContent: "center" },
   expand: { position: "absolute", top: 8, right: 8, width: 30, height: 30, borderRadius: 15, backgroundColor: "rgba(255,255,255,0.9)", alignItems: "center", justifyContent: "center" },
   box: { width: "100%", backgroundColor: "#E9EBE8", overflow: "hidden" },
   fill: { flex: 1, backgroundColor: "#E9EBE8" },

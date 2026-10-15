@@ -126,7 +126,7 @@ export default function PostsFeedScreen() {
       {/* Post map: plain Linqa map, tap to enlarge */}
       {item.location ? (
         <View style={styles.mapBox}>
-          <PlainLocationMap latitude={item.location.latitude} longitude={item.location.longitude} height={176} />
+          <PlainLocationMap latitude={item.location.latitude} longitude={item.location.longitude} height={176} label={item.location.title} />
           <View style={styles.hud} pointerEvents="none">
             <View style={styles.hudDot} />
             <Text numberOfLines={1} style={styles.hudText}>{item.location.title}</Text>

@@ -73,7 +73,7 @@ export default function CreateEventConnected({ config, onClose, heading, onPubli
   /** Called only when the server confirmed the item; queued (offline) items are reported later by the sync. */
   onPublished?: (info: PublishedInfo) => void | Promise<void>;
 }) {
-  return <LinqaCreateEvent onClose={onClose} heading={heading} resolveLocation={resolveLocation} keepFile={keepFile} loadPeople={loadPeople} currentPlace={currentPlace} renderMap={(coords) => <PlainLocationMap latitude={coords.latitude} longitude={coords.longitude} height={200} />} onPublish={async event => {
+  return <LinqaCreateEvent onClose={onClose} heading={heading} resolveLocation={resolveLocation} keepFile={keepFile} loadPeople={loadPeople} currentPlace={currentPlace} renderMap={(coords, place) => <PlainLocationMap latitude={coords.latitude} longitude={coords.longitude} height={200} label={place} />} onPublish={async event => {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const result = await publishOrQueue(config, event, timezone);
     const noun = (heading ?? 'event').toLowerCase().includes('post') ? 'post' : 'event';
