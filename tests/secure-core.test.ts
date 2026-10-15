@@ -44,7 +44,7 @@ class FakeCore implements CoreBridge {
 
 const mem = (initial: Record<string, string> = {}): SecretStore & { data: Record<string, string> } => {
   const data = { ...initial };
-  return { data, async get(k) { return data[k] ?? null; }, async put(k, v) { data[k] = v; } };
+  return { data, async protectionLevel() { return "OS_PROTECTED"; }, async get(k) { return data[k] ?? null; }, async put(k, v) { data[k] = v; } };
 };
 const enrolled = (deviceId: string, seed: number) => mem({ "device.signingPrivateKey": bytesToBase64(new Uint8Array(32).fill(seed)), "device.encryptionPrivateKey": bytesToBase64(new Uint8Array(32).fill(seed + 1)), "device.id": deviceId });
 
@@ -116,6 +116,36 @@ test("the key package is for this device, valid two weeks, and says when it expi
   const pkg = unb64(made.packageBase64) as KeyPackageJson;
   assert.equal(pkg.user_id, USER_A);
   assert.equal(pkg.device_id, "10000000-0000-4000-8000-0000000000a1");
+});
+
+test("software core protection requires a verified OS storage adapter", async () => {
+  const p = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  delete p.store.protectionLevel;
+  assert.equal(await p.device.asNativeCore().protectionLevel(), "SOFTWARE_REQUIRES_OS_WRAPPING");
+  p.store.protectionLevel = async () => "OS_PROTECTED";
+  assert.equal(await p.device.asNativeCore().protectionLevel(), "OS_PROTECTED");
+  p.store.protectionLevel = async () => null;
+  assert.equal(await p.device.asNativeCore().protectionLevel(), "SOFTWARE_REQUIRES_OS_WRAPPING");
+  p.store.protectionLevel = async () => { throw new Error("keystore unavailable"); };
+  await assert.rejects(p.device.asNativeCore().protectionLevel(), /keystore unavailable/);
+  p.core.protectionLevel = async () => "unknown";
+  assert.equal(await code(p.device.asNativeCore().protectionLevel()), "KEY_PROTECTION_REQUIRED");
+});
+
+test("direct message calls cannot bypass key protection, including cached plaintext", async () => {
+  const a = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const b = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 2);
+  const directory = await directoryOf([a, b]);
+  const sender = messaging(a, directory), receiver = messaging(b, directory);
+  const context = { conversationId: CONV, senderUserId: USER_A, clientMessageId: "protection-boundary" };
+  const ciphertext = await sender.seal("private", context);
+  const readContext = { conversationId: CONV, senderUserId: USER_A, messageId: context.clientMessageId };
+  assert.equal(await receiver.open(ciphertext, readContext), "private");
+  a.store.protectionLevel = async () => null;
+  b.store.protectionLevel = async () => null;
+  const rejected = (error: unknown) => (error as { code?: string }).code === "MESSAGING_KEY_PROTECTION_REQUIRED";
+  await assert.rejects(sender.seal("blocked", { ...context, clientMessageId: "blocked" }), rejected);
+  await assert.rejects(receiver.open(ciphertext, readContext), rejected);
 });
 
 test("a message is sealed for the other person and for the sender, and opens on both", async () => {

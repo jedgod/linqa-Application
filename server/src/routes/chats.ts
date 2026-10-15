@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
+import { assertActivePrincipal } from "../auth/active-principal.js";
 
 /**
  * Chat inbox for the Chats tab.
@@ -74,10 +75,7 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
     try {
       principal = await authenticate(request);
       requireScope(principal, "messages:read");
-      if(principal.deviceId){
-        const device=await db.query("SELECT 1 FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL",[principal.deviceId,principal.userId]);
-        if(!device.rowCount)throw new Error('device authentication revoked');
-      }
+      await assertActivePrincipal(db, principal);
     } catch (error) {
       request.log.warn({ err: error }, "chat inbox authentication rejected");
       return reply.code(401).send({ error: "unauthenticated" });
@@ -333,6 +331,7 @@ export async function registerChatRoutes(app: FastifyInstance, config: AppConfig
     try {
       principal = await authenticate(request);
       requireScope(principal, "messages:read");
+      await assertActivePrincipal(db, principal);
       if(principal.deviceId){
         const device=await db.query("SELECT 1 FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL",[principal.deviceId,principal.userId]);
         if(!device.rowCount)throw new Error('device authentication revoked');

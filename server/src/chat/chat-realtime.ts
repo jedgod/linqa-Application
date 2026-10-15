@@ -51,6 +51,7 @@ export interface ChatRealtimePrincipal {
   deviceId: string;
   /** Unix seconds from the access token, or undefined if it carried none. */
   expiresAt: number | undefined;
+  authorize?: () => Promise<boolean>;
 }
 
 /**
@@ -122,6 +123,7 @@ export function attachChatRealtime(
       return;
     }
 
+    if (principal.authorize && !await principal.authorize()) return;
     const text = raw.toString();
     // The pre-existing liveness probe.
     if (text === "ping") {

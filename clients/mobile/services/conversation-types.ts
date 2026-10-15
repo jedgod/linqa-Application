@@ -4,7 +4,7 @@ import type { Payload } from "./conversation-engine";
 // The two "Like" interfaces describe what the screen needs; `ConversationService` (conversation.service.ts)
 // and `createMessagingGate` (conversation-gate.ts) are the real implementations.
 
-export type LockReason = "SECURE_CORE_UNAVAILABLE" | "PROBE_FAILED" | "NOT_READY";
+export type LockReason = "SECURE_CORE_UNAVAILABLE" | "PROBE_FAILED" | "NOT_READY" | "KEY_PROTECTION_REQUIRED";
 
 export type MessagingMode = { mode: "LIVE" } | { mode: "LOCKED"; reason: LockReason };
 
@@ -69,5 +69,5 @@ export interface ConversationPeer {
 
 export function isSecureCoreError(e: unknown): boolean {
   const err = e as { code?: string; message?: string } | undefined;
-  return err?.code === "SECURE_CORE_UNAVAILABLE" || (typeof err?.message === "string" && err.message.includes("SECURE_CORE_UNAVAILABLE"));
+  return err?.code === "SECURE_CORE_UNAVAILABLE" || err?.code === "MESSAGING_KEY_PROTECTION_REQUIRED" || (typeof err?.message === "string" && err.message.includes("SECURE_CORE_UNAVAILABLE"));
 }

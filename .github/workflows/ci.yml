@@ -5,12 +5,13 @@ on:
     branches: ["main", "develop"]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -105,7 +106,17 @@ jobs:
       - run: npm run db:migrate
       - name: Verify migration ledger and idempotent upgrade replay
         run: npm run db:migrate
+      - name: Install mobile encryption dependencies
+        working-directory: clients/mobile
+        run: npm ci --ignore-scripts
       - run: npm test
+      - name: Chat security boundary regressions
+        run: npm run test:security:chat
+      - name: Mobile key-protection regressions
+        working-directory: .
+        run: node --import ./server/node_modules/tsx/dist/loader.mjs --test tests/messaging-gate-security.test.ts tests/secure-core.test.ts
+      - name: Offline metadata encryption and audit verifier regressions
+        run: npm run test:encryption
       - run: npm run build
 
   web:

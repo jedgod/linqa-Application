@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
+import { assertActivePrincipal } from "../auth/active-principal.js";
 import { simpleRateLimit } from "../services/countrylinqa/final/rate-limit.js";
 import type { RealtimeHub } from "../realtime/hub.js";
 import {
@@ -100,10 +101,7 @@ export async function registerChatV2Routes(
     try {
       const principal = await authenticate(request);
       requireScope(principal, scope);
-      if (principal.deviceId) {
-        const device=await db.query("SELECT 1 FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL",[principal.deviceId,principal.userId]);
-        if (!device.rowCount) throw new Error('device authentication revoked');
-      }
+      await assertActivePrincipal(db, principal);
       return principal;
     } catch (error) {
       request.log.warn({ err: error }, "chat v2 authentication rejected");

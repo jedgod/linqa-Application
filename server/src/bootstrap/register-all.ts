@@ -154,7 +154,7 @@ export async function registerAll(
     gap: services.gap
   });
   await registerPasskeyRoutes(app, config, services.passkeys, services.stepUp);
-  await registerFileVaultRoutes(app, config, services.fileVault, undefined, biometrics);
+  await registerFileVaultRoutes(app, config, services.fileVault, undefined, biometrics, db);
   if (config.NODE_ENV !== "production" && !(config.OBJECT_STORAGE_REGION && config.OBJECT_STORAGE_BUCKET && config.OBJECT_STORAGE_KMS_KEY_ID)) {
     await registerLocalVaultBlobRoutes(app, config.JWT_HS256_SECRET);
   }

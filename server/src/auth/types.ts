@@ -3,5 +3,6 @@ export interface AuthPrincipal {
   userId: string;
   deviceId?: string;
   sessionId?: string;
+  expiresAt?: number;
   scopes: ReadonlySet<string>;
 }

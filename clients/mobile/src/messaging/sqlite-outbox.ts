@@ -1,5 +1,9 @@
 import * as SQLite from "expo-sqlite";
 import type { MobileOutboxDb, MobileOutboxRow, MediaOutboxRow } from "./outbox";
+import { getRandomBytes } from "expo-crypto";
+import { loadOfflineMetadataKey } from "./offline-metadata-key";
+import { OfflineMetadataCipher } from "./offline-metadata";
+import { ProtectedMobileOutbox } from "./protected-outbox";
 
 const toRow = (row: any): MobileOutboxRow => ({
   messageId: row.message_id, accountId: row.account_id,
@@ -13,11 +17,13 @@ const toRow = (row: any): MobileOutboxRow => ({
 export class ExpoSqliteMobileOutboxDb implements MobileOutboxDb {
   private constructor(private readonly accountId: string, private readonly db: SQLite.SQLiteDatabase) {}
 
-  static async open(accountId: string): Promise<ExpoSqliteMobileOutboxDb> {
+  static async open(accountId: string): Promise<MobileOutboxDb> {
     if (!accountId.trim()) throw new Error("OUTBOX_ACCOUNT_REQUIRED");
+    const cipher = new OfflineMetadataCipher(await loadOfflineMetadataKey(accountId), accountId, getRandomBytes);
     const db = await SQLite.openDatabaseAsync("linqa-encrypted-outbox.db");
     await db.execAsync(`
       PRAGMA journal_mode = WAL;
+      PRAGMA secure_delete = ON;
       CREATE TABLE IF NOT EXISTS encrypted_mobile_outbox (
         message_id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL,
@@ -44,7 +50,25 @@ export class ExpoSqliteMobileOutboxDb implements MobileOutboxDb {
     const columns = (await db.getAllAsync<{ name: string }>("PRAGMA table_info(encrypted_mobile_outbox)")).map((c) => c.name);
     if (!columns.includes("created_at")) await db.execAsync("ALTER TABLE encrypted_mobile_outbox ADD COLUMN created_at INTEGER");
     if (!columns.includes("error_code")) await db.execAsync("ALTER TABLE encrypted_mobile_outbox ADD COLUMN error_code TEXT");
-    return new ExpoSqliteMobileOutboxDb(accountId, db);
+    const accountIndex = cipher.index("account", accountId);
+    const protectedDb = new ProtectedMobileOutbox(new ExpoSqliteMobileOutboxDb(accountIndex, db), cipher, accountId);
+    // Upgrade only this account. A transaction makes a crash retryable without dropping queued ciphertext.
+    await db.withExclusiveTransactionAsync(async tx => {
+      const messages = await tx.getAllAsync<any>("SELECT * FROM encrypted_mobile_outbox WHERE account_id=?", accountId);
+      for (const record of messages) {
+        const row = protectedDb.protectMessage(toRow(record));
+        await tx.runAsync("UPDATE encrypted_mobile_outbox SET account_id=?,conversation_id=?,recipient_device_id=?,encrypted_envelope_b64=? WHERE message_id=? AND account_id=?",
+          accountIndex, row.conversationId, row.recipientDeviceId, row.encryptedEnvelopeB64, row.messageId, accountId);
+      }
+      const media = await tx.getAllAsync<any>("SELECT * FROM encrypted_media_uploads_v1 WHERE account_id=?", accountId);
+      for (const record of media) {
+        const source: MediaOutboxRow = { messageId: record.message_id, conversationId: record.conversation_id, deviceId: record.device_id, mediaId: record.media_id, envelope: record.envelope_b64, ciphertext: record.ciphertext };
+        const row = protectedDb.protectMedia(source, { messageId: source.messageId, accountId, conversationId: source.conversationId, recipientDeviceId: "*", encryptedEnvelopeB64: source.ciphertext, state: "QUEUED", attempts: 0, nextAttemptAt: Date.now() });
+        await tx.runAsync("UPDATE encrypted_media_uploads_v1 SET account_id=?,conversation_id=?,device_id=?,media_id=?,envelope_b64=?,ciphertext=? WHERE message_id=? AND account_id=?",
+          accountIndex, row.conversationId, row.deviceId, row.mediaId, row.envelope, row.ciphertext, row.messageId, accountId);
+      }
+    });
+    return protectedDb;
   }
 
   transaction<T>(fn: () => Promise<T>): Promise<T> {

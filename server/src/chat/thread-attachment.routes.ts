@@ -1,4 +1,5 @@
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
+import { assertActivePrincipal } from "../auth/active-principal.js";
 import { ChatError } from "./chat.service.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -22,7 +23,7 @@ export async function registerThreadAttachmentRoutes(app: FastifyInstance, confi
   const mediaLimit = simpleRateLimit({ windowMs: 3_600_000, max: 30, keyPrefix: "thread-media" });
   const authenticateMedia = createAuthenticator(config);
   app.post("/v2/chats/:id/media/:mediaId", { bodyLimit: 36_000_000, onRequest: async (request, reply) => {
-    try { const who = await authenticateMedia(request); requireScope(who, "messages:send"); if (!who.deviceId) return reply.code(401).send({ error: { code: "DEVICE_REQUIRED" } }); }
+    try { const who = await authenticateMedia(request); requireScope(who, "messages:send"); if (!who.deviceId) return reply.code(401).send({ error: { code: "DEVICE_REQUIRED" } }); await assertActivePrincipal(db, who); }
     catch { return reply.code(401).send({ error: { code: "UNAUTHENTICATED" } }); }
   } }, run("messages:send", mediaLimit, async (request, who) => {
     if (!who.deviceId) throw new ChatError(401, "DEVICE_REQUIRED");

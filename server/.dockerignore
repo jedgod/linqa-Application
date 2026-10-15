@@ -1,0 +1,8 @@
+# Only Dockerfile inputs belong in the build context. Exclude local secrets,
+# installed dependencies, vault data, logs and generated output by default.
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!src/
+!src/**

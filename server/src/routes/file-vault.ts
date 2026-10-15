@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
+import { createActiveAuthenticator } from "../auth/active-principal.js";
+import type { Database } from "../db/pool.js";
 import type { VaultAdapters } from "../integrations/vault/contracts.js";
 import { currentVaultIntegrationStatus, safeDefaultVaultAdapters } from "../integrations/vault/safe-default.adapters.js";
 import { beginUploadWithIntegrations } from "../integrations/vault/close-existing-upload.js";
@@ -17,9 +19,11 @@ export async function registerFileVaultRoutes(
   config: AppConfig,
   fileVault: FileVaultService,
   vaultAdapters: VaultAdapters = safeDefaultVaultAdapters(),
-  biometrics?: BiometricAuthorizationService
+  biometrics?: BiometricAuthorizationService,
+  db?: Database
 ) {
-  const authenticate = createAuthenticator(config);
+  if (config.NODE_ENV === "production" && !db) throw new Error("VAULT_AUTHORIZATION_DATABASE_REQUIRED");
+  const authenticate = db ? createActiveAuthenticator(config, db) : createAuthenticator(config);
 
   /**
    * Single source of truth for which vault capabilities are genuinely

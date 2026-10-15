@@ -65,7 +65,7 @@ export class DeviceFederationService {
 
       await client.query(
         `UPDATE devices
-         SET status='REVOKED'
+         SET status='REVOKED', revoked_at=COALESCE(revoked_at,now())
          WHERE user_id=$1 AND id=$2`,
         [userId, deviceId]
       );

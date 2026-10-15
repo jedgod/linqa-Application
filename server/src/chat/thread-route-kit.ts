@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
+import { assertActivePrincipal } from "../auth/active-principal.js";
 import { ChatError } from "./chat.service.js";
 import type { Database } from '../db/pool.js';
 
@@ -22,10 +23,9 @@ export function makeRunner(config: AppConfig,db?:Database) {
   return function run(scope: string, limit: Limiter, handler: (request: FastifyRequest, who: Who) => Promise<unknown>, success = 200) {
     return async (request: FastifyRequest, reply: FastifyReply) => {
       let principal;
-      try { principal = await authenticate(request); requireScope(principal, scope); }
+      try { principal = await authenticate(request); requireScope(principal, scope); if (db) await assertActivePrincipal(db, principal); }
       catch (error) { request.log.warn({ err: error }, "thread route authentication rejected"); return reply.code(401).send({ error: { code: "UNAUTHENTICATED", requestId: request.id } }); }
       try {
-        if(db&&principal.deviceId){const active=await db.query("SELECT id FROM devices WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND revoked_at IS NULL",[principal.deviceId,principal.userId]);if(!active.rowCount)throw new ChatError(401,'DEVICE_REQUIRED');}
         limit(principal.userId, request);
         const result = await handler(request, { userId: principal.userId, deviceId: (principal as { deviceId?: string }).deviceId ?? null });
         void reply.header("Cache-Control", "private, no-store");

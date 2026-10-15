@@ -37,7 +37,7 @@ export function sharedSecureSession(selfId: string): SharedSecure | null {
   if (sessions.has(selfId)) return sessions.get(selfId) ?? null;
   const bridge = secureCoreModule();
   if (!bridge) { sessions.set(selfId, null); return null; }
-  const store = { get: (key: string) => storage.get(selfId, key), put: (key: string, value: string) => storage.put(selfId, key, value) };
+  const store = { protectionLevel: () => storage.protectionLevel(), get: (key: string) => storage.get(selfId, key), put: (key: string, value: string) => storage.put(selfId, key, value) };
   const server = new SecureCoreServer(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
   const device = new SecureCoreDevice(bridge, store, selfId);
   const messaging = new SecureCoreMessaging({

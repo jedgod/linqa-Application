@@ -1,0 +1,18 @@
+services:
+  test-db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: linqa_test
+      POSTGRES_PASSWORD: disposable_test_password
+      POSTGRES_DB: linqa_security_test
+    ports:
+      - target: 5432
+        host_ip: 127.0.0.1
+        protocol: tcp
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U linqa_test -d linqa_security_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

@@ -120,6 +120,7 @@ const COPY: Record<LockReason | "CHECKING", { title: string; body: string; actio
     title: "Messages are sealed on this device",
     body: "This version of the app can't open or send encrypted messages yet. Your history is safe and will open after an update."
   },
+  KEY_PROTECTION_REQUIRED: { title: "Secure key storage unavailable", body: "Messages stay sealed until this device can protect its encryption keys.", action: "Check again" },
   PROBE_FAILED: { title: "Encryption check failed", body: "Sending is off until the check passes.", action: "Check again" },
   NOT_READY: { title: "Secure messaging is still setting up", body: "This usually takes a moment.", action: "Check again" }
 };

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
+import { createActiveAuthenticator } from "../auth/active-principal.js";
 import { intakeConfigured, unconfiguredIntakeAdapters, type ImportKind, type IntakeAdapters } from "../integrations/vault/intake-adapters.js";
 import { LivePlatformSecurity, LiveStepUp, LiveUserDirectory } from "../integrations/vault/live-platform-adapters.js";
 import { providerFlags, unconfiguredProviders, type VaultProviders } from "../integrations/vault/production-contracts.js";
@@ -40,7 +41,7 @@ const kinds = z.enum(["message", "client", "external_link", "scan_document"]);
  * content key is never seen here: imports reach the Vault only as ciphertext the device uploads.
  */
 export async function registerVaultIntakeRoutes(app: FastifyInstance, config: AppConfig, db: Database, deps: VaultRouteDeps = {}) {
-  const authenticate = createAuthenticator(config);
+  const authenticate = createActiveAuthenticator(config, db);
   const env = deps.env ?? process.env;
   const adapters = deps.intakeAdapters ?? unconfiguredIntakeAdapters();
 

@@ -8,6 +8,7 @@ import cors from "@fastify/cors";
 import rawBody from "fastify-raw-body";
 import { randomUUID } from "node:crypto";
 import { ScopeAuthorizationError } from "./auth/jwt.js";
+import { API_CONTENT_SECURITY_POLICY } from "./security/api-headers.js";
 import type { AppConfig } from "./config.js";
 import type { Database } from "./db/pool.js";
 import { createServiceContainer } from "./bootstrap/service-container.js";
@@ -71,7 +72,7 @@ export async function buildApp(config: AppConfig, db: Database) {
 
   await app.register(helmet, {
     global: true,
-    contentSecurityPolicy: false
+    contentSecurityPolicy: API_CONTENT_SECURITY_POLICY
   });
 
   await app.register(cors, {

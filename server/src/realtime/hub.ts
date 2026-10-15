@@ -1,12 +1,15 @@
 import type { WebSocket } from "ws";
+import { createAuthorizedSender } from "./authorized-sender.js";
 
 interface Connection {
   socket: WebSocket;
   userId: string;
   deviceId: string;
+  authorize?: () => Promise<boolean>;
 }
 
 export class RealtimeHub {
+  private readonly senders = new WeakMap<Connection, (message: string) => void>();
   private readonly byDevice = new Map<string, Set<Connection>>();
 
   add(connection: Connection): () => void {
@@ -16,7 +19,7 @@ export class RealtimeHub {
 
     return () => {
       set.delete(connection);
-      if (set.size === 0) this.byDevice.delete(connection.deviceId);
+      if (set.size === 0 && this.byDevice.get(connection.deviceId) === set) this.byDevice.delete(connection.deviceId);
     };
   }
 
@@ -31,7 +34,7 @@ export class RealtimeHub {
     const message = JSON.stringify(payload);
     for (const connection of set) {
       if (connection.socket.readyState === connection.socket.OPEN) {
-        connection.socket.send(message);
+        this.send(connection, message);
       }
     }
   }
@@ -46,7 +49,7 @@ export class RealtimeHub {
           connection.socket.readyState === connection.socket.OPEN &&
           !delivered.has(connection.socket)
         ) {
-          connection.socket.send(message);
+          this.send(connection, message);
           delivered.add(connection.socket);
         }
       }
@@ -60,5 +63,11 @@ export class RealtimeHub {
       connection.socket.close(code, reason);
     }
     this.byDevice.delete(deviceId);
+  }
+
+  private send(connection: Connection, message: string): void {
+    let send = this.senders.get(connection);
+    if (!send) { send = createAuthorizedSender(connection.socket, connection.authorize); this.senders.set(connection, send); }
+    send(message);
   }
 }

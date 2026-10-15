@@ -5,6 +5,8 @@ import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
 import type { RealtimeHub } from "../realtime/hub.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
+import { assertActivePrincipal } from "../auth/active-principal.js";
+import { createSocketSessionGuard } from "../realtime/session-guard.js";
 import { GlobalNewsService } from "../services/global-news.service.js";
 import { discoverEvents } from "../services/countrylinqa/golive/eventRanking.js";
 
@@ -171,6 +173,7 @@ export async function registerMobileHubRoutes(
     try {
       const principal = await authenticate(request);
       requireScope(principal, "profile:read");
+      await assertActivePrincipal(db, principal);
       return await loadHubSnapshot(db, principal.userId, principal.deviceId);
     } catch (error) {
       request.log.warn({ err: error }, "mobile hub read rejected");
@@ -183,6 +186,7 @@ export async function registerMobileHubRoutes(
     try {
       principal = await authenticate(request);
       requireScope(principal, "profile:read");
+      await assertActivePrincipal(db, principal);
     } catch (error) {
       request.log.warn({ err: error }, "mobile home authentication rejected");
       return reply.code(401).send({ error: "unauthenticated" });
@@ -230,6 +234,7 @@ export async function registerMobileHubRoutes(
     try {
       const principal = await authenticate(request);
       requireScope(principal, "status:write");
+      await assertActivePrincipal(db, principal);
       const body = z.object({ body: z.string().trim().min(1).max(280) }).parse(request.body);
       const inserted = await db.query(`INSERT INTO user_status_updates (user_id,body) VALUES ($1,$2)
         RETURNING id,body,visibility,expires_at,created_at`, [principal.userId, body.body]);
@@ -245,6 +250,7 @@ export async function registerMobileHubRoutes(
     try {
       const principal = await authenticate(request);
       requireScope(principal, "messages:send");
+      await assertActivePrincipal(db, principal);
       const body = z.object({ recipientUserId: z.string().uuid() }).parse(request.body);
       if (body.recipientUserId === principal.userId) return reply.code(400).send({ error: "invalid_recipient" });
       const result = await resolveDirectConversation(db, principal.userId, body.recipientUserId);
@@ -260,6 +266,7 @@ export async function registerMobileHubRoutes(
     try {
       const principal = await authenticate(request);
       requireScope(principal, "calls:write");
+      await assertActivePrincipal(db, principal);
       const body = z.object({ peerUserId: z.string().uuid(), callType: z.enum(["AUDIO", "VIDEO"]).default("AUDIO") }).parse(request.body);
       const inserted = await db.query(`INSERT INTO call_history
         (user_id,peer_user_id,direction,call_type,status,started_at,ended_at,duration_seconds)
@@ -276,9 +283,13 @@ export async function registerMobileHubRoutes(
   app.get("/v1/mobile-hub/live", { websocket: true }, async (socket, request) => {
     try {
       const principal = await authenticate(request);
-      const remove = hub.add({ socket, userId: principal.userId, deviceId: principal.deviceId ?? "unbound" });
+      requireScope(principal, "messages:read");
+      if (!principal.deviceId) throw new Error("device-bound token required");
+      await assertActivePrincipal(db, principal);
+      const guard = createSocketSessionGuard(socket, principal, db);
+      const remove = hub.add({ socket, userId: principal.userId, deviceId: principal.deviceId, authorize: guard.authorize });
       socket.send(JSON.stringify({ type: "ready" })); socket.on("close", remove); socket.on("error", remove);
-      socket.on("message", (raw) => { if (raw.toString() === "ping") socket.send("pong"); });
+      socket.on("message", (raw) => { void guard.authorize().then(active => { if (active && raw.toString() === "ping" && socket.readyState === socket.OPEN) socket.send("pong"); }); });
     } catch { socket.close(4001, "authentication required"); }
   });
 

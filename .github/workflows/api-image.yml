@@ -3,29 +3,88 @@ name: Signed API Image
 on:
   workflow_dispatch:
   push:
+    branches: ["main", "develop"]
     tags: ["v*"]
+  pull_request:
+    branches: ["main"]
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 env:
   IMAGE_NAME: ghcr.io/jedgod/linqa-application-api
 
 jobs:
-  build-sign:
+  readiness:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Require signed production-readiness evidence before publishing
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        env:
+          LINQA_READINESS_PUBLIC_KEY_PEM: ${{ vars.LINQA_READINESS_PUBLIC_KEY_PEM }}
+          LINQA_READINESS_ENVELOPE_BASE64: ${{ vars.LINQA_READINESS_ENVELOPE_BASE64 }}
+        run: node scripts/security-check.mjs
+
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan repository for exposed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  build-sign:
+    needs: [checks, secrets, readiness]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: sigstore/cosign-installer@v3
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      - name: Build local image for validation
+        uses: docker/build-push-action@v6
+        with:
+          context: server
+          load: true
+          push: false
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - name: Scan image before publishing
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: false
+          scanners: vuln
+          severity: CRITICAL,HIGH
+      - name: Verify runtime user and packaged entry point
+        run: |
+          docker run --rm --entrypoint node "${IMAGE_NAME}:${GITHUB_SHA}" -e 'const fs=require("node:fs");if(process.getuid()===0||!fs.statSync("/app/dist/index.js").isFile()||!fs.statSync("/app/dist/db/migrations").isDirectory())process.exit(1);'
       - id: build
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         uses: docker/build-push-action@v6
         with:
           context: server
@@ -34,12 +93,15 @@ jobs:
           sbom: true
           tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
       - name: Sign immutable image digest
+        if: steps.build.outcome == 'success'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
       - name: Record deployable digest
+        if: steps.build.outcome == 'success'
         run: echo "${IMAGE_NAME}@${{ steps.build.outputs.digest }}" > signed-api-image.txt
       - uses: actions/upload-artifact@v4
+        if: steps.build.outcome == 'success'
         with:
           name: signed-api-image
           path: signed-api-image.txt

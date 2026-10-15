@@ -1,5 +1,6 @@
 import type { SecureMessaging } from "./conversation.service";
 import { accountScopeGeneration } from "./account-scope";
+import { assertMessagingUnlocked } from "./conversation-gate";
 
 /**
  * Glue between the app and the Rust secure core: the device's key material, its published key package, and message
@@ -85,6 +86,8 @@ const nums = (bytes: Uint8Array) => Array.from(bytes);
 // ---- the device's own key material ----------------------------------------------------------------------------------
 
 export interface SecretStore {
+  /** Only a platform storage adapter may report OS wrapping; absent means unverified. */
+  protectionLevel?(): Promise<"OS_PROTECTED" | null>;
   get(key: string): Promise<string | null>;
   put(key: string, value: string): Promise<void>;
 }
@@ -139,7 +142,19 @@ export class SecureCoreDevice {
   asNativeCore() {
     return {
       version: async () => { await this.ensure(); return this.bridge.version(); },
-      protectionLevel: async () => { await this.ensure(); return this.bridge.protectionLevel() as Promise<"SOFTWARE_REQUIRES_OS_WRAPPING" | "OS_PROTECTED" | "HARDWARE_BACKED">; }
+      protectionLevel: async (): Promise<"SOFTWARE_REQUIRES_OS_WRAPPING" | "OS_PROTECTED" | "HARDWARE_BACKED"> => {
+        await this.ensure();
+        const level = await this.bridge.protectionLevel();
+        this.assertScope();
+        if (level === "OS_PROTECTED" || level === "HARDWARE_BACKED") return level;
+        if (level === "SOFTWARE_REQUIRES_OS_WRAPPING") {
+          const storageLevel = await this.store.protectionLevel?.();
+          this.assertScope();
+          if (storageLevel === "OS_PROTECTED") return storageLevel;
+          return level;
+        }
+        return fail("KEY_PROTECTION_REQUIRED");
+      }
     };
   }
 
@@ -211,6 +226,7 @@ export class SecureCoreMessaging implements SecureMessaging {
 
   async seal(plaintext: string, context: { conversationId: string; senderUserId: string; clientMessageId: string }): Promise<string> {
     await this.deps.device.ensure();
+    await assertMessagingUnlocked(this.deps.device.asNativeCore());
     const selfDevice = await this.deps.device.deviceId();
     const people = Array.from(new Set(await this.deps.members(context.conversationId)));
     if (!people.includes(context.senderUserId)) return fail("NOT_A_MEMBER");
@@ -247,6 +263,7 @@ export class SecureCoreMessaging implements SecureMessaging {
 
   async open(ciphertextBase64: string, context: { conversationId: string; senderUserId: string; messageId: string }): Promise<string> {
     await this.deps.device.ensure();
+    await assertMessagingUnlocked(this.deps.device.asNativeCore());
     const key = `${context.conversationId}:${context.messageId}`;
     const known = this.opened.get(key);
     if(known!==undefined){

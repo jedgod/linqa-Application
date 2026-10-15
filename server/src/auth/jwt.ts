@@ -32,6 +32,7 @@ export function createAuthenticator(config: AppConfig) {
     const { payload } = await jwtVerify(token, verificationKey, {
       issuer: config.JWT_ISSUER,
       audience: config.JWT_AUDIENCE,
+      requiredClaims: ["sub", "exp", "user_id"],
       algorithms: productionKey ? ["EdDSA"] : remoteKeys ? ["RS256", "ES256", "EdDSA"] : ["HS256"]
     });
 
@@ -53,6 +54,7 @@ export function createAuthenticator(config: AppConfig) {
       subject: payload.sub,
       userId,
       scopes,
+      ...(typeof payload.exp === "number" ? { expiresAt: payload.exp } : {}),
       ...(deviceId !== undefined ? { deviceId } : {}),
       ...(sessionId !== undefined ? { sessionId } : {})
     };

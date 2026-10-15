@@ -1,6 +1,7 @@
 import type { Database } from "../db/pool.js";
 import type { AppConfig } from "../config.js";
 import { hashToken, issueAccessToken, randomToken } from "../auth/tokens.js";
+import { assertActivePrincipal, InactivePrincipalError } from "../auth/active-principal.js";
 
 export class InvalidRefreshTokenError extends Error {}
 
@@ -87,6 +88,14 @@ export class SessionService {
 
       if (!row || row.revoked_at || new Date(row.expires_at).getTime() <= Date.now()) {
         throw new InvalidRefreshTokenError("invalid refresh token");
+      }
+
+      try {
+        await assertActivePrincipal(client, { subject: row.external_subject, userId: row.user_id, sessionId: row.id,
+          scopes: new Set<string>(row.access_scope), ...(row.device_id ? { deviceId: row.device_id as string } : {}) });
+      } catch (error) {
+        if (error instanceof InactivePrincipalError) throw new InvalidRefreshTokenError("inactive refresh session");
+        throw error; // Preserve temporary database failures; they must not look like invalid credentials.
       }
 
       if (

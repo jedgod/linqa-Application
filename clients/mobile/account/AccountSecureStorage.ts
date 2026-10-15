@@ -2,6 +2,7 @@ import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
 export interface SecureNamespaceAdapter {
+  protectionLevel?(): Promise<"OS_PROTECTED" | null>;
   put(namespace: string, key: string, value: string): Promise<void>;
   get(namespace: string, key: string): Promise<string | null>;
   remove(namespace: string, key: string): Promise<void>;
@@ -26,6 +27,9 @@ function indexKey(namespace: string): string {
 }
 
 export class SecureStoreNamespaceAdapter implements SecureNamespaceAdapter {
+  async protectionLevel(): Promise<"OS_PROTECTED" | null> {
+    return await SecureStore.isAvailableAsync() ? "OS_PROTECTED" : null;
+  }
   private async readIndex(namespace: string): Promise<string[]> {
     const raw = await SecureStore.getItemAsync(indexKey(namespace));
     if (!raw) return [];
@@ -126,6 +130,10 @@ function defaultAdapter(): SecureNamespaceAdapter {
 
 export class AccountSecureStorage {
   constructor(private readonly adapter: SecureNamespaceAdapter = defaultAdapter()) {}
+
+  async protectionLevel(): Promise<"OS_PROTECTED" | null> {
+    return this.adapter.protectionLevel ? this.adapter.protectionLevel() : null;
+  }
 
   namespace(userId: string) {
     return `linqa.account.${userId}`;
