@@ -130,14 +130,14 @@ function AccountHome() {
   const stories = feed?.breakingAroundWorld ?? [];
   // The hero is image-led, so image-bearing stories are promoted into it, but
   // a text-only story is still shown rather than leaving a slot empty.
-  const orderedStories = [
-    ...stories.filter((story) => story.imageUrl),
-    ...stories.filter((story) => !story.imageUrl)
-  ];
+  const withPicture = stories.filter((story) => story.imageUrl);
+  const textOnly = stories.filter((story) => !story.imageUrl);
+  // Variety first, but only among stories that have a picture: one per publisher, then more from the same publishers, and
+  // text-only stories only if there are not enough pictures to fill the slots.
   const heroPublishers = new Set<string>();
-  const diverseStories = orderedStories.filter(story => { if (heroPublishers.has(story.publisherDomain)) return false; heroPublishers.add(story.publisherDomain); return true; });
+  const diverseStories = withPicture.filter(story => { if (heroPublishers.has(story.publisherDomain)) return false; heroPublishers.add(story.publisherDomain); return true; });
   const diverseUrls = new Set(diverseStories.map(story => story.canonicalUrl));
-  const heroStories = [...diverseStories, ...orderedStories.filter(story => !diverseUrls.has(story.canonicalUrl))].slice(0, HERO_SLOTS);
+  const heroStories = [...diverseStories, ...withPicture.filter(story => !diverseUrls.has(story.canonicalUrl)), ...textOnly].slice(0, HERO_SLOTS);
   const heroUrls = new Set(heroStories.map((story) => story.canonicalUrl));
   const currentHero = heroStories.length ? heroStories[clampPage(heroPage, heroStories.length)] : null;
   useFocusEffect(useCallback(() => {
@@ -471,9 +471,10 @@ function AccountHome() {
                   <ImageBackground
                     key={story?.canonicalUrl ?? `hero-empty-${index}`}
                     source={story?.imageUrl ? { uri: story.imageUrl } : undefined}
-                    style={{ width: cardWidth, height: 194 }}
+                    style={[{ width: cardWidth, height: 194 }, story && !story.imageUrl ? { backgroundColor: categoryColor(story.category) } : null]}
                     imageStyle={s.heroImage}
                   >
+                    {story && !story.imageUrl ? <Ionicons name="newspaper-outline" size={120} color="rgba(255,255,255,0.18)" style={{ position: "absolute", right: -10, top: 30 }} /> : null}
                     {/* Light at the top so the picture shows; darker only low down, behind the words. */}
                     <View style={s.heroScrim}>
                       {/* A vertical fade built from stacked translucent bands (the gradient component here is only a flat stand-in). */}
