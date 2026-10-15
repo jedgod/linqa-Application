@@ -1,5 +1,5 @@
-// Driving directions are handed to a navigation app on the phone (Google Maps, Waze, Apple Maps...). That app does the routing and
-// the turn-by-turn guidance; Linqa only passes it the destination. Nothing is started until the person picks an app.
+// Driving directions are handed to a navigation app on the phone: Google Maps (Apple Maps on iPhone). That app does the routing and
+// the turn-by-turn guidance; Linqa only passes it the destination.
 
 import { Alert, Linking, Platform } from 'react-native';
 
@@ -18,22 +18,17 @@ export function directionsUrls(latitude: number, longitude: number, label?: stri
   };
 }
 
-async function open(url: string, fallback?: string) {
+async function open(url: string) {
   try { await Linking.openURL(url); }
-  catch {
-    if (fallback) { try { await Linking.openURL(fallback); return; } catch { /* fall through */ } }
-    Alert.alert('Could not open directions', 'No navigation app was available. Try Google Maps or Waze in a browser.');
-  }
+  catch { Alert.alert('Could not open directions', 'No navigation app or browser was available.'); }
 }
 
-/** Asks which navigation app to use, then opens it with the venue as the destination. */
+/**
+ * Opens driving directions to the venue in one step, with no question asked. Google Maps' web link is used on Android: it opens the
+ * Google Maps app at the route when installed and the browser otherwise, so it always works. iPhone uses Apple Maps.
+ */
 export function openDirections(latitude: number, longitude: number, label?: string) {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
   const urls = directionsUrls(latitude, longitude, label);
-  Alert.alert('Get directions', label ? `Drive to ${label}` : 'Drive to this location', [
-    { text: 'Google Maps', onPress: () => void open(urls.google) },
-    { text: 'Waze', onPress: () => void open(urls.waze, urls.google) },
-    ...(Platform.OS === 'ios' ? [{ text: 'Apple Maps', onPress: () => void open(urls.system, urls.google) }] : [{ text: 'Other map app', onPress: () => void open(urls.system, urls.google) }]),
-    { text: 'Cancel', style: 'cancel' as const },
-  ]);
+  void open(Platform.OS === 'ios' ? urls.system : urls.google);
 }
