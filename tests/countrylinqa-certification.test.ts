@@ -63,7 +63,8 @@ test("the dedicated database guard accepts throwaway databases and refuses anyth
   assert.equal(check("postgresql://u:p@db/prod_test").code, 4);
   assert.equal(check("postgresql://u:p@db/staging").code, 3);
   assert.equal(check("postgresql://u:p@db/latest").code, 3); // "test" inside a word is not a test database
-  assert.equal(check(undefined).code, 2);
+  // An empty value means "missing". Passing undefined would fall back to the real DATABASE_URL (set in CI) via the default parameter.
+  assert.equal(check("").code, 2);
   assert.equal(check("not a url").code, 2);
   assert.equal(check("postgresql://u:p@db/staging", { LINQA_ALLOW_CERT_DB: "1" }).ok, true);
 });
