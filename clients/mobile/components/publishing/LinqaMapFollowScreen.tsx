@@ -46,11 +46,24 @@ interface LinqaMapFollowScreenProps {
   embedded?: boolean;
 }
 
-/** Shows a typed address the way it is normally written: "2817 ruckert av baltimore md 21214" -> "2817 Ruckert Av Baltimore MD 21214". */
+// Street-type abbreviations written out in full. They are only expanded after the street's own name, so "St Louis" (Saint) or
+// "Dr Martin Luther King" (Doctor) at the start of a street are left alone.
+const STREET_TYPES: Record<string, string> = {
+  av: 'Avenue', ave: 'Avenue', st: 'Street', rd: 'Road', dr: 'Drive', ln: 'Lane', blvd: 'Boulevard', ct: 'Court', pl: 'Place',
+  hwy: 'Highway', pkwy: 'Parkway', cir: 'Circle', ter: 'Terrace', trl: 'Trail', sq: 'Square', pt: 'Point',
+};
+
+/** Shows a typed address the way it is normally written: "2817 ruckert av baltimore md 21214" -> "2817 Ruckert Avenue Baltimore MD 21214". */
 export function prettyAddress(text: string): string {
   const words = text.trim().split(/\s+/).filter(Boolean);
-  return words.map((w, i) => {
+  // Only the first street-type word is expanded: "ruckert av baltimore" -> Avenue, but a later "st"/"dr" is left alone.
+  let expanded = false;
+  return words.map((raw, i) => {
+    const w = raw.replace(/\.$/, '');
     if (/^[a-z]{2}$/i.test(w) && /^\d{5}(-\d{4})?$/.test(words[i + 1] ?? '')) return w.toUpperCase();
+    const type = STREET_TYPES[w.toLowerCase()];
+    const afterName = i >= 2 || (i === 1 && !/^\d/.test(words[0] ?? ''));
+    if (type && !expanded && afterName && i < words.length - 1) { expanded = true; return type; }
     return w.charAt(0).toUpperCase() + w.slice(1);
   }).join(' ');
 }
