@@ -67,7 +67,7 @@ describe("publishing routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["cache-control"]).toBe("private, no-store");
     const sql = String(f.query.mock.calls.find(([s]) => String(s).includes("FROM publishing_events"))?.[0]);
-    expect(sql).toContain("e.creator_id=$1 OR (e.visibility='public' AND e.status='published')");
+    expect(sql).toContain("(e.creator_id=$1 AND e.status<>'cancelled') OR (e.visibility='public' AND e.status='published')");
   });
   it("answers 404 for someone else's private event, cancel and edit", async () => {
     const f = await fixture();

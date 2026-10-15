@@ -238,10 +238,13 @@ export async function registerPublishingRoutes(app: FastifyInstance, config: App
     const limit = Math.min(Math.max(Number((request.query as { limit?: string }).limit) || 20, 1), 50);
     const r = await db.query(
       `SELECT e.id,e.title,e.description,e.starts_at,e.venue_name,e.visibility,e.status,e.creator_id,p.display_name AS creator_name,
-              (SELECT count(*)::int FROM publishing_media m WHERE m.event_id=e.id) AS media_count
+              e.created_at,e.latitude,e.longitude,e.feeling_activity,
+              (SELECT count(*)::int FROM publishing_media m WHERE m.event_id=e.id) AS media_count,
+              COALESCE((SELECT json_agg(json_build_object('id',m.id,'kind',m.kind,'mimeType',m.mime_type) ORDER BY m.created_at) FROM publishing_media m WHERE m.event_id=e.id),'[]'::json) AS media,
+              COALESCE((SELECT json_agg(json_build_object('userId',t.user_id,'name',COALESCE(tp.display_name,'Linqa user')) ORDER BY tp.display_name) FROM publishing_event_tags t LEFT JOIN user_profiles tp ON tp.user_id=t.user_id WHERE t.event_id=e.id),'[]'::json) AS tagged
          FROM publishing_events e LEFT JOIN user_profiles p ON p.user_id=e.creator_id
-        WHERE e.creator_id=$1 OR (e.visibility='public' AND e.status='published')
-        ORDER BY e.starts_at DESC,e.id DESC LIMIT $2`,
+        WHERE (e.creator_id=$1 AND e.status<>'cancelled') OR (e.visibility='public' AND e.status='published')
+        ORDER BY e.created_at DESC,e.id DESC LIMIT $2`,
       [userId, limit]
     );
     void reply.header("Cache-Control", "private, no-store");

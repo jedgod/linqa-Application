@@ -123,6 +123,7 @@ export default function RootLayout() {
         <Stack.Screen name="settings/accessibility" />
         <Stack.Screen name="settings/messaging" />
         <Stack.Screen name="event-log" />
+        <Stack.Screen name="posts" />
         <Stack.Screen name="settings/storage" />
         <Stack.Screen name="settings/ai-privacy" />
         <Stack.Screen name="settings/privacy-rights" />

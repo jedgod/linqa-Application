@@ -102,6 +102,7 @@ export const LINQA_HUB_SERVICES: readonly HubService[] = [
   { key: "vault", title: "LinqaVault", description: "Private files, scans and notes", icon: "lock-closed-outline", color: "#5966E9", route: "/modules/file-vault", group: "Organize" },
   { key: "calendar", title: "Calendar", description: "Events, calls and reminders", icon: "calendar-outline", color: "#E53E78", route: "/modules/calendar", group: "Organize" },
   { key: "notes", title: "Notes", description: "Secure notes and checklists", icon: "document-text-outline", color: "#F49A23", route: "/modules/notes", group: "Organize" },
+  { key: "posts", title: "Posts", description: "What people are sharing, with maps", icon: "newspaper-outline", color: "#6041B8", route: "/posts", group: "Discover" },
   { key: "countrylinqa", title: "CountryLinqa", description: "Local communities and global discovery", icon: "globe-outline", color: "#7457F5", route: "/countrylinqa/world", group: "Discover" },
   { key: "communities", title: "Communities", description: "Groups, events and live discussions", icon: "people-circle-outline", color: "#13BFA6", route: "/(tabs)/communities", group: "Discover" },
   { key: "status", title: "Status & Posts", description: "Share updates with your audience", icon: "radio-outline", color: "#EE4778", route: "/modules/status", group: "Discover" },
