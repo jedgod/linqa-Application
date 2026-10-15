@@ -1,14 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView,
+  Alert, ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, ScrollView,
   StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { Ionicons, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
-// react-native-maps is not part of the installed development build yet. When it is missing, the map preview is a
-// placeholder and everything else works; once it is added to the build the real map appears with no further change.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let Maps: any = null;
-try { Maps = require('react-native-maps'); } catch { Maps = null; }
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -28,6 +23,8 @@ type Props = {
   onGif?: () => void;
   /** Screen title; the supplied default is "Create Event". */
   heading?: string;
+  /** Draws the verified location (a Waze map in the app). Without it a plain "Location verified" panel is shown. */
+  renderMap?: (coords: Coordinates, place: string) => React.ReactNode;
   /** Copies a picked file somewhere that lasts (Android clears the picker's cache within seconds). Default: use it as picked. */
   keepFile?: (uri: string, type: 'image' | 'video', base64?: string | null) => Promise<string>;
 };
@@ -36,7 +33,7 @@ const purple = '#6041B8';
 const initialDate = (() => { const d = new Date(Date.now() + 60 * 60_000); d.setMinutes(Math.ceil(d.getMinutes() / 5) * 5, 0, 0); return d; })();
 
 export default function LinqaCreateEvent({
-  onClose, onPublish, resolveLocation, onTagPeople, onFeelingActivity, onGif, heading = 'Create Event', keepFile,
+  onClose, onPublish, resolveLocation, onTagPeople, onFeelingActivity, onGif, heading = 'Create Event', keepFile, renderMap,
 }: Props) {
   const [title, setTitle] = useState('');
   const [startsAt, setStartsAt] = useState(initialDate);
@@ -47,6 +44,14 @@ export default function LinqaCreateEvent({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
   const [finding, setFinding] = useState(false);
+  // On Android the window does not shrink for the keyboard, so the toolbar would sit underneath it. Lift it by the keyboard's height.
+  const [keyboard, setKeyboard] = useState(0);
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const show = Keyboard.addListener('keyboardDidShow', e => setKeyboard(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboard(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   async function chooseMedia() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -93,7 +98,7 @@ export default function LinqaCreateEvent({
     { label: 'GIFs', icon: 'images-outline' as const, tint: '#F1DDF7', color: '#A04BB8', action: () => onGif?.() },
   ];
   return (
-    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={[styles.root, { paddingBottom: keyboard }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onClose} accessibilityLabel="Close" style={styles.close}><Ionicons name="close" size={26} color="#17151C" /></TouchableOpacity>
         <Text style={styles.heading}>{heading}</Text>
@@ -124,9 +129,8 @@ export default function LinqaCreateEvent({
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Location</Text>
           <View style={styles.mapFrame}>
-            {coords && Maps ? <Maps.default style={styles.map} pointerEvents="none" region={{ ...coords, latitudeDelta: 0.025, longitudeDelta: 0.025 }}><Maps.Marker coordinate={coords} /></Maps.default> :
-              coords ? <View style={styles.mapPlaceholder}><Ionicons name="location" size={26} color="#2478B7" /><Text style={styles.mapHint}>Location verified</Text></View> :
-              <View style={styles.mapPlaceholder}><Ionicons name="map-outline" size={28} color="#9A97A6" /><Text style={styles.mapHint}>Search for a city or venue</Text></View>}
+            {coords ? (renderMap ? renderMap(coords, location.trim()) : <View style={styles.mapPlaceholder}><Ionicons name="location" size={30} color="#2478B7" /><Text style={styles.mapHint}>Location verified</Text></View>) :
+              <View style={styles.mapPlaceholder}><Ionicons name="map-outline" size={34} color="#9A97A6" /><Text style={styles.mapHint}>Search for a city or venue</Text></View>}
             <View style={styles.locationRow}>
               <Ionicons name="location" size={23} color="#2478B7" />
               <TextInput style={styles.locationInput} placeholder="City or Venue" value={location} onChangeText={v => { setLocation(v); setCoords(null); }} onSubmitEditing={lookupLocation} returnKeyType="search" />
@@ -166,9 +170,9 @@ const styles = StyleSheet.create({
   chipText: { flex: 1, minWidth: 0 }, chipLabel: { fontSize: 11, fontWeight: '700' }, chipValue: { fontSize: 14, fontWeight: '700', color: '#18151D' },
   done: { color: purple, fontWeight: '700', textAlign: 'right', paddingTop: 8 },
   mapFrame: { borderRadius: 15, overflow: 'hidden', borderWidth: 1, borderColor: '#DADADA' },
-  map: { height: 70, width: '100%' },
-  mapPlaceholder: { height: 70, backgroundColor: '#E9EBE8', flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center' },
-  mapHint: { color: '#77727F', fontSize: 12 },
+  map: { height: 200, width: '100%' },
+  mapPlaceholder: { height: 200, backgroundColor: '#E9EBE8', flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center' },
+  mapHint: { color: '#77727F', fontSize: 13 },
   locationRow: { height: 52, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 10, backgroundColor: 'white' },
   locationInput: { flex: 1, fontSize: 16, color: '#201C24' },
   descriptionWrap: { borderRadius: 17, borderWidth: 1, borderColor: '#D2D2D0', backgroundColor: '#F1F1EF', minHeight: 98, padding: 14 },

@@ -5,6 +5,7 @@ import React from 'react';
 import { Alert } from 'react-native';
 import * as Location from 'expo-location';
 import * as FileSystem from 'expo-file-system/legacy';
+import { WazeLocationMap } from '../calls/WazeLocationMap';
 import { adoptCapture } from '../../services/conversation-media';
 import LinqaCreateEvent, { type EventPayload } from './LinqaCreateEvent';
 import { publishOrQueue, type PublishingConfig } from '../../lib/publishing/publishing';
@@ -47,7 +48,7 @@ export default function CreateEventConnected({ config, onClose, heading, onPubli
   /** Called only when the server confirmed the item; queued (offline) items are reported later by the sync. */
   onPublished?: (info: PublishedInfo) => void | Promise<void>;
 }) {
-  return <LinqaCreateEvent onClose={onClose} heading={heading} resolveLocation={resolveLocation} keepFile={keepFile} onPublish={async event => {
+  return <LinqaCreateEvent onClose={onClose} heading={heading} resolveLocation={resolveLocation} keepFile={keepFile} renderMap={(coords, place) => <WazeLocationMap latitude={coords.latitude} longitude={coords.longitude} placeLabel={place || 'Event location'} height={200} rounded={false} />} onPublish={async event => {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     const result = await publishOrQueue(config, event, timezone);
     const noun = (heading ?? 'event').toLowerCase().includes('post') ? 'post' : 'event';

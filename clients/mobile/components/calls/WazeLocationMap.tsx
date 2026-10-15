@@ -4,7 +4,7 @@ import { WebView } from "react-native-webview";
 import { buildWazeMapUrl, isWazeMapNavigation } from "../../config/waze";
 
 /** Waze destination preview with a local place label and no contact identity props. */
-export function WazeLocationMap({ latitude, longitude, placeLabel }: { latitude: number; longitude: number; placeLabel: string }) {
+export function WazeLocationMap({ latitude, longitude, placeLabel, height: fixedHeight, rounded = true }: { latitude: number; longitude: number; placeLabel: string; /** A fixed height; by default the map sizes itself to the screen. */ height?: number; rounded?: boolean }) {
   const { height } = useWindowDimensions();
   const [retry, setRetry] = useState(0);
   const [failed, setFailed] = useState(false);
@@ -13,7 +13,7 @@ export function WazeLocationMap({ latitude, longitude, placeLabel }: { latitude:
     catch { return null; }
   }, [latitude, longitude]);
   const error = <View style={styles.error}><Text style={styles.text}>{source ? "Waze map could not be loaded." : "Waze map configuration is unavailable."}</Text>{source ? <Pressable accessibilityRole="button" onPress={() => { setFailed(false); setRetry(value => value + 1); }}><Text style={styles.retry}>Retry map</Text></Pressable> : null}</View>;
-  return <View style={[styles.map, { height: Math.min(330, Math.max(160, height * 0.4)) }]}>
+  return <View style={[styles.map, { height: fixedHeight ?? Math.min(330, Math.max(160, height * 0.4)) }, !rounded && { borderRadius: 0 }]}>
     {!source || failed ? error : Platform.OS === "web" ? React.createElement("iframe", {
       key: `${source.uri}:${retry}`, src: source.uri, title: "Shared location on Waze", referrerPolicy: "no-referrer",
       style: { width: "100%", height: "100%", border: 0, pointerEvents: "none" },

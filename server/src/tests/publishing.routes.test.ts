@@ -77,3 +77,19 @@ describe("publishing routes", () => {
     expect((await f.app.inject({ method: "PATCH", url: `/api/publishing/events/${id}`, headers: f.headers, payload: JSON.stringify({ title: "x" }) })).statusCode).toBe(404);
   });
 });
+
+describe("location belongs to the publisher", () => {
+  it("only the publisher's own, still-published event can have its location changed", async () => {
+    const f = await fixture();
+    const id = "22222222-2222-4222-8222-222222222222";
+    await f.app.inject({ method: "PATCH", url: `/api/publishing/events/${id}`, headers: f.headers, payload: JSON.stringify({ location: "Elsewhere", coordinates: { latitude: 1, longitude: 2 } }) });
+    const call = f.query.mock.calls.find(([sql]) => String(sql).startsWith("UPDATE publishing_events SET"));
+    const sql = String(call?.[0]);
+    expect(sql).toContain("venue_name=");
+    expect(sql).toContain("latitude=");
+    // The row is matched on the caller being its creator, so any other person changes nothing and is told "not found".
+    expect(sql).toMatch(/creator_id=\$\d+ AND status='published'/);
+    expect(call?.[1]).toContain(user);
+  });
+});
+
