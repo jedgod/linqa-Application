@@ -8,6 +8,33 @@ on:
 jobs:
   additive-closure:
     runs-on: ubuntu-latest
+    # Same database and test configuration as the Server job in ci.yml; the server suite needs both.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: linqa_test
+          POSTGRES_USER: linqa
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U linqa -d linqa_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      LINQA_REQUIRE_DB_TESTS: "1"
+      DATABASE_URL: postgresql://linqa:test_password@127.0.0.1:5432/linqa_test
+      JWT_ISSUER: https://test.linqa.local
+      JWT_AUDIENCE: linqa-api
+      JWT_HS256_SECRET: test-secret-that-is-at-least-32-bytes-long
+      CONTACT_DISCOVERY_SECRET: test-secret-that-is-at-least-32-bytes-2
+      TOKEN_VAULT_KEY_BASE64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      TURN_SHARED_SECRET: test-turn-secret-that-is-at-least-32-bytes
+      TURN_URLS: turn:127.0.0.1:3478?transport=udp
+      CORS_ORIGINS: http://127.0.0.1:5173
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +53,10 @@ jobs:
       - name: Mobile deps
         working-directory: clients/mobile
         run: npm ci
+
+      - name: Migrate test database
+        working-directory: server
+        run: npm run db:migrate
 
       - name: Run the full additive-closure suite
         run: bash certification/unified/run_additive_closure.sh
