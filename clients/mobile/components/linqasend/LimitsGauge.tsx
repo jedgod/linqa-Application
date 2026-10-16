@@ -45,6 +45,6 @@ const s = StyleSheet.create({
   gauge: { alignSelf: "center", width: SIZE, height: SIZE, marginVertical: 22, alignItems: "center", justifyContent: "center" },
   segment: { position: "absolute", left: SIZE / 2 - SEGMENT_WIDTH / 2, top: SIZE / 2 - STROKE / 2, width: SEGMENT_WIDTH, height: STROKE, borderRadius: 2 },
   center: { alignItems: "center", paddingHorizontal: 26 },
-  top: { color: send.text, fontFamily: fonts.extrabold, fontSize: 26 },
+  top: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
   bottom: { color: send.muted, fontFamily: fonts.medium, fontSize: 14, marginTop: 4, textAlign: "center" }
 });

@@ -55,7 +55,7 @@ const s = StyleSheet.create({
   rail: { width: 48, alignItems: "center" },
   line: { width: 3, flex: 1, marginTop: 2, borderRadius: 2 },
   stepText: { flex: 1, paddingLeft: 14, paddingTop: 5 },
-  stepLabel: { color: send.text, fontFamily: fonts.semibold, fontSize: 17 },
+  stepLabel: { color: send.text, fontFamily: fonts.semibold, fontSize: 16 },
   stepTime: { color: send.muted, fontFamily: fonts.regular, fontSize: 14, marginTop: 5 },
   dot: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
   dotCurrent: { backgroundColor: send.bg, borderWidth: 3, borderColor: "#2F4CC4" },

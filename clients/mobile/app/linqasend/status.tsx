@@ -1,9 +1,11 @@
+import { pollPaymentStatus } from "../../services/payment-status-polling";
+import { displayMoney } from "../../services/send-money-validation";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { LinqaSendStatusBar, formatMinor, send } from "../../components/linqasend/ui";
+import { LinqaSendStatusBar, send } from "../../components/linqasend/ui";
 import { getApiBaseUrl } from "../../config/api";
 import { LinqaSendService, type LinqaSendTransferDetail } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
@@ -23,6 +25,12 @@ export default function LinqaSendStatus() {
   const [transfer, setTransfer] = useState<LinqaSendTransferDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", state => { if (state === "active") setRetry(value => value + 1); });
+    return () => subscription.remove();
+  }, []);
 
   async function cancel() {
     try { await client.cancelTransfer(params.id); setTransfer(await client.getTransfer(params.id)); setNote("Transfer canceled."); }
@@ -35,24 +43,16 @@ export default function LinqaSendStatus() {
   }
 
   useEffect(() => {
-    let stopped = false;
-    async function poll() {
-      while (!stopped) {
-        try {
-          const detail = await client.getTransfer(params.id);
-          if (stopped) return;
-          setTransfer(detail);
-          if (TERMINAL_STATUSES.has(detail.status) || detail.status === "MANUAL_REVIEW") return;
-        } catch (e) {
-          setError(e instanceof Error ? e.message.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()) : "Unable to load this transfer.");
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-      }
-    }
-    void poll();
-    return () => { stopped = true; };
-  }, [client, params.id]);
+    const controller = new AbortController();
+    void pollPaymentStatus({
+      signal: controller.signal,
+      load: () => client.getTransfer(params.id),
+      onValue: detail => { setTransfer(detail); setError(null); },
+      onError: () => setError("Unable to refresh payment status. Reconnecting?"),
+      terminal: detail => TERMINAL_STATUSES.has(detail.status) || detail.status === "MANUAL_REVIEW"
+    });
+    return () => controller.abort();
+  }, [client, params.id, retry]);
 
   const tracking = useMemo(
     () => (transfer ? trackTransfer({ status: transfer.status, createdAt: transfer.createdAt, completedAt: transfer.completedAt, timeline: transfer.timeline, failureCode: transfer.failureCode }) : null),
@@ -74,6 +74,8 @@ export default function LinqaSendStatus() {
       {error ? (
         <View style={s.center}>
           <Text style={s.muted}>{error}</Text>
+          <Text style={s.muted}>Connection trouble does not mean the payment failed.</Text>
+          <Pressable accessibilityRole="button" style={{ marginTop: 14 }} onPress={() => { setError(null); setRetry(value => value + 1); }}><Text style={s.link}>Retry status check</Text></Pressable>
           <Pressable accessibilityRole="button" style={{ marginTop: 14 }} onPress={() => router.replace("/linqasend")}><Text style={s.link}>Back to LinqaSend</Text></Pressable>
         </View>
       ) : null}
@@ -81,7 +83,7 @@ export default function LinqaSendStatus() {
       {transfer && tracking ? (
         <ScrollView contentContainerStyle={s.content}>
           <Text style={s.summary}>
-            ${formatMinor(transfer.sendAmountMinor)} {transfer.sendCurrency} → {formatMinor(transfer.receiveAmountMinor)} {transfer.receiveCurrency} to {transfer.recipientName}
+            {displayMoney(transfer.sendAmountMinor, transfer.sendCurrency)} {transfer.sendCurrency} → {displayMoney(transfer.receiveAmountMinor, transfer.receiveCurrency)} {transfer.receiveCurrency} to {transfer.recipientName}
           </Text>
 
           <TrackingTimeline steps={tracking.steps} />
@@ -107,7 +109,7 @@ const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: send.bg },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
   headerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 19 },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 16 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   muted: { color: send.muted, fontFamily: fonts.regular, fontSize: 14, textAlign: "center" },
   link: { color: send.primary, fontFamily: fonts.bold, fontSize: 15 },

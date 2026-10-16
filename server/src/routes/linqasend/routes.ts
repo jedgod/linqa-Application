@@ -1,8 +1,11 @@
+import { createPaymentAuthenticator } from "../../auth/payment-authenticator.js";
+import { PaymentIntentService } from "../../services/linqasend/payment-intent.service.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../../config.js";
-import { createAuthenticator, requireScope } from "../../auth/jwt.js";
+import { requireScope } from "../../auth/jwt.js";
+import { InactivePrincipalError } from "../../auth/active-principal.js";
 import type { Database } from "../../db/pool.js";
 import type { LinqaSendProviders } from "../../integrations/linqasend/provider.contracts.js";
 import { getLinqaSendProviders } from "../../integrations/linqasend/provider.registry.js";
@@ -31,6 +34,7 @@ function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) =
     try {
       return await handler(request, reply);
     } catch (error: any) {
+      if (error instanceof InactivePrincipalError) return reply.code(401).send({ error: "authentication_revoked" });
       if (error instanceof z.ZodError) {
         return reply.code(422).send({ error: "validation_error", details: error.flatten() });
       }
@@ -100,7 +104,13 @@ export async function registerLinqaSendRoutes(
 ) {
   await registerAdvancedLinqaSendRoutes(app, config, db, biometrics);
   await registerLinqaSendModuleSurfaceRoutes(app, config, db);
-  const authenticate = createAuthenticator(config);
+  const authenticate = createPaymentAuthenticator(config, db);
+  const paymentIntents = new PaymentIntentService(db);
+  app.post("/v1/linqasend/payment-intents", withErrors(async (request) => {
+    const p = await authenticate(request); requireScope(p, "linqasend:write");
+    const body = z.object({ quoteId: z.string().uuid() }).strict().parse(request.body);
+    return paymentIntents.resolve(p.userId, body.quoteId);
+  }));
   const fxPricing = new FxPricingService();
   const fxRates = new FxRateRepository(db);
   const quotes = new QuoteService(db, fxPricing, fxRates);
@@ -328,6 +338,8 @@ export async function registerLinqaSendRoutes(
 
       if (!p.deviceId || !p.sessionId) return reply.code(401).send({ error: "device_bound_fresh_session_required" });
 
+      const intent = await paymentIntents.resolve(p.userId, body.quoteId);
+      if (intent.idempotencyKey !== idempotencyKey) return reply.code(409).send({ error: "payment_intent_key_mismatch" });
       const quote = await quotes.getActiveQuote(p.userId, body.quoteId);
       const recipientRow = await db.query(
         `SELECT id, display_name, country, recipient_type, linqa_user_id, payout_profile_ref FROM linqasend_recipients WHERE id = $1 AND owner_user_id = $2`,

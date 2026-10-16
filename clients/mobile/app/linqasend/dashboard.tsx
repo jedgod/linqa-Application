@@ -1,10 +1,11 @@
+import { displayMoney } from "../../services/send-money-validation";
 import { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { TransferRow, transferRoute } from "../../components/linqasend/TransferRow";
-import { LinqaSendStatusBar, LinqaSendTabBar, formatMinor, send } from "../../components/linqasend/ui";
+import { LinqaSendStatusBar, LinqaSendTabBar, send } from "../../components/linqasend/ui";
 import { getApiBaseUrl } from "../../config/api";
 import { LinqaSendService, type LinqaSendTransferSummary } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
@@ -36,7 +37,7 @@ export default function LinqaSendDashboard() {
   }, [client]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
-  const usd = (minor: string | undefined) => `$${formatMinor(minor ?? "0")}`;
+  const usd = (minor: string | undefined) => `${displayMoney(minor ?? "0", totals?.currency ?? "USD")} ${totals?.currency ?? "USD"}`;
 
   return (
     <SafeAreaView style={s.screen}>
@@ -93,20 +94,20 @@ const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: send.bg },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
   headerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 19 },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 16 },
   content: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 30 },
   hero: { backgroundColor: send.primary, borderRadius: 18, paddingVertical: 22, paddingHorizontal: 20 },
   heroLabel: { color: "#E3E1FF", fontFamily: fonts.medium, fontSize: 14 },
-  heroValue: { color: "#FFFFFF", fontFamily: fonts.extrabold, fontSize: 36, marginTop: 8 },
-  heroCode: { fontFamily: fonts.semibold, fontSize: 18 },
+  heroValue: { color: "#FFFFFF", fontFamily: fonts.extrabold, fontSize: 18, marginTop: 8 },
+  heroCode: { fontFamily: fonts.semibold, fontSize: 16 },
   pair: { flexDirection: "row", gap: 14, marginTop: 16 },
   small: { flex: 1, backgroundColor: send.primarySoft, borderRadius: 18, padding: 18 },
   smallLabel: { color: send.primary, fontFamily: fonts.semibold, fontSize: 14 },
-  smallValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 22, marginTop: 10 },
-  section: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18, marginTop: 28, marginBottom: 4 },
+  smallValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18, marginTop: 10 },
+  section: { color: send.text, fontFamily: fonts.extrabold, fontSize: 16, marginTop: 28, marginBottom: 4 },
   empty: { color: send.muted, fontFamily: fonts.regular, fontSize: 14, lineHeight: 21, marginTop: 10 },
   viewAll: { alignItems: "center", paddingVertical: 22 },
-  viewAllText: { color: send.primary, fontFamily: fonts.bold, fontSize: 17 },
+  viewAllText: { color: send.primary, fontFamily: fonts.bold, fontSize: 16 },
   errorBox: { backgroundColor: "#FEF3F2", borderRadius: 14, padding: 14, gap: 8, marginBottom: 14 },
   error: { color: send.danger, fontFamily: fonts.medium, fontSize: 14 },
   link: { color: send.primary, fontFamily: fonts.bold, fontSize: 14 }

@@ -1,8 +1,9 @@
+import { displayMoney } from "../../services/send-money-validation";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { LinqaSendTransferSummary } from "../../services/linqasend.service";
 import { fonts } from "../../theme/tokens";
 import { whenLabel } from "./TrackingTimeline";
-import { Avatar, formatMinor, send } from "./ui";
+import { Avatar, send } from "./ui";
 
 const STATUS: Record<string, { label: string; color: string }> = {
   COMPLETED: { label: "Completed", color: send.success },
@@ -20,7 +21,7 @@ export function statusOf(status: string): { label: string; color: string } {
 
 /** "GHS 5,319.00" for other currencies, "$300.00" for dollars. Shows what the recipient gets. */
 export function transferAmount(item: Pick<LinqaSendTransferSummary, "receiveAmountMinor" | "receiveCurrency">): string {
-  return item.receiveCurrency === "USD" ? `$${formatMinor(item.receiveAmountMinor)}` : `${item.receiveCurrency} ${formatMinor(item.receiveAmountMinor)}`;
+  return item.receiveCurrency === "USD" ? `$${displayMoney(item.receiveAmountMinor, item.receiveCurrency)}` : `${item.receiveCurrency} ${displayMoney(item.receiveAmountMinor, item.receiveCurrency)}`;
 }
 
 /** Finished transfers open their receipt; anything still moving opens live tracking. */

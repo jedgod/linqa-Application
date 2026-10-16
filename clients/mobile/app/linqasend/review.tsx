@@ -3,13 +3,14 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Avatar, LinqaSendStatusBar, countryName, currencyFlag, deliveryLabel, formatMinor, send } from "../../components/linqasend/ui";
+import { Avatar, LinqaSendStatusBar, countryName, currencyFlag, deliveryLabel, send } from "../../components/linqasend/ui";
 import { getApiBaseUrl } from "../../config/api";
 import { LinqaSendApiError, LinqaSendService, type LinqaSendQuote, type LinqaSendSecurityWarning, type PreparedLinqaSendTransfer } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
 import { requestTransactionAuth } from "../../services/transaction-auth";
 import { fonts } from "../../theme/tokens";
 import { createBiometricClient } from "../../services/biometric-session";
+import { displayMoney, parseReviewQuote } from "../../services/send-money-validation";
 
 const API = getApiBaseUrl();
 
@@ -17,7 +18,7 @@ function secondsRemaining(expiresAt: string): number {
   return Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
 }
 
-type Method = { id: string; type: string; last4: string | null };
+type Method = { id: string; type: string; last4: string | null; verificationStatus: string };
 const METHOD_NAME: Record<string, string> = { DEBIT_CARD: "Debit card", CREDIT_CARD: "Credit card", BANK_ACCOUNT: "Bank account", MOBILE_WALLET: "Mobile wallet" };
 
 /**
@@ -27,8 +28,15 @@ const METHOD_NAME: Record<string, string> = { DEBIT_CARD: "Debit card", CREDIT_C
  */
 export default function LinqaSendReview() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ quote: string }>();
+  const quote = useMemo(() => parseReviewQuote(params.quote), [params.quote]);
+  if (!quote) return <SafeAreaView style={s.screen}><LinqaSendStatusBar /><View style={s.content}><Text style={s.title}>Start a new quote</Text><Text style={s.error}>This payment link is incomplete or invalid. No money was sent.</Text><Pressable accessibilityRole="button" onPress={() => router.replace("/linqasend/send")}><Text style={s.link}>Choose recipient and amount</Text></Pressable></View></SafeAreaView>;
+  return <ValidReview key={quote.id} quote={quote} />;
+}
+
+function ValidReview({ quote }: { quote: LinqaSendQuote }) {
+  const router = useRouter();
   const params = useLocalSearchParams<{ quote: string; recipientName: string; recipientCountry?: string; recipientType?: string; purposeCode?: string; paymentMethodId?: string }>();
-  const quote: LinqaSendQuote = useMemo(() => JSON.parse(params.quote), [params.quote]);
   const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
 
   const [remaining, setRemaining] = useState(() => secondsRemaining(quote.expiresAt));
@@ -39,6 +47,16 @@ export default function LinqaSendReview() {
   const [result, setResult] = useState<{ transferId: string; status: string; reason?: string; action?: string } | null>(null);
   const [pending, setPending] = useState<PreparedLinqaSendTransfer | null>(null);
   const [warnings, setWarnings] = useState<LinqaSendSecurityWarning[]>([]);
+  const [reconciled, setReconciled] = useState(false);
+  useEffect(() => {
+    let current = true;
+    client.resolvePaymentIntent(quote.id).then(intent => {
+      if (!current) return;
+      if (intent.transferId) router.replace({ pathname: "/linqasend/status", params: { id: intent.transferId } });
+      else setReconciled(true);
+    }).catch(() => { if (current) setError("Payment status could not be checked. Reopen this review when connected; do not start a duplicate payment."); });
+    return () => { current = false; };
+  }, [client, quote.id, router]);
 
   useEffect(() => {
     const timer = setInterval(() => setRemaining(secondsRemaining(quote.expiresAt)), 1000);
@@ -49,31 +67,33 @@ export default function LinqaSendReview() {
     client
       .listPaymentMethods()
       .then((r) => {
-        setPaymentMethods(r.items);
+        const methods = r.items.filter(item => item.verificationStatus === "VERIFIED");
+        setPaymentMethods(methods);
         // The method chosen on the Select Payment Method step wins; otherwise the first on file.
-        const chosen = r.items.find((item) => item.id === params.paymentMethodId);
-        if (chosen ?? r.items[0]) setPaymentMethodId((chosen ?? r.items[0])!.id);
+        const chosen = methods.find((item) => item.id === params.paymentMethodId);
+        if (chosen ?? methods[0]) setPaymentMethodId((chosen ?? methods[0])!.id);
       })
       .catch(() => setPaymentMethods([]));
   }, [client, params.paymentMethodId]);
 
-  const sendFee = Number(quote.senderFeeMinor ?? 0);
-  const recipientFee = Number(quote.recipientFeeMinor ?? 0);
-  const total = Number(quote.sendAmountMinor) + sendFee;
+  const sendFee = BigInt(quote.senderFeeMinor ?? 0);
+  const recipientFee = BigInt(quote.recipientFeeMinor ?? 0);
+  const total = BigInt(quote.sendAmountMinor) + sendFee;
   const method = (paymentMethods ?? []).find((m) => m.id === paymentMethodId) ?? null;
 
   async function confirm() {
-    if (!paymentMethodId) return;
+    if (!paymentMethodId || busy || !reconciled) return;
     setBusy(true);
     setError(null);
     try {
+      await client.rememberPaymentReview({ ...params, quote: JSON.stringify(quote), recipientName: params.recipientName ?? "Recipient" }, quote.id);
       let prepared = pending;
       if (!prepared) {
         // The production signer prompts on the transaction-bound hardware key itself.
         const strong = (await createBiometricClient(() => accessTokenProvider.getAccessToken()).available()).strong;
         if (!strong) {
           if (!__DEV__) throw new Error("Strong biometric signing is required. Rebuild the app and enroll device biometrics.");
-          const auth = await requestTransactionAuth({ amountLabel: `$${formatMinor(quote.sendAmountMinor)} ${quote.sendCurrency}`, recipientName: params.recipientName });
+          const auth = await requestTransactionAuth({ amountLabel: `${displayMoney(quote.sendAmountMinor, quote.sendCurrency)} ${quote.sendCurrency}`, recipientName: params.recipientName });
           if (auth !== "AUTHORIZED") return;
         }
         prepared = await client.prepareTransferConfirmation({ quoteId: quote.id, paymentMethodId, ...(params.purposeCode ? { purposeCode: params.purposeCode } : {}) });
@@ -84,6 +104,10 @@ export default function LinqaSendReview() {
       if (outcome.status === "DECLINED") setResult(outcome);
       else router.replace({ pathname: "/linqasend/status", params: { id: outcome.transferId } });
     } catch (e) {
+      if (e instanceof LinqaSendApiError && typeof e.payload.transferId === "string") {
+        router.replace({ pathname: "/linqasend/status", params: { id: e.payload.transferId } });
+        return;
+      }
       if (e instanceof LinqaSendApiError && e.payload.error === "scam_warning_acknowledgement_required" && Array.isArray(e.payload.warnings)) {
         setWarnings(e.payload.warnings as LinqaSendSecurityWarning[]);
         setError(null);
@@ -121,7 +145,7 @@ export default function LinqaSendReview() {
     );
   }
 
-  const disabled = busy || !paymentMethodId || remaining === 0;
+  const disabled = busy || !reconciled || !paymentMethodId || remaining === 0;
 
   return (
     <SafeAreaView style={s.screen}>
@@ -138,14 +162,14 @@ export default function LinqaSendReview() {
         <Text style={s.label}>You Send</Text>
         <View style={s.moneyCard}>
           <Text style={s.flag}>{currencyFlag(quote.sendCurrency)}</Text>
-          <Text style={s.moneyValue}>{formatMinor(quote.sendAmountMinor)}</Text>
+          <Text style={s.moneyValue}>{displayMoney(quote.sendAmountMinor, quote.sendCurrency)}</Text>
           <Text style={s.moneyCode}>{quote.sendCurrency}</Text>
         </View>
 
         <Text style={[s.label, { marginTop: 16 }]}>They Receive</Text>
         <View style={s.moneyCard}>
           <Text style={s.flag}>{currencyFlag(quote.receiveCurrency)}</Text>
-          <Text style={s.moneyValue}>{formatMinor(quote.receiveAmountMinor)}</Text>
+          <Text style={s.moneyValue}>{displayMoney(quote.receiveAmountMinor, quote.receiveCurrency)}</Text>
           <Text style={s.moneyCode}>{quote.receiveCurrency}</Text>
         </View>
 
@@ -161,9 +185,9 @@ export default function LinqaSendReview() {
         <View style={s.divider} />
 
         <View style={s.line}><Text style={s.lineLabel}>Exchange rate</Text><Text style={s.lineValue}>1 {quote.sendCurrency} = {Number(quote.customerRate).toFixed(4)} {quote.receiveCurrency}</Text></View>
-        <View style={s.line}><Text style={s.lineLabel}>Transfer fee</Text><Text style={s.lineValue}>${formatMinor(sendFee)}</Text></View>
-        <View style={s.line}><Text style={s.lineLabel}>Recipient fee</Text><Text style={s.lineValue}>${formatMinor(recipientFee)}</Text></View>
-        <View style={s.line}><Text style={s.totalLabel}>Total to be charged</Text><Text style={s.totalValue}>${formatMinor(total)}</Text></View>
+        <View style={s.line}><Text style={s.lineLabel}>Transfer fee</Text><Text style={s.lineValue}>{displayMoney(sendFee, quote.sendCurrency)} {quote.sendCurrency}</Text></View>
+        <View style={s.line}><Text style={s.lineLabel}>Recipient fee</Text><Text style={s.lineValue}>{displayMoney(recipientFee, quote.receiveCurrency)} {quote.receiveCurrency}</Text></View>
+        <View style={s.line}><Text style={s.totalLabel}>Total to be charged</Text><Text style={s.totalValue}>{displayMoney(total, quote.sendCurrency)} {quote.sendCurrency}</Text></View>
         <View style={s.line}>
           <Text style={s.lineLabel}>Paid with</Text>
           {paymentMethods === null ? <ActivityIndicator color={send.primary} /> : method ? (
@@ -205,22 +229,22 @@ const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: send.bg },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
   headerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 16 },
   content: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 20 },
   label: { color: send.text, fontFamily: fonts.bold, fontSize: 15, marginBottom: 10 },
   moneyCard: { flexDirection: "row", alignItems: "center", gap: 14, height: 70, borderRadius: 16, borderWidth: 1.5, borderColor: send.border, paddingHorizontal: 16 },
-  flag: { fontSize: 30 },
-  moneyValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 24 },
+  flag: { fontSize: 18 },
+  moneyValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
   moneyCode: { color: send.muted, fontFamily: fonts.semibold, fontSize: 15, marginTop: 6 },
   toRow: { flexDirection: "row", alignItems: "center", gap: 14 },
-  toName: { color: send.text, fontFamily: fonts.bold, fontSize: 17 },
+  toName: { color: send.text, fontFamily: fonts.bold, fontSize: 16 },
   toMeta: { color: send.muted, fontFamily: fonts.regular, fontSize: 14, marginTop: 4 },
   divider: { height: 1, backgroundColor: send.border, marginVertical: 20 },
   line: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
   lineLabel: { color: send.muted, fontFamily: fonts.medium, fontSize: 15 },
   lineValue: { color: send.text, fontFamily: fonts.semibold, fontSize: 15 },
   totalLabel: { color: send.text, fontFamily: fonts.bold, fontSize: 16 },
-  totalValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
+  totalValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 16 },
   lock: { color: send.primary, fontFamily: fonts.semibold, fontSize: 13, marginBottom: 14 },
   banner: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#ECFDF3", borderWidth: 1, borderColor: "#BFEBD0", borderRadius: 14, padding: 14, marginTop: 4 },
   bannerIcon: { width: 36, height: 36, borderRadius: 10, borderWidth: 1.5, borderColor: send.success, alignItems: "center", justifyContent: "center" },
@@ -231,10 +255,10 @@ const s = StyleSheet.create({
   warningText: { color: send.text, fontFamily: fonts.regular, fontSize: 13, lineHeight: 19, marginBottom: 4 },
   footer: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 14, backgroundColor: send.bg },
   confirm: { height: 56, borderRadius: 16, backgroundColor: send.primary, alignItems: "center", justifyContent: "center" },
-  confirmText: { color: "#FFFFFF", fontFamily: fonts.bold, fontSize: 17 },
+  confirmText: { color: "#FFFFFF", fontFamily: fonts.bold, fontSize: 16 },
   link: { color: send.primary, fontFamily: fonts.bold, fontSize: 15 },
   resultBox: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28 },
   resultIcon: { width: 96, height: 96, borderRadius: 48, alignItems: "center", justifyContent: "center" },
-  resultTitle: { color: send.text, fontFamily: fonts.extrabold, fontSize: 24, marginTop: 20 },
+  resultTitle: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18, marginTop: 20 },
   resultSub: { color: send.muted, fontFamily: fonts.regular, fontSize: 14, lineHeight: 21, textAlign: "center", marginTop: 10 }
 });

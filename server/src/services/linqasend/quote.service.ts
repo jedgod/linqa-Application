@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Database } from "../../db/pool.js";
 import { FxPricingService } from "./fx-pricing.service.js";
 import { FxRateRepository } from "./fx-rate.repository.js";
+import { currencyMinorDigits } from "./money.js";
 
 const QUOTE_TTL_SECONDS = 30;
 
@@ -59,6 +60,8 @@ export class QuoteService {
 
     const price = this.fxPricing.createPrice({
       sendAmountMinor: input.sendAmountMinor,
+      sourceDigits: currencyMinorDigits(c.source_currency),
+      destinationDigits: currencyMinorDigits(c.destination_currency),
       marketRate: rate.marketRate,
       providerExecutionRate: rate.executionRate,
       rule: {

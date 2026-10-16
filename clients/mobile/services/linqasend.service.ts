@@ -123,9 +123,33 @@ function jwtUserId(token: string): string {
 export class LinqaSendService {
   constructor(private readonly baseUrl: string, private readonly token: () => Promise<string>) {}
 
+  resolvePaymentIntent(quoteId: string) {
+    return this.request<{ idempotencyKey: string; transferId?: string; status?: string }>("/v1/linqasend/payment-intents", { method: "POST", body: JSON.stringify({ quoteId }) });
+  }
+
+  async rememberPaymentReview(params: { quote: string; recipientName: string; [key: string]: string | undefined }, quoteId: string) {
+    const { userId, storage } = await this.checkPendingPayment(quoteId);
+    await storage.put(userId, "linqasend.pendingReview", JSON.stringify({ quoteId, params }));
+  }
+
+  async pendingPaymentReview(): Promise<{ quote: string; recipientName: string; [key: string]: string | undefined } | null> {
+    const userId = jwtUserId(await this.token());
+    const storage = new AccountSecureStorage();
+    const quoteId = await storage.get(userId, "linqasend.pendingQuote");
+    if (!quoteId) return null;
+    const raw = await storage.get(userId, "linqasend.pendingReview");
+    if (!raw) return null;
+    const record = JSON.parse(raw);
+    return record.quoteId === quoteId ? record.params : null;
+  }
+
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    try {
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
+      signal: controller.signal,
       headers: {
         ...(init.body === undefined ? {} : { "content-type": "application/json" }),
         authorization: `Bearer ${await this.token()}`,
@@ -138,6 +162,22 @@ export class LinqaSendService {
       throw new LinqaSendApiError(message, payload as Record<string, unknown>, response.status);
     }
     return payload as T;
+    } finally { clearTimeout(timeout); }
+  }
+
+  private async checkPendingPayment(quoteId: string) {
+    const userId = jwtUserId(await this.token());
+    const storage = new AccountSecureStorage();
+    const previousQuote = await storage.get(userId, "linqasend.pendingQuote");
+    if (previousQuote && previousQuote !== quoteId) {
+      const previous = await this.resolvePaymentIntent(previousQuote);
+      if (previous.transferId) {
+        await storage.remove(userId, "linqasend.pendingQuote");
+        throw new LinqaSendApiError("previous_payment_found", { transferId: previous.transferId }, 409);
+      }
+      throw new Error("A previous payment has an uncertain outcome. Resume its original review before starting another payment.");
+    }
+    return { userId, storage };
   }
 
   listPaymentMethods() {
@@ -197,8 +237,10 @@ export class LinqaSendService {
   }
 
   async prepareTransferConfirmation(input: PreparedLinqaSendTransfer["input"]): Promise<PreparedLinqaSendTransfer> {
-    const idempotencyKey =
-      typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    await this.checkPendingPayment(input.quoteId);
+    const intent = await this.resolvePaymentIntent(input.quoteId);
+    if (intent.transferId) throw new LinqaSendApiError("payment_already_submitted", { transferId: intent.transferId }, 409);
+    const idempotencyKey = intent.idempotencyKey;
     const installationId = await getCachedInstallationServerId();
     if (!installationId) throw new Error("This installation is not registered for secure payments. Sign in again.");
     const token = await this.token();
@@ -223,11 +265,21 @@ export class LinqaSendService {
     return { input, idempotencyKey, installationId, transactionHash: authorization.transactionHash, securityAuthorizationId: authorization.authorizationId };
   }
 
-  submitPreparedTransfer(prepared: PreparedLinqaSendTransfer, acknowledgedWarningCodes: string[] = []) {
-    return this.request<{ transferId: string; status: string; reason?: string; action?: string; idempotentReplay: boolean }>(
+  async submitPreparedTransfer(prepared: PreparedLinqaSendTransfer, acknowledgedWarningCodes: string[] = []) {
+    const { userId, storage } = await this.checkPendingPayment(prepared.input.quoteId);
+    await storage.put(userId, "linqasend.pendingQuote", prepared.input.quoteId);
+    try {
+    const result = await this.request<{ transferId: string; status: string; reason?: string; action?: string; idempotentReplay: boolean }>(
       "/v1/linqasend/transfers",
       { method: "POST", headers: { "idempotency-key": prepared.idempotencyKey, "x-installation-id": prepared.installationId }, body: JSON.stringify({ ...prepared.input, transactionHash: prepared.transactionHash, securityAuthorizationId: prepared.securityAuthorizationId, acknowledgedWarningCodes }) }
     );
+    await storage.remove(userId, "linqasend.pendingQuote");
+    return result;
+    } catch (error) {
+      // Only explicit pre-submission refusals can safely clear an uncertain outcome.
+      if (error instanceof LinqaSendApiError && ["real_money_not_ready", "verified_payment_method_required", "payment_method_provider_mismatch", "payment_intent_key_mismatch", "QUOTE_EXPIRED", "QUOTE_EXPIRED_OR_NOT_OWNED"].includes(String(error.payload.error))) await storage.remove(userId, "linqasend.pendingQuote");
+      throw error;
+    }
   }
 
   async createTransfer(input: PreparedLinqaSendTransfer["input"]) {

@@ -1,9 +1,10 @@
+import { currencyDigits, displayMoney, parseMoney } from "../../services/send-money-validation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { LinqaSendStatusBar, countryName, currencyFlag, formatMinor, send } from "../../components/linqasend/ui";
+import { LinqaSendStatusBar, countryName, currencyFlag, send } from "../../components/linqasend/ui";
 import { getApiBaseUrl } from "../../config/api";
 import { LinqaSendService, type LinqaSendQuote } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
@@ -12,16 +13,7 @@ import { fonts } from "../../theme/tokens";
 const API = getApiBaseUrl();
 /** Wait for the person to stop typing before asking the server for a live rate. */
 const QUOTE_DEBOUNCE_MS = 650;
-const SOURCE_CURRENCY = "USD";
-
 const secondsLeft = (iso: string) => Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 1000));
-
-/** Decimal string to minor units, or null if it is not a positive amount with at most 2 decimals. */
-function toMinor(text: string): string | null {
-  if (!/^\d{1,9}(\.\d{0,2})?$/.test(text)) return null;
-  const minor = Math.round(Number(text) * 100);
-  return minor > 0 ? String(minor) : null;
-}
 
 export default function LinqaSendAmount() {
   const router = useRouter();
@@ -35,15 +27,27 @@ export default function LinqaSendAmount() {
   const [remaining, setRemaining] = useState(0);
   const requestId = useRef(0);
 
-  const minor = toMinor(amount.trim());
+  const [sourceCurrency, setSourceCurrency] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    Promise.all([client.getSettings(), client.getLimits()]).then(([settings, limits]) => {
+      const currency = settings.default_currency ?? limits.currency;
+      if (!currency) throw new Error("Set your sending currency in LinqaSend settings first.");
+      currencyDigits(currency);
+      if (current) setSourceCurrency(currency);
+    }).catch(cause => { if (current) setError(cause instanceof Error ? cause.message : "Sending currency unavailable."); });
+    return () => { current = false; };
+  }, [client]);
+  const minor = sourceCurrency ? parseMoney(amount.trim(), sourceCurrency) : null;
   const invalid = amount.trim().length > 0 && minor === null;
 
   const fetchQuote = useCallback(async (sendMinor: string) => {
+    if (!sourceCurrency) return;
     const id = ++requestId.current;
     setLoading(true);
     setError(null);
     try {
-      const next = await client.createQuote({ recipientId: p.recipientId, sourceCurrency: SOURCE_CURRENCY, destinationCurrency: p.recipientCurrency, sendAmountMinor: sendMinor });
+      const next = await client.createQuote({ recipientId: p.recipientId, sourceCurrency, destinationCurrency: p.recipientCurrency, sendAmountMinor: sendMinor });
       if (id !== requestId.current) return; // a newer request superseded this one
       setQuote(next);
       setRemaining(secondsLeft(next.expiresAt));
@@ -54,13 +58,13 @@ export default function LinqaSendAmount() {
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, [client, p.recipientId, p.recipientCurrency]);
+  }, [client, p.recipientId, p.recipientCurrency, sourceCurrency]);
 
   // A new amount: drop the old quote immediately (its receive amount no longer applies) and fetch after a pause.
   useEffect(() => {
     requestId.current++;
     setQuote(null);
-    setError(null);
+    if (sourceCurrency) setError(null);
     if (!minor) { setLoading(false); return; }
     setLoading(true);
     const timer = setTimeout(() => void fetchQuote(minor), QUOTE_DEBOUNCE_MS);
@@ -73,10 +77,10 @@ export default function LinqaSendAmount() {
     const timer = setInterval(() => {
       const left = secondsLeft(quote.expiresAt);
       setRemaining(left);
-      if (left === 0 && minor) void fetchQuote(minor);
+      if (left === 0 && minor && !loading) void fetchQuote(minor);
     }, 1000);
     return () => clearInterval(timer);
-  }, [quote, minor, fetchQuote]);
+  }, [quote, minor, fetchQuote, loading]);
 
   function explain() {
     Alert.alert(
@@ -97,8 +101,8 @@ export default function LinqaSendAmount() {
 
   const ready = Boolean(quote) && remaining > 0 && !loading;
   const missingRecipient = !p.recipientId || !p.recipientCurrency;
-  const receive = quote ? formatMinor(quote.receiveAmountMinor) : "";
-  const fee = (value?: string) => `$${formatMinor(value ?? "0")}`;
+  const receive = quote ? displayMoney(quote.receiveAmountMinor, quote.receiveCurrency) : "";
+  const fee = (value: string | undefined, currency: string) => `${displayMoney(value ?? "0", currency)} ${currency}`;
 
   // Opened without a recipient (a stale link or a restored session): send the person back to choose one
   // instead of rendering with undefined values.
@@ -133,8 +137,8 @@ export default function LinqaSendAmount() {
         <Text style={s.label}>You send</Text>
         <View style={[s.field, invalid && s.fieldInvalid]}>
           <View style={s.currency}>
-            <Text style={s.flag}>{currencyFlag(SOURCE_CURRENCY)}</Text>
-            <Text style={s.code}>{SOURCE_CURRENCY}</Text>
+            <Text style={s.flag}>{currencyFlag(sourceCurrency ?? "")}</Text>
+            <Text style={s.code}>{sourceCurrency ?? "?"}</Text>
           </View>
           <TextInput
             accessibilityLabel="Amount to send"
@@ -147,7 +151,7 @@ export default function LinqaSendAmount() {
             autoFocus
           />
         </View>
-        {invalid ? <Text style={s.hint}>Enter an amount with up to two decimals.</Text> : null}
+        {invalid ? <Text style={s.hint}>Enter a valid amount for the selected sending currency.</Text> : null}
 
         <Text style={[s.label, { marginTop: 18 }]}>They receive</Text>
         <View style={s.field}>
@@ -172,8 +176,8 @@ export default function LinqaSendAmount() {
           </Pressable>
         </View>
 
-        <View style={s.feeRow}><Text style={s.feeLabel}>Transfer fee</Text><Text style={s.feeValue}>{quote ? fee(quote.senderFeeMinor) : "—"}</Text></View>
-        <View style={s.feeRow}><Text style={s.feeLabel}>Recipient fee</Text><Text style={s.feeValue}>{quote ? fee(quote.recipientFeeMinor) : "—"}</Text></View>
+        <View style={s.feeRow}><Text style={s.feeLabel}>Transfer fee</Text><Text style={s.feeValue}>{quote ? fee(quote.senderFeeMinor, quote.sendCurrency) : "—"}</Text></View>
+        <View style={s.feeRow}><Text style={s.feeLabel}>Recipient fee</Text><Text style={s.feeValue}>{quote ? fee(quote.recipientFeeMinor, quote.receiveCurrency) : "—"}</Text></View>
 
         <View style={s.banner}>
           <View style={s.bannerIcon}><Ionicons name="shield-checkmark-outline" size={26} color={send.success} /></View>
@@ -203,22 +207,22 @@ const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: send.bg },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
   headerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 16 },
   content: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 20 },
   to: { color: send.primary, fontFamily: fonts.semibold, fontSize: 14, marginBottom: 14 },
   label: { color: send.text, fontFamily: fonts.bold, fontSize: 15, marginBottom: 10 },
   field: { flexDirection: "row", alignItems: "stretch", height: 70, borderRadius: 16, borderWidth: 1.5, borderColor: send.border, backgroundColor: send.bg, overflow: "hidden" },
   fieldInvalid: { borderColor: send.danger },
   currency: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, borderRightWidth: 1, borderRightColor: send.border, minWidth: 124 },
-  flag: { fontSize: 26 },
-  code: { color: send.text, fontFamily: fonts.bold, fontSize: 17 },
-  amountInput: { flex: 1, textAlign: "right", paddingHorizontal: 18, color: send.text, fontFamily: fonts.extrabold, fontSize: 24 },
+  flag: { fontSize: 18 },
+  code: { color: send.text, fontFamily: fonts.bold, fontSize: 16 },
+  amountInput: { flex: 1, textAlign: "right", paddingHorizontal: 18, color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
   receiveBox: { flex: 1, alignItems: "flex-end", justifyContent: "center", paddingHorizontal: 18 },
-  amountText: { color: send.text, fontFamily: fonts.extrabold, fontSize: 24 },
+  amountText: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
   hint: { color: send.danger, fontFamily: fonts.medium, fontSize: 13, marginTop: 6 },
   rateCard: { flexDirection: "row", alignItems: "center", backgroundColor: send.primarySoft, borderWidth: 1, borderColor: "#D9DDFB", borderRadius: 16, padding: 16, marginTop: 20 },
   rateTitle: { color: send.muted, fontFamily: fonts.medium, fontSize: 13 },
-  rateValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 20, marginTop: 6 },
+  rateValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18, marginTop: 6 },
   info: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   feeRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 16 },
   feeLabel: { color: send.text, fontFamily: fonts.medium, fontSize: 15 },
@@ -231,7 +235,7 @@ const s = StyleSheet.create({
   footer: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 14, backgroundColor: send.bg },
   continue: { height: 56, borderRadius: 16, backgroundColor: send.primary, alignItems: "center", justifyContent: "center" },
   continueDisabled: { opacity: 0.45 },
-  continueText: { color: "#FFFFFF", fontFamily: fonts.bold, fontSize: 17 },
+  continueText: { color: "#FFFFFF", fontFamily: fonts.bold, fontSize: 16 },
   footNote: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 14 },
   footNoteText: { color: send.muted, fontFamily: fonts.medium, fontSize: 14 }
 });

@@ -92,13 +92,13 @@ export default function LinqaSendMore() {
 
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: send.bg },
-  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 24, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 6 },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 6 },
   content: { paddingHorizontal: 20, paddingBottom: 24 },
   entry: { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: send.border },
   icon: { width: 44, height: 44, borderRadius: 14, backgroundColor: send.primarySoft, alignItems: "center", justifyContent: "center" },
   entryLabel: { color: send.text, fontFamily: fonts.semibold, fontSize: 16 },
   entryHint: { color: send.muted, fontFamily: fonts.regular, fontSize: 13, marginTop: 2 },
-  section: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18, marginTop: 26, marginBottom: 6 },
+  section: { color: send.text, fontFamily: fonts.extrabold, fontSize: 16, marginTop: 26, marginBottom: 6 },
   card: { backgroundColor: send.surface, borderRadius: 16, paddingHorizontal: 16 },
   setting: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: send.border },
   settingText: { color: send.text, fontFamily: fonts.semibold, fontSize: 15 },

@@ -25,10 +25,14 @@ export function scaledRateToString(scaled: bigint): string {
 }
 
 /** amountMinor * scaledRate / RATE_SCALE, rounded half-up. */
-export function convertMinor(amountMinor: bigint, scaledRate: bigint): bigint {
-  const product = amountMinor * scaledRate;
-  const half = RATE_SCALE / 2n;
-  return (product + half) / RATE_SCALE;
+export function currencyMinorDigits(currency: string): number {
+  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("INVALID_CURRENCY");
+  return new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
+}
+export function convertMinor(amountMinor: bigint, scaledRate: bigint, sourceDigits = 2, destinationDigits = 2): bigint {
+  const product = amountMinor * scaledRate * 10n ** BigInt(destinationDigits);
+  const denominator = RATE_SCALE * 10n ** BigInt(sourceDigits);
+  return (product + denominator / 2n) / denominator;
 }
 
 export function applyMarginToScaledRate(scaledExecutionRate: bigint, marginBps: number): bigint {

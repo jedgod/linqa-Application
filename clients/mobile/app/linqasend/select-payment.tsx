@@ -124,7 +124,7 @@ const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: send.bg },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
   headerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18 },
+  title: { color: send.text, fontFamily: fonts.extrabold, fontSize: 16 },
   content: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 20 },
   section: { color: send.text, fontFamily: fonts.bold, fontSize: 15, marginBottom: 12 },
   method: { flexDirection: "row", alignItems: "center", gap: 14, borderWidth: 1.5, borderColor: send.border, borderRadius: 16, padding: 16, marginBottom: 12, backgroundColor: send.bg },
@@ -143,7 +143,7 @@ const s = StyleSheet.create({
   footer: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 14, backgroundColor: send.bg },
   continue: { height: 56, borderRadius: 16, backgroundColor: send.primary, alignItems: "center", justifyContent: "center" },
   continueDisabled: { opacity: 0.45 },
-  continueText: { color: "#FFFFFF", fontFamily: fonts.bold, fontSize: 17 },
+  continueText: { color: "#FFFFFF", fontFamily: fonts.bold, fontSize: 16 },
   footNote: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 14 },
   footNoteText: { color: send.muted, fontFamily: fonts.medium, fontSize: 14 }
 });

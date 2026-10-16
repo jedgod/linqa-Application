@@ -29,6 +29,8 @@ export class FxPricingService {
     marketRate: string;
     providerExecutionRate: string;
     rule: CorridorPricingRule;
+    sourceDigits?: number;
+    destinationDigits?: number;
   }) {
     if (input.sendAmountMinor <= 0n) throw new Error("INVALID_SEND_AMOUNT");
 
@@ -37,9 +39,9 @@ export class FxPricingService {
     const scaledCustomerRate = applyMarginToScaledRate(scaledExecutionRate, marginBps);
     if (scaledCustomerRate <= 0n) throw new Error("INVALID_CUSTOMER_RATE");
 
-    const receiveAmountMinor = convertMinor(input.sendAmountMinor, scaledCustomerRate);
-    const providerReceiveMinor = convertMinor(input.sendAmountMinor, scaledExecutionRate);
-    const marketReceiveMinor = convertMinor(input.sendAmountMinor, parseRateToScaled(input.marketRate));
+    const receiveAmountMinor = convertMinor(input.sendAmountMinor, scaledCustomerRate, input.sourceDigits, input.destinationDigits);
+    const providerReceiveMinor = convertMinor(input.sendAmountMinor, scaledExecutionRate, input.sourceDigits, input.destinationDigits);
+    const marketReceiveMinor = convertMinor(input.sendAmountMinor, parseRateToScaled(input.marketRate), input.sourceDigits, input.destinationDigits);
 
     return {
       marginBps,

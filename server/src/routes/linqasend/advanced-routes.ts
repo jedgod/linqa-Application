@@ -1,8 +1,10 @@
+import { createPaymentAuthenticator } from "../../auth/payment-authenticator.js";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../../config.js";
-import { createAuthenticator, requireScope } from "../../auth/jwt.js";
+import { requireScope } from "../../auth/jwt.js";
+import { InactivePrincipalError } from "../../auth/active-principal.js";
 import type { Database } from "../../db/pool.js";
 import { LinqaSendReadinessService } from "../../services/linqasend/readiness.service.js";
 import { JurisdictionV2Service, LocationSignalType, SensitiveAction } from "../../services/linqasend/jurisdiction-v2.js";
@@ -18,6 +20,7 @@ function guarded<T>(handler: (request: FastifyRequest, reply: FastifyReply) => P
   return async (request: FastifyRequest, reply: FastifyReply) => {
     try { return await handler(request, reply); }
     catch (error) {
+      if (error instanceof InactivePrincipalError) return reply.code(401).send({ error: "authentication_revoked" });
       if (error instanceof z.ZodError) return reply.code(422).send({ error: "validation_error", details: error.flatten() });
       request.log.warn({ err: error }, "advanced linqasend request rejected");
       return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid_request" });
@@ -30,7 +33,7 @@ const country = z.string().length(2).transform((v) => v.toUpperCase());
 const currency = z.string().length(3).transform((v) => v.toUpperCase());
 
 export async function registerAdvancedLinqaSendRoutes(app: FastifyInstance, config: AppConfig, db: Database, biometrics?: BiometricAuthorizationService) {
-  const auth = createAuthenticator(config);
+  const auth = createPaymentAuthenticator(config, db);
   const readiness = new LinqaSendReadinessService(db, config.LINQASEND_RELEASE_GIT_SHA && config.LINQASEND_ARTIFACT_SHA256 ? { gitSha: config.LINQASEND_RELEASE_GIT_SHA, artifactDigest: config.LINQASEND_ARTIFACT_SHA256 } : undefined, { realMoneyEnabled: config.LINQASEND_REAL_MONEY_ENABLED === true, mode: config.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION", ...(config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID ? { limitedCorridorId: config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID } : {}) });
   const jurisdiction = new JurisdictionV2Service(db);
   const settlement = new SettlementTreasuryV5Service(db);

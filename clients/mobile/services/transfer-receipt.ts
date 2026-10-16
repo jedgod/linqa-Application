@@ -1,3 +1,4 @@
+import { displayMoney } from "./send-money-validation";
 export interface ReceiptInput {
   id: string;
   direction?: "SENT" | "RECEIVED";
@@ -14,11 +15,8 @@ export interface ReceiptInput {
 export interface ReceiptRow { label: string; value: string }
 
 function money(minor: string, currency: string): string {
-  const negative = minor.startsWith("-");
-  const digits = (negative ? minor.slice(1) : minor).replace(/\D/g, "").padStart(3, "0");
-  const whole = digits.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  const text = `${whole}.${digits.slice(-2)}`;
-  return currency === "USD" ? `${negative ? "-" : ""}$${text}` : `${negative ? "-" : ""}${text} ${currency}`;
+  const text = displayMoney(minor, currency);
+  return currency === "USD" ? `${text.startsWith("-") ? "-$" + text.slice(1) : "$" + text}` : `${text} ${currency}`;
 }
 
 /** Date like "Oct 12, 2026, 3:42 PM" in the viewer's locale. Empty string when the date is unusable. */
