@@ -39,6 +39,7 @@ try {
     "src/tests/chat/route-security.test.ts", "src/tests/chat/realtime-security.test.ts", "src/tests/chat/shared-attachment.routes.test.ts",
     "src/tests/chats-inbox.route.test.ts", "src/tests/production-auth-policy.test.ts", "src/tests/chat/chat-v2.integration.test.ts", "src/tests/chat/thread-attachment.integration.test.ts",
     "src/tests/chat/session-lifecycle.test.ts", "src/tests/chat/session-revocation.integration.test.ts",
+    "src/tests/chat/call-vault-security.test.ts", "src/tests/desktop-call-auth.test.ts",
     "--maxWorkers=1", "--testTimeout=30000", "--hookTimeout=30000"], {
     cwd: server, windowsHide: true, timeout: 600_000, maxBuffer: 8_000_000,
     env: { ...process.env, NODE_ENV: "test", DATABASE_URL: url, LINQA_REQUIRE_DB_TESTS: "1" }

@@ -2,6 +2,7 @@ import { BottomInsetSpacer, ModalSafe } from "../../components/common/ModalSafe"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccessibilityInfo, AppState, ActivityIndicator, Image, ImageBackground, Linking, Modal, Pressable, RefreshControl, ScrollView, Switch, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useAccounts } from '../../account/AccountContext';
@@ -42,6 +43,11 @@ export default function HomeScreen() {
 }
 
 function AccountHome() {
+  const [isFocused, setIsFocused] = useState(false);
+  useFocusEffect(useCallback(() => {
+    setIsFocused(true);
+    return () => setIsFocused(false);
+  }, []));
   const moneyAvailable = useLinqaSendAvailability() === true;
   const router = useRouter();
   const { profile } = useProfile();
@@ -360,6 +366,7 @@ function AccountHome() {
     // is nothing honest to render until CountryLinqa verification completes.
     return (
       <SafeAreaView edges={["top", "left", "right"]} style={s.screen}>
+        {isFocused && <StatusBar style="dark" hidden={false} />}
         <View style={s.gateWrap}>
           <View style={s.gateIcon}>
             <Ionicons name="globe-outline" size={28} color="#4F46E5" />
@@ -382,6 +389,7 @@ function AccountHome() {
 
   return (
     <SafeAreaView edges={["top", "left", "right"]} style={s.screen}>
+      {isFocused && <StatusBar style="dark" hidden={false} />}
       <ScrollView
         contentContainerStyle={s.content}
         showsVerticalScrollIndicator={false}

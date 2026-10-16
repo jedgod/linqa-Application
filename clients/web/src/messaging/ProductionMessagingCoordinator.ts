@@ -25,7 +25,7 @@ export class ProductionMessagingCoordinator {
     const recipient=packages.keyPackages.find(k=>new Date(k.expiresAt).getTime()>Date.now());
     if(!recipient)throw new Error("No valid recipient key package.");
     const checkpointKey=import.meta.env.VITE_TRANSPARENCY_PUBLIC_KEY_BASE64;
-    if(!recipient.transparencyProof || !checkpointKey)throw new Error("Transparency proof is unavailable.");
+    if(!recipient.transparencyProof || typeof checkpointKey !== "string" || !checkpointKey)throw new Error("Transparency proof is unavailable.");
     const packageBytes=Uint8Array.from(atob(recipient.packageBase64),c=>c.charCodeAt(0));
     await verifyTransparencyProof({packageBytes,proof:recipient.transparencyProof,checkpointPublicKeyBase64:checkpointKey});
     const messageId=input.clientMessageId ?? crypto.randomUUID();

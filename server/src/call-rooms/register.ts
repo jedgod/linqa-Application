@@ -3,7 +3,10 @@ import type { WebSocket } from "ws";
 import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
-import { createAuthenticator, requireScope } from "../auth/jwt.js";
+import { requireScope } from "../auth/jwt.js";
+import { createActiveAuthenticator } from "../auth/active-principal.js";
+import { createSocketSessionGuard } from "../realtime/session-guard.js";
+import { createAuthorizedSender } from "../realtime/authorized-sender.js";
 import { CallsStore } from "./calls.store.js";
 import { CallsService, CallError } from "./calls.service.js";
 import { TurnService } from "./turn.service.js";
@@ -26,9 +29,11 @@ const schemas: Record<string,z.ZodTypeAny> = {
   [C2S.handoffCancel]:z.object({callId:uuid,token:z.string().min(16).max(128)}).strict()
 };
 class Emitter implements CallEmitter {
+  private readonly senders=new WeakMap<WebSocket,(message:string)=>void>();
+  register(socket:WebSocket,ctx:AuthContext,send:(message:string)=>void){this.connections.set(socket,ctx);this.senders.set(socket,send);}
   connections=new Map<WebSocket,AuthContext>();
   pending: (()=>void)[]=[];
-  private send(socket: WebSocket,event:string,data:unknown) { if(socket.readyState===socket.OPEN) socket.send(JSON.stringify({event,data})); }
+  private send(socket: WebSocket,event:string,data:unknown) { this.senders.get(socket)?.(JSON.stringify({event,data})); }
   toUser(userId:string,event:string,data:unknown,opts?:{exceptDeviceId?:string}) { this.pending.push(()=>{for(const [s,c] of this.connections) if(c.userId===userId && c.deviceId!==opts?.exceptDeviceId) this.send(s,event,data);}); }
   toDevice(userId:string,deviceId:string,event:string,data:unknown) { this.pending.push(()=>{for(const [s,c] of this.connections) if(c.userId===userId && c.deviceId===deviceId) this.send(s,event,data);}); }
   onlineDevices(userId:string):DeviceInfo[] { return [...new Map([...this.connections.values()].filter(c=>c.userId===userId).map(c=>[c.deviceId,{deviceId:c.deviceId,name:c.deviceName,platform:c.platform}])).values()]; }
@@ -58,7 +63,7 @@ export async function registerCallRooms(app:FastifyInstance,config:AppConfig,db:
   }
   const interval=setInterval(()=>{ if(!stopped) void serialize(()=>undefined).catch(error=>{ app.log.error({err:error},'Secure call-room persistence failed'); stopped=true;for(const socket of emitter.connections.keys()) socket.close(1011,'persistence unavailable'); }); },1000);interval.unref();
   app.addHook('onClose',async()=>{clearInterval(interval);calls.onModuleDestroy();await queue;await persistence.save(store.all());await lease.query(`SELECT pg_advisory_unlock(hashtext('linqa-secure-call-room-worker'))`);lease.release();});
-  const authenticate=createAuthenticator(config);
+  const authenticate=createActiveAuthenticator(config,db);
   async function auth(request:FastifyRequest,scope:string):Promise<AuthContext> {
     const principal=await authenticate(request);requireScope(principal,scope);
     if(!principal.deviceId) throw new Error('device-bound-token-required');
@@ -88,8 +93,9 @@ export async function registerCallRooms(app:FastifyInstance,config:AppConfig,db:
   app.post('/v1/call-rooms/:callId/reports',async(request,reply)=>{try {const ctx=await auth(request,'safety:write');const callId=uuid.parse((request.params as any).callId);return await serialize(()=>reports.create(ctx.userId,callId,request.body as any));}catch{return reply.code(400).send({error:'invalid-report'});} });
   app.get('/v1/call-rooms/signaling',{websocket:true},(socket,request)=>{
     let ctx:AuthContext|null=null;let count=0;let window=Date.now();let pending=0;let closed=false;let authenticating=false;
+    let sendFrame:(value:unknown)=>void=()=>undefined;
     const authDeadline=setTimeout(()=>socket.close(4003,'authentication timeout'),5000);
-    const beginAuth=()=>{authenticating=true;void auth(request,'calls:write').then(async verified=>{if(closed)return;clearTimeout(authDeadline);ctx=verified;emitter.connections.set(socket,verified);socket.send(JSON.stringify({event:'ready',data:{}}));await serialize(()=>calls.resendRings(verified.userId,verified.deviceId));}).catch(()=>socket.close(4003,'unauthorized'));};
+    const beginAuth=()=>{authenticating=true;void auth(request,'calls:write').then(async verified=>{const principal=await authenticate(request);if(closed)return;const guard=createSocketSessionGuard(socket,principal,db);const send=createAuthorizedSender(socket,guard.authorize);sendFrame=value=>send(JSON.stringify(value));clearTimeout(authDeadline);ctx=verified;emitter.register(socket,verified,send);sendFrame({event:'ready',data:{}});await serialize(()=>calls.resendRings(verified.userId,verified.deviceId));}).catch(()=>socket.close(4003,'unauthorized'));};
     socket.on('close',()=>{clearTimeout(authDeadline);closed=true;if(!ctx)return;emitter.connections.delete(socket);if(![...emitter.connections.values()].some(c=>c.deviceId===ctx!.deviceId))void serialize(()=>calls.deviceDisconnected(ctx!.userId,ctx!.deviceId)).catch(()=>undefined);});
     socket.on('message',raw=>{
       if(closed)return;
@@ -101,7 +107,7 @@ export async function registerCallRooms(app:FastifyInstance,config:AppConfig,db:
       }if(text.length>600000){socket.close(1009,'frame too large');return;}
       if(Date.now()-window>60000){count=0;window=Date.now();}if(++count>600||pending>=32){socket.close(1008,'rate limited');return;}
       let frame:any;try {frame=JSON.parse(text);if(!Number.isSafeInteger(frame.id)||frame.id<1||typeof frame.event!=='string')throw Error();}catch{socket.close(1008,'invalid frame');return;}
-      pending++;void serialize(async()=>{const refreshed=await auth(request,'calls:write');return dispatch(refreshed,frame.event,frame.data);}).then(data=>{if(socket.readyState===socket.OPEN)socket.send(JSON.stringify({id:frame.id,ok:true,data}));}).catch(error=>{if(!(error instanceof CallError)&&!(error instanceof z.ZodError))request.log.error({err:error,event:frame.event},'call room request failed');if(socket.readyState===socket.OPEN)socket.send(JSON.stringify({id:frame.id,ok:false,error:error instanceof CallError ? error.code : error instanceof z.ZodError ? 'invalid-request' : 'request-failed'}));}).finally(()=>pending--);
+      pending++;void serialize(async()=>{const refreshed=await auth(request,'calls:write');return dispatch(refreshed,frame.event,frame.data);}).then(data=>sendFrame({id:frame.id,ok:true,data})).catch(error=>{if(!(error instanceof CallError)&&!(error instanceof z.ZodError))request.log.error({err:error,event:frame.event},'call room request failed');sendFrame({id:frame.id,ok:false,error:error instanceof CallError ? error.code : error instanceof z.ZodError ? 'invalid-request' : 'request-failed'});}).finally(()=>pending--);
     });
     if(request.headers.authorization)beginAuth();
   });

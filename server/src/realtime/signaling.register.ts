@@ -1,7 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
-import { createAuthenticator } from "../auth/jwt.js";
+import { requireScope } from "../auth/jwt.js";
+import { createActiveAuthenticator } from "../auth/active-principal.js";
+import { createSocketSessionGuard } from "./session-guard.js";
+import { z } from "zod";
 import type { SignalingService } from "../services/signaling.service.js";
 import { RealtimeHub } from "./hub.js";
 
@@ -29,18 +32,21 @@ export async function registerSignaling(
   signaling: SignalingService,
   hub: RealtimeHub
 ) {
-  const authenticate = createAuthenticator(config);
+  const authenticate = createActiveAuthenticator(config, db);
+  const frameSchema = z.object({ callId: z.string().uuid(), recipientDeviceId: z.string().uuid(), sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    eventType: z.string().refine(value => EVENT_TYPES.has(value)), ciphertextBase64: z.string().base64().min(24).max(87_384) }).strict();
 
   app.get("/v1/calls/signaling", { websocket: true }, async (socket, request) => {
     try {
       const principal = await authenticate(request);
+      requireScope(principal, "calls:write");
       if (!principal.deviceId) {
         socket.close(4001, "device-bound token required");
         return;
       }
 
       const callId = new URL(request.url, "http://localhost").searchParams.get("callId");
-      if (!callId) {
+      if (!callId || !z.string().uuid().safeParse(callId).success) {
         socket.close(4400, "callId is required");
         return;
       }
@@ -54,18 +60,27 @@ export async function registerSignaling(
         return;
       }
 
+      const guard = createSocketSessionGuard(socket, principal, db);
       const remove = hub.add({
         socket,
         userId: principal.userId,
-        deviceId: principal.deviceId
+        deviceId: principal.deviceId,
+        authorize: guard.authorize
       });
 
       socket.send(JSON.stringify({ type: "ready" }));
       socket.on("close", remove);
       socket.on("error", remove);
 
+      let windowStart = Date.now(), count = 0, pending = 0;
       socket.on("message", (raw) => {
+        if (raw.toString().length > 90_000) { socket.close(1009, "frame too large"); return; }
+        if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); count = 0; }
+        if (++count > 600 || pending >= 32) { socket.close(1008, "rate limited"); return; }
+        pending += 1;
         void (async () => {
+          try {
+          if (!await guard.authorize()) return;
           const text = raw.toString();
           if (text === "ping") {
             socket.send("pong");
@@ -73,18 +88,11 @@ export async function registerSignaling(
           }
 
           try {
-            const message = JSON.parse(text);
-            if (
-              message.callId !== callId ||
-              typeof message.recipientDeviceId !== "string" ||
-              typeof message.sequence !== "number" ||
-              !EVENT_TYPES.has(message.eventType) ||
-              typeof message.ciphertextBase64 !== "string"
-            ) {
-              return;
-            }
+            const message = frameSchema.parse(JSON.parse(text));
+            if (message.callId !== callId) return;
 
             const ciphertext = Buffer.from(message.ciphertextBase64, "base64");
+            if (ciphertext.length < 16 || ciphertext.length > 65_536) return;
             const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
             const stored = await signaling.append({
@@ -92,7 +100,7 @@ export async function registerSignaling(
               senderDeviceId: principal.deviceId!,
               recipientDeviceId: message.recipientDeviceId,
               sequence: message.sequence,
-              eventType: message.eventType,
+              eventType: message.eventType as Parameters<SignalingService["append"]>[0]["eventType"],
               ciphertext,
               expiresAt
             });
@@ -110,6 +118,7 @@ export async function registerSignaling(
             // Malformed or unauthorized signaling events are silently dropped —
             // never acknowledged, never forwarded.
           }
+          } finally { pending -= 1; }
         })();
       });
     } catch {

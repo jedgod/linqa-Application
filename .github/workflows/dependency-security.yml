@@ -1,10 +1,13 @@
 name: Dependency security
 on:
   pull_request:
-    paths: ["server/package*.json", "clients/mobile/package*.json", ".github/workflows/dependency-security.yml"]
+    paths: ["server/package*.json", "clients/web/package*.json", "clients/mobile/package*.json", "clients/mobile/audit-ci.jsonc", "security/dependency-exceptions.json", "scripts/check-dependency-exceptions.mjs", "tests/dependency-exceptions.test.mjs", ".github/workflows/dependency-security.yml"]
   push:
     branches: [main]
-    paths: ["server/package*.json", "clients/mobile/package*.json", ".github/workflows/dependency-security.yml"]
+    paths: ["server/package*.json", "clients/web/package*.json", "clients/mobile/package*.json", "clients/mobile/audit-ci.jsonc", "security/dependency-exceptions.json", "scripts/check-dependency-exceptions.mjs", "tests/dependency-exceptions.test.mjs", ".github/workflows/dependency-security.yml"]
+  schedule:
+    - cron: "17 10 * * 1"
+    - cron: "17 10 15 4 *"
   workflow_dispatch:
 permissions:
   contents: read
@@ -14,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        directory: [server, clients/mobile]
+        directory: [server, clients/mobile, clients/web]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,10 +27,19 @@ jobs:
           cache-dependency-path: ${{ matrix.directory }}/package-lock.json
       - run: npm ci --ignore-scripts
         working-directory: ${{ matrix.directory }}
+      - name: Enforce reviewed dependency exceptions and upstream versions
+        if: matrix.directory == 'clients/mobile'
+        run: |
+          node --test tests/dependency-exceptions.test.mjs
+          node scripts/check-dependency-exceptions.mjs --check-upstream
       - name: Audit server dependencies
         if: matrix.directory == 'server'
         run: npm audit --audit-level=high
         working-directory: server
+      - name: Audit web dependencies including build/test tooling
+        if: matrix.directory == 'clients/web'
+        run: npm audit --audit-level=high
+        working-directory: clients/web
       # Mobile uses an explicit, reviewed accepted-risk list (clients/mobile/audit-ci.jsonc); any new high/critical advisory fails.
       - name: Audit mobile dependencies
         if: matrix.directory == 'clients/mobile'

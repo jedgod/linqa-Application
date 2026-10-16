@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
-import { createAuthenticator, requireScope } from "../auth/jwt.js";
+import { requireScope } from "../auth/jwt.js";
 import { createActiveAuthenticator } from "../auth/active-principal.js";
 import { intakeConfigured, unconfiguredIntakeAdapters, type ImportKind, type IntakeAdapters } from "../integrations/vault/intake-adapters.js";
 import { LivePlatformSecurity, LiveStepUp, LiveUserDirectory } from "../integrations/vault/live-platform-adapters.js";

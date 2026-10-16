@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "advisory": "GHSA-vfj7-8cjw-p6xm",
+      "package": "braces",
+      "reviewedVersion": "3.0.3",
+      "acceptedOn": "2026-10-15",
+      "reviewedOn": "2026-10-16",
+      "reviewBy": "2027-04-15",
+      "scope": "Mobile glob/build tooling; deny untrusted glob patterns in build inputs.",
+      "rationale": "No patched release listed by the reviewed advisory or npm at review time. Existing owner acceptance retained, not expanded.",
+      "source": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+    },
+    {
+      "advisory": "GHSA-86w9-cpqp-85rv",
+      "package": "node-forge",
+      "reviewedVersion": "1.4.0",
+      "acceptedOn": "2026-10-15",
+      "reviewedOn": "2026-10-16",
+      "reviewBy": "2027-04-15",
+      "scope": "Expo signing/build tooling. Build-time use is still security-sensitive; this exception is not signing approval.",
+      "rationale": "No patched release listed by the reviewed advisory or npm at review time. Existing owner acceptance retained, not expanded.",
+      "source": "https://github.com/advisories/GHSA-86w9-cpqp-85rv"
+    }
+  ]
+}

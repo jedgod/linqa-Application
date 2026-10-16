@@ -1,0 +1,182 @@
+LINQA PRODUCT READINESS REVIEW
+Date: October 15, 2026
+Scope: Targeted local source review and selected tests. This is not a full security audit, penetration test, or production certification.
+
+1. SECURITY LEVEL AND EXPOSURE IF COMPROMISED
+
+Security protections exist, but the system cannot yet be certified as secure from this review.
+
+Online API/database breach:
+- Potential exposure includes account/profile data, conversation membership, device identifiers, activity metadata, and stored ciphertext.
+- Properly encrypted message content should remain protected if client keys remain safe. That guarantee still needs end-to-end verification across the deployed system.
+
+Hacked phone, online or offline:
+- Displayed/decrypted messages, accessible files, sessions, and potentially encryption keys may be exposed.
+- End-to-end encryption cannot protect content inside a fully compromised client.
+
+Offline extraction of app storage:
+- The mobile outbox stores encrypted message envelopes.
+- Account, conversation, and device identifiers, timestamps, and delivery state are readable database fields.
+- The inspected outbox implementation does not configure whole-database encryption.
+- Source: clients/mobile/src/messaging/sqlite-outbox.ts
+
+Compromised development computer:
+- Debug builds and ADB connections create additional access to application data and runtime behavior.
+- The current Galaxy/LG configuration is a development environment.
+
+Concrete concerns requiring follow-up:
+- SECURITY-REVIEW.md records historical release-signing password exposure. Credential/key rotation was not verified in this review. Secret values are not reproduced here.
+- clients/mobile/services/conversation-gate.ts calls protectionLevel() but does not enforce an acceptable returned protection level. This check alone does not establish hardware-backed or OS-wrapped key protection.
+
+Limits:
+- Production configuration, live authorization, provider configuration, credential rotation, and all application routes were not comprehensively verified.
+- Security-model documentation describes intended guarantees; it does not independently prove that every deployed flow meets them.
+
+2. CHAT ROUTE SECURITY VALIDATION SUITE
+
+Recommendation: Maintain and extend a dedicated route-security suite using the existing Vitest runner. Jest is optional and is not required to improve security coverage.
+
+Existing coverage includes:
+- Missing authentication.
+- Insufficient scope.
+- Conversation membership filtering.
+- Rejection of cleartext attachment metadata.
+
+Validation performed:
+Command, run from server/:
+node node_modules/vitest/vitest.mjs run src/tests/chats-inbox.route.test.ts src/tests/chat/shared-attachment.routes.test.ts src/tests/production-auth-policy.test.ts src/tests/auth-security.test.ts
+
+Result: 4 test files passed; 32 tests passed.
+This was a targeted run, not a full database integration run or penetration test.
+
+Recommended dedicated security command and coverage:
+- Expired and forged tokens, incorrect issuer/audience.
+- Revoked devices and sessions.
+- Cross-account access and object ownership.
+- Removed conversation members.
+- Attachment ownership and access.
+- WebSocket authentication and authorization.
+- Logout and account-switch isolation.
+
+Adding Jest would introduce another runner without improving security by itself. No new runner or suite was introduced during this review.
+
+3. GITHUB ACTIONS CI/CD AND IMAGE BUILDING
+
+GitHub Actions workflows exist, but automatic image build/test on every main push is incomplete.
+
+.github/workflows/ci.yml:
+- Runs on pushes to main/develop, pull requests, and manual requests.
+- Tests/builds the server, web client, and Rust core.
+
+.github/workflows/api-image.yml:
+- Runs on v* release tags and manual requests.
+- Builds, publishes, and signs the API Docker image.
+- Records the immutable deployable image digest.
+- Does not trigger on every main push.
+- Does not have a test dependency in that workflow.
+
+.github/workflows/mobile-release.yml:
+- Manually starts Android/iOS EAS builds.
+- It is separate from the API Docker image workflow.
+
+Recommended changes for the API image pipeline:
+- Add a main-push trigger.
+- Require passing tests before publishing the image.
+- Add image smoke tests and image security checks.
+
+Verification limits:
+- Workflow files alone do not confirm successful GitHub runs, configured secrets, enforced branch protection, or production deployment.
+- This review inspected local workflow definitions; it did not verify live GitHub execution.
+
+READINESS CONCLUSION
+
+Do not treat this targeted review as production security clearance. Resolve or verify the historical signing-credential exposure, validate client key-protection enforcement, broaden security-boundary tests, and connect image publishing to required passing checks.
+
+No application source or workflow files were changed during the review. This report records findings and recommendations only.
+
+IMPLEMENTATION ADDENDUM - OCTOBER 15, 2026
+
+Following the review, the supplied implementation proposal was adapted to Linqa's existing stack. The original findings above describe the review-time state.
+
+- Enforced OS-protected or hardware-backed key policy in the messaging gate. Software keys qualify only through the native account SecureStore adapter; unverified storage remains locked.
+- Added real HTTP/WebSocket security regression tests using Vitest and a named test:security:chat command.
+- Required messages:read scope and explicit revoked-device exclusion at the realtime handshake.
+- Added main/develop/PR image validation triggers, reusable CI prerequisites, secret scanning, container vulnerability scanning, and a non-root runtime packaging check before image publishing.
+- Kept publication/signing restricted to main or release tags.
+- Did not install the supplied Python simulation: HMAC is not encryption, simulated hardware keys are not hardware-backed keys, and memory-only revocation is not production session management.
+
+Validation: 43 server security tests and 17 mobile key-protection/core tests passed. Server build and mobile typecheck passed. Forty-six dedicated-database integration tests were skipped locally. Local Docker access was denied, so image validation remains unverified until CI runs. The broader conversation-engine test file hit an existing React Native Flow import error under Node and is not recorded as passed.
+
+Historical signing-credential rotation, offline metadata protection, live deployment verification and comprehensive security audit remain outstanding.
+
+Implementation details and commands: docs/product-readiness-implementation.md
+
+SECOND IMPLEMENTATION KIT FOLLOW-UP - OCTOBER 15, 2026
+
+Reviewed the attached HTML implementation kit and adapted its TypeScript, test and CI examples to the existing application.
+
+- Added a shared protection probe and assertion, enforced inside direct message encryption/decryption and before returning cached plaintext.
+- Extended actual attachment-route tests for cross-account device ownership and strict plaintext-metadata rejection.
+- Extended actual realtime tests for wrong JWT issuer and audience.
+- Preserved header-based tokens, messages:send scope, membership-based attachment sharing, existing API error responses, GHCR registry and real migration paths.
+- Strengthened image runtime packaging checks and added a 30-minute build job timeout.
+
+Latest targeted security results: 50 server tests and 19 mobile/core tests passed; server build and mobile typecheck passed. Forty-six PostgreSQL integration tests were skipped without a dedicated database. Workflow YAML checks passed. Live image build/scan/publish and the original security limitations remain unverified; these results are not production security clearance.
+
+THIRD IMPLEMENTATION PROPOSAL - OCTOBER 15, 2026
+
+- Added a portable Docker Compose test runner with a disposable PostgreSQL database, loopback-only dynamic port, readiness checks, real migrations and cleanup. It does not use the development database.
+- Added AES-256-GCM local outbox record encryption, per-account native SecureStore keys, keyed identifier indexes and transactional legacy-record migration.
+- Added signed, fresh, exact-revision audit-evidence verification. Presence of a file does not establish credential rotation, integration execution, Docker validation or a live audit.
+- Main/tag image publication now requires genuine signed evidence for all five readiness milestones. Missing evidence blocks publication; no completion evidence was fabricated.
+- Added CI encryption/audit tests. Eight new tests passed, including real SQLite operations, migration rollback, retry preservation and tamper rejection. Server build and mobile typecheck passed.
+
+Residual local exposure: scheduling state, attempt counts, timestamps, rejection codes, message UUIDs, index equality and row counts remain observable. Historical journals/snapshots/backups are not certified scrubbed. This is not whole-database encryption or protection against a compromised unlocked client.
+
+Commands, evidence format and implementation limits: docs/offline-metadata-and-readiness.md
+
+DEDICATED POSTGRESQL EXECUTION RESULT
+
+The isolated database runner succeeded after Docker access outside the sandbox was permitted. All seven chat-security suites passed: 96 tests, no skips. Real migrations and disposable database cleanup completed. This supersedes the earlier 46-test local skip limitation. The eight new encryption/storage/audit tests, server build and mobile typecheck also passed.
+
+FOURTH SECURITY BLUEPRINT - OCTOBER 15, 2026
+
+- Centralized permanent device revocation and session ownership/device/expiry checks across chat, thread and mobile-hub authorization.
+- Required JWT subject, user identity and expiry claims alongside existing issuer/audience/algorithm verification.
+- Rechecked established realtime connections before guarded inbound/outbound traffic and every 15 seconds while idle. Database failures close connections.
+- Added ordered outbound authorization, a bounded pending queue, slow-consumer limits and replacement-connection cleanup protection.
+- Added revoked-device/session checks during refresh-token rotation while preserving temporary database failures as service errors.
+- Added restrictive API CSP headers while retaining existing Helmet protections and rate limiting.
+- Preserved existing Rust/native cryptography, encrypted attachment schema and CI gates. Did not introduce duplicate architecture, query-string tokens, or expiring Redis markers as the sole revocation authority.
+
+Latest validation: 108 chat-security tests passed against real disposable PostgreSQL, with no skips and cleanup completed. Forty-one broader authentication/authorization tests passed. Eight encryption/storage/audit tests and the server build passed.
+
+Limits: idle revocation detection depends on the 15-second interval plus database latency; events already sent cannot be recalled. Other route/socket families still need review. No deployment, credential rotation or independent audit was completed by these code changes.
+
+Details: docs/session-and-realtime-hardening.md
+
+SECURITY REVIEW AND RELEASE DECISION - OCTOBER 16, 2026
+
+Decision: hold merge and release tagging. Reviewed the existing braces 3.0.3 and node-forge 1.4.0 exceptions before 2027-04-15; neither advisory currently lists a patched release. Added dated, scoped policy and CI checks for expiry, lockfile drift and upstream version changes. Two policy tests passed; mobile audit-ci passed with the existing accepted risks, not a zero-vulnerability result.
+
+Fixed newly discovered web tooling advisories by updating Vite/Vitest/React plugin with a fresh lockfile. Full web audit now reports zero vulnerabilities; 87 web tests passed. Server audit reports zero vulnerabilities and server TypeScript build passed. Added call/vault security enforcement and regression coverage; focused 16-test run passed. The fresh database-backed rerun could not start because Docker info failed; older 108-test evidence predates these additions.
+
+Remote PR #1 remains draft. G0-G4 failed on missing external signed evidence. API image build/scan succeeded, while publishing and signing were skipped on the PR. Main was unprotected and repository rulesets were empty. These are release blockers.
+
+Signing credentials were NOT rotated: production signing identity/provider access is missing. Deployed environment was NOT audited: URL/access are missing and kubectl has no current context. Full independent audit remains outstanding. No merge, tag, publish or deployment was performed.
+
+Detailed findings, sources and required next steps: docs/security-review-2026-10-16.md
+
+Final web production build passed (bundle-size warning only); the three affected messaging-coordinator tests also passed after the environment-value type guard. Scoped whitespace and dependency workflow structure checks passed.
+
+GALAXY AND LG DEVICE CHECK
+Both target phones connected over authorized ADB. Galaxy SM-A037U: Android 13, security patch 2025-07-01. LG LM-X320: Android 10, security patch 2021-09-01. Both report verified boot green and ro.debuggable=0, which does not establish absence of compromise. Installed com.linqa.mobile 0.3.0 is DEBUGGABLE on both, so these are development builds, not production-signing evidence. LG uses network ADB on port 5555; disable network debugging after testing, using a safe USB reconnection path. No signing keys were rotated.
+API 127.0.0.1:8088 responds ready with version development. No initial ADB reverse routes existed. Existing host port 8081 was unresponsive; left it untouched and started separate Metro on 8082, with API/Metro forwarding and development-client launch requested for both phones. This device check does not replace a full production/server audit.
+Launch verification limit: both Android launch intents succeeded, but Metro 8082 had not reached its HTTP readiness endpoint during the check. Unloaded pages are not yet confirmed fixed. Existing unresponsive port 8081 was not stopped.
+
+HOME STATUS BAR FIX: Home now explicitly requests visible dark system icons while focused, matching its white safe-area background, including the country-confirmation state. Other screens retain their status-bar choices. Device visual verification pending reload.
+
+GALAXY SCRIPT LOAD REPAIR: Restarted Metro with IPv4-first DNS; host and phone-side /status checks returned HTTP 200. Removed the unresolved @react-navigation/native import introduced by the status-bar change; focus is tracked using the existing Expo Router hook. Fresh Android bundle returned HTTP 200 (14,524,775 bytes; 2,666 modules). Relaunched Galaxy against Metro 8082. Device visual verification remains pending; manifest asset resolution warning remains.
+
+HOME RENDER ERROR CORRECTION: Moved focus state from HomeScreen into AccountHome, where status-bar JSX reads it. Full mobile TypeScript check passed; Android bundle returned HTTP 200. Galaxy relaunched after correction.
+Galaxy post-reload UI verification: Home present, render-error panel absent (189 UI nodes). Mobile TypeScript check and bundle validation passed. Existing call-overlay require-cycle warning remains.
