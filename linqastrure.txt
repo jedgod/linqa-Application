@@ -1,0 +1,354 @@
+LINQA - SYSTEM STRUCTURE (FRONTEND + BACKEND)
+Generated: 2026-10-15 | Branch: agent/production-module-hardening
+Source: repository layout as tracked in git (node_modules / build output omitted)
+================================================================================
+
+1. HIGH-LEVEL ARCHITECTURE
+--------------------------------------------------------------------------------
+
+  CLIENTS                                   BACKEND                        DATA / INFRA
+  ------------------------------            ---------------------------    -----------------------
+  Mobile (Expo / React Native)  --HTTPS-->  Fastify API (TypeScript)       PostgreSQL (76 migrations)
+  Web (Vite + React)            --WSS--->   Realtime hub (WebSocket)       Redis (chat bus, home cache)
+  Desktop (Tauri)                           Background workers             S3 / CDN (attachments)
+  Android native (Kotlin/Gradle)            Provider integrations          KMS, SIEM export
+  iOS native (Swift)                        (LinqaSend, Vault, push,       TURN / OSRM routing
+          |                                  OTP, email)
+          v
+  Shared Rust secure core (core/)  <-- E2EE, MLS, sealed sender, PQC,
+  exposed via UniFFI (mobile), WASM (web), FFI (native)
+
+Stack summary
+  - Backend:   Node >= 22, Fastify 5, zod, pg, jose (JWT), ws, pino, @simplewebauthn,
+               AWS SDK (KMS, S3). Package: @linqa/server (ESM, tsx for dev, vitest).
+  - Mobile:    Expo SDK 57, expo-router, React Native, expo-secure-store,
+               expo-local-authentication, WebRTC, SQLite outbox. Package: linqa-mobile 1.3.0.
+  - Web:       Vite + React + TypeScript.
+  - Desktop:   Tauri (Rust shell) + Vite/TS.
+  - Core:      Rust crate (Cargo) with UniFFI + WASM bindings.
+  - Deploy:    Docker (server/Dockerfile), k8s/api-deployment.yaml, Terraform, GitHub Actions
+               (GHCR image publish, signed releases, SBOM).
+
+
+2. REPOSITORY ROOT LAYOUT
+--------------------------------------------------------------------------------
+
+  Production code
+    clients/                 All client apps (mobile, web, desktop, android, ios, native, shared)
+    server/                  Backend API, realtime, workers, migrations, tests
+    core/                    Rust secure core (crypto / protocol)
+    protocol/                Protocol design docs (MLS, sealed-sender, PQC, identity)
+    implementations/         Rust reference modules (hybrid crypto, encrypted store,
+                             messaging path, file vault, device enrollment, calls media)
+    mobile/                  expo57 migration + device-certification material
+    security/                Threat models, audit reports, evidence templates, fuzzing
+    compliance/              SOC2 control map
+    config/                  Release-closure / G5 gate / evidence-freshness policy JSON
+    infra/                   routing (OSRM compose + scripts), terraform
+    k8s/                     API deployment manifest
+    ops/                     observability, disaster-recovery, device-lab, release, canary,
+                             incident, privacy, support, prometheus, database
+    scripts/                 Release gates, certification, USB mobile launch, SBOM, signing
+    tests/                   Cross-cutting tests (security, e2e, load, chaos, protocol fixtures,
+                             conversation / countrylinqa / mobile / vault / call tests)
+    certification/           Certification evidence + runbooks
+    evidence/                Product-readiness evidence (e.g. product-readiness.json)
+    docs/                    Product readiness implementation + design docs (~124 files)
+    .github/workflows/       21 CI/CD workflows (see section 8)
+    vertical-slice/          Standalone runnable end-to-end slice (src, docker-compose)
+
+  Feature packs / integration kits (source drops merged or staged for integration)
+    Admin-Staff/             Operations / staff console (React) + 001_operations.sql
+    HamburgerPage/           Side drawer + chats header + profile
+    Scheduler/               Vue call scheduler (CallScheduler, VideoRoom, mock-server)
+    Vault-Interface/         Vault mobile UI + backend-wired packs (v1-v5, v6, v7)
+    interfacePage/           All-pages UI reference code
+    Emoji-page/              Emoji panel + data
+    LinkaSend-pageCode/      LinqaSend (money transfer) UI + production packs v1-v7
+    linqAudio-VideoCall/     Voice/video call backend + pages
+    linqa-calls_video/       Calls (mobile + server) kit
+    linqa-attachments+backend/ Attachment flow, cards, composers, sealing pipeline
+    linqa-conversation-v2/   Conversation v2 + secure-send (mobile, server, shared, web, tests)
+    linqa-protected/         Protected media (api + mobile)
+    linqa-publishing/        Posts / publishing feed (mobile + server + docs)
+    linqaChat-And-iOS/       Chat + iOS pieces
+    linqa_biometric_pack/, Linqa_Biometric_Production_v2_to_v5/   Biometric step-up packs
+    Linqa_Chat_Composer_Photo_Video_v1/, Linqa_Photo_Video_*/     Composer / media packs
+    Linqa_Conversation_Thread/, Linqa_Durable_Receive_Closure_v3/ Thread + durable receive
+    Linqa_Vault_*_v6.0 / v7.0/                                    Vault closure packs
+    Linqa_Items_2_3_Patch/, linqa-item1-rejections/               Patches
+    E2EE_Transport/          E2EE transport closure packs (notepad txt)
+    CountryLinqa(TM)/        CountryLinqa discovery/ranking/certification kits (144 files)
+    prototypes/              CLI prototype
+    backcountrypic/          Image assets
+
+  Root loose files
+    README.md, SECURITY-REVIEW.md, LICENSE
+    productReadyResult.txt, securityassessclaude.txt, claudeCodeassess.txt,
+    copilotassess.txt, thingsdone.txt (assessment / progress notes)
+    FINAL_*.md, GREEN_LABEL_RULES.md, G5_GREEN_LABEL_RULES.md, INTEGRATION_*.md,
+    APPLY_TO_LIVE_REPO*.md (release / integration checklists)
+    *_MANIFEST.json (final release closure, G0-G4 gates, G5 GA assurance)
+    docker-compose.test.yml, launch-linqa.cmd, LaunchApp.txt, LaunchLinqaApp.txt
+    Linqa_Calls_*.tsx, LinqaMapFollowScreen.tsx, mapboxdashboard.txt
+    Deploy-OSRM-Valhala.txt, device_after_*.xml, linqa-ui.xml, linqa-logo.jpeg
+
+
+3. BACKEND  -  server/
+--------------------------------------------------------------------------------
+server/
+  package.json, tsconfig.json, Dockerfile, docker-compose.yml, .env.example,
+  vitest.chat-features.config.ts, README.md, README_INTEGRATION.md
+  feature-tests/, key-directory/, docs/
+  src/
+    index.ts, app.ts, config.ts      Entry point, Fastify app assembly, env config
+    bootstrap/                       register-all.ts, service-container.ts (DI + route wiring)
+
+    ---- HTTP surface ----
+    routes/ (55)                     auth, enrollment(-v2), onboarding, passkeys, biometrics,
+                                     key-packages, chats, attachments, calls, contact-discovery,
+                                     search, sync, relay, push, profile, usernames, privacy,
+                                     safety, entitlements, feature-flags, file-vault,
+                                     vault-intake, protected-media, recorded-videos,
+                                     publishing, multi-account, account-deletion,
+                                     account-identifiers, protocol-capability, runtime,
+                                     mobile-hub, mobile-features, milestone-*, ga-hardening,
+                                     execution-launch, gap-closure, vertical-2, ...
+                                     subfolders: countrylinqa/, linqasend/, operations/
+    chat/ (13)                       chat-v2.routes, chat-feature.routes, chat.service,
+                                     chat-contacts, chat-outbox, chat-delivery.worker,
+                                     chat-realtime, chat-redis-bus
+    chat-organization/               chat controls + organization service
+    calls/, call-rooms/              call tokens, TURN credentials, call-room service/store,
+                                     signaling protocol, reports, persistence
+    realtime/                        hub.ts (WebSocket handshake: JWT issuer/audience,
+                                     messages:read scope, revoked-device exclusion),
+                                     signaling.register.ts
+    device-links/, history-transfer/ linked devices, encrypted history transfer
+    ai/                              assistant routes
+    home/ (24)                       home feed, news, durable cache, redis, health, telemetry,
+                                     admin routes
+    protected-media/                 policy, service, audit-chain
+    profile/                         username rules
+
+    ---- Domain services ----
+    services/ (194 files)            account/session (account-session-issuer, account-switch,
+                                     multi-account), auth (otp, auth-challenge, passkey-v2,
+                                     recovery-code/email, phone-registration/risk),
+                                     devices (device-enrollment, device-federation),
+                                     E2EE (mls-group, mls-provider/, key-transparency(-v2),
+                                     transparency-proof), messaging (group, sync, delivery/,
+                                     disappearing-message, signaling), attachments
+                                     (attachment, attachment-cdn, cdn/, storage/),
+                                     push (push, push-v2, push/, push-providers/),
+                                     calls (call, turn-region), vault (vault-files, vault-share,
+                                     vault-intake, vault-access/, vault-audit-chain/,
+                                     vault-billing, vault-operations/), linqasend/,
+                                     countrylinqa/, billing/, community, collaboration,
+                                     business-profile, location-sharing, global-news,
+                                     privacy-rights/settings, trust-safety, abuse-decision,
+                                     network-risk, line-intelligence/, emergency(-escalation),
+                                     enterprise-identity-v2, enterprise-policy, scim,
+                                     legal-hold, retention-archive, data-residency,
+                                     entitlement, feature-flag, kill-switch,
+                                     canary-release, release-approval/promotion,
+                                     incident-response, support-operations, operations/,
+                                     ga-release-gate, ga-rollout, security-assessment,
+                                     backup-integrity, diagnostic-redaction
+    repositories/                    device, key-package, relay repositories
+    integrations/                    linqasend/ (provider contracts, registry, webhook verifier,
+                                     reconciliation, safe-default providers)
+                                     vault/   (contracts, intake + live platform adapters)
+    providers/                       provider-registry.ts
+
+    ---- Security ----
+    auth/ (10)                       jwt, oidc-verifier, otp, ops-scopes, enrollment-proof,
+                                     key-package-proof, rate-limit-key, normalize
+    security/                        step-up (+ postgres store), hash, biometrics/
+                                     (attestation, canonical, service), kms/ (production KMS
+                                     provider), secrets/ (rotation coordinator),
+                                     siem/ (security-event exporter)
+    crypto/                          symmetric-cipher.ts
+    ops/                             security-event.service.ts
+
+    ---- Data ----
+    db/                              pool.ts, migrate.ts, migration-runner.ts,
+                                     chat-schema-readiness.ts,
+                                     migrations/ (76 SQL files: 001_initial ... 076_publishing_tags)
+
+    ---- Background jobs ----
+    jobs/ (12)                       account-deletion.worker, ai-worker, chat-workers,
+                                     cleanup, countrylinqa-workers, disappearing-message-cleanup,
+                                     home-news.jobs, home-workers, linqasend-workers, ...
+    vault-workers.ts
+
+    ---- Release / assurance / ops ----
+    runtime/                         bootstrap-gate, capability + artifact/database/http/
+                                     provider/redis/derived probes
+    observability/                   metrics, metrics-registry, telemetry, ga-assurance
+    gates/                           signed gate evidence + release controller
+    ga/                              G5 GA assurance (policies, evidence registry, materialize)
+    release-closure/                 final release controller, dependency-security,
+                                     device-certification, expo57-migration, promotion-policy
+    config/                          home-production.config, ports
+    dev/                             token minting, seed scripts, SQL smoke tests
+
+    tests/ (99)                      vitest suites: auth-security, biometrics, calls-*,
+                                     chat/ (route-security, realtime-security,
+                                     shared-attachment, chat-v2 + thread-attachment
+                                     integration), chats-inbox, production-auth-policy,
+                                     home/, offline-outbox-storage, ...
+                                     (DB integration tests require a dedicated database)
+
+  Key npm scripts: dev, build, start, test, test:security:chat(:db), test:encryption,
+  db:migrate, db:cleanup, chat:workers, home:workers, countrylinqa:workers,
+  linqasend:workers, g5:materialize/verify, final:verify, release:unified-onboarding,
+  home:* (device certify, evidence, provider redundancy, release gate).
+
+
+4. FRONTEND  -  clients/
+--------------------------------------------------------------------------------
+
+4.1 Mobile (Expo / React Native)  -  clients/mobile/   [primary client, ~510 files]
+  app/                              expo-router screens
+    _layout.tsx, index.tsx, welcome.tsx, onboarding/
+    (tabs)/                         home, chats, calls, communities, create, linqa, media,
+                                    settings
+    account/, settings/, security/, privacy-center, linked-devices, message-requests,
+    connections, notifications, event-log, search, posts, news, status, support,
+    recorder, vault/, linqasend/, countrylinqa/, modules/
+  components/                       account, calls, chats, common, conversation, countrylinqa,
+                                    drawer, home, linqasend, protected, publishing, ui, vault,
+                                    plus shared (CodeInput, PhoneField, PrimaryButton, ...)
+  features/                         call-rooms/, conversation/
+  services/                         API + domain clients: chat-inbox, chat-realtime.client,
+                                    conversation-engine/-gate/-thread/-media/-outbox/-state,
+                                    conversation-file-crypto, calls.service, call-controller,
+                                    call-actions/, call-recordings, biometric-*, device-link,
+                                    countrylinqa-*, assistant, bootstrap-auth, ga-hardening, ...
+  account/                          AccountContext, AccountSecureStorage, AccountSessionStore,
+                                    InstallationIdentity/Registry (multi-account)
+  auth/, auth-flow.ts               Validation + auth flow
+  crypto/                           device-enrollment-proof, random-polyfill
+  SecureKeyStore.ts                 Native key custody facade
+  src/
+    core/SecureCore.ts              Rust-core bridge (fail-closed)
+    messaging/                      outbox, protected-outbox, sqlite-outbox, offline-metadata(-key)
+    secure-storage/                 device-key-policy.ts (OS/hardware-backed key gating)
+    runtime/module-gates.ts, release/MobileReleaseAssurance.ts, features/emoji
+  modules/                          Native Expo modules:
+                                    linqa-secure-core, linqa-biometric, linqa-call-native,
+                                    screen-recording-detector, catalog.ts
+  navigation/, hooks/, lib/, config/, constants/, theme/, plugins/, assets/
+  android/                          Generated native Android project
+  scripts/, tests/, app.json, eas.json, metro.config.js, babel.config.js
+
+4.2 Web (Vite + React)  -  clients/web/   [~167 files]
+  src/
+    main.tsx, App.tsx, routes/, app/ (AppIntegrationShell, apiSession, opsAccess)
+    pages/        CallsPage, CountryLinqaPage, FileVaultPage, MediaGalleryPage,
+                  PrivacyCenterPage, UnavailableCapabilityPage
+    Feature areas: admin, ai, auth, billing, business, calls, chat, collaboration,
+                  communities, contacts, enterprise, integration, location, messages,
+                  messaging, milestones, native, privacy, protocol, push, safety,
+                  security, vault, voice
+    Infra:        components, hooks, services, storage, runtime, config, core, utils,
+                  styles, types.ts, mock/
+
+4.3 Desktop (Tauri)  -  clients/desktop/
+  src/ (main.ts, services, utils, mock, styles)  +  src-tauri/ (Rust shell)
+
+4.4 Android native  -  clients/android/   (Gradle Kotlin DSL; app/, src/, uniffi + JNA bindings)
+4.5 iOS native      -  clients/ios/       (Linqa/ App, Models, Services, Views; Security/IOSKeyCustody.swift)
+4.6 Shared / native bridge
+    clients/shared/security/PlatformKeyProvider.ts   Platform key-provider abstraction
+    clients/native/src/NativeSecureCore.ts           Native secure-core binding
+
+
+5. RUST SECURE CORE  -  core/
+--------------------------------------------------------------------------------
+  Cargo.toml / Cargo.lock
+  src/   identity, key_package, enrollment, envelope, groups, attachments, backup,
+         call_crypto, replay, safety_number, search_tokens, error,
+         crypto/, protocol/, bin/
+         Bindings: ffi.rs (C ABI), uniffi_api.rs (+ uniffi/), wasm.rs (web)
+  generated/  UniFFI output,  scripts/,  tests/
+  implementations/ (repo root): reference modules 01_hybrid_crypto, 02_encrypted_store,
+         03_messaging_path, 04_file_vault, 05_device_enrollment, 06_calls_media
+  protocol/ (docs): mls/, sealed-sender/, pqc/, identity/
+
+
+6. DATA FLOW (MESSAGING PATH)
+--------------------------------------------------------------------------------
+  Mobile UI (app/, components/)
+    -> services/conversation-engine + conversation-gate (key-protection gate: only
+       OS-protected / hardware-backed keys, or native SecureStore adapter, may send)
+    -> src/core/SecureCore.ts -> Rust core (seal / MLS / envelope)
+    -> src/messaging/sqlite-outbox (durable encrypted offline outbox, metadata protected)
+    -> HTTPS: server/src/routes + chat/chat-v2.routes  (auth: JWT header, scopes
+       messages:send, device ownership, rate limit, zod validation)
+    -> services/delivery + chat-outbox + Redis bus (chat-redis-bus) + Postgres
+    -> Realtime: server/src/realtime/hub.ts (WebSocket; messages:read scope, revoked
+       devices excluded) -> recipient client chat-realtime.client
+    -> push (services/push*, push-providers) for offline devices
+  Attachments: client seals file -> routes/attachments -> storage/S3 + CDN;
+       membership-based sharing; plaintext metadata rejected.
+
+
+7. TESTING
+--------------------------------------------------------------------------------
+  server/src/tests (99)            vitest: unit, route, realtime, DB integration
+  tests/ (52)                      node:test / vitest: security/, e2e/, load/, chaos/,
+                                   protocol-fixtures/, ga/, conversation-*, countrylinqa-*,
+                                   mobile-*, vault, call, receive, transfer, media tests
+  clients/mobile/tests, core/tests, Scheduler, vertical-slice
+  Named commands: test:security:chat, test:security:chat:db, test:encryption,
+                  home:test, chat:test
+
+
+8. CI/CD AND RELEASE (.github/workflows)
+--------------------------------------------------------------------------------
+  ci.yml                          Core build/test prerequisites (reusable)
+  api-image.yml                   Docker image validation (PR/main/develop), secret scan,
+                                  container vuln scan, non-root check; publish/sign only
+                                  on main or release tags (GHCR)
+  release-security.yml, dependency-security.yml, ga-security-gates.yml
+  g0-g4-green-gates.yml, g5-ga-assurance.yml, final-release-closure.yml,
+  milestone-3.yml, milestone-release.yml, industrial-completion.yml,
+  additive-closure-no-duplicates.yml, execution-launch.yml
+  home-release-gate.yml, countrylinqa-certification.yml,
+  linqasend-production-certification.yml
+  mobile-release.yml, public-mobile-release.yml, mobile-startup.yml,
+  multi-account-verification.yml, uniffi-jna-private-key-boundary.yml
+
+  Release scripts (scripts/): gate evidence generation/verification, manifest refresh,
+  sign-release.sh, create-sbom.sh, device certification merge, USB mobile launcher,
+  DB-test enforcement, vitest skip audit.
+
+
+9. PRODUCT MODULES MAP (feature -> client / server locations)
+--------------------------------------------------------------------------------
+  Chat / Conversation   clients/mobile/{app/(tabs)/chats,features/conversation,services/conversation-*}
+                        server/src/{chat,routes/chats.ts,services/group,delivery}
+  Calls (voice/video)   clients/mobile/{features/call-rooms,modules/linqa-call-native}
+                        server/src/{call-rooms,calls,services/call,signaling}
+  Vault / file vault    clients/mobile/{app/vault,components/vault}  clients/web/src/{vault,pages/FileVaultPage}
+                        server/src/{routes/file-vault,vault-intake; services/vault-*; integrations/vault}
+  LinqaSend (transfers) clients/mobile/{app/linqasend,components/linqasend}
+                        server/src/{routes/linqasend,services/linqasend,integrations/linqasend,jobs/linqasend-workers}
+  CountryLinqa          clients/mobile/{app/countrylinqa}  clients/web/src/pages/CountryLinqaPage
+                        server/src/{routes/countrylinqa,services/countrylinqa,jobs/countrylinqa-workers}
+  Publishing / posts    clients/mobile/{app/posts,components/publishing}
+                        server/src/routes/publishing.ts  (migrations 075-076)
+  Home / news           clients/mobile/app/(tabs)/home   server/src/home/
+  Protected media       clients/mobile/{components/protected,lib/protectedMedia}
+                        server/src/{protected-media,routes/protected-media.ts}
+  Biometrics / passkeys clients/mobile/modules/linqa-biometric  server/src/{security/biometrics,routes/{biometrics,passkeys}.ts}
+  Multi-account         clients/mobile/account/   server/src/{routes/multi-account.routes.ts,services/multi-account.ts}
+  Admin / staff ops     Admin-Staff/, clients/web/src/admin   server/src/{routes/operations,services/operations}
+  Privacy / safety      clients/mobile/app/privacy-center  server/src/routes/{privacy,safety}.ts
+
+================================================================================
+Note: Feature-pack folders at the repo root are integration source drops; the
+authoritative running code lives in clients/, server/ and core/.
+Counts are approximate file counts from git ls-files at time of generation.
