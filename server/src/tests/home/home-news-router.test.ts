@@ -59,7 +59,7 @@ function stubProvider(
 type Harness = {
   db: Database;
   cache: { get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
-  repository: { saveArticle: ReturnType<typeof vi.fn> };
+  repository: { saveArticle: ReturnType<typeof vi.fn>; listArticles: ReturnType<typeof vi.fn> };
   validator: { validate: ReturnType<typeof vi.fn> };
   telemetry: HomeTelemetryService;
   metrics: { increment: ReturnType<typeof vi.fn>; observe: ReturnType<typeof vi.fn> };
@@ -87,7 +87,7 @@ function harness(): Harness {
   return {
     db,
     cache: { get: vi.fn(async () => null), set: vi.fn(async () => undefined) },
-    repository: { saveArticle: vi.fn(async () => undefined) },
+    repository: { saveArticle: vi.fn(async () => undefined), listArticles: vi.fn(async () => []) },
     validator: { validate: vi.fn(async (raw: RawNewsArticle) => newsItem({ title: raw.title, providerName: raw.providerName, publishedAt: raw.publishedAt })) },
     telemetry: new HomeTelemetryService(metrics),
     metrics,
@@ -106,6 +106,37 @@ function buildRouter(h: Harness, providers: NewsProvider[]): NewsRouterService {
     h.repository as unknown as HomeRepository
   );
 }
+
+describe("home news router: durable outage fallback", () => {
+  const stored = () => ({
+    canonicalUrl: "https://reuters.com/storm", title: "Storm disrupts coastal travel",
+    providerName: "TEST", providerScore: 0.8, publisherName: "Reuters",
+    publishedAt: new Date().toISOString(), category: "CLIMATE"
+  });
+
+  it("revalidates durable stories after a cache miss and marks them stale, never breaking", async () => {
+    const h = harness();
+    h.repository.listArticles.mockResolvedValue([stored()]);
+    const result = await buildRouter(h, []).fetch({ limit: 20, categories: ["CLIMATE"] });
+    expect(result.state).toBe("STALE");
+    expect(result.articles).toHaveLength(1);
+    expect(result.articles[0]?.breakingEligible).toBe(false);
+    expect(h.validator.validate).toHaveBeenCalled();
+    expect(h.cache.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects expired stories and publishers that fail current validation", async () => {
+    const h = harness();
+    h.repository.listArticles.mockResolvedValue([
+      { ...stored(), publishedAt: new Date(Date.now() - 49 * 3600_000).toISOString() }, stored()
+    ]);
+    h.validator.validate.mockRejectedValue(new Error("PUBLISHER_BLOCKED"));
+    const result = await buildRouter(h, []).fetch({ limit: 20 });
+    expect(result.state).toBe("UNAVAILABLE");
+    expect(result.articles).toEqual([]);
+    expect(h.validator.validate).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("home news router: provider failover", () => {
   let h: Harness;

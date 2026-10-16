@@ -154,6 +154,41 @@ export class NewsRouterService {
       return { articles: staleArticles, state: "STALE" };
     }
 
+    // A different page size/topic has a different short-lived cache key.
+    // Revalidate recent durable stories rather than blanking Home on an outage.
+    // Never extend this fallback beyond 48 hours or present it as breaking/live.
+    if (!query.breakingOnly) {
+      try {
+        const stored = await this.homeRepository.listArticles({
+          limit: 100, sinceHours: 48, countryCode: query.countryCode,
+          category: query.categories?.length === 1 ? query.categories[0] : undefined
+        });
+        const fallback: HomeNewsItem[] = [];
+        for (const row of stored) {
+          if (query.categories?.length && !query.categories.includes(row.category)) continue;
+          const publishedAt = new Date(row.publishedAt).getTime();
+          if (!Number.isFinite(publishedAt) || publishedAt < Date.now() - 48 * 3600_000) continue;
+          try {
+            const article = await this.validator.validate({
+              title: row.title, url: row.canonicalUrl, providerName: row.providerName,
+              providerScore: row.providerScore ?? 0, publishedAt: new Date(publishedAt).toISOString(),
+              category: row.category, publisherName: row.publisherName,
+              ...(row.summary ? { summary: row.summary } : {}),
+              ...(row.imageUrl ? { imageUrl: row.imageUrl } : {}),
+              ...(row.countryCode ? { countryCode: row.countryCode } : {})
+            });
+            if (article.validationScore < MIN_VALIDATION_SCORE || article.trustScore < MIN_TRUST_SCORE) continue;
+            fallback.push({ ...article, breakingEligible: false });
+            if (fallback.length >= query.limit) break;
+          } catch { /* A removed/blocked publisher must not return through fallback. */ }
+        }
+        if (fallback.length) {
+          this.telemetry.cacheHit(true);
+          return { articles: fallback, state: "STALE" };
+        }
+      } catch { /* Database failure retains the explicit unavailable result. */ }
+    }
+
     // No provider, no cache: say so. Home renders an honest "unavailable"
     // state rather than inventing a headline.
     return { articles: [], state: "UNAVAILABLE" };

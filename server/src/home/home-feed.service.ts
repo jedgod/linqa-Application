@@ -29,6 +29,7 @@ type SectionName =
   | "liveUpdates"
   | "spotlight"
   | "news"
+  | "weatherNews"
   | "snapshot";
 
 export class HomeFeedService {
@@ -110,7 +111,23 @@ export class HomeFeedService {
             ? Promise.resolve({ articles: [] as HomeNewsItem[], state: "LIVE" as const })
             : settle<{ articles: HomeNewsItem[]; state: "LIVE" | "STALE" | "UNAVAILABLE" }>(
                 "news",
-                this.newsRouter.fetch({ limit: homeProductionConfig.feed.maxNewsItems }),
+                (async () => {
+                  const [general, weather] = await Promise.all([
+                    settle("news", this.newsRouter.fetch({ limit: homeProductionConfig.feed.maxNewsItems }), { articles: [] as HomeNewsItem[], state: "UNAVAILABLE" as const }),
+                    settle("weatherNews", this.newsRouter.fetch({ categories: ["CLIMATE"], limit: 8 }), { articles: [] as HomeNewsItem[], state: "UNAVAILABLE" as const })
+                  ]);
+                  const urls = new Set(general.articles.map(article => article.canonicalUrl));
+                  const extra = weather.articles.filter(article => {
+                    if (urls.has(article.canonicalUrl)) return false;
+                    urls.add(article.canonicalUrl);
+                    return true;
+                  });
+                  // Reserve room for independently fetched weather coverage.
+                  const articles = [...general.articles.slice(0, Math.max(0, homeProductionConfig.feed.maxNewsItems - extra.length)), ...extra];
+                  const contributing = [general, weather].filter(result => result.articles.length);
+                  const state: "LIVE" | "STALE" | "UNAVAILABLE" = contributing.length ? (contributing.some(result => result.state !== "LIVE") ? "STALE" : "LIVE") : "UNAVAILABLE";
+                  return { articles, state };
+                })(),
                 { articles: [], state: "UNAVAILABLE" }
               )
         ]);

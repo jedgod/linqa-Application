@@ -11,6 +11,7 @@ export interface StoredNewsRow {
   publisherDomain: string;
   publisherName: string;
   providerName: string;
+  providerScore?: number;
   category: string;
   countryCode: string | null;
   publishedAt: string;
@@ -28,6 +29,7 @@ const STORED_NEWS_COLUMNS = `
   publisher_domain AS "publisherDomain",
   publisher_name AS "publisherName",
   provider_name AS "providerName",
+  provider_score AS "providerScore",
   category,
   country_code AS "countryCode",
   published_at AS "publishedAt",

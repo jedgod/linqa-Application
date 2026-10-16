@@ -21,10 +21,10 @@ export const homeProductionConfig = {
   },
   feed: {
     snapshotTtlSeconds: positiveNumber(process.env.HOME_FEED_SNAPSHOT_TTL, 120),
-    maxNewsItems: positiveNumber(process.env.HOME_FEED_MAX_NEWS, 40),
+    maxNewsItems: positiveNumber(process.env.HOME_FEED_MAX_NEWS, 60),
     maxUpcomingItems: 10,
     maxContinueItems: 12,
-    maxLiveUpdateItems: positiveNumber(process.env.HOME_FEED_MAX_LIVE_UPDATES, 6),
+    maxLiveUpdateItems: positiveNumber(process.env.HOME_FEED_MAX_LIVE_UPDATES, 8),
     // "Continue your day" is three lanes on the client: conversations, the
     // most recently touched Vault items, and money that is still in flight.
     maxVaultItems: positiveNumber(process.env.HOME_FEED_MAX_VAULT_ITEMS, 4),

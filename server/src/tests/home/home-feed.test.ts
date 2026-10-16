@@ -94,6 +94,28 @@ function buildHarness(options: {
 }
 
 describe("home feed: payload contract", () => {
+  it("adds weather coverage without duplicating stories from the general feed", async () => {
+    const h = buildHarness();
+    const general = newsItem("World headline");
+    const weather = { ...newsItem("Storm forecast"), canonicalUrl: "https://reuters.com/storm", category: "CLIMATE" };
+    vi.mocked(h.newsRouter.fetch).mockImplementation(async query => ({
+      articles: query.categories?.includes("CLIMATE") ? [general, weather] : [general], state: "LIVE"
+    }));
+    const feed = await h.service.build("u1", "US");
+    expect(feed.breakingAroundWorld.map(article => article.title)).toEqual(["World headline", "Storm forecast"]);
+    expect(h.newsRouter.fetch).toHaveBeenCalledWith({ categories: ["CLIMATE"], limit: 8 });
+  });
+
+  it("keeps general news available when weather coverage fails", async () => {
+    const h = buildHarness();
+    vi.mocked(h.newsRouter.fetch).mockImplementation(async query => {
+      if (query.categories) throw new Error("WEATHER_PROVIDER_UNAVAILABLE");
+      return { articles: [newsItem("World headline")], state: "LIVE" };
+    });
+    const feed = await h.service.build("u1", "US");
+    expect(feed.breakingAroundWorld).toHaveLength(1);
+    expect(feed.serviceState.degraded).toContain("weatherNews");
+  });
   it("builds an authenticated feed for the resolved jurisdiction", async () => {
     const h = buildHarness();
     const feed = await h.service.build("u1", "US");
@@ -129,7 +151,7 @@ describe("home feed: payload contract", () => {
     expect(feed.continueYourDay.length).toBeLessThanOrEqual(12);
     expect(feed.vaultRecent.length).toBeLessThanOrEqual(4);
     expect(feed.pendingTransfers.length).toBeLessThanOrEqual(4);
-    expect(feed.liveUpdates.length).toBeLessThanOrEqual(6);
+    expect(feed.liveUpdates.length).toBeLessThanOrEqual(8);
   });
 
   it("persists a hashed snapshot of what the user was served", async () => {

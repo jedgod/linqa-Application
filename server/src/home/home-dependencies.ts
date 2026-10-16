@@ -357,18 +357,22 @@ export function createHomeDependencies(db: Database, repository: HomeRepository)
       }));
     },
 
-    async getLiveUpdates(_userId: string, country: string): Promise<HomeLiveUpdate[]> {
+    async getLiveUpdates(_userId: string, _country: string): Promise<HomeLiveUpdate[]> {
       const limit = homeProductionConfig.feed.maxLiveUpdateItems;
-      // Prefer the user's own jurisdiction, then top up from world coverage so
-      // the rail is never half-empty in a country with little local output.
-      const local = await repository.listArticles({ countryCode: country, sinceHours: 12, limit });
-      if (local.length >= limit) return local.map(toLiveUpdate);
-
-      const world = await repository.listArticles({ sinceHours: 12, limit: limit * 2 });
-      const combined = [...local];
-      for (const row of world) {
-        if (combined.length >= limit) break;
-        if (!combined.some((existing) => existing.id === row.id)) combined.push(row);
+      // Worldwide coverage with a slot per topic before any topic repeats.
+      const topics = ["TECHNOLOGY", "HEALTH", "CLIMATE", "BUSINESS"];
+      const groups = await Promise.all(topics.map(category => repository.listArticles({
+        category, sinceHours: 24, limit: Math.ceil(limit / topics.length)
+      })));
+      const combined: StoredNewsRow[] = [];
+      const seen = new Set<string>();
+      for (let index = 0; index < Math.ceil(limit / topics.length); index++) {
+        for (const group of groups) {
+          const row = group[index];
+          if (!row || seen.has(row.canonicalUrl) || combined.length >= limit) continue;
+          seen.add(row.canonicalUrl);
+          combined.push(row);
+        }
       }
       return combined.map(toLiveUpdate);
     },

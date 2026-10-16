@@ -2,12 +2,12 @@ import { NativeScrollEvent, NativeSyntheticEvent } from "react-native";
 import { relativeAge, type HideableHomeSection, type HomeUpcomingEvent, type HomeVaultItem } from "../../services/home-feed.service";
 
 /** Stories carried by the hero pager, one per dot. */
-export const HERO_SLOTS = 12;
+export const HERO_SLOTS = 20;
 
 /** World cards per page, and pages, in "Breaking around the world". */
 export const WORLD_PER_PAGE = 3;
 
-export const WORLD_PAGES = 8;
+export const WORLD_PAGES = 14;
 
 export type HomeUpcomingCard = HomeUpcomingEvent & {
   suggested?: boolean;

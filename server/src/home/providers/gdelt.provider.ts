@@ -16,8 +16,8 @@ const CATEGORY_QUERY_TERMS: Record<string, string> = {
   POLITICS: "(election OR government OR parliament OR diplomacy)",
   TECHNOLOGY: "(technology OR software OR \"artificial intelligence\")",
   HEALTH: "(health OR hospital OR vaccine)",
-  CLIMATE: "(climate OR emissions OR renewable)",
-  BUSINESS: "(economy OR markets OR trade)",
+  CLIMATE: "(weather OR storm OR hurricane OR flood OR heatwave OR climate OR emissions OR renewable)",
+  BUSINESS: "(stocks OR \"stock market\" OR shares OR Nasdaq OR FTSE OR Nikkei OR economy OR markets OR trade)",
   SCIENCE: "(science OR research OR space)",
   SPORTS: "(sports OR championship OR league)",
   GENERAL: "world"

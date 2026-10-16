@@ -15,6 +15,7 @@ import { colors, spacing } from "../../theme/tokens";
 import { getApiBaseUrl } from "../../config/api";
 import { useLinqaSendAvailability } from "../../services/linqasend-availability";
 import { GUTTER, s } from "../../components/home/styles";
+import { bannerLabel, isWeatherNews, selectBannerStories } from "../../components/home/news-banner";
 import { PersonAvatar } from "../../components/account/PersonAvatar";
 import { useProfile } from "../../hooks/useProfile";
 import { avatarUri } from "../../lib/profileApi";
@@ -143,7 +144,7 @@ function AccountHome() {
   const heroPublishers = new Set<string>();
   const diverseStories = withPicture.filter(story => { if (heroPublishers.has(story.publisherDomain)) return false; heroPublishers.add(story.publisherDomain); return true; });
   const diverseUrls = new Set(diverseStories.map(story => story.canonicalUrl));
-  const heroStories = [...diverseStories, ...withPicture.filter(story => !diverseUrls.has(story.canonicalUrl)), ...textOnly].slice(0, HERO_SLOTS);
+  const heroStories = selectBannerStories([...diverseStories, ...withPicture.filter(story => !diverseUrls.has(story.canonicalUrl)), ...textOnly], HERO_SLOTS);
   const heroUrls = new Set(heroStories.map((story) => story.canonicalUrl));
   const currentHero = heroStories.length ? heroStories[clampPage(heroPage, heroStories.length)] : null;
   useFocusEffect(useCallback(() => {
@@ -482,7 +483,7 @@ function AccountHome() {
                     style={[{ width: cardWidth, height: 194 }, story && !story.imageUrl ? { backgroundColor: categoryColor(story.category) } : null]}
                     imageStyle={s.heroImage}
                   >
-                    {story && !story.imageUrl ? <Ionicons name="newspaper-outline" size={120} color="rgba(255,255,255,0.18)" style={{ position: "absolute", right: -10, top: 30 }} /> : null}
+                    {story && !story.imageUrl ? <Ionicons name={isWeatherNews(story) ? "partly-sunny-outline" : "newspaper-outline"} size={120} color="rgba(255,255,255,0.18)" style={{ position: "absolute", right: -10, top: 30 }} /> : null}
                     {/* Light at the top so the picture shows; darker only low down, behind the words. */}
                     <View style={s.heroScrim}>
                       {/* A vertical fade built from stacked translucent bands (the gradient component here is only a flat stand-in). */}
@@ -507,9 +508,9 @@ function AccountHome() {
               {/* Fixed: does not move when the story changes. */}
               <View style={s.heroFixedTop} pointerEvents="none">
                 <View style={s.kickerRowChip}>
-                  <Ionicons name="flash" size={13} color="#FF3B4E" />
+                  <Ionicons name={currentHero && isWeatherNews(currentHero) ? "partly-sunny" : "flash"} size={13} color="#FF3B4E" />
                   {/* Only a publisher cleared for breaking coverage may be presented under a BREAKING kicker. */}
-                  <Text style={s.heroKicker}>{currentHero?.breakingEligible ? "BREAKING NEWS" : "WORLD NEWS"}</Text>
+                  <Text style={s.heroKicker}>{bannerLabel(currentHero)}</Text>
                 </View>
                 <View style={[s.livePillFixed, newsState !== "LIVE" && s.stalePill]}>
                   <Text style={s.livePillText}>{stateCopy.label}</Text>
@@ -527,7 +528,7 @@ function AccountHome() {
 
             {heroStories.length > 1 ? (
               <View style={s.dotRow} pointerEvents="none">
-                {heroStories.map((story, index) => (
+                {heroStories.map((story, index) => Math.abs(index - clampPage(heroPage, heroStories.length)) > 3 ? null : (
                   <View
                     key={`hero-dot-${story.canonicalUrl}`}
                     style={index === clampPage(heroPage, heroStories.length) ? s.dotActive : s.dotInactive}
