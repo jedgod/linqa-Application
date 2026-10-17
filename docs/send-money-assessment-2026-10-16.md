@@ -27,3 +27,18 @@ Positive controls include server-owned quote lookup and recipient/funding owners
 All 55 tests passed across five selected suites: real-money closure, providers, module routes, control stack and v7 execution. These use isolated test collaborators and are evidence for the covered behavior, not successful funding/payout or provider certification. Database-backed v7 execution, real webhook/reconciliation execution, app-restart-after-ambiguous-submit, deep-link validation, currency-exponent cases, and physical-device biometric success/cancel/lockout cases were not executed in this assessment.
 
 Recommended order: resolve persistent payment intent/retry handling and route revocation coverage; protect Review from invalid navigation state; implement currency-aware presentation and resilient status tracking; then validate the complete certified provider flow with real-money gates still enforced. No application behavior was changed by this assessment.
+
+Card Registration
+Deshante / Credit Card
+[Sensitive payment-test details removed.]
+[Sensitive payment-test details removed.]
+[Sensitive payment-test details removed.]
+Green/Credit Card
+[Sensitive payment-test details removed.]
+[Sensitive payment-test details removed.]
+[Sensitive payment-test details removed.]
+all in USA
+
+Linqa chat contacts (from LaunchLinqaApp.txt:105-106)
+[Sensitive payment-test details removed.]
+[Sensitive payment-test details removed.]
