@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { detectBrand, formatCardNumber, formatExpiry, isExpired, isValidCardNumber, parseExpiry, validateCardForm, cvvLength } from "../clients/mobile/services/card-input.ts";
+import { detectBrand, formatCardNumber, formatExpiry, formatZip, isExpired, isValidCardNumber, isValidZip, parseExpiry, validateCardForm, cvvLength } from "../clients/mobile/services/card-input.ts";
 import { getCardTokenizer } from "../clients/mobile/services/card-tokenizer.ts";
 
 test("brand detection", () => {
@@ -43,9 +43,9 @@ test("expiry formatting, parsing and the end-of-month rule", () => {
 
 test("form validation reports each problem and passes a good card", () => {
   const now = new Date(2026, 9, 6);
-  const good = { number: "4242 4242 4242 4242", expiry: "12 / 27", cvv: "123", name: "Daniel Lincoln", address: "123 Lincoln St, New York, NY 10001, USA" };
+  const good = { number: "4242 4242 4242 4242", expiry: "12 / 27", cvv: "123", name: "Daniel Lincoln", zip: "10001" };
   assert.deepEqual(validateCardForm(good, now), {});
-  assert.deepEqual(Object.keys(validateCardForm({ number: "1", expiry: "13 / 99", cvv: "1", name: "", address: "x" }, now)).sort(), ["address", "cvv", "expiry", "name", "number"]);
+  assert.deepEqual(Object.keys(validateCardForm({ number: "1", expiry: "13 / 99", cvv: "1", name: "", zip: "1" }, now)).sort(), ["cvv", "expiry", "name", "number", "zip"]);
   assert.equal(validateCardForm({ ...good, expiry: "01 / 20" }, now).expiry, "This card has expired.");
   assert.equal(cvvLength("AMEX"), 4);
   assert.deepEqual(validateCardForm({ ...good, number: "3782 822463 10005", cvv: "123" }, now), { cvv: "Enter the 4-digit security code." });
@@ -66,4 +66,27 @@ test("usedShare: fraction of a real limit, null when there is no limit", () => {
   assert.equal(usedShare(null, "100"), null);
   assert.equal(usedShare(undefined, "100"), null);
   assert.equal(usedShare("0", "100"), null);
+});
+
+test("ZIP codes: 5 digits or ZIP+4, formatted as typed", () => {
+  for (const ok of ["20740", "10001", "20740-1234", " 90210 "]) assert.equal(isValidZip(ok), true, ok);
+  for (const bad of ["", "1234", "123456", "2074a", "20740-12", "20740 1234", "ABCDE"]) assert.equal(isValidZip(bad), false, bad);
+  assert.equal(formatZip("20740"), "20740");
+  assert.equal(formatZip("207401234"), "20740-1234");
+  assert.equal(formatZip("20-74 0x12345678"), "20740-1234");
+  assert.equal(validateCardForm({ number: "4242 4242 4242 4242", expiry: "12 / 27", cvv: "123", name: "Daniel Lincoln", zip: "2074" }, new Date(2026, 9, 6)).zip, "Enter the 5-digit ZIP code.");
+});
+
+test("the development tokenizer only talks to the loopback sandbox provider", async () => {
+  const g = globalThis as { __DEV__?: boolean };
+  g.__DEV__ = true;
+  try {
+    const t = getCardTokenizer();
+    assert.notEqual(t, null);
+    const card = { number: "4242424242424242", expMonth: 12, expYear: 2030, cvv: "123", holderName: "A B", billingPostalCode: "20740" };
+    for (const endpoint of ["https://cards.example.com/cards/seti_abc", "http://10.0.0.5:8099/cards/seti_abc", "http://127.0.0.1:8099/other/seti_abc", undefined]) {
+      await assert.rejects(t!.submit({ setupToken: "x".repeat(8), clientSecret: "s".repeat(8), ...(endpoint ? { cardEndpoint: endpoint } : {}) }, card), /card_provider_not_available/);
+    }
+    await assert.rejects(t!.submitCvv({ clientSecret: "s".repeat(8), cvvEndpoint: "https://evil.example/cvv/cvvs_ab" }, "123"), /card_provider_not_available/);
+  } finally { delete g.__DEV__; }
 });

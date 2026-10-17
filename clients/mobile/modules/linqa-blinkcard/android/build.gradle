@@ -1,0 +1,23 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'com.linqa.blinkcard'
+version = '1.0.0'
+android {
+  namespace 'com.linqa.blinkcard'
+  defaultConfig { versionCode 1; versionName '1.0.0' }
+}
+
+// BlinkCard Android SDK 2.12.0, the last 2.x release (the 2.x line is superseded by 3000+), kept as a local Maven artifact so the AAR's native
+// libraries, assets and resources reach the app build. Licenses issued for this generation start "sRwC...".
+repositories {
+  maven { url uri("${projectDir}/vendor-maven") }
+}
+
+dependencies {
+  api 'com.linqa.vendor:blinkcard-legacy:2.12.0'
+  // The legacy SDK's activity is built on these.
+  implementation 'androidx.appcompat:appcompat:1.6.1'
+  implementation 'androidx.activity:activity:1.8.2'
+}

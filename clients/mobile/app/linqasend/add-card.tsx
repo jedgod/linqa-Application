@@ -5,13 +5,16 @@ import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinqaSendStatusBar, send } from "../../components/linqasend/ui";
 import { getApiBaseUrl } from "../../config/api";
-import { BRAND_LABEL, cvvLength, detectBrand, digitsOnly, formatCardNumber, formatExpiry, parseExpiry, validateCardForm, type CardFormErrors } from "../../services/card-input";
+import { BRAND_LABEL, cvvLength, detectBrand, digitsOnly, formatCardNumber, formatExpiry, formatZip, parseExpiry, validateCardForm, type CardFormErrors } from "../../services/card-input";
+import { scanCardForForm } from "../../services/card-scan";
+import { describeScanOutcome, expiryDigits } from "../../services/card-scan-parse";
 import { getCardTokenizer } from "../../services/card-tokenizer";
 import { LinqaSendService } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
 import { fonts } from "../../theme/tokens";
 
 const API = getApiBaseUrl();
+const CARD_TYPE_LABEL = { CREDIT_CARD: "Credit card", DEBIT_CARD: "Debit card" } as const;
 
 function BrandMark({ number }: { number: string }) {
   const brand = detectBrand(number);
@@ -36,9 +39,11 @@ export default function LinqaSendAddCard() {
   const [cvv, setCvv] = useState("");
   const [cardType, setCardType] = useState<"CREDIT_CARD" | "DEBIT_CARD">("CREDIT_CARD");
   const [name, setName] = useState("");
-  const [address, setAddress] = useState("");
+  const [zip, setZip] = useState("");
+  const [typeOpen, setTypeOpen] = useState(false);
   const [errors, setErrors] = useState<CardFormErrors>({});
   const [busy, setBusy] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   // Card details must not outlive the screen.
@@ -46,9 +51,30 @@ export default function LinqaSendAddCard() {
 
   const brand = detectBrand(number);
 
+  /** Auto-scan: fills the number, expiry and name from the camera. The security code is never scanned: type it yourself. */
+  async function autoScan() {
+    if (scanning || busy) return;
+    setScanning(true);
+    setMessage(null);
+    try {
+      const outcome = await scanCardForForm();
+      if (outcome.status === "filled") {
+        setNumber(formatCardNumber(outcome.card.number));
+        const digits = expiryDigits(outcome.card);
+        if (digits) setExpiry(formatExpiry(digits));
+        if (outcome.card.holderName) setName(outcome.card.holderName);
+        setCvv("");
+        setErrors({});
+      }
+      setMessage(describeScanOutcome(outcome));
+    } finally {
+      setScanning(false);
+    }
+  }
+
   async function submit() {
     setMessage(null);
-    const found = validateCardForm({ number, expiry, cvv, name, address });
+    const found = validateCardForm({ number, expiry, cvv, name, zip });
     setErrors(found);
     if (Object.keys(found).length > 0) return;
     if (!tokenizer) {
@@ -61,7 +87,7 @@ export default function LinqaSendAddCard() {
       const expiryParts = parseExpiry(expiry)!;
       const session = await client.setupPaymentMethod({ type: cardType, billingCountry: "US" });
       await tokenizer.submit({ setupToken: session.setupToken, clientSecret: session.clientSecret, ...(session.cardEndpoint ? { cardEndpoint: session.cardEndpoint } : {}) }, {
-        number: digitsOnly(number), expMonth: expiryParts.month, expYear: expiryParts.year, cvv: digitsOnly(cvv), holderName: name.trim(), billingAddress: address.trim()
+        number: digitsOnly(number), expMonth: expiryParts.month, expYear: expiryParts.year, cvv: digitsOnly(cvv), holderName: name.trim(), billingPostalCode: zip.trim()
       });
       await client.confirmPaymentMethod(session.setupToken);
       setNumber(""); setCvv(""); setExpiry("");
@@ -93,13 +119,29 @@ export default function LinqaSendAddCard() {
             </View>
           ) : null}
 
-          <View style={s.row}>
-            {(["CREDIT_CARD", "DEBIT_CARD"] as const).map((kind) => (
-              <Pressable key={kind} accessibilityRole="button" accessibilityState={{ selected: cardType === kind }} onPress={() => setCardType(kind)} style={[s.typeChip, cardType === kind && s.typeChipOn]}>
-                <Text style={[s.typeChipText, cardType === kind && s.typeChipTextOn]}>{kind === "CREDIT_CARD" ? "Credit" : "Debit"}</Text>
-              </Pressable>
-            ))}
-          </View>
+          <Text style={s.label}>Card Type</Text>
+          <Pressable
+            accessibilityRole="combobox" accessibilityLabel="Card type" accessibilityValue={{ text: CARD_TYPE_LABEL[cardType] }} accessibilityState={{ expanded: typeOpen }}
+            style={[s.field, typeOpen && { borderColor: send.primary }]} onPress={() => setTypeOpen((open) => !open)}
+          >
+            <Text style={s.dropdownValue}>{CARD_TYPE_LABEL[cardType]}</Text>
+            <Ionicons name={typeOpen ? "chevron-up" : "chevron-down"} size={20} color={send.muted} />
+          </Pressable>
+          {typeOpen ? (
+            <View style={s.dropdownList} accessibilityRole="list">
+              {(["CREDIT_CARD", "DEBIT_CARD"] as const).map((kind) => (
+                <Pressable key={kind} accessibilityRole="menuitem" accessibilityState={{ selected: cardType === kind }} onPress={() => { setCardType(kind); setTypeOpen(false); }} style={[s.dropdownItem, cardType === kind && s.dropdownItemOn]}>
+                  <Text style={[s.dropdownItemText, cardType === kind && s.dropdownItemTextOn]}>{CARD_TYPE_LABEL[kind]}</Text>
+                  {cardType === kind ? <Ionicons name="checkmark" size={20} color={send.primary} /> : null}
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+
+          <Pressable accessibilityRole="button" accessibilityLabel="Scan card with the camera" accessibilityState={{ busy: scanning, disabled: scanning || busy }} disabled={scanning || busy} style={[s.scan, (scanning || busy) && { opacity: 0.6 }]} onPress={autoScan}>
+            {scanning ? <ActivityIndicator color={send.primary} /> : <Ionicons name="scan-outline" size={22} color={send.primary} />}
+            <Text style={s.scanText}>{scanning ? "Opening camera…" : "Scan card with camera"}</Text>
+          </Pressable>
 
           <Text style={s.label}>Card Number</Text>
           <View style={[s.field, errors.number && s.fieldError]}>
@@ -138,12 +180,11 @@ export default function LinqaSendAddCard() {
           </View>
           {errors.name ? <Text style={s.fieldMessage}>{errors.name}</Text> : null}
 
-          <Text style={s.label}>Billing Address</Text>
-          <View style={[s.field, errors.address && s.fieldError]}>
-            <TextInput accessibilityLabel="Billing address" value={address} onChangeText={setAddress} placeholder="Street, city, state ZIP, country" placeholderTextColor={send.faint} autoComplete="off" importantForAutofill="no" style={s.inputBare} />
-            <Ionicons name="pencil" size={18} color={send.primary} />
+          <Text style={s.label}>ZIP Code</Text>
+          <View style={[s.field, errors.zip && s.fieldError]}>
+            <TextInput accessibilityLabel="Billing ZIP code" value={zip} onChangeText={(t) => setZip(formatZip(t))} placeholder="20740" placeholderTextColor={send.faint} keyboardType="number-pad" maxLength={10} autoComplete="postal-code" textContentType="postalCode" importantForAutofill="no" style={s.inputBare} />
           </View>
-          {errors.address ? <Text style={s.fieldMessage}>{errors.address}</Text> : null}
+          {errors.zip ? <Text style={s.fieldMessage}>{errors.zip}</Text> : <Text style={s.helper}>The ZIP code where your card statement is sent.</Text>}
 
           <View style={s.saveRow}>
             <View style={{ flex: 1 }}>
@@ -184,10 +225,14 @@ const s = StyleSheet.create({
   inputBare: { flex: 1, color: send.text, fontFamily: fonts.semibold, fontSize: 16, paddingVertical: 0 },
   brandMark: { fontFamily: fonts.extrabold, fontSize: 15, fontStyle: "italic" },
   row: { flexDirection: "row", gap: 14 },
-  typeChip: { flex: 1, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: send.border, alignItems: "center", justifyContent: "center" },
-  typeChipOn: { borderColor: send.primary, backgroundColor: "#EEF0FF" },
-  typeChipText: { color: send.muted, fontFamily: fonts.semibold, fontSize: 14 },
-  typeChipTextOn: { color: send.primary },
+  scan: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, height: 52, borderRadius: 14, borderWidth: 1.5, borderColor: send.primary, marginTop: 16 },
+  scanText: { color: send.primary, fontFamily: fonts.bold, fontSize: 15 },
+  dropdownValue: { flex: 1, color: send.text, fontFamily: fonts.semibold, fontSize: 16 },
+  dropdownList: { marginTop: 6, borderRadius: 14, borderWidth: 1.5, borderColor: send.border, backgroundColor: send.bg, overflow: "hidden" },
+  dropdownItem: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: 52, paddingHorizontal: 16 },
+  dropdownItemOn: { backgroundColor: "#EEF0FF" },
+  dropdownItemText: { color: send.text, fontFamily: fonts.medium, fontSize: 16 },
+  dropdownItemTextOn: { color: send.primary, fontFamily: fonts.bold },
   fieldMessage: { color: send.danger, fontFamily: fonts.medium, fontSize: 13, marginTop: 6 },
   helper: { color: send.muted, fontFamily: fonts.regular, fontSize: 13, marginTop: 6 },
   saveRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 24 },

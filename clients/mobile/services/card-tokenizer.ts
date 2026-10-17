@@ -10,7 +10,7 @@
  * screen refuses to submit instead of sending card data anywhere else. When a provider is chosen,
  * implement `CardTokenizer` with its SDK and return it here; nothing else changes.
  */
-export type CardDetails = { number: string; expMonth: number; expYear: number; cvv: string; holderName: string; billingAddress: string };
+export type CardDetails = { number: string; expMonth: number; expYear: number; cvv: string; holderName: string; billingPostalCode: string };
 
 export type TokenizerSession = { setupToken: string; clientSecret: string; cardEndpoint?: string };
 
@@ -64,5 +64,6 @@ const devSandboxTokenizer: CardTokenizer = {
 };
 
 export function getCardTokenizer(): CardTokenizer | null {
-  return __DEV__ ? devSandboxTokenizer : null;
+  // __DEV__ only exists inside React Native; anywhere else (tests, release builds) there is no tokenizer.
+  return typeof __DEV__ !== "undefined" && __DEV__ ? devSandboxTokenizer : null;
 }

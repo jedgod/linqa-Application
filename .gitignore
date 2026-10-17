@@ -81,3 +81,9 @@ mapboxdashboard.txt
 
 # Local test/account credentials: never publish
 /Userscredential.txt
+
+# Proprietary / third-party binaries that must not be redistributed in this public repo
+# (the folder is re-included first because the generic vendor/ rule above would otherwise hide the .pom and README too)
+!clients/mobile/modules/linqa-blinkcard/android/vendor-maven/com/linqa/vendor/
+clients/mobile/modules/linqa-blinkcard/android/vendor-maven/**/*.aar
+LinkaSend-pageCode/ScanCard/blinkcard-xamarin-main/

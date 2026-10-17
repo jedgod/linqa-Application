@@ -17,6 +17,8 @@ allprojects {
     google()
     mavenCentral()
     maven { url 'https://www.jitpack.io' }
+    // BlinkCard Android SDK 2.12.0, vendored as a local Maven artifact (see modules/linqa-blinkcard/android/build.gradle).
+    maven { url uri("${rootDir}/../modules/linqa-blinkcard/android/vendor-maven") }
   }
 }
 

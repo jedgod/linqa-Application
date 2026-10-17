@@ -77,9 +77,20 @@ export function isExpired(expiry: { month: number; year: number }, now = new Dat
   return expiry.year < now.getFullYear() || (expiry.year === now.getFullYear() && expiry.month < now.getMonth() + 1);
 }
 
-export type CardFormErrors = Partial<Record<"number" | "expiry" | "cvv" | "name" | "address", string>>;
+/** US ZIP code: 5 digits, optionally followed by the 4-digit extension ("20740" or "20740-1234"). */
+export function isValidZip(value: string): boolean {
+  return /^\d{5}(-\d{4})?$/.test(value.trim());
+}
 
-export function validateCardForm(form: { number: string; expiry: string; cvv: string; name: string; address: string }, now = new Date()): CardFormErrors {
+/** Typing "207401234" shows "20740-1234". Digits only, at most 9. */
+export function formatZip(input: string): string {
+  const digits = digitsOnly(input).slice(0, 9);
+  return digits.length > 5 ? `${digits.slice(0, 5)}-${digits.slice(5)}` : digits;
+}
+
+export type CardFormErrors = Partial<Record<"number" | "expiry" | "cvv" | "name" | "zip", string>>;
+
+export function validateCardForm(form: { number: string; expiry: string; cvv: string; name: string; zip: string }, now = new Date()): CardFormErrors {
   const errors: CardFormErrors = {};
   if (!isValidCardNumber(form.number)) errors.number = "Check the card number.";
   const expiry = parseExpiry(form.expiry);
@@ -87,6 +98,6 @@ export function validateCardForm(form: { number: string; expiry: string; cvv: st
   else if (isExpired(expiry, now)) errors.expiry = "This card has expired.";
   if (digitsOnly(form.cvv).length !== cvvLength(detectBrand(form.number))) errors.cvv = `Enter the ${cvvLength(detectBrand(form.number))}-digit security code.`;
   if (form.name.trim().length < 2) errors.name = "Enter the name on the card.";
-  if (form.address.trim().length < 8) errors.address = "Enter the billing address.";
+  if (!isValidZip(form.zip)) errors.zip = "Enter the 5-digit ZIP code.";
   return errors;
 }

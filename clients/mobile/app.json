@@ -10,6 +10,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.linqa.mobile",
       "infoPlist": {
+        "NSCameraUsageDescription": "Allow Linqa to scan your payment card so you don't have to type the details.",
         "NSFaceIDUsageDescription": "Use Face ID to unlock LinqaVault and authorize LinqaSend transfers.",
         "ITSAppUsesNonExemptEncryption": false
       },
