@@ -37,8 +37,8 @@ export type LinqaSendQuote = {
   marginBps: number;
   senderFeeMinor?: string;
   recipientFeeMinor?: string;
-  /** Delivery speed the quote was priced for; same-day adds the sender fee to the total charged. */
-  deliveryOption?: "standard" | "same_day";
+  /** Delivery speed the quote was priced for; instant adds the sender fee to the total charged. */
+  deliveryOption?: "standard" | "instant";
   totalChargedMinor?: string;
   provider: string;
   expiresAt: string;
@@ -93,6 +93,20 @@ export type LinqaSendTransferDetail = LinqaSendTransferSummary & {
   timeline: Array<{ phase: string; status: string; errorCode: string | null; at: string }>;
 };
 
+/** The receiver's choice for moving received money from their wallet to a bank or card on file. Amounts are minor-unit strings. */
+export type LinqaSendDepositOptions = {
+  transferId: string;
+  amountMinor: string;
+  currency: string;
+  senderPaidInstantFee: boolean;
+  options: {
+    instant: { available: boolean; receiverFeeMinor: string; feePaidBy: "sender" | "receiver"; netDepositMinor: string; unavailableReason?: string };
+    standard: { receiverFeeMinor: string; netDepositMinor: string; businessDays: number; availableOn: string; senderFeeRefundMinor: string };
+  };
+  chosen: { option: "instant" | "standard"; status: string } | null;
+};
+export type LinqaSendDepositResult = { depositId: string; option: "instant" | "standard"; status: string; netDepositMinor: string; receiverFeeMinor: string; releaseOn: string | null; senderFeeRefundMinor: string };
+
 export type LinqaSendSecurityWarning = { code: string; severity: "INFO" | "WARN" | "HIGH" | "CRITICAL"; messageKey: string };
 export class LinqaSendApiError extends Error {
   constructor(message: string, readonly payload: Record<string, unknown>, readonly status: number) { super(message); }
@@ -131,6 +145,14 @@ export class LinqaSendService {
   /** Opens a one-time security-code session for the card about to be used; the code itself goes straight to the provider. */
   createCvvSession(paymentMethodId: string) {
     return this.request<{ cvvSessionId: string; clientSecret: string; cvvEndpoint?: string; expiresAt: string }>(`/v1/linqasend/payment-methods/${paymentMethodId}/cvv-session`, { method: "POST", body: "{}" });
+  }
+
+  depositOptions(transferId: string) {
+    return this.request<LinqaSendDepositOptions>(`/v1/linqasend/transfers/${encodeURIComponent(transferId)}/deposit-options`);
+  }
+
+  requestDeposit(transferId: string, input: { option: "instant" | "standard"; paymentMethodId: string }) {
+    return this.request<LinqaSendDepositResult>(`/v1/linqasend/transfers/${encodeURIComponent(transferId)}/deposit`, { method: "POST", body: JSON.stringify(input) });
   }
 
   resolvePaymentIntent(quoteId: string) {
@@ -253,7 +275,7 @@ export class LinqaSendService {
     destinationCurrency: string;
     paymentMethodId?: string;
     sendAmountMinor: string;
-    deliveryOption?: "standard" | "same_day";
+    deliveryOption?: "standard" | "instant";
   }) {
     return this.request<LinqaSendQuote>("/v1/linqasend/quotes", { method: "POST", body: JSON.stringify(input) });
   }

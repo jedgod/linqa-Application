@@ -86,6 +86,12 @@ export default function LinqaSendReceipt() {
             ))}
           </ScrollView>
           <View style={s.footer}>
+            {received ? (
+              <Pressable accessibilityRole="button" style={[s.share, { backgroundColor: send.primary, marginBottom: 10 }]} onPress={() => router.push({ pathname: "/linqasend/deposit", params: { id } })}>
+                <Ionicons name="business-outline" size={22} color="#FFFFFF" />
+                <Text style={s.shareText}>Deposit to bank or card</Text>
+              </Pressable>
+            ) : null}
             <Pressable accessibilityRole="button" style={s.share} onPress={() => void share()}>
               <Ionicons name="share-outline" size={22} color="#FFFFFF" />
               <Text style={s.shareText}>Share Receipt</Text>

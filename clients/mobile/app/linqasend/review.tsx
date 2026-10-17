@@ -234,7 +234,7 @@ function ValidReview({ quote }: { quote: LinqaSendQuote }) {
 
         <View style={s.banner}>
           <View style={s.bannerIcon}><Ionicons name="shield-checkmark-outline" size={22} color={send.success} /></View>
-          <Text style={s.bannerText}>{sendFee > 0n ? "Same-day delivery fee is included in the total above. The rate includes our disclosed margin." : "No separate fees. The rate includes our disclosed margin."}</Text>
+          <Text style={s.bannerText}>{sendFee > 0n ? "Instant delivery fee is included in the total above. The rate includes our disclosed margin." : "No separate fees. The rate includes our disclosed margin."}</Text>
         </View>
 
         {error ? <Text style={s.error}>{error}</Text> : null}
