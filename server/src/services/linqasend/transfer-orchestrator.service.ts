@@ -54,6 +54,7 @@ export class TransferOrchestratorService {
       id: string;
       recipientId: string;
       sendAmountMinor: string;
+      senderFeeMinor?: string;
       sendCurrency: string;
       receiveAmountMinor: string;
       receiveCurrency: string;
@@ -283,13 +284,15 @@ export class TransferOrchestratorService {
     if (!input.paymentMethodRef) throw new Error("VERIFIED_PROVIDER_PAYMENT_REFERENCE_REQUIRED");
     const fundingReference = this.tokenVault ? await this.tokenVault.resolve(input.paymentMethodRef,{actorId:"linqasend-execution",purpose:"FUNDING_AUTHORIZATION",expectedOwnerUserId:input.userId}) : input.paymentMethodRef;
     const fundingKey = `${input.idempotencyKey}:funding`;
-    const fundingOperation = await this.operations.register({transferId:id,providerId:input.quote.provider,operationType:"FUNDING_AUTHORIZATION",idempotencyKey:fundingKey,payload:{transferId:publicId,amountMinor:input.quote.sendAmountMinor,currency:input.quote.sendCurrency}});
+    // The card is charged the send amount plus the sender fee (0 for standard delivery); the recipient still gets the full send amount.
+    const fundingAmountMinor = BigInt(input.quote.sendAmountMinor) + BigInt(input.quote.senderFeeMinor ?? "0");
+    const fundingOperation = await this.operations.register({transferId:id,providerId:input.quote.provider,operationType:"FUNDING_AUTHORIZATION",idempotencyKey:fundingKey,payload:{transferId:publicId,amountMinor:fundingAmountMinor.toString(),currency:input.quote.sendCurrency}});
     await this.operations.submitted(fundingOperation.id);
     let authorization;
     try { authorization = await this.providers.funding.authorizeFunding({
       transferId: publicId,
       providerPaymentMethodRef: fundingReference,
-      amountMinor: BigInt(input.quote.sendAmountMinor),
+      amountMinor: fundingAmountMinor,
       currency: input.quote.sendCurrency,
       idempotencyKey: fundingKey
     }); await this.operations.succeeded(fundingOperation.id,authorization.providerRef,authorization); }

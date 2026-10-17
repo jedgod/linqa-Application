@@ -25,6 +25,9 @@ function guarded<T>(handler: (request: FastifyRequest, reply: FastifyReply) => P
   };
 }
 
+import { DEV_SANDBOX_KEY_ID, DEV_SANDBOX_PROVIDER_ID, DevLocalKmsProvider, devSandboxCardProvider } from "../../services/linqasend/dev-sandbox.js";
+import { CARD_FUNDING_TYPES, CvvRecollectionService, resolveCardProvider } from "../../services/linqasend/cvv-recollection.service.js";
+
 const country = z.string().length(2).transform((v) => v.toUpperCase());
 const currency = z.string().length(3).transform((v) => v.toUpperCase());
 const amount = z.string().regex(/^\d+$/).transform(BigInt).refine((v) => v > 0n, "amount must be positive");
@@ -38,6 +41,10 @@ export async function registerLinqaSendModuleSurfaceRoutes(app: FastifyInstance,
   const tokenVault = config.LINQASEND_TOKEN_KMS_KEY_ID && config.LINQASEND_TOKEN_KMS_REGION
     ? new ProviderTokenVaultService(db, new AwsProductionKmsProvider(config.LINQASEND_TOKEN_KMS_KEY_ID, config.LINQASEND_TOKEN_KMS_REGION), config.LINQASEND_TOKEN_KMS_KEY_ID)
     : undefined;
+  // Development-only card sandbox (config.ts refuses it outside development/sandbox mode with real money off).
+  const sandboxCards = devSandboxCardProvider(config);
+  const fundingVault = tokenVault ?? (sandboxCards ? new ProviderTokenVaultService(db, new DevLocalKmsProvider(config.JWT_HS256_SECRET), DEV_SANDBOX_KEY_ID) : undefined);
+  const cardProvider = resolveCardProvider(config);
 
   app.get("/v1/linqasend/home", guarded(async (request) => {
     const p = await authenticate(request); requireScope(p, "linqasend:read");
@@ -114,28 +121,44 @@ export async function registerLinqaSendModuleSurfaceRoutes(app: FastifyInstance,
   app.post("/v1/linqasend/payment-methods/setup", guarded(async (request, reply) => {
     const p = await authenticate(request); requireScope(p, "linqasend:write");
     const body = z.object({ type: z.enum(["DEBIT_CARD", "CREDIT_CARD", "BANK_ACCOUNT", "MOBILE_WALLET"]), billingCountry: country.optional() }).parse(request.body);
-    if (!config.LINQASEND_PROVIDER_URL || !config.LINQASEND_PROVIDER_TOKEN) return reply.code(409).send({ error: "provider_hosted_tokenization_not_configured" });
-    const response = await fetch(`${config.LINQASEND_PROVIDER_URL.replace(/\/$/, "")}/payment-methods/setup`, { method: "POST", headers: { authorization: `Bearer ${config.LINQASEND_PROVIDER_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ userId: p.userId, ...body }), signal: AbortSignal.timeout(10_000) });
+    if (!cardProvider) return reply.code(409).send({ error: "provider_hosted_tokenization_not_configured" });
+    const response = await fetch(`${cardProvider.url.replace(/\/$/, "")}/payment-methods/setup`, { method: "POST", headers: { authorization: `Bearer ${cardProvider.token}`, "content-type": "application/json" }, body: JSON.stringify({ userId: p.userId, ...body }), signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error(`TOKENIZATION_PROVIDER_ERROR:${response.status}`);
-    const session = z.object({ setupToken: z.string().min(8), clientSecret: z.string().min(8), expiresAt: z.string().datetime() }).parse(await response.json());
+    const session = z.object({ setupToken: z.string().min(8), clientSecret: z.string().min(8), expiresAt: z.string().datetime(), ...(sandboxCards ? { cardEndpoint: z.string().url() } : {}) }).parse(await response.json());
     return reply.code(201).send(session);
   }));
 
   app.post("/v1/linqasend/payment-methods/confirm", guarded(async (request, reply) => {
     const p = await authenticate(request); requireScope(p, "linqasend:write");
     const body = z.object({ setupToken: z.string().min(8) }).parse(request.body);
-    if (!config.LINQASEND_PROVIDER_URL || !config.LINQASEND_PROVIDER_TOKEN) return reply.code(409).send({ error: "provider_hosted_tokenization_not_configured" });
-    const response = await fetch(`${config.LINQASEND_PROVIDER_URL.replace(/\/$/, "")}/payment-methods/confirm`, { method: "POST", headers: { authorization: `Bearer ${config.LINQASEND_PROVIDER_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ userId: p.userId, setupToken: body.setupToken }), signal: AbortSignal.timeout(10_000) });
+    if (!cardProvider) return reply.code(409).send({ error: "provider_hosted_tokenization_not_configured" });
+    const response = await fetch(`${cardProvider.url.replace(/\/$/, "")}/payment-methods/confirm`, { method: "POST", headers: { authorization: `Bearer ${cardProvider.token}`, "content-type": "application/json" }, body: JSON.stringify({ userId: p.userId, setupToken: body.setupToken }), signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error(`TOKENIZATION_PROVIDER_ERROR:${response.status}`);
     const method = z.object({ provider: z.string().min(2).max(64), providerCustomerRef: z.string().max(255).optional(), providerPaymentMethodRef: z.string().min(8).max(255), type: z.enum(["DEBIT_CARD", "CREDIT_CARD", "BANK_ACCOUNT", "MOBILE_WALLET"]), last4: z.string().length(4).optional(), billingCountry: country.optional(), verificationStatus: z.literal("VERIFIED"), brand: z.string().trim().max(24).optional(), expMonth: z.number().int().min(1).max(12).optional(), expYear: z.number().int().min(2000).max(2200).optional() }).parse(await response.json());
-    const certified = await db.query(`SELECT 1 FROM linqasend_provider_certifications_v6 WHERE provider_id=$1 AND status='CERTIFIED' AND expires_at>now() LIMIT 1`, [method.provider]);
+    // Only the development sandbox provider, and only while the sandbox is active, skips the certification lookup.
+    const sandboxFundingSource = sandboxCards !== null && method.provider === DEV_SANDBOX_PROVIDER_ID;
+    const certified = sandboxFundingSource ? { rows: [1] } : await db.query(`SELECT 1 FROM linqasend_provider_certifications_v6 WHERE provider_id=$1 AND status='CERTIFIED' AND expires_at>now() LIMIT 1`, [method.provider]);
     if (!certified.rows[0]) return reply.code(409).send({ error: "certified_funding_provider_required" });
-    if (!tokenVault) return reply.code(409).send({ error: "provider_token_kms_not_configured" });
-    const protectedReference = await tokenVault.store({ ownerUserId: p.userId, providerId: method.provider, secretKind: "FUNDING_METHOD", plaintext: method.providerPaymentMethodRef, ...(method.last4 ? { maskedDisplay: `•••• ${method.last4}` } : {}) });
+    if (!fundingVault) return reply.code(409).send({ error: "provider_token_kms_not_configured" });
+    const protectedReference = await fundingVault.store({ ownerUserId: p.userId, providerId: method.provider, secretKind: "FUNDING_METHOD", plaintext: method.providerPaymentMethodRef, ...(method.last4 ? { maskedDisplay: `•••• ${method.last4}` } : {}) });
     const providerSecretId = protectedReference.slice("vault:".length);
     const id = randomUUID();
     const { rows } = await db.query(`INSERT INTO linqasend_payment_methods(id,user_id,provider,provider_customer_ref,provider_payment_method_ref,provider_secret_id,type,last4,billing_country,verification_status,metadata) VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$8,'VERIFIED',$9::jsonb) ON CONFLICT(provider,provider_payment_method_ref) DO UPDATE SET updated_at=now() RETURNING id,type,last4,verification_status`, [id, p.userId, method.provider, protectedReference, providerSecretId, method.type, method.last4 ?? null, method.billingCountry ?? null, JSON.stringify({ ...(method.brand ? { brand: method.brand } : {}), ...(method.expMonth ? { expMonth: method.expMonth } : {}), ...(method.expYear ? { expYear: method.expYear } : {}) })]);
     return reply.code(201).send({ id: rows[0].id, type: rows[0].type, last4: rows[0].last4, verificationStatus: rows[0].verification_status });
+  }));
+
+  // Card security-code recollection: a one-time session for the card the sender is about to pay with. The code is typed on
+  // the phone and posted straight to the provider; the transfer route later spends this session exactly once.
+  const cvvRecollection = new CvvRecollectionService(db, cardProvider);
+  app.post("/v1/linqasend/payment-methods/:id/cvv-session", guarded(async (request, reply) => {
+    const p = await authenticate(request); requireScope(p, "linqasend:write");
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const row = (await db.query(`SELECT type,provider_payment_method_ref FROM linqasend_payment_methods WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL AND verification_status='VERIFIED'`, [id, p.userId])).rows[0];
+    if (!row) return reply.code(404).send({ error: "payment_method_not_found" });
+    if (!(CARD_FUNDING_TYPES as readonly string[]).includes(row.type)) return reply.code(409).send({ error: "cvv_not_applicable" });
+    if (!cardProvider || !fundingVault) return reply.code(409).send({ error: "cvv_provider_not_configured" });
+    const providerPaymentMethodRef = await fundingVault.resolve(row.provider_payment_method_ref, { actorId: p.userId, purpose: "CVV_RECOLLECTION", expectedOwnerUserId: p.userId });
+    return reply.code(201).send(await cvvRecollection.createSession({ userId: p.userId, paymentMethodId: id, providerPaymentMethodRef }));
   }));
 
   app.delete("/v1/linqasend/payment-methods/:id", guarded(async (request, reply) => {

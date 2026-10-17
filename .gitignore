@@ -78,3 +78,6 @@ clients/mobile/android/app/src/main/assets/vosk-model-en/
 **/linqa-signing.properties
 server/.local-publishing/
 mapboxdashboard.txt
+
+# Local test/account credentials: never publish
+/Userscredential.txt

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -11,6 +11,8 @@ import { requestTransactionAuth } from "../../services/transaction-auth";
 import { fonts } from "../../theme/tokens";
 import { createBiometricClient } from "../../services/biometric-session";
 import { displayMoney, parseReviewQuote } from "../../services/send-money-validation";
+import { getCardTokenizer } from "../../services/card-tokenizer";
+import { digitsOnly } from "../../services/card-input";
 
 const API = getApiBaseUrl();
 
@@ -48,6 +50,22 @@ function ValidReview({ quote }: { quote: LinqaSendQuote }) {
   const [pending, setPending] = useState<PreparedLinqaSendTransfer | null>(null);
   const [warnings, setWarnings] = useState<LinqaSendSecurityWarning[]>([]);
   const [reconciled, setReconciled] = useState(false);
+  // Card payments need the sender to type the card's security code each time; it goes straight to the card provider.
+  const [cvvPrompt, setCvvPrompt] = useState(false);
+  const [cvvText, setCvvText] = useState("");
+  const cvvAnswer = useRef<((value: string | null) => void) | null>(null);
+  function askCvv(): Promise<string | null> {
+    setCvvText("");
+    setCvvPrompt(true);
+    return new Promise((resolve) => { cvvAnswer.current = resolve; });
+  }
+  function answerCvv(value: string | null) {
+    setCvvPrompt(false);
+    setCvvText("");
+    cvvAnswer.current?.(value);
+    cvvAnswer.current = null;
+  }
+  useEffect(() => () => { cvvAnswer.current?.(null); }, []);
   useEffect(() => {
     let current = true;
     client.resolvePaymentIntent(quote.id).then(intent => {
@@ -88,6 +106,16 @@ function ValidReview({ quote }: { quote: LinqaSendQuote }) {
     try {
       await client.rememberPaymentReview({ ...params, quote: JSON.stringify(quote), recipientName: params.recipientName ?? "Recipient" }, quote.id);
       let prepared = pending;
+      let cvvSessionId = pending?.cvvSessionId;
+      if (!prepared && method && (method.type === "CREDIT_CARD" || method.type === "DEBIT_CARD")) {
+        const code = await askCvv();
+        if (!code) return;
+        const tokenizer = getCardTokenizer();
+        if (!tokenizer) throw new Error("Card security code entry isn't available in this build.");
+        const session = await client.createCvvSession(paymentMethodId);
+        await tokenizer.submitCvv({ clientSecret: session.clientSecret, ...(session.cvvEndpoint ? { cvvEndpoint: session.cvvEndpoint } : {}) }, code);
+        cvvSessionId = session.cvvSessionId;
+      }
       if (!prepared) {
         // The production signer prompts on the transaction-bound hardware key itself.
         const strong = (await createBiometricClient(() => accessTokenProvider.getAccessToken()).available()).strong;
@@ -96,7 +124,7 @@ function ValidReview({ quote }: { quote: LinqaSendQuote }) {
           const auth = await requestTransactionAuth({ amountLabel: `${displayMoney(quote.sendAmountMinor, quote.sendCurrency)} ${quote.sendCurrency}`, recipientName: params.recipientName });
           if (auth !== "AUTHORIZED") return;
         }
-        prepared = await client.prepareTransferConfirmation({ quoteId: quote.id, paymentMethodId, ...(params.purposeCode ? { purposeCode: params.purposeCode } : {}) });
+        prepared = { ...(await client.prepareTransferConfirmation({ quoteId: quote.id, paymentMethodId, ...(params.purposeCode ? { purposeCode: params.purposeCode } : {}) })), ...(cvvSessionId ? { cvvSessionId } : {}) };
         setPending(prepared);
       }
       const outcome = await client.submitPreparedTransfer(prepared, warnings.map((warning) => warning.code));
@@ -108,7 +136,11 @@ function ValidReview({ quote }: { quote: LinqaSendQuote }) {
         router.replace({ pathname: "/linqasend/status", params: { id: e.payload.transferId } });
         return;
       }
-      if (e instanceof LinqaSendApiError && e.payload.error === "scam_warning_acknowledgement_required" && Array.isArray(e.payload.warnings)) {
+      if (e instanceof LinqaSendApiError && typeof e.payload.error === "string" && e.payload.error.startsWith("cvv_")) {
+        // The security-code proof was missing, expired or already used: ask for the code again on the next confirm.
+        setPending(null);
+        setError("Enter your card's security code again to continue.");
+      } else if (e instanceof LinqaSendApiError && e.payload.error === "scam_warning_acknowledgement_required" && Array.isArray(e.payload.warnings)) {
         setWarnings(e.payload.warnings as LinqaSendSecurityWarning[]);
         setError(null);
       } else {
@@ -202,7 +234,7 @@ function ValidReview({ quote }: { quote: LinqaSendQuote }) {
 
         <View style={s.banner}>
           <View style={s.bannerIcon}><Ionicons name="shield-checkmark-outline" size={22} color={send.success} /></View>
-          <Text style={s.bannerText}>No separate fees. The rate includes our disclosed margin.</Text>
+          <Text style={s.bannerText}>{sendFee > 0n ? "Same-day delivery fee is included in the total above. The rate includes our disclosed margin." : "No separate fees. The rate includes our disclosed margin."}</Text>
         </View>
 
         {error ? <Text style={s.error}>{error}</Text> : null}
@@ -221,11 +253,36 @@ function ValidReview({ quote }: { quote: LinqaSendQuote }) {
           {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={s.confirmText}>{remaining === 0 ? "Quote expired" : warnings.length ? "I understand, send money" : "Confirm & Continue"}</Text>}
         </Pressable>
       </View>
+
+      <Modal visible={cvvPrompt} transparent animationType="fade" onRequestClose={() => answerCvv(null)}>
+        <View style={s.cvvBackdrop}>
+          <View style={s.cvvCard} accessibilityViewIsModal>
+            <Text accessibilityRole="header" style={s.cvvTitle}>Enter your card security code</Text>
+            <Text style={s.cvvHelp}>{method ? `${METHOD_NAME[method.type] ?? "Card"}${method.last4 ? ` •••• ${method.last4}` : ""}` : "Card"} — type the 3 or 4 digit code for this payment. It goes straight to your card provider and is never stored.</Text>
+            <TextInput
+              accessibilityLabel="Card security code" value={cvvText} onChangeText={(t) => setCvvText(digitsOnly(t).slice(0, 4))}
+              placeholder="CVV" placeholderTextColor={send.faint} keyboardType="number-pad" secureTextEntry maxLength={4} autoFocus
+              autoComplete="off" importantForAutofill="no" contextMenuHidden style={s.cvvInput}
+            />
+            <Pressable accessibilityRole="button" accessibilityState={{ disabled: cvvText.length < 3 }} disabled={cvvText.length < 3} style={[s.confirm, cvvText.length < 3 && { opacity: 0.45 }]} onPress={() => answerCvv(cvvText)}>
+              <Text style={s.confirmText}>Continue</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" style={{ padding: 12, alignItems: "center" }} onPress={() => answerCvv(null)}>
+              <Text style={s.link}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
+  cvvBackdrop: { flex: 1, backgroundColor: "rgba(10,12,22,0.6)", justifyContent: "center", paddingHorizontal: 24 },
+  cvvCard: { backgroundColor: send.bg, borderRadius: 18, padding: 20 },
+  cvvTitle: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18, marginBottom: 8 },
+  cvvHelp: { color: send.muted, fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, marginBottom: 14 },
+  cvvInput: { height: 56, borderRadius: 14, borderWidth: 1.5, borderColor: send.border, paddingHorizontal: 16, color: send.text, fontFamily: fonts.semibold, fontSize: 18, marginBottom: 14, letterSpacing: 4 },
   screen: { flex: 1, backgroundColor: send.bg },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 },
   headerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },

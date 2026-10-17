@@ -17,11 +17,15 @@ import { registerMetrics } from "./observability/metrics.js";
 import { enforceProductionBoot } from "./runtime/bootstrap-gate.js";
 import { configureLinqaSendProviders, resetLinqaSendProvidersToSafeDefaults } from "./integrations/linqasend/provider.registry.js";
 import { createHttpLinqaSendProviders } from "./integrations/linqasend/http.providers.js";
+import { createDevSandboxProviders, devSandboxCardProvider } from "./services/linqasend/dev-sandbox.js";
 
 export async function buildApp(config: AppConfig, db: Database) {
   resetLinqaSendProvidersToSafeDefaults();
   if (config.LINQASEND_PROVIDER_URL && config.LINQASEND_PROVIDER_TOKEN) {
     configureLinqaSendProviders(createHttpLinqaSendProviders(config.LINQASEND_PROVIDER_URL, config.LINQASEND_PROVIDER_TOKEN));
+  } else if (devSandboxCardProvider(config)) {
+    // Development sandbox only (config.ts refuses it outside development with real money off): simulated, network-free providers.
+    configureLinqaSendProviders(createDevSandboxProviders());
   }
   const app = Fastify({
     logger: {

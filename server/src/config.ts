@@ -97,6 +97,10 @@ const EnvSchema = z.object({
   LINQASEND_PUBLIC_ENROLLMENT: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
   LINQASEND_TOKEN_KMS_KEY_ID: z.string().min(1).optional(),
   LINQASEND_TOKEN_KMS_REGION: z.string().min(1).optional(),
+  // Development-only card sandbox. Never real money: see the refinements below.
+  LINQASEND_DEV_SANDBOX: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
+  LINQASEND_DEV_CARD_PROVIDER_URL: z.string().url().optional(),
+  LINQASEND_DEV_CARD_PROVIDER_TOKEN: z.string().min(16).optional(),
   LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID: z.string().uuid().optional(),
   LINQASEND_EXECUTION_LEASE_SECONDS: z.coerce.number().int().min(10).max(600).optional(),
   LINQASEND_WEBHOOK_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(86_400).optional(),
@@ -172,6 +176,14 @@ const EnvSchema = z.object({
   const mode = value.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION";
   if (realMoney && mode === "SANDBOX_CERTIFICATION") {
     context.addIssue({ code: "custom", message: "LinqaSend real money cannot be enabled in SANDBOX_CERTIFICATION mode" });
+  }
+  if (value.LINQASEND_DEV_SANDBOX === true) {
+    if (value.NODE_ENV !== "development") context.addIssue({ code: "custom", message: "LINQASEND_DEV_SANDBOX is allowed only when NODE_ENV=development" });
+    if (realMoney || mode !== "SANDBOX_CERTIFICATION") context.addIssue({ code: "custom", message: "LINQASEND_DEV_SANDBOX requires SANDBOX_CERTIFICATION mode with real money disabled" });
+    if (value.LINQASEND_PROVIDER_URL || value.LINQASEND_TOKEN_KMS_KEY_ID) context.addIssue({ code: "custom", message: "LINQASEND_DEV_SANDBOX cannot be combined with a real provider or KMS configuration" });
+    let loopback = false;
+    try { const host = new URL(value.LINQASEND_DEV_CARD_PROVIDER_URL ?? "").hostname; loopback = ["127.0.0.1", "localhost", "[::1]"].includes(host); } catch { /* invalid URL stays false */ }
+    if (!loopback || !value.LINQASEND_DEV_CARD_PROVIDER_TOKEN) context.addIssue({ code: "custom", message: "LINQASEND_DEV_SANDBOX requires a loopback LINQASEND_DEV_CARD_PROVIDER_URL and LINQASEND_DEV_CARD_PROVIDER_TOKEN" });
   }
   if (value.LINQASEND_PUBLIC_ENROLLMENT === true && mode !== "GENERAL_AVAILABILITY") {
     context.addIssue({ code: "custom", message: "LinqaSend public enrollment is forbidden before GENERAL_AVAILABILITY" });

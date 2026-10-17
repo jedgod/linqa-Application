@@ -1,3 +1,4 @@
+import { acceptedKycStatuses, DEV_SANDBOX_EXCUSABLE_BLOCKERS, DEV_SANDBOX_PROVIDER_ID, effectiveKycStatus } from "./dev-sandbox.js";
 import { createHash } from "node:crypto";
 import type { Database } from "../../db/pool.js";
 import { PgCapabilityRepository } from "./capability-repository.pg.js";
@@ -21,7 +22,7 @@ export class LinqaSendReadinessService {
   private readonly jurisdiction: JurisdictionV2Service;
   private readonly regulatory: RegulatedEntityResolverV7;
   private readonly settlement: SettlementTreasuryV5Service;
-  constructor(private readonly db: Database, private readonly release?: { gitSha: string; artifactDigest: string }, private readonly runtime: { realMoneyEnabled?: boolean; mode?: "SANDBOX_CERTIFICATION"|"LIMITED_LAUNCH"|"GENERAL_AVAILABILITY"; limitedCorridorId?: string } = {}) {
+  constructor(private readonly db: Database, private readonly release?: { gitSha: string; artifactDigest: string }, private readonly runtime: { realMoneyEnabled?: boolean; mode?: "SANDBOX_CERTIFICATION"|"LIMITED_LAUNCH"|"GENERAL_AVAILABILITY"; limitedCorridorId?: string; devSandbox?: boolean } = {}) {
     this.capabilities = new RegulatoryCapabilityEngine(new PgCapabilityRepository(db));
     this.jurisdiction = new JurisdictionV2Service(db);
     this.regulatory = new RegulatedEntityResolverV7(db);
@@ -36,14 +37,14 @@ export class LinqaSendReadinessService {
     const [recipientResult, methodResult, complianceResult] = await Promise.all([
       this.db.query(`SELECT * FROM linqasend_recipients WHERE id=$1 AND owner_user_id=$2`, [args.recipientId, args.userId]),
       this.db.query(`SELECT * FROM linqasend_payment_methods WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL AND verification_status='VERIFIED'`, [args.paymentMethodId, args.userId]),
-      this.db.query(`SELECT * FROM linqasend_customer_compliance_profiles_v7 WHERE user_id=$1 AND kyc_status='VERIFIED' AND (expires_at IS NULL OR expires_at>now())`, [args.userId])
+      this.db.query(`SELECT * FROM linqasend_customer_compliance_profiles_v7 WHERE user_id=$1 AND kyc_status = ANY($2::text[]) AND (expires_at IS NULL OR expires_at>now())`, [args.userId, acceptedKycStatuses(this.runtime.devSandbox === true)])
     ]);
     const recipientRow = recipientResult.rows[0], method = methodResult.rows[0], compliance = complianceResult.rows[0];
     if (!recipientRow) throw new Error("RECIPIENT_NOT_FOUND");
     if (!method) throw new Error("VERIFIED_FUNDING_SOURCE_NOT_FOUND");
     if (!compliance) throw new Error("VERIFIED_CUSTOMER_COMPLIANCE_PROFILE_REQUIRED");
     if (compliance.verified_country !== profile.regulatoryJurisdiction) throw new Error("KYC_JURISDICTION_MISMATCH");
-    const sender: SenderContext = { userId: args.userId, verifiedCountry: profile.regulatoryJurisdiction, baseCurrency: args.sourceCurrency.toUpperCase(), kycLevel: compliance.kyc_level, kycStatus: compliance.kyc_status, riskScore: 0, deviceTrust: "UNKNOWN", accountStatus: "ACTIVE" };
+    const sender: SenderContext = { userId: args.userId, verifiedCountry: profile.regulatoryJurisdiction, baseCurrency: args.sourceCurrency.toUpperCase(), kycLevel: compliance.kyc_level, kycStatus: effectiveKycStatus(compliance.kyc_status), riskScore: 0, deviceTrust: "UNKNOWN", accountStatus: "ACTIVE" };
     const externalType = String(recipientRow.recipient_type);
     const resolvedRecipientType = externalType === "LINQA_USER" ? RecipientType.LINQA_USER : externalType === "MOBILE_WALLET" ? RecipientType.MOBILE_MONEY_RECIPIENT : externalType === "CARD" ? RecipientType.CARD_RECIPIENT : RecipientType.BANK_RECIPIENT;
     const resolvedReceiveMode = externalType === "LINQA_USER" ? ReceiveMode.LINQA_BALANCE : externalType === "MOBILE_WALLET" ? ReceiveMode.MOBILE_MONEY : externalType === "CARD" ? ReceiveMode.CARD : ReceiveMode.BANK;
@@ -109,8 +110,11 @@ export class LinqaSendReadinessService {
         }
       }
     }
-    const uniqueBlockers=[...new Set(blockers)];
-    const snapshotBody={userId:args.userId,sourceCountry:profile.regulatoryJurisdiction,destinationCountry:recipient.verifiedCountry,transferClass:classification.transferClass,fundingMode:resolvedFundingMode,receiveMode:recipient.receiveMode,blockers:uniqueBlockers};
+    // Sandbox only: configuration/real-money switches are excused for domestic transfers funded by the dev-sandbox provider.
+    const sandboxExcused = this.runtime.devSandbox === true && method.provider === DEV_SANDBOX_PROVIDER_ID && classification.transferClass === "INTERNAL_DOMESTIC"
+      ? [...new Set(blockers.filter((b) => DEV_SANDBOX_EXCUSABLE_BLOCKERS.has(b)))] : [];
+    const uniqueBlockers=[...new Set(blockers.filter((b) => !sandboxExcused.includes(b)))];
+    const snapshotBody={userId:args.userId,sourceCountry:profile.regulatoryJurisdiction,destinationCountry:recipient.verifiedCountry,transferClass:classification.transferClass,fundingMode:resolvedFundingMode,receiveMode:recipient.receiveMode,blockers:uniqueBlockers,...(sandboxExcused.length ? { sandboxExcused } : {})};
     const snapshotHash=createHash("sha256").update(JSON.stringify(snapshotBody)).digest("hex");
     await this.db.query(`INSERT INTO linqasend_readiness_snapshots(scope_type,scope_id,release_git_sha,artifact_sha256,ready,checks,blockers,snapshot_hash) VALUES('USER_TRANSFER',$1,$2,$3,$4,$5,$6,$7) ON CONFLICT(snapshot_hash) DO NOTHING`,[args.userId,this.release?.gitSha??null,this.release?.artifactDigest??null,uniqueBlockers.length===0,JSON.stringify(snapshotBody),uniqueBlockers,snapshotHash]);
     return { ready: uniqueBlockers.length === 0, blockers: uniqueBlockers, transferClass: classification.transferClass, fundingMode: resolvedFundingMode, receiveMode: recipient.receiveMode, sourceCountry: profile.regulatoryJurisdiction, destinationCountry: recipient.verifiedCountry, senderLegalName: compliance.verified_legal_name, capabilitySnapshot: capabilitySnapshot as unknown as Record<string, unknown>, responsibilityResolution: resolution as unknown as Record<string, unknown> };

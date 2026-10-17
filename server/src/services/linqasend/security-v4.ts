@@ -308,7 +308,7 @@ export class LinqaSendSecurityV4Service {
     await this.db.query(
       `INSERT INTO linqasend_payment_risk_assessments_v4(transfer_id,user_id,score,decision,model_version,reasons,signals)
        VALUES($1,$2,$3,$4,$5,$6,$7)`,
-      [transfer.id, transfer.senderUserId, risk.score, risk.decision, risk.modelVersion, JSON.stringify(risk.reasons), JSON.stringify(signals ? { ...signals, amountSent24hMinor: signals.amountSent24hMinor.toString() } : {})]
+      [transfer.id, transfer.senderUserId, risk.score, risk.decision, risk.modelVersion, JSON.stringify(risk.reasons), JSON.stringify(signals ?? {}, (_key, value) => (typeof value === "bigint" ? value.toString() : value))]
     );
     for (const warning of warnings) {
       await this.db.query(

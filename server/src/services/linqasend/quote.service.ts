@@ -3,8 +3,11 @@ import type { Database } from "../../db/pool.js";
 import { FxPricingService } from "./fx-pricing.service.js";
 import { FxRateRepository } from "./fx-rate.repository.js";
 import { currencyMinorDigits } from "./money.js";
+import { calculateSenderFeeMinor, type DeliveryOption } from "./fee-calculation.js";
 
-const QUOTE_TTL_SECONDS = 30;
+// Development sandbox only (config.ts refuses LINQASEND_DEV_SANDBOX outside development with real money off): a longer lock
+// so first-time PIN setup and scripted device runs fit inside the window. Production keeps the 30-second lock.
+const QUOTE_TTL_SECONDS = process.env.LINQASEND_DEV_SANDBOX === "true" && process.env.NODE_ENV === "development" ? 180 : 30;
 
 export interface Corridor {
   id: string;
@@ -50,8 +53,12 @@ export class QuoteService {
     corridor: Corridor;
     paymentMethodId?: string | undefined;
     sendAmountMinor: bigint;
+    deliveryOption?: DeliveryOption | undefined;
   }) {
     const c = input.corridor;
+    const deliveryOption: DeliveryOption = input.deliveryOption ?? "standard";
+    // The fee is added on top: the recipient still receives the full send amount.
+    const senderFeeMinor = calculateSenderFeeMinor(input.sendAmountMinor, c.source_currency, deliveryOption);
     if (input.sendAmountMinor < BigInt(c.min_amount_minor) || input.sendAmountMinor > BigInt(c.max_amount_minor)) {
       throw new Error("AMOUNT_OUTSIDE_CORRIDOR_LIMITS");
     }
@@ -82,8 +89,8 @@ export class QuoteService {
          id, user_id, recipient_id, corridor_id, payment_method_id,
          send_amount_minor, send_currency, receive_amount_minor, receive_currency,
          market_reference_rate, provider_execution_rate, customer_rate, margin_bps,
-         sender_fee_minor, recipient_fee_minor, status, expires_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'ACTIVE',$16)`,
+         sender_fee_minor, recipient_fee_minor, status, expires_at, delivery_option
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'ACTIVE',$16,$17)`,
       [
         id,
         input.userId,
@@ -98,9 +105,10 @@ export class QuoteService {
         rate.executionRate,
         price.customerRate,
         price.marginBps,
-        price.senderFeeMinor.toString(),
+        senderFeeMinor.toString(),
         price.recipientFeeMinor.toString(),
-        quoteExpiry
+        quoteExpiry,
+        deliveryOption
       ]
     );
 
@@ -116,7 +124,9 @@ export class QuoteService {
       providerExecutionRate: rate.executionRate,
       customerRate: price.customerRate,
       marginBps: price.marginBps,
-      senderFeeMinor: "0",
+      senderFeeMinor: senderFeeMinor.toString(),
+      deliveryOption,
+      totalChargedMinor: (input.sendAmountMinor + senderFeeMinor).toString(),
       recipientFeeMinor: "0",
       provider: c.provider,
       expiresAt: quoteExpiry.toISOString()

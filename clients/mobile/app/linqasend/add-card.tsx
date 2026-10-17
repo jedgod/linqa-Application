@@ -34,6 +34,7 @@ export default function LinqaSendAddCard() {
   const [number, setNumber] = useState("");
   const [expiry, setExpiry] = useState("");
   const [cvv, setCvv] = useState("");
+  const [cardType, setCardType] = useState<"CREDIT_CARD" | "DEBIT_CARD">("CREDIT_CARD");
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [errors, setErrors] = useState<CardFormErrors>({});
@@ -58,8 +59,8 @@ export default function LinqaSendAddCard() {
     setBusy(true);
     try {
       const expiryParts = parseExpiry(expiry)!;
-      const session = await client.setupPaymentMethod({ type: "DEBIT_CARD" });
-      await tokenizer.submit({ setupToken: session.setupToken, clientSecret: session.clientSecret }, {
+      const session = await client.setupPaymentMethod({ type: cardType, billingCountry: "US" });
+      await tokenizer.submit({ setupToken: session.setupToken, clientSecret: session.clientSecret, ...(session.cardEndpoint ? { cardEndpoint: session.cardEndpoint } : {}) }, {
         number: digitsOnly(number), expMonth: expiryParts.month, expYear: expiryParts.year, cvv: digitsOnly(cvv), holderName: name.trim(), billingAddress: address.trim()
       });
       await client.confirmPaymentMethod(session.setupToken);
@@ -91,6 +92,14 @@ export default function LinqaSendAddCard() {
               <Text style={s.noticeText}>Card payments aren't turned on yet. You can preview this form, but it can't save a card until a payment partner is connected.</Text>
             </View>
           ) : null}
+
+          <View style={s.row}>
+            {(["CREDIT_CARD", "DEBIT_CARD"] as const).map((kind) => (
+              <Pressable key={kind} accessibilityRole="button" accessibilityState={{ selected: cardType === kind }} onPress={() => setCardType(kind)} style={[s.typeChip, cardType === kind && s.typeChipOn]}>
+                <Text style={[s.typeChipText, cardType === kind && s.typeChipTextOn]}>{kind === "CREDIT_CARD" ? "Credit" : "Debit"}</Text>
+              </Pressable>
+            ))}
+          </View>
 
           <Text style={s.label}>Card Number</Text>
           <View style={[s.field, errors.number && s.fieldError]}>
@@ -175,6 +184,10 @@ const s = StyleSheet.create({
   inputBare: { flex: 1, color: send.text, fontFamily: fonts.semibold, fontSize: 16, paddingVertical: 0 },
   brandMark: { fontFamily: fonts.extrabold, fontSize: 15, fontStyle: "italic" },
   row: { flexDirection: "row", gap: 14 },
+  typeChip: { flex: 1, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: send.border, alignItems: "center", justifyContent: "center" },
+  typeChipOn: { borderColor: send.primary, backgroundColor: "#EEF0FF" },
+  typeChipText: { color: send.muted, fontFamily: fonts.semibold, fontSize: 14 },
+  typeChipTextOn: { color: send.primary },
   fieldMessage: { color: send.danger, fontFamily: fonts.medium, fontSize: 13, marginTop: 6 },
   helper: { color: send.muted, fontFamily: fonts.regular, fontSize: 13, marginTop: 6 },
   saveRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 24 },

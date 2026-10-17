@@ -28,6 +28,7 @@ import { AwsProductionKmsProvider } from "../../security/kms/production-kms-prov
 import { ProviderTokenVaultService } from "../../services/linqasend/provider-token-vault.service.js";
 import type { BiometricAuthorizationService } from "../../security/biometrics/service.js";
 import { biometricPrincipal } from "../biometrics.js";
+import { CARD_FUNDING_TYPES, CvvError, CvvRecollectionService, resolveCardProvider } from "../../services/linqasend/cvv-recollection.service.js";
 
 function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) => Promise<T>) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
@@ -55,7 +56,9 @@ const createQuoteSchema = z.object({
   sourceCurrency: z.string().length(3),
   destinationCurrency: z.string().length(3).optional(),
   paymentMethodId: z.string().uuid().optional(),
-  sendAmountMinor: z.string().regex(/^\d+$/)
+  sendAmountMinor: z.string().regex(/^\d+$/),
+  // Standard delivery is free; same-day carries a sender fee (see fee-calculation.ts).
+  deliveryOption: z.enum(["standard", "same_day"]).default("standard")
 });
 
 /**
@@ -81,7 +84,9 @@ export const createTransferSchema = z.object({
   senderCountry: z.string().length(2).optional(),
   securityAuthorizationId: z.string().uuid(),
   transactionHash: z.string().length(64),
-  acknowledgedWarningCodes: z.array(z.string().max(100)).max(20).default([])
+  acknowledgedWarningCodes: z.array(z.string().max(100)).max(20).default([]),
+  // One-time proof that the sender typed the card's security code for this payment (card-funded transfers only).
+  cvvSessionId: z.string().uuid().optional()
   // Strict on purpose: a client must not be able to name a provider, entity, contract,
   // responsibility map or readiness flag. The server resolves all of those itself.
 }).strict();
@@ -106,6 +111,7 @@ export async function registerLinqaSendRoutes(
   await registerLinqaSendModuleSurfaceRoutes(app, config, db);
   const authenticate = createPaymentAuthenticator(config, db);
   const paymentIntents = new PaymentIntentService(db);
+  const cvvRecollection = new CvvRecollectionService(db, resolveCardProvider(config));
   app.post("/v1/linqasend/payment-intents", withErrors(async (request) => {
     const p = await authenticate(request); requireScope(p, "linqasend:write");
     const body = z.object({ quoteId: z.string().uuid() }).strict().parse(request.body);
@@ -123,7 +129,7 @@ export async function registerLinqaSendRoutes(
     ? new ProviderTokenVaultService(db, linqasendKms, config.LINQASEND_TOKEN_KMS_KEY_ID)
     : undefined;
   const orchestrator = new TransferOrchestratorService(db, risk, ledger, providers, tokenVault);
-  const readiness = new LinqaSendReadinessService(db, config.LINQASEND_RELEASE_GIT_SHA && config.LINQASEND_ARTIFACT_SHA256 ? { gitSha: config.LINQASEND_RELEASE_GIT_SHA, artifactDigest: config.LINQASEND_ARTIFACT_SHA256 } : undefined, { realMoneyEnabled: config.LINQASEND_REAL_MONEY_ENABLED === true, mode: config.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION", ...(config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID ? { limitedCorridorId: config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID } : {}) });
+  const readiness = new LinqaSendReadinessService(db, config.LINQASEND_RELEASE_GIT_SHA && config.LINQASEND_ARTIFACT_SHA256 ? { gitSha: config.LINQASEND_RELEASE_GIT_SHA, artifactDigest: config.LINQASEND_ARTIFACT_SHA256 } : undefined, { realMoneyEnabled: config.LINQASEND_REAL_MONEY_ENABLED === true, mode: config.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION", devSandbox: config.LINQASEND_DEV_SANDBOX === true && config.NODE_ENV === "development", ...(config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID ? { limitedCorridorId: config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID } : {}) });
   const securityV4 = new LinqaSendSecurityV4Service(db);
   const transactionSignatures = new TransactionSignatureService();
   const jurisdictionV2 = new JurisdictionV2Service(db);
@@ -317,7 +323,8 @@ export async function registerLinqaSendRoutes(
         recipientId: body.recipientId,
         corridor,
         paymentMethodId: body.paymentMethodId,
-        sendAmountMinor: BigInt(body.sendAmountMinor)
+        sendAmountMinor: BigInt(body.sendAmountMinor),
+        deliveryOption: body.deliveryOption
       });
     })
   );
@@ -347,7 +354,7 @@ export async function registerLinqaSendRoutes(
       );
       if (!recipientRow.rows[0]) return reply.code(404).send({ error: "recipient_not_found" });
       const recipient = recipientRow.rows[0];
-      const paymentMethodResult = await db.query(`SELECT provider,provider_payment_method_ref,verification_status FROM linqasend_payment_methods WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, [body.paymentMethodId,p.userId]);
+      const paymentMethodResult = await db.query(`SELECT provider,provider_payment_method_ref,verification_status,type FROM linqasend_payment_methods WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, [body.paymentMethodId,p.userId]);
       const paymentMethod = paymentMethodResult.rows[0];
       if (!paymentMethod || paymentMethod.verification_status !== "VERIFIED") return reply.code(409).send({ error: "verified_payment_method_required" });
       if (paymentMethod.provider !== quote.provider) return reply.code(409).send({ error: "payment_method_provider_mismatch" });
@@ -415,6 +422,17 @@ export async function registerLinqaSendRoutes(
         await securityV4.consumeAuthorization({ authorizationId: body.securityAuthorizationId, userId: p.userId, deviceId: p.deviceId, transferId: internalId, transactionHash: expectedHash });
       }
 
+      // Extra layer for card-funded payments: the sender must have typed the card's security code for THIS payment.
+      if ((CARD_FUNDING_TYPES as readonly string[]).includes(paymentMethod.type)) {
+        if (!body.cvvSessionId) return reply.code(409).send({ error: "cvv_required" });
+        try {
+          await cvvRecollection.consume({ userId: p.userId, paymentMethodId: body.paymentMethodId, cvvSessionId: body.cvvSessionId });
+        } catch (error) {
+          if (error instanceof CvvError) return reply.code(409).send({ error: error.code });
+          throw error;
+        }
+      }
+
       const result = await orchestrator.createTransfer({
         internalId,
         deferExecution: config.LINQASEND_REAL_MONEY_ENABLED === true,
@@ -427,6 +445,7 @@ export async function registerLinqaSendRoutes(
           id: quote.id,
           recipientId: quote.recipient_id,
           sendAmountMinor: String(quote.send_amount_minor),
+          senderFeeMinor: String(quote.sender_fee_minor ?? 0),
           sendCurrency: quote.send_currency,
           receiveAmountMinor: String(quote.receive_amount_minor),
           receiveCurrency: quote.receive_currency,

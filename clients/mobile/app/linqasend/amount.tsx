@@ -26,6 +26,8 @@ export default function LinqaSendAmount() {
   const [error, setError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState(0);
   const requestId = useRef(0);
+  // Standard delivery is free; same-day adds a fee (1.85%, minimum 0.30) that the server prices into the quote.
+  const [delivery, setDelivery] = useState<"standard" | "same_day">("standard");
 
   const [sourceCurrency, setSourceCurrency] = useState<string | null>(null);
   useEffect(() => {
@@ -47,7 +49,7 @@ export default function LinqaSendAmount() {
     setLoading(true);
     setError(null);
     try {
-      const next = await client.createQuote({ recipientId: p.recipientId, sourceCurrency, destinationCurrency: p.recipientCurrency, sendAmountMinor: sendMinor });
+      const next = await client.createQuote({ recipientId: p.recipientId, sourceCurrency, destinationCurrency: p.recipientCurrency, sendAmountMinor: sendMinor, deliveryOption: delivery });
       if (id !== requestId.current) return; // a newer request superseded this one
       setQuote(next);
       setRemaining(secondsLeft(next.expiresAt));
@@ -58,7 +60,7 @@ export default function LinqaSendAmount() {
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, [client, p.recipientId, p.recipientCurrency, sourceCurrency]);
+  }, [client, p.recipientId, p.recipientCurrency, sourceCurrency, delivery]);
 
   // A new amount: drop the old quote immediately (its receive amount no longer applies) and fetch after a pause.
   useEffect(() => {
@@ -176,13 +178,24 @@ export default function LinqaSendAmount() {
           </Pressable>
         </View>
 
+        <Text style={[s.feeLabel, { marginTop: 18 }]}>Delivery</Text>
+        <View style={s.deliveryRow}>
+          {([["standard", "Standard", "Free"], ["same_day", "Same-day", "1.85% (min 0.30)"]] as const).map(([value, title, note]) => (
+            <Pressable key={value} accessibilityRole="button" accessibilityState={{ selected: delivery === value }} onPress={() => setDelivery(value)} style={[s.deliveryChip, delivery === value && s.deliveryChipOn]}>
+              <Text style={[s.deliveryTitle, delivery === value && s.deliveryTitleOn]}>{title}</Text>
+              <Text style={s.deliveryNote}>{note}</Text>
+            </Pressable>
+          ))}
+        </View>
+
         <View style={s.feeRow}><Text style={s.feeLabel}>Transfer fee</Text><Text style={s.feeValue}>{quote ? fee(quote.senderFeeMinor, quote.sendCurrency) : "—"}</Text></View>
         <View style={s.feeRow}><Text style={s.feeLabel}>Recipient fee</Text><Text style={s.feeValue}>{quote ? fee(quote.recipientFeeMinor, quote.receiveCurrency) : "—"}</Text></View>
+        {quote && quote.deliveryOption === "same_day" ? <View style={s.feeRow}><Text style={s.feeLabel}>Total to be charged</Text><Text style={s.feeValue}>{fee(quote.totalChargedMinor, quote.sendCurrency)}</Text></View> : null}
 
         <View style={s.banner}>
           <View style={s.bannerIcon}><Ionicons name="shield-checkmark-outline" size={26} color={send.success} /></View>
           <View style={{ flex: 1 }}>
-            <Text style={s.bannerTitle}>No separate fees. See the rate first.</Text>
+            <Text style={s.bannerTitle}>{quote?.deliveryOption === "same_day" ? "Same-day fee shown above. See the rate first." : "No separate fees. See the rate first."}</Text>
             <Text style={s.bannerText}>The exchange rate includes our disclosed margin, and you see exactly what your recipient gets.</Text>
           </View>
         </View>
@@ -225,6 +238,12 @@ const s = StyleSheet.create({
   rateValue: { color: send.text, fontFamily: fonts.extrabold, fontSize: 18, marginTop: 6 },
   info: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   feeRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 16 },
+  deliveryRow: { flexDirection: "row", gap: 12, marginTop: 10 },
+  deliveryChip: { flex: 1, borderRadius: 14, borderWidth: 1.5, borderColor: send.border, paddingVertical: 12, paddingHorizontal: 14 },
+  deliveryChipOn: { borderColor: send.primary, backgroundColor: "#EEF0FF" },
+  deliveryTitle: { color: send.text, fontFamily: fonts.bold, fontSize: 15 },
+  deliveryTitleOn: { color: send.primary },
+  deliveryNote: { color: send.muted, fontFamily: fonts.regular, fontSize: 13, marginTop: 2 },
   feeLabel: { color: send.text, fontFamily: fonts.medium, fontSize: 15 },
   feeValue: { color: send.text, fontFamily: fonts.bold, fontSize: 15 },
   banner: { flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: "#ECFDF3", borderWidth: 1, borderColor: "#BFEBD0", borderRadius: 16, padding: 16, marginTop: 22 },

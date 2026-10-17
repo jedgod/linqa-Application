@@ -37,6 +37,9 @@ export type LinqaSendQuote = {
   marginBps: number;
   senderFeeMinor?: string;
   recipientFeeMinor?: string;
+  /** Delivery speed the quote was priced for; same-day adds the sender fee to the total charged. */
+  deliveryOption?: "standard" | "same_day";
+  totalChargedMinor?: string;
   provider: string;
   expiresAt: string;
 };
@@ -100,6 +103,8 @@ export type PreparedLinqaSendTransfer = {
   installationId: string;
   transactionHash: string;
   securityAuthorizationId: string;
+  /** One-time proof that the sender typed the card's security code for this payment (card-funded transfers). */
+  cvvSessionId?: string;
 };
 
 function jwtUserId(token: string): string {
@@ -122,6 +127,11 @@ function jwtUserId(token: string): string {
  */
 export class LinqaSendService {
   constructor(private readonly baseUrl: string, private readonly token: () => Promise<string>) {}
+
+  /** Opens a one-time security-code session for the card about to be used; the code itself goes straight to the provider. */
+  createCvvSession(paymentMethodId: string) {
+    return this.request<{ cvvSessionId: string; clientSecret: string; cvvEndpoint?: string; expiresAt: string }>(`/v1/linqasend/payment-methods/${paymentMethodId}/cvv-session`, { method: "POST", body: "{}" });
+  }
 
   resolvePaymentIntent(quoteId: string) {
     return this.request<{ idempotencyKey: string; transferId?: string; status?: string }>("/v1/linqasend/payment-intents", { method: "POST", body: JSON.stringify({ quoteId }) });
@@ -170,7 +180,18 @@ export class LinqaSendService {
     const storage = new AccountSecureStorage();
     const previousQuote = await storage.get(userId, "linqasend.pendingQuote");
     if (previousQuote && previousQuote !== quoteId) {
-      const previous = await this.resolvePaymentIntent(previousQuote);
+      let previous: { idempotencyKey: string; transferId?: string; status?: string };
+      try {
+        previous = await this.resolvePaymentIntent(previousQuote);
+      } catch (cause) {
+        // An expired quote with no transfer behind it can never become a payment: nothing is in flight, so release the guard.
+        if (cause instanceof LinqaSendApiError && cause.payload.error === "QUOTE_EXPIRED_OR_NOT_OWNED") {
+          await storage.remove(userId, "linqasend.pendingQuote");
+          await storage.remove(userId, "linqasend.pendingReview");
+          return { userId, storage };
+        }
+        throw cause;
+      }
       if (previous.transferId) {
         await storage.remove(userId, "linqasend.pendingQuote");
         throw new LinqaSendApiError("previous_payment_found", { transferId: previous.transferId }, 409);
@@ -189,7 +210,7 @@ export class LinqaSendService {
   }
 
   setupPaymentMethod(input: { type: "DEBIT_CARD" | "CREDIT_CARD" | "BANK_ACCOUNT" | "MOBILE_WALLET"; billingCountry?: string }) {
-    return this.request<{ setupToken: string; clientSecret: string; expiresAt: string }>("/v1/linqasend/payment-methods/setup", { method: "POST", body: JSON.stringify(input) });
+    return this.request<{ setupToken: string; clientSecret: string; expiresAt: string; cardEndpoint?: string }>("/v1/linqasend/payment-methods/setup", { method: "POST", body: JSON.stringify(input) });
   }
 
   confirmPaymentMethod(setupToken: string) {
@@ -232,6 +253,7 @@ export class LinqaSendService {
     destinationCurrency: string;
     paymentMethodId?: string;
     sendAmountMinor: string;
+    deliveryOption?: "standard" | "same_day";
   }) {
     return this.request<LinqaSendQuote>("/v1/linqasend/quotes", { method: "POST", body: JSON.stringify(input) });
   }
@@ -271,7 +293,7 @@ export class LinqaSendService {
     try {
     const result = await this.request<{ transferId: string; status: string; reason?: string; action?: string; idempotentReplay: boolean }>(
       "/v1/linqasend/transfers",
-      { method: "POST", headers: { "idempotency-key": prepared.idempotencyKey, "x-installation-id": prepared.installationId }, body: JSON.stringify({ ...prepared.input, transactionHash: prepared.transactionHash, securityAuthorizationId: prepared.securityAuthorizationId, acknowledgedWarningCodes }) }
+      { method: "POST", headers: { "idempotency-key": prepared.idempotencyKey, "x-installation-id": prepared.installationId }, body: JSON.stringify({ ...prepared.input, transactionHash: prepared.transactionHash, securityAuthorizationId: prepared.securityAuthorizationId, acknowledgedWarningCodes, ...(prepared.cvvSessionId ? { cvvSessionId: prepared.cvvSessionId } : {}) }) }
     );
     await storage.remove(userId, "linqasend.pendingQuote");
     return result;

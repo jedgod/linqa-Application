@@ -34,7 +34,7 @@ const currency = z.string().length(3).transform((v) => v.toUpperCase());
 
 export async function registerAdvancedLinqaSendRoutes(app: FastifyInstance, config: AppConfig, db: Database, biometrics?: BiometricAuthorizationService) {
   const auth = createPaymentAuthenticator(config, db);
-  const readiness = new LinqaSendReadinessService(db, config.LINQASEND_RELEASE_GIT_SHA && config.LINQASEND_ARTIFACT_SHA256 ? { gitSha: config.LINQASEND_RELEASE_GIT_SHA, artifactDigest: config.LINQASEND_ARTIFACT_SHA256 } : undefined, { realMoneyEnabled: config.LINQASEND_REAL_MONEY_ENABLED === true, mode: config.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION", ...(config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID ? { limitedCorridorId: config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID } : {}) });
+  const readiness = new LinqaSendReadinessService(db, config.LINQASEND_RELEASE_GIT_SHA && config.LINQASEND_ARTIFACT_SHA256 ? { gitSha: config.LINQASEND_RELEASE_GIT_SHA, artifactDigest: config.LINQASEND_ARTIFACT_SHA256 } : undefined, { realMoneyEnabled: config.LINQASEND_REAL_MONEY_ENABLED === true, mode: config.LINQASEND_MODE ?? "SANDBOX_CERTIFICATION", devSandbox: config.LINQASEND_DEV_SANDBOX === true && config.NODE_ENV === "development", ...(config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID ? { limitedCorridorId: config.LINQASEND_LIMITED_LAUNCH_CORRIDOR_ID } : {}) });
   const jurisdiction = new JurisdictionV2Service(db);
   const settlement = new SettlementTreasuryV5Service(db);
   const closure = new ProductionClosureV6Service(db);
@@ -63,7 +63,7 @@ export async function registerAdvancedLinqaSendRoutes(app: FastifyInstance, conf
     if (typeof installationId !== "string" || !z.string().uuid().safeParse(installationId).success) return reply.code(401).send({ error: "installation_binding_required" });
     const installation = await db.query(`SELECT 1 FROM installation_accounts_v2 WHERE installation_id=$1 AND user_id=$2 AND state='ACTIVE'`, [installationId, p.userId]);
     if (!installation.rows[0]) return reply.code(401).send({ error: "installation_account_binding_mismatch" });
-    await db.query(`INSERT INTO linqasend_trusted_payment_devices_v4(user_id,installation_id,device_id,device_binding_key_id,trust_state) VALUES($1,$2,$3,$3,'UNKNOWN') ON CONFLICT(user_id,installation_id,device_id) DO UPDATE SET last_seen_at=now()`, [p.userId, installationId, p.deviceId]);
+    await db.query(`INSERT INTO linqasend_trusted_payment_devices_v4(user_id,installation_id,device_id,device_binding_key_id,trust_state) VALUES($1,$2,$3,$4,'UNKNOWN') ON CONFLICT(user_id,installation_id,device_id) DO UPDATE SET last_seen_at=now()`, [p.userId, installationId, p.deviceId, p.deviceId]);
     const body = z.object({ quoteId: z.string().uuid(), paymentMethodId: z.string().uuid(), idempotencyKey: z.string().min(16).max(160) }).parse(request.body);
     const quoteResult = await db.query(`SELECT q.*,r.country AS destination_country,r.preferred_currency,r.id AS recipient_id FROM linqasend_quotes q JOIN linqasend_recipients r ON r.id=q.recipient_id WHERE q.id=$1 AND q.user_id=$2 AND q.status='ACTIVE' AND q.expires_at>now()`, [body.quoteId, p.userId]);
     const quote = quoteResult.rows[0];
