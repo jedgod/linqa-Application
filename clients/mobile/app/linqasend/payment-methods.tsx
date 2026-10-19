@@ -48,7 +48,7 @@ export default function LinqaSendPaymentMethods() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [showOther, setShowOther] = useState(false);
-  const [otherType, setOtherType] = useState<"BANK_ACCOUNT" | "MOBILE_WALLET">("BANK_ACCOUNT");
+  const [otherType, setOtherType] = useState<"BANK_ACCOUNT" | "MOBILE_WALLET">("MOBILE_WALLET");
   const [reference, setReference] = useState("");
   const [last4, setLast4] = useState("");
 
@@ -161,14 +161,15 @@ export default function LinqaSendPaymentMethods() {
 
         {others.length > 0 ? <><Text style={[s.section, { marginTop: 22 }]}>Bank accounts & wallets</Text>{others.map(renderCard)}</> : null}
 
+        <Pressable accessibilityRole='button' style={s.add} onPress={()=>router.push('/linqasend/bank-link')}><Text style={s.addText}>Link bank or verify debit card for wallet</Text></Pressable>
         <Pressable accessibilityRole="button" accessibilityState={{ expanded: showOther }} style={s.otherToggle} onPress={() => setShowOther((v) => !v)}>
-          <Text style={s.otherToggleText}>Add a bank account or wallet</Text>
+          <Text style={s.otherToggleText}>Add an external mobile wallet</Text>
           <Ionicons name={showOther ? "chevron-up" : "chevron-down"} size={18} color={send.primary} />
         </Pressable>
         {showOther ? (
           <View style={s.otherForm}>
             <View style={s.segment}>
-              {([["BANK_ACCOUNT", "Bank account"], ["MOBILE_WALLET", "Mobile wallet"]] as const).map(([key, label]) => (
+              {([["MOBILE_WALLET", "Mobile wallet"]] as const).map(([key, label]) => (
                 <Pressable key={key} accessibilityRole="radio" accessibilityState={{ checked: otherType === key }} style={[s.segmentItem, otherType === key && s.segmentOn]} onPress={() => setOtherType(key)}>
                   <Text style={[s.segmentText, otherType === key && { color: "#FFFFFF" }]}>{label}</Text>
                 </Pressable>

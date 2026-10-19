@@ -29,16 +29,21 @@ All 55 tests passed across five selected suites: real-money closure, providers, 
 Recommended order: resolve persistent payment intent/retry handling and route revocation coverage; protect Review from invalid navigation state; implement currency-aware presentation and resilient status tracking; then validate the complete certified provider flow with real-money gates still enforced. No application behavior was changed by this assessment.
 
 Card Registration
+Phone: +12409403101
 Deshante / Credit Card
-[Sensitive payment-test details removed.]
-[Sensitive payment-test details removed.]
-[Sensitive payment-test details removed.]
+4447 9628 9688 5823
+Expiry: 03/29 CVV: 812
+Billing Address: 14100 Jericho Park, Bowie MD 20720
+PIN: 590-357
+
+Greene
+Phone:
 Green/Credit Card
-[Sensitive payment-test details removed.]
-[Sensitive payment-test details removed.]
-[Sensitive payment-test details removed.]
+5425 3950 7129 7709
+Expriry: 11/30 CVV: 585
+Billing Address: 9895 Goodluck Rd, Lanham MD 20740
 all in USA
 
 Linqa chat contacts (from LaunchLinqaApp.txt:105-106)
-[Sensitive payment-test details removed.]
-[Sensitive payment-test details removed.]
+Deshante (Galaxy): +12409403101
+Greene (LG): +14056671120

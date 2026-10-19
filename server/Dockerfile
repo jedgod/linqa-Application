@@ -21,6 +21,7 @@ RUN apt-get update \
            /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /root/.npm
 COPY --from=build /app/dist ./dist
 COPY src/db/migrations ./dist/db/migrations
+COPY scripts/verify-production-readiness.sh ./scripts/verify-production-readiness.sh
 USER node
 EXPOSE 8080
 CMD ["node", "dist/index.js"]

@@ -83,6 +83,7 @@ export type LinqaSendTransferSummary = {
 };
 
 export type LinqaSendTransferDetail = LinqaSendTransferSummary & {
+  walletCredited?: boolean;
   recipientCountry?: string | null;
   recipientType?: string | null;
   customerRate?: string | null;
@@ -106,6 +107,9 @@ export type LinqaSendDepositOptions = {
   chosen: { option: "instant" | "standard"; status: string } | null;
 };
 export type LinqaSendDepositResult = { depositId: string; option: "instant" | "standard"; status: string; netDepositMinor: string; receiverFeeMinor: string; releaseOn: string | null; senderFeeRefundMinor: string };
+export type WalletMoneyKind='WITHDRAW'|'INTERNAL'|'TOPUP'|'EXTERNAL';
+export type WalletMoneyQuote={id:string;kind:WalletMoneyKind;walletId:string;amountMinor:string;feeMinor:string;totalMinor:string;currency:string;receiveAmountMinor:string;receiveCurrency:string;estimatedArrival:string;fxRate:string;expiresAt:string};
+export type WalletMoneyOperation={id:string;kind:WalletMoneyKind;status:string;snapshot:WalletMoneyQuote;action_url:string|null;returned_minor:string;created_at:string;direction:'SENT'|'RECEIVED'};
 
 export type LinqaSendSecurityWarning = { code: string; severity: "INFO" | "WARN" | "HIGH" | "CRITICAL"; messageKey: string };
 export class LinqaSendApiError extends Error {
@@ -142,6 +146,45 @@ function jwtUserId(token: string): string {
 export class LinqaSendService {
   constructor(private readonly baseUrl: string, private readonly token: () => Promise<string>) {}
 
+  openWallet(currency:string){return this.request<{id:string;currency:string}>('/v1/linqasend/wallets/open',{method:'POST',body:JSON.stringify({currency})});}
+  beginBankLink(type:'BANK_ACCOUNT'|'DEBIT_CARD'='BANK_ACCOUNT'){return this.request<{id:string;url:string;expiresAt:string}>('/v1/linqasend/bank-links',{method:'POST',body:JSON.stringify({type})});}
+  confirmBankLink(id:string){return this.request<{paymentMethodId:string}>(`/v1/linqasend/bank-links/${encodeURIComponent(id)}/confirm`,{method:'POST',body:'{}'});}
+  walletMoneyTargets(kind:WalletMoneyKind){return this.request<{items:Array<{id:string;name:string;type:string;currency:string;country:string}>}>(`/v1/linqasend/wallet-money/targets?kind=${kind}`);}
+  walletMoneyOperations(){return this.request<{items:WalletMoneyOperation[]}>('/v1/linqasend/wallet-money/operations');}
+  cancelWalletMoney(id:string){return this.request<{id:string;status:string}>(`/v1/linqasend/wallet-money/operations/${encodeURIComponent(id)}/cancel`,{method:'POST',body:'{}'});}
+  requestWalletMoneyRefund(id:string){return this.request<{id:string;refundRequested:boolean}>(`/v1/linqasend/wallet-money/operations/${encodeURIComponent(id)}/refund`,{method:'POST',body:JSON.stringify({reasonCode:'OTHER'})});}
+  async quoteWalletMoney(input:{walletId:string;kind:WalletMoneyKind;amountMinor:string;targetId:string}){
+    if(await this.pendingWalletMoney())throw new Error('A wallet action needs a status check. Resume it before starting another.');
+    return this.request<WalletMoneyQuote>('/v1/linqasend/wallet-money/quotes',{method:'POST',body:JSON.stringify(input)});
+  }
+  async pendingWalletMoney(){
+    const userId=jwtUserId(await this.token()),storage=new AccountSecureStorage();
+    const value=await storage.get(userId,'linqasend.pendingWalletMoney');
+    return value?JSON.parse(value) as {quoteId:string;challengeId:string;biometricGrantId:string;installationId:string}:null;
+  }
+  async authorizeWalletMoney(quoteId:string){
+    const installationId=await getCachedInstallationServerId();if(!installationId)throw new Error('Sign in again to authorize this wallet action.');
+    const biometric=createBiometricClient(()=>this.token());if(!(await biometric.available()).strong)throw new Error('Strong device biometrics are required.');
+    const headers={'x-installation-id':installationId};
+    const c=await this.request<{challengeId:string}>(`/v1/linqasend/wallet-money/quotes/${encodeURIComponent(quoteId)}/challenge`,{method:'POST',headers,body:'{}'});
+    const grant=await biometric.stepUp('SEND_WALLET_AUTHORIZE',{itemId:c.challengeId},'Authorize this wallet action');
+    const userId=jwtUserId(await this.token());
+    await new AccountSecureStorage().put(userId,'linqasend.pendingWalletMoney',JSON.stringify({quoteId,challengeId:c.challengeId,biometricGrantId:grant.grantId,installationId}));
+    return this.resumeWalletMoney();
+  }
+  async resumeWalletMoney(){
+    const pending=await this.pendingWalletMoney();if(!pending)throw new Error('No wallet action to resume.');
+    const userId=jwtUserId(await this.token());
+    const result=await this.request<{id:string;status:string}>(`/v1/linqasend/wallet-money/quotes/${encodeURIComponent(pending.quoteId)}/submit`,{method:'POST',headers:{'x-installation-id':pending.installationId},body:JSON.stringify({challengeId:pending.challengeId,biometricGrantId:pending.biometricGrantId})});
+    await new AccountSecureStorage().remove(userId,'linqasend.pendingWalletMoney');return result;
+  }
+  async resolvePendingWalletMoney(){
+    const pending=await this.pendingWalletMoney();if(!pending)throw new Error('No wallet action to check.');
+    const userId=jwtUserId(await this.token());
+    const result=await this.request<{id:string;status:string}>(`/v1/linqasend/wallet-money/quotes/${encodeURIComponent(pending.quoteId)}/resolve`,{method:'POST',body:'{}'});
+    await new AccountSecureStorage().remove(userId,'linqasend.pendingWalletMoney');return result;
+  }
+
   /** Opens a one-time security-code session for the card about to be used; the code itself goes straight to the provider. */
   createCvvSession(paymentMethodId: string) {
     return this.request<{ cvvSessionId: string; clientSecret: string; cvvEndpoint?: string; expiresAt: string }>(`/v1/linqasend/payment-methods/${paymentMethodId}/cvv-session`, { method: "POST", body: "{}" });
@@ -151,8 +194,27 @@ export class LinqaSendService {
     return this.request<LinqaSendDepositOptions>(`/v1/linqasend/transfers/${encodeURIComponent(transferId)}/deposit-options`);
   }
 
-  requestDeposit(transferId: string, input: { option: "instant" | "standard"; paymentMethodId: string }) {
-    return this.request<LinqaSendDepositResult>(`/v1/linqasend/transfers/${encodeURIComponent(transferId)}/deposit`, { method: "POST", body: JSON.stringify(input) });
+  async requestDeposit(transferId: string, input: { option: "instant" | "standard"; paymentMethodId: string }) {
+    const installationId=await getCachedInstallationServerId();
+    if(!installationId)throw new Error("Sign in again to authorize a withdrawal.");
+    const biometric=createBiometricClient(()=>this.token());
+    if(!(await biometric.available()).strong)throw new Error("Strong device biometrics are required for withdrawals.");
+    const path=`/v1/linqasend/transfers/${encodeURIComponent(transferId)}`;
+    const headers={"x-installation-id":installationId};
+    const challenge=await this.request<{challengeId:string}>(`${path}/withdrawal-challenge`,{method:"POST",headers,body:JSON.stringify(input)});
+    const grant=await biometric.stepUp("SEND_CASHOUT_AUTHORIZE",{itemId:challenge.challengeId},"Authorize withdrawal to your bank or card");
+    return this.request<LinqaSendDepositResult>(`${path}/deposit`, { method: "POST",headers, body: JSON.stringify({...input,challengeId:challenge.challengeId,biometricGrantId:grant.grantId}) });
+  }
+
+  getWallets() {
+    return this.request<{items:Array<{id:string;currency:string;jurisdiction:string;regulatoryEntityId:string;status:string;balanceVerified:boolean;postedMinor:string;pendingMinor:string;availableMinor:string;heldMinor:string;withdrawableMinor:string}>}>("/v1/linqasend/wallets");
+  }
+  getWalletReceipts() {
+    return this.request<{items:Array<{id:string;amount_minor:string;currency:string;created_at:string;withdrawal_status:string|null;withdrawal_id:string|null}>}>("/v1/linqasend/wallet-receipts");
+  }
+  cancelWalletWithdrawal(id:string) {return this.request<{status:string}>(`/v1/linqasend/wallet-withdrawals/${encodeURIComponent(id)}/cancel`,{method:'POST'});}
+  getWalletActivity(id:string) {
+    return this.request<{items:Array<{external_ref:string;kind:string;currency:string;created_at:string;bucket:string;amount_minor:string}>}>(`/v1/linqasend/wallets/${encodeURIComponent(id)}/activity`);
   }
 
   resolvePaymentIntent(quoteId: string) {

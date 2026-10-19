@@ -1,102 +1,51 @@
-import { describe, expect, it } from "vitest";
-import { DepositError, DepositService } from "../services/linqasend/deposit.service.js";
+import { describe,expect,it,vi } from "vitest";
+import { DepositService,assertWithdrawalSnapshot } from "../services/linqasend/deposit.service.js";
+import { WalletLedgerService } from "../services/linqasend/wallet-ledger.service.js";
+import type { PayoutProvider } from "../integrations/linqasend/provider.contracts.js";
+import type { Database } from "../db/pool.js";
 
-type Call = { sql: string; params: any[] };
-
-/** Scripted database: answers by the statement's shape and records every call. */
-function fakeDb(opts: { transfer?: any | null; destination?: any | null; insertWins?: boolean; existing?: any | null; claimed?: any[] }) {
-  const calls: Call[] = [];
-  const transfer = opts.transfer === undefined ? { id: "t-1", public_id: "T-PUBLIC", status: "COMPLETED", receive_amount_minor: "156090", receive_currency: "USD", sender_fee_minor: "0" } : opts.transfer;
-  const destination = opts.destination === undefined ? { provider_payment_method_ref: "vault:bank" } : opts.destination;
-  return {
-    calls,
-    async query(sql: string, params: any[] = []) {
-      calls.push({ sql, params });
-      if (sql.includes("FROM linqasend_transfers t") && sql.includes("JOIN linqasend_quotes")) return { rows: transfer ? [transfer] : [] };
-      if (sql.includes("FROM linqasend_payment_methods")) return { rows: destination ? [destination] : [] };
-      if (sql.includes("INSERT INTO linqasend_deposit_requests")) return { rows: opts.insertWins === false ? [] : [{ id: params[0] }] };
-      if (sql.includes("SELECT option,status")) return { rows: opts.existing ? [opts.existing] : [] };
-      if (sql.includes("SET status='PROCESSING'")) return { rows: opts.claimed ?? [] };
-      return { rows: [] };
-    }
-  } as any;
+function harness(row:any) {
+  const query=vi.fn(async(sql:string)=>{
+    if(sql.includes("SELECT d.*,t.public_id"))return {rows:row?[row]:[]};
+    if(sql.includes("submission_started_at=now()"))return {rows:[{id:row.id}]};
+    if(sql.includes("WHERE id=$1 AND lease_token=$2 FOR UPDATE"))return {rows:[row]};
+    return {rows:[]};
+  });
+  const release=vi.fn();return {query,db:{query,connect:async()=>({query,release})} as unknown as Database};
 }
-
-function payoutStub(result: "COMPLETED" | "PROCESSING" | "FAILED" | "THROW" = "COMPLETED") {
-  const created: any[] = [];
-  return {
-    created,
-    provider: {
-      name: "stub",
-      async createPayout(input: any) { created.push(input); if (result === "THROW") throw new Error("boom"); return { status: result, providerRef: "po_1" }; },
-      async lookup() { return null; }
-    }
-  };
-}
-
-const NOW = new Date("2026-10-14T16:00:00Z");
-const withSenderFee = { id: "t-1", public_id: "T-PUBLIC", status: "COMPLETED", receive_amount_minor: "156090", receive_currency: "USD", sender_fee_minor: "2888" };
-
-describe("deposit service", () => {
-  it("shows who pays for instant and when the free option releases", async () => {
-    const service = new DepositService(fakeDb({ transfer: withSenderFee }), payoutStub().provider);
-    const result = await service.options("u-receiver", "T-PUBLIC", NOW);
-    expect(result.senderPaidInstantFee).toBe(true);
-    expect(result.options.instant).toMatchObject({ receiverFeeMinor: 0n, feePaidBy: "sender" });
-    expect(result.options.standard).toMatchObject({ availableOn: "2026-10-19", senderFeeRefundMinor: 2888n });
-    expect(result.chosen).toBeNull();
+function provider():PayoutProvider {return {name:"test",createPayout:vi.fn(async()=>({status:"PROCESSING" as const,providerRef:"p"})),lookup:vi.fn(async()=>null),lookupByIdempotencyKey:vi.fn(async()=>null)};}
+const operation={id:"d",public_id:"T",wallet_id:"w",receiver_user_id:"u",destination_ref:"vault:ref",net_deposit_minor:"100",currency:"USD",status:"SCHEDULED",submission_started_at:null};
+const policy={authorizePayout:async()=>{},resolveDestination:async()=>"provider-token"};
+describe("receipt-backed withdrawal behavior",()=>{
+  it("rejects changed authorization details including payout destination and amount",()=>{
+    expect(()=>assertWithdrawalSnapshot({amount:"100",destination:"one"},{destination:"one",amount:"100"})).not.toThrow();
+    expect(()=>assertWithdrawalSnapshot({amount:"100"},{amount:"101"})).toThrow("withdrawal_details_changed");
+    expect(()=>assertWithdrawalSnapshot({destination:"one"},{destination:"two"})).toThrow("withdrawal_details_changed");
   });
-
-  it("instant when the sender skipped the fee: pays out the amount minus the receiver's fee", async () => {
-    const payout = payoutStub();
-    const service = new DepositService(fakeDb({}), payout.provider);
-    const out = await service.request({ userId: "u-receiver", publicId: "T-PUBLIC", option: "instant", paymentMethodId: "pm-bank", now: NOW });
-    expect(out).toMatchObject({ status: "COMPLETED", receiverFeeMinor: 2888n, netDepositMinor: 153202n });
-    expect(payout.created).toHaveLength(1);
-    expect(payout.created[0]).toMatchObject({ amountMinor: 153202n, currency: "USD", recipientProviderRef: "vault:bank" });
-    expect(payout.created[0].idempotencyKey).toMatch(/^deposit:/);
+  it("does not use a completed transfer as proof that money is in custody",async()=>{
+    const query=vi.fn(async()=>({rows:[{status:"COMPLETED",wallet_id:null}]}));
+    await expect(new DepositService({query} as unknown as Database,provider()).options("user","T")).rejects.toThrow("wallet_receipt_not_verified");
   });
-
-  it("instant when the sender paid: the receiver pays nothing and gets the full amount", async () => {
-    const payout = payoutStub();
-    const out = await new DepositService(fakeDb({ transfer: withSenderFee }), payout.provider).request({ userId: "u", publicId: "T-PUBLIC", option: "instant", paymentMethodId: "pm", now: NOW });
-    expect(out).toMatchObject({ receiverFeeMinor: 0n, netDepositMinor: 156090n });
-    expect(payout.created[0].amountMinor).toBe(156090n);
+  it("dispatches only through a resolved provider token and durable identity",async()=>{
+    const h=harness(operation),p=provider();await new DepositService(h.db,p,policy).releaseDue();
+    expect(p.createPayout).toHaveBeenCalledWith(expect.objectContaining({recipientProviderRef:"provider-token",idempotencyKey:"deposit:d",amountMinor:100n}));
   });
-
-  it("standard schedules the deposit for 3 business days, pays nothing now, and refunds a sender who paid", async () => {
-    const payout = payoutStub();
-    const db = fakeDb({ transfer: withSenderFee });
-    const out = await new DepositService(db, payout.provider).request({ userId: "u", publicId: "T-PUBLIC", option: "standard", paymentMethodId: "pm", now: NOW });
-    expect(out).toMatchObject({ status: "SCHEDULED", releaseOn: "2026-10-19", netDepositMinor: 156090n, senderFeeRefundMinor: 2888n });
-    expect(payout.created).toHaveLength(0);
-    const insert = db.calls.find((c: Call) => c.sql.includes("INSERT INTO linqasend_deposit_requests"))!;
-    expect(insert.params).toContain("PENDING_REFUND");
-    expect(insert.params).toContain("SCHEDULED");
+  it("retains an ambiguous payout as reconciling and never releases the hold",async()=>{
+    const h=harness(operation),p=provider();vi.mocked(p.createPayout).mockRejectedValue(new Error("timeout"));
+    await new DepositService(h.db,p,policy).releaseDue();
+    expect(h.query.mock.calls.some(c=>c[0].includes("status=$3"))).toBe(true);
+    expect(h.query.mock.calls.some(c=>c[0].includes("wallet_postings"))).toBe(false);
   });
-
-  it("refuses non-receivers, unfinished transfers, bad destinations, repeat choices and tiny instant amounts", async () => {
-    const stub = payoutStub().provider;
-    await expect(new DepositService(fakeDb({ transfer: null }), stub).request({ userId: "u", publicId: "x", option: "standard", paymentMethodId: "pm" })).rejects.toMatchObject({ code: "transfer_not_found" });
-    await expect(new DepositService(fakeDb({ transfer: { ...withSenderFee, status: "DECLINED" } }), stub).request({ userId: "u", publicId: "x", option: "standard", paymentMethodId: "pm" })).rejects.toMatchObject({ code: "transfer_not_completed" });
-    await expect(new DepositService(fakeDb({ destination: null }), stub).request({ userId: "u", publicId: "x", option: "standard", paymentMethodId: "pm" })).rejects.toMatchObject({ code: "deposit_destination_required" });
-    await expect(new DepositService(fakeDb({ insertWins: false }), stub).request({ userId: "u", publicId: "x", option: "standard", paymentMethodId: "pm" })).rejects.toMatchObject({ code: "deposit_already_chosen" });
-    await expect(new DepositService(fakeDb({ transfer: { ...withSenderFee, receive_amount_minor: "30", sender_fee_minor: "0" } }), stub).request({ userId: "u", publicId: "x", option: "instant", paymentMethodId: "pm" })).rejects.toMatchObject({ code: "instant_deposit_unavailable" });
+  it("looks up an expired dispatched operation without submitting another payout",async()=>{
+    const h=harness({...operation,status:"PROCESSING",submission_started_at:new Date()}),p=provider();
+    await new DepositService(h.db,p,policy).releaseDue();
+    expect(p.createPayout).not.toHaveBeenCalled();expect(p.lookupByIdempotencyKey).toHaveBeenCalledWith("deposit:d");
   });
-
-  it("marks the deposit failed when the payout fails or errors", async () => {
-    for (const result of ["FAILED", "THROW"] as const) {
-      const db = fakeDb({});
-      await expect(new DepositService(db, payoutStub(result).provider).request({ userId: "u", publicId: "x", option: "instant", paymentMethodId: "pm", now: NOW })).rejects.toBeInstanceOf(DepositError);
-      expect(db.calls.some((c: Call) => c.sql.includes("UPDATE linqasend_deposit_requests") && JSON.stringify(c.params).includes("FAILED") || c.sql.includes("status='FAILED'"))).toBe(true);
-    }
+  it("fails closed without an explicit withdrawal provider policy",async()=>{
+    const h=harness(operation),p=provider();await new DepositService(h.db,p).releaseDue();expect(p.createPayout).not.toHaveBeenCalled();
   });
-
-  it("releases due scheduled deposits through the payout provider", async () => {
-    const payout = payoutStub();
-    const db = fakeDb({ claimed: [{ id: "d-1", public_id: "T-1", provider_payment_method_ref: "vault:bank", net_deposit_minor: "156090", currency: "USD" }] });
-    expect(await new DepositService(db, payout.provider).releaseDue(new Date("2026-10-19T16:00:00Z"))).toBe(1);
-    expect(payout.created[0]).toMatchObject({ amountMinor: 156090n, idempotencyKey: "deposit:d-1" });
-    expect(db.calls[0].params[0]).toBe("2026-10-19");
+  it("rejects an unbalanced journal before attempting database writes",async()=>{
+    const query=vi.fn();await expect(new WalletLedgerService({} as Database).post({query} as any,{ref:"x",kind:"RECEIPT",currency:"USD",legs:[{bucket:"AVAILABLE",amount:2n},{bucket:"CUSTODY_CLEARING",amount:-1n}]})).rejects.toThrow("UNBALANCED_WALLET_JOURNAL");
+    expect(query).not.toHaveBeenCalled();
   });
 });

@@ -1,23 +1,33 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Database } from "../../db/pool.js";
+import { WalletLedgerService, type WalletCreditEvidence } from "./wallet-ledger.service.js";
 
 /** Posts the completion journal, status, outbox, request linkage and audit atomically. */
 export class AtomicCompletionService {
   constructor(private readonly db: Database) {}
 
-  async complete(input: { transferId: string; providerReference?: string; source: "EXECUTION_WORKER" | "WEBHOOK_WORKER" }): Promise<{ completed: boolean; journalId: string }> {
+  async complete(input: { transferId: string; providerReference?: string; walletCredit?: WalletCreditEvidence; source: "EXECUTION_WORKER" | "WEBHOOK_WORKER" | "RECONCILIATION_WORKER" }): Promise<{ completed: boolean; journalId: string }> {
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
       const locked = await client.query(`SELECT * FROM linqasend_transfers WHERE id=$1 FOR UPDATE`, [input.transferId]);
       const transfer = locked.rows[0];
       if (!transfer) throw new Error("TRANSFER_NOT_FOUND");
+      // Credit only explicit provider-confirmed custody. Never infer money from a UI label or legacy balance.
+      if (input.walletCredit) {
+        await new WalletLedgerService(this.db).creditReceipt(client,transfer,input.walletCredit,input.providerReference ?? transfer.provider_payout_ref ?? "");
+        await client.query(`UPDATE linqasend_transfers SET wallet_credit_evidence=$2 WHERE id=$1`,[input.transferId,JSON.stringify(input.walletCredit)]);
+      }
       if (transfer.status === "COMPLETED") {
         if (!transfer.completion_journal_id) throw new Error("COMPLETED_TRANSFER_MISSING_JOURNAL");
         await client.query("COMMIT");
         return { completed: false, journalId: transfer.completion_journal_id as string };
       }
-      if (!['PAYOUT_SUBMITTED','PAYOUT_PROCESSING'].includes(transfer.status)) throw new Error(`COMPLETION_FROM_INVALID_STATE:${transfer.status}`);
+      if(transfer.status==='PROCESSING'&&input.source==='RECONCILIATION_WORKER'){
+        const proof=await client.query(`SELECT id FROM linqasend_provider_operations WHERE transfer_id=$1 AND provider_id=$2 AND operation_type='PAYOUT'
+          AND state='SUCCEEDED' AND provider_reference=$3 AND response_metadata->>'status'='COMPLETED' FOR SHARE`,[transfer.id,transfer.provider,input.providerReference]);
+        if(!proof.rows[0])throw new Error('COMPLETED_PROVIDER_LOOKUP_EVIDENCE_REQUIRED');
+      }else if (!['PAYOUT_SUBMITTED','PAYOUT_PROCESSING'].includes(transfer.status)) throw new Error(`COMPLETION_FROM_INVALID_STATE:${transfer.status}`);
 
       const externalRef = `transfer:${input.transferId}:completion`;
       const existing = await client.query(`SELECT id FROM linqasend_ledger_transactions WHERE external_ref=$1`, [externalRef]);

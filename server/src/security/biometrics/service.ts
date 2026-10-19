@@ -104,6 +104,21 @@ export class BiometricAuthorizationService {
   }
 
   async resource(client: PoolClient, p: BiometricPrincipal, purpose: BiometricPurpose, reference: { paymentChallengeId?: string; itemId?: string }, consumedPayment = false) {
+    if(purpose === 'SEND_WALLET_AUTHORIZE') {
+      if(!reference.itemId)throw new Error('BIOMETRIC_WALLET_CHALLENGE_INVALID');
+      const row=(await client.query(`SELECT c.snapshot FROM linqasend_wallet_money_challenges c JOIN linqasend_wallet_money_quotes q ON q.id=c.quote_id
+        WHERE c.id=$1 AND c.user_id=$2 AND c.device_id=$3 AND c.session_id=$4 AND c.installation_id=$5
+        AND c.consumed_at IS NULL AND c.expires_at>now() AND q.expires_at>now() FOR UPDATE OF c`,[reference.itemId,p.userId,p.deviceId,p.sessionId,p.installationId])).rows[0];
+      if(!row)throw new Error('BIOMETRIC_WALLET_CHALLENGE_INVALID');
+      return row.snapshot;
+    }
+    if(purpose === "SEND_CASHOUT_AUTHORIZE") {
+      if(!reference.itemId)throw new Error("BIOMETRIC_WITHDRAWAL_CHALLENGE_INVALID");
+      const row=(await client.query(`SELECT snapshot FROM linqasend_withdrawal_challenges WHERE id=$1 AND user_id=$2 AND device_id=$3 AND session_id=$4
+        AND installation_id=$5 AND consumed_at IS NULL AND expires_at>now() FOR UPDATE`,[reference.itemId,p.userId,p.deviceId,p.sessionId,p.installationId])).rows[0];
+      if(!row)throw new Error("BIOMETRIC_WITHDRAWAL_CHALLENGE_INVALID");
+      return row.snapshot;
+    }
     if (purpose === "VAULT_UNLOCK") return { userId: p.userId, action: "UNLOCK_PRIVATE_VAULT" };
     if (purpose === "VAULT_PRIVATE_OPEN") {
       const item = (await client.query(`SELECT id,version,item_type FROM vault_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR SHARE`, [reference.itemId,p.userId])).rows[0];

@@ -26,6 +26,9 @@ describe("LinqaSend full module surface", () => {
       ["GET","/v1/linqasend/receive-profile"], ["POST","/v1/linqasend/requests"], ["GET","/v1/linqasend/requests"],
       ["POST","/v1/linqasend/requests/:id/pay"], ["POST","/v1/linqasend/requests/:id/decline"], ["GET","/v1/linqasend/limits"],
       ["GET","/v1/linqasend/settings"], ["PATCH","/v1/linqasend/settings"], ["POST","/v1/linqasend/transfers/:id/cancel"], ["POST","/v1/linqasend/transfers/:id/refund"]
+      ,["POST","/v1/linqasend/wallets/open"],["POST","/v1/linqasend/bank-links"],["POST","/v1/linqasend/bank-links/:id/confirm"],
+      ["POST","/v1/linqasend/wallet-money/quotes"],["GET","/v1/linqasend/wallet-money/targets"],["GET","/v1/linqasend/wallet-money/operations"],
+      ["POST","/v1/linqasend/wallet-money/quotes/:id/challenge"],["POST","/v1/linqasend/wallet-money/quotes/:id/submit"],["POST","/v1/linqasend/wallet-money/operations/:id/cancel"],["POST","/v1/linqasend/wallet-money/operations/:id/refund"]
     ];
     for (const [method,url] of routes) expect(app.hasRoute({ method, url })).toBe(true);
   });
@@ -36,5 +39,11 @@ describe("LinqaSend full module surface", () => {
     expect(response.statusCode).toBeGreaterThanOrEqual(400);
     expect(response.statusCode).toBeLessThan(500);
     expect(response.json()).not.toHaveProperty("available");
+  });
+  it('rejects unauthenticated wallet writes without creating operations or bank links',async()=>{
+    app=await buildApp(config,database);await app.ready();
+    for(const url of ['/v1/linqasend/wallets/open','/v1/linqasend/bank-links','/v1/linqasend/wallet-money/quotes','/v1/linqasend/wallet-money/quotes/00000000-0000-4000-8000-000000000001/submit']){
+      const r=await app.inject({method:'POST',url,payload:{}});expect(r.statusCode).toBeGreaterThanOrEqual(400);expect(r.statusCode).toBeLessThan(500);expect(r.json()).toHaveProperty('error');
+    }
   });
 });

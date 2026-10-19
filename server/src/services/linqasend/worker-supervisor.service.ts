@@ -4,23 +4,49 @@ import { reconcileInFlightTransfers } from "../../integrations/linqasend/reconci
 import type { TransferOrchestratorService } from "./transfer-orchestrator.service.js";
 import { LinqaSendExecutionQueue } from "./execution-queue.service.js";
 import { WebhookInboxService } from "./webhook-inbox.service.js";
+import type { DepositService } from "./deposit.service.js";
+import { WalletLedgerService } from "./wallet-ledger.service.js";
+import { ProviderCustodyService } from './provider-custody.service.js';
+import { ProviderPayoutReconciliationService } from './provider-payout-reconciliation.service.js';
+import type { WalletMoneyService } from './wallet-money.service.js';
+import type { SenderFeeRefundService } from './sender-fee-refund.service.js';
 
-export const LINQASEND_WORKERS = ["execution","webhook","notifications","reconciliation","break-escalation","suspense-aging","liquidity","certification-expiry","stuck-transfer","automatic-pause"] as const;
+export const LINQASEND_WORKERS = ["execution","webhook","notifications","reconciliation","break-escalation","suspense-aging","liquidity","certification-expiry","stuck-transfer","automatic-pause","wallet-custody","wallet-withdrawals","wallet-money","wallet-fee-refunds"] as const;
 export type LinqaSendWorkerName = typeof LINQASEND_WORKERS[number];
 
 /** Supervised one-shot jobs; deployment calls each repeatedly and readiness checks heartbeats. */
 export class LinqaSendWorkerSupervisor {
   private readonly queue: LinqaSendExecutionQueue;
   private readonly inbox: WebhookInboxService;
-  constructor(private readonly db:Database,private readonly orchestrator:TransferOrchestratorService,private readonly providers:LinqaSendProviders,leaseSeconds=60){this.queue=new LinqaSendExecutionQueue(db,leaseSeconds);this.inbox=new WebhookInboxService(db);}
+  constructor(private readonly db:Database,private readonly orchestrator:TransferOrchestratorService,private readonly providers:LinqaSendProviders,leaseSeconds=60,private readonly deposits?:DepositService,private readonly money?:WalletMoneyService,private readonly feeRefunds?:SenderFeeRefundService){this.queue=new LinqaSendExecutionQueue(db,leaseSeconds);this.inbox=new WebhookInboxService(db);}
   async runOnce(name:LinqaSendWorkerName,instanceId:string):Promise<void>{
+    if(name==="wallet-withdrawals"&&!this.deposits)throw new Error("WALLET_WITHDRAWAL_WORKER_NOT_CONFIGURED");
+    if(name==='wallet-money'&&!this.money)throw new Error('WALLET_MONEY_WORKER_NOT_CONFIGURED');
+    if(name==='wallet-fee-refunds'&&!this.feeRefunds)throw new Error('WALLET_FEE_REFUND_WORKER_NOT_CONFIGURED');
     await this.queue.heartbeat(name,instanceId);
-    if(name==="execution"){
+    if(name==='wallet-fee-refunds'){
+      await this.feeRefunds!.runOnce();
+      const unresolved=await this.db.query(`SELECT id FROM linqasend_deposit_requests WHERE sender_fee_refund_status='REFUND_REVIEW' OR (sender_fee_refund_status='PENDING_REFUND' AND status='COMPLETED' AND updated_at<now()-interval '30 minutes') LIMIT 100`);
+      for(const row of unresolved.rows)await this.alert('HIGH','SENDER_FEE_REFUND_UNRESOLVED','WITHDRAWAL',row.id,{});
+    }else if(name==='wallet-money'){
+      await this.money!.runOnce();
+      const unresolved=await this.db.query(`SELECT id FROM linqasend_wallet_money_operations WHERE status IN ('QUEUED','PROCESSING','RECONCILING','ACTION_REQUIRED','RETURN_REVIEW') AND created_at<now()-interval '30 minutes' LIMIT 100`);
+      for(const row of unresolved.rows)await this.alert('HIGH','WALLET_MONEY_UNRESOLVED','WALLET_OPERATION',row.id,{});
+    }else if(name==='wallet-custody'){
+      await new ProviderCustodyService(this.db,this.providers.custody).sweep();
+    }else if(name==="wallet-withdrawals"){
+      if(!this.deposits)throw new Error("WALLET_WITHDRAWAL_WORKER_NOT_CONFIGURED");
+      await this.deposits.releaseDue();
+      const stuck=await this.db.query(`SELECT id FROM linqasend_deposit_requests WHERE status IN ('PROCESSING','RECONCILING') AND created_at<now()-interval '30 minutes' LIMIT 100`);
+      for(const row of stuck.rows)await this.alert("HIGH","WALLET_WITHDRAWAL_UNRESOLVED","WITHDRAWAL",row.id,{});
+    }else if(name==="execution"){
       const claim=await this.queue.claim(instanceId); if(!claim)return;
       try{await this.queue.running(claim.id,instanceId);await this.orchestrator.runClaimedExecution(claim);await this.queue.succeeded(claim.id);}catch(error){await this.queue.failed(claim.id,error);throw error;}
     }else if(name==="webhook"){
       const item=await this.inbox.claim(instanceId);if(item)await this.inbox.process(item);
     }else if(name==="reconciliation"){
+      await new ProviderPayoutReconciliationService(this.db,this.providers).runOnce();
+      await new WalletLedgerService(this.db).reconcileProjections();
       const result=await reconcileInFlightTransfers(this.db,this.providers);await this.metric("reconciliation_mismatches","GLOBAL","*",Number((result as any).mismatchCount??(result as any).mismatches?.length??0));
     }else if(name==="notifications"){
       const r=await this.db.query(`SELECT count(*)::int AS count FROM linqasend_notification_outbox_v1 WHERE status='PENDING' AND available_at<now()-interval '5 minutes'`);if(Number(r.rows[0]?.count)>0)await this.alert("HIGH","NOTIFICATION_BACKLOG","GLOBAL","*",r.rows[0]);

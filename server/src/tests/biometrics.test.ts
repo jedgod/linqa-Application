@@ -121,7 +121,10 @@ describe("biometric v5 authorization",() => {
     await expect(f.bio.challenge(p,"SEND_TRANSFER_AUTHORIZE",{ paymentChallengeId: f.payment.id })).rejects.toThrow("BIOMETRIC_PAYMENT_SECURITY_DENIED");
   });
   it("rejects unconfigured purposes instead of accepting an arbitrary resource",async () => {
-    const f = fixture(); await expect(f.bio.challenge(p,"SEND_CASHOUT_AUTHORIZE",{})).rejects.toThrow("BIOMETRIC_PURPOSE_NOT_CONFIGURED");
+    const f = fixture(); await expect(f.bio.challenge(p,"SEND_CHANGE_SECURITY",{})).rejects.toThrow("BIOMETRIC_PURPOSE_NOT_CONFIGURED");
+  });
+  it("requires a server-owned withdrawal reference before issuing a cash-out challenge",async()=>{
+    const f=fixture();await expect(f.bio.challenge(p,"SEND_CASHOUT_AUTHORIZE",{})).rejects.toThrow("BIOMETRIC_WITHDRAWAL_CHALLENGE_INVALID");
   });
   it("keeps successful security evidence in a hash chain",async () => {
     const f = fixture(); await grant(f); const first = f.audit[0]!;

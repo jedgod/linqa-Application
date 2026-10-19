@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 
-export const purposes = ["VAULT_UNLOCK", "VAULT_PRIVATE_OPEN", "VAULT_EXPORT_SOCIAL", "VAULT_DELETE_PERMANENT", "VAULT_SHARE_EXTERNAL", "SEND_TRANSFER_AUTHORIZE", "SEND_CASHOUT_AUTHORIZE", "SEND_ADD_PAYMENT_METHOD", "SEND_CHANGE_SECURITY"] as const;
+export const purposes = ["VAULT_UNLOCK", "VAULT_PRIVATE_OPEN", "VAULT_EXPORT_SOCIAL", "VAULT_DELETE_PERMANENT", "VAULT_SHARE_EXTERNAL", "SEND_TRANSFER_AUTHORIZE", "SEND_CASHOUT_AUTHORIZE", "SEND_WALLET_AUTHORIZE", "SEND_ADD_PAYMENT_METHOD", "SEND_CHANGE_SECURITY"] as const;
 export type BiometricPurpose = typeof purposes[number];
 export type BiometricPrincipal = { userId: string; deviceId: string; sessionId: string; installationId: string };
 

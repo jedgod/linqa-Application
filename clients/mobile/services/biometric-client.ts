@@ -1,5 +1,5 @@
 import type { BiometricSigningModule } from "../modules/linqa-biometric";
-export type BiometricPurpose = "VAULT_UNLOCK" | "VAULT_PRIVATE_OPEN" | "SEND_TRANSFER_AUTHORIZE";
+export type BiometricPurpose = "VAULT_UNLOCK" | "VAULT_PRIVATE_OPEN" | "SEND_TRANSFER_AUTHORIZE" | "SEND_CASHOUT_AUTHORIZE" | "SEND_WALLET_AUTHORIZE";
 export type BiometricStatus = { enrolled: boolean; credentialId: string | null; keyAlias: string | null; attestation: string; productionAttestationRequired: boolean };
 type Context = { token: string; principal: { userId: string; deviceId: string; sessionId: string; installationId: string } };
 export type VaultUnlockSession = { token: string; expiresAt: string };

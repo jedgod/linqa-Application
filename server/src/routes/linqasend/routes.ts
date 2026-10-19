@@ -29,7 +29,8 @@ import { ProviderTokenVaultService } from "../../services/linqasend/provider-tok
 import type { BiometricAuthorizationService } from "../../security/biometrics/service.js";
 import { biometricPrincipal } from "../biometrics.js";
 import { CARD_FUNDING_TYPES, CvvError, CvvRecollectionService, resolveCardProvider } from "../../services/linqasend/cvv-recollection.service.js";
-import { DepositError, DepositService } from "../../services/linqasend/deposit.service.js";
+import { registerWalletRoutes } from "./wallet-routes.js";
+import { registerWalletMoneyRoutes } from './wallet-money-routes.js';
 
 function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) => Promise<T>) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
@@ -118,25 +119,8 @@ export async function registerLinqaSendRoutes(
     const body = z.object({ quoteId: z.string().uuid() }).strict().parse(request.body);
     return paymentIntents.resolve(p.userId, body.quoteId);
   }));
-  // Receiver side: money lands in the receiver's wallet, then they choose to deposit it to a bank/card instantly or after 3 business days.
-  const deposits = new DepositService(db, providers.payout);
-  const bigintSafe = <T>(value: T): unknown => JSON.parse(JSON.stringify(value, (_key, v) => (typeof v === "bigint" ? v.toString() : v)));
-  const depositStatus = (error: unknown) => error instanceof DepositError ? (error.code === "transfer_not_found" ? 404 : 409) : null;
-  app.get("/v1/linqasend/transfers/:id/deposit-options", withErrors(async (request, reply) => {
-    const p = await authenticate(request); requireScope(p, "linqasend:read");
-    const { id } = z.object({ id: z.string().min(1).max(64) }).parse(request.params);
-    try { return bigintSafe(await deposits.options(p.userId, id)); }
-    catch (error) { const status = depositStatus(error); if (status) return reply.code(status).send({ error: (error as DepositError).code }); throw error; }
-  }));
-  app.post("/v1/linqasend/transfers/:id/deposit", withErrors(async (request, reply) => {
-    const p = await authenticate(request); requireScope(p, "linqasend:write");
-    if (!p.deviceId || !p.sessionId) return reply.code(401).send({ error: "device_bound_fresh_session_required" });
-    const { id } = z.object({ id: z.string().min(1).max(64) }).parse(request.params);
-    const body = z.object({ option: z.enum(["instant", "standard"]), paymentMethodId: z.string().uuid() }).strict().parse(request.body);
-    try { return reply.code(201).send(bigintSafe(await deposits.request({ userId: p.userId, publicId: id, option: body.option, paymentMethodId: body.paymentMethodId }))); }
-    catch (error) { const status = depositStatus(error); if (status) return reply.code(status).send({ error: (error as DepositError).code }); throw error; }
-  }));
-
+  await registerWalletRoutes(app, config, db, providers.payout, biometrics);
+  await registerWalletMoneyRoutes(app, config, db, providers, biometrics);
   const fxPricing = new FxPricingService();
   const fxRates = new FxRateRepository(db);
   const quotes = new QuoteService(db, fxPricing, fxRates);
@@ -576,6 +560,7 @@ export async function registerLinqaSendRoutes(
         id: row.public_id,
         status: row.status,
         direction: received ? "RECEIVED" : "SENT",
+        walletCredited: received && Boolean(row.wallet_credit_evidence),
         sendAmountMinor: String(row.send_amount_minor),
         sendCurrency: row.send_currency,
         receiveAmountMinor: String(row.receive_amount_minor),

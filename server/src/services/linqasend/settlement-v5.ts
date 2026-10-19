@@ -20,7 +20,7 @@ export class SettlementTreasuryV5Service {
   async checkSafeguarding(currency: string): Promise<SafeguardingCheckResult> {
     const [assetResult, liabilityResult] = await Promise.all([
       this.db.query(`SELECT coalesce(sum(last_reported_balance_minor),0)::bigint AS total FROM linqasend_settlement_accounts_v5 WHERE account_type='SAFEGUARDING' AND currency=$1 AND active=true`, [currency.toUpperCase()]),
-      this.db.query(`SELECT coalesce(sum(CASE WHEN e.side='CREDIT' THEN e.amount_minor ELSE -e.amount_minor END),0)::bigint AS total FROM linqasend_ledger_entries e JOIN linqasend_ledger_accounts a ON a.id=e.account_id WHERE a.type='LIABILITY' AND e.currency=$1`, [currency.toUpperCase()])
+      this.db.query(`SELECT coalesce(sum(amount_minor),0)::bigint AS total FROM linqasend_customer_liabilities_v8 WHERE currency=$1`, [currency.toUpperCase()])
     ]);
     const safeguardingAssetMinor = toBigInt(assetResult.rows[0]?.total);
     const customerLiabilityMinor = toBigInt(liabilityResult.rows[0]?.total);
@@ -32,7 +32,7 @@ export class SettlementTreasuryV5Service {
     const c = currency.toUpperCase();
     const [accounts, liabilities, external, suspense] = await Promise.all([
       this.db.query(`SELECT account_type,coalesce(sum(last_reported_balance_minor),0)::bigint AS total FROM linqasend_settlement_accounts_v5 WHERE currency=$1 AND active=true GROUP BY account_type`, [c]),
-      this.db.query(`SELECT coalesce(sum(CASE WHEN e.side='CREDIT' THEN e.amount_minor ELSE -e.amount_minor END),0)::bigint AS total FROM linqasend_ledger_entries e JOIN linqasend_ledger_accounts a ON a.id=e.account_id WHERE a.type='LIABILITY' AND e.currency=$1`, [c]),
+      this.db.query(`SELECT coalesce(sum(amount_minor),0)::bigint AS total FROM linqasend_customer_liabilities_v8 WHERE currency=$1`, [c]),
       this.db.query(`SELECT coalesce(sum(CASE WHEN direction='RECEIVABLE' THEN amount_minor ELSE 0 END),0)::bigint AS receivable,coalesce(sum(CASE WHEN direction='PAYABLE' THEN amount_minor ELSE 0 END),0)::bigint AS payable FROM linqasend_external_settlement_records_v5 WHERE currency=$1`, [c]),
       this.db.query(`SELECT coalesce(sum(debit_minor),0)::bigint AS debit,coalesce(sum(credit_minor),0)::bigint AS credit FROM linqasend_suspense_items_v5 WHERE currency=$1 AND status='OPEN'`, [c])
     ]);
@@ -179,6 +179,12 @@ export class SettlementTreasuryV5Service {
   }
 
   async approveAndExecuteMoneyAdjustment(actionId: string, approvedBy: string): Promise<{ adjustmentId: string; ledgerExternalRef: string }> {
+    // The legacy refund path cannot debit an authoritative wallet or claw back an external withdrawal.
+    // Route these to operations until a provider-confirmed wallet refund workflow is available.
+    const walletReceipt=await this.db.query(`SELECT 1 FROM linqasend_privileged_money_actions_v4 a JOIN linqasend_transfers t ON t.id=a.transfer_id
+      JOIN linqasend_recipients r ON r.id=t.recipient_id WHERE a.id=$1 AND (r.recipient_type='LINQA_USER'
+      OR EXISTS(SELECT 1 FROM linqasend_wallet_journals j WHERE j.transfer_id=t.id AND j.kind='RECEIPT'))`,[actionId]);
+    if(walletReceipt.rows.length)throw new Error("WALLET_REFUND_REQUIRES_RECONCILED_CUSTODY_WORKFLOW");
     const action = await this.db.query(`UPDATE linqasend_privileged_money_actions_v4 SET approved_by=$2,status='APPROVED',approved_at=now() WHERE id=$1 AND status='REQUESTED' AND requested_by<>$2 RETURNING id,transfer_id,action_type`, [actionId, approvedBy]);
     if (!action.rows[0]) throw new Error("MONEY_ACTION_NOT_APPROVABLE_OR_SELF_APPROVAL");
     const adjustment = await this.db.query(`SELECT * FROM linqasend_money_adjustments_v5 WHERE action_id=$1 AND status='REQUESTED'`, [actionId]);

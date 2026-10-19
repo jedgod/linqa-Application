@@ -1,0 +1,262 @@
+LINQA SEND PAGE: ASSESSMENT AND RECOMMENDATIONS
+Assessment date: October 18, 2026
+Project: Linqa / clients/mobile
+
+EXISTING GATEWAY / MIGRATION UPDATE - OCTOBER 18, 2026
+
+WALLET MONEY-FLOW ASSESSMENT: Current code supports provider-confirmed Linqa receipt credits and full-receipt withdrawals to compatible owned verified bank/debit accounts. It does not implement direct bank/card wallet top-ups, assigned inbound bank deposit details, amount-based pooled/partial withdrawals, wallet-funded Linqa-to-Linqa Send, or wallet-funded external Send. Existing Send charges a separate verified payment method. Bank linking is not a money load. Standard withdrawal dates are worker release dates, not guaranteed bank arrival; sender-fee refund intent is recorded without an identified execution consumer. Full source assessment, recommendations and acceptance criteria: docs/linqasend-wallet-money-flows.md. No money moved; live configuration blockers remain.
+
+RUNTIME AUDIT FOLLOW-UP: Added scripts/verify-production-readiness.sh with its packaged server implementation. It checks exported configuration, readable and structurally valid custody manifest JSON, and the comprehensive wallet preflight without npm in the production image. It reports failure for missing settings and never claims cloud KMS access, replication, load capacity, or release approval from mere variable presence. The verified environment/status mapping is recorded in deploy/README-wallet.md; production is not yet verified for activation.
+
+PRODUCTION DEPLOYMENT BLUEPRINT: Added deploy/kubernetes-secret-env-injector.yaml and deploy/README-wallet.md with actual compiled worker entrypoint, required selector, protected gateway/KMS mappings, read-only custody manifest, full runtime-secret reference, workload-identity requirements and staged verification/registration steps. The template defaults to zero replicas with real money disabled. Kubernetes Secret references do not provision a vault/KMS integration or populate credentials. No production cluster was changed. Actual certified image, cluster secrets, KMS access and custody mappings remain deployment inputs.
+
+PARITY VALIDATION FOLLOW-UP: Added server command linqasend:wallet:verify-integration, adapting the supplied telemetry script to run TypeScript and the comprehensive read-only wallet preflight, emit local timing results, and fail when either check fails. No mobile telemetry dependency or database credentials are added to the app. The script verifies configuration; it cannot supply the missing gateway token, actual KMS key/region, or approved custody manifest. Deployment values remain required.
+
+FOLLOW-UP INGESTION CODE: Adapted the supplied protected-manifest approach into the existing registration command via LINQASEND_CUSTODY_MANIFEST_PATH (explicit CLI path takes precedence). Existing authenticated gateway adapters and checksum/capability/custody/KMS preflight cover the other supplied modules. Corrected the approach by retaining the actual migration 083 column names, transaction-scoped registration, validated provider evidence, sanitized errors, and fail-closed missing configuration. The pasted code references environment settings and an external manifest but does not supply them; it does not by itself remove the live configuration blockers.
+
+ANDROID CONFIGURATION FOLLOW-UP: Reviewed Migration 082/android, including hidden workflow configuration. The folder contains development Compose scaffolding, Android signing secret references, and a load test using https://linqa-send.com with a simulated token. It contains no authenticated custody gateway URL/token reference, KMS configuration, or approved entity/account mapping. The Compose gateway start script has no implementation in the repository. Its destructive example custody seed and unrelated Knex migration were not executed. No public-site load tests or payment calls were made. Detailed findings are recorded in docs/linqasend-gateway-custody-rollout.md. Live connection still requires the backend gateway deployment configuration location; mobile signing secrets do not provide it.
+
+The Migration 082 package has been adapted to the existing gateway. Migrations 082 and 083 are applied and checksum-verified in the configured DEVELOPMENT database, with no pending wallet migrations. Migration 083 adds provider-scoped immutable custody observations and entity/currency coverage checks. Gateway adapters now support custody balances, settled receipt lookup, and original-key payout recovery. The worker can reconcile a completed payout whose response was lost without creating a second payout or inferring a wallet credit from a balance change.
+
+Verification: 105 selected server/gateway/security tests and 22 disposable PostgreSQL integration tests passed. Migration replay preserved wallet postings. No real payment or production deployment was performed.
+
+Live readiness is still blocked: the configured environment has no gateway URL/token, KMS configuration, or custody-account mappings. Real money remains disabled. The migration work is complete for this development target; the actual remote gateway connection cannot be verified until its deployment configuration is supplied. Current rollout instructions and sanitized readiness evidence are saved in docs/linqasend-gateway-custody-rollout.md and docs/evidence/linqasend-custody-preflight-2026-10-18.json.
+
+WALLET IMPLEMENTATION UPDATE - OCTOBER 18, 2026
+
+The wallet findings below now serve as the pre-implementation assessment. Repository changes add an immutable balanced customer subledger, provider-confirmed receipt credits, atomic reservations, transaction-bound server biometric withdrawal authorization, durable leased withdrawal execution, stable payout recovery identities, cancellation before dispatch, projection reconciliation/freezing, and a wallet page under LinqaSend > More.
+
+Migration 082 and its associated services integrate with the existing provider adapters, token vault, active-session authentication, signed webhook inbox, operational workers, and safeguarding/liability calculations. Generic completed payouts and nonzero legacy balance columns cannot create synthetic wallet funds. Existing wallet receipts are not automatically backfilled from transfer history.
+
+Validation passed: 99 selected server regression/security tests, 18 disposable PostgreSQL wallet integration tests, and 12 mobile validation/tracking utility tests (129 tests total). Database cases include concurrent credits/reservations/worker dispatch, lost payout responses, crash recovery, cancellation, immutable history, biometric resource scope, projection drift, legacy-balance rejection, and completion/webhook replay. No application or production database migration or real payment was performed. The separate test PostgreSQL cluster was stopped and removed.
+
+The 082/083 scope was confirmed receipts and receipt-linked withdrawals (superseded in part by the migration 084 update below). Cross-entity/currency migrations remain unsupported and unavailable. The production provider must implement custody confirmations and payout lookup, and the deployment must supply the appropriate KYC, custody and bank/card payout policies before live use.
+
+Implementation details, rollout requirements, API changes, reference-package decisions, and test commands are saved in docs/linqasend-wallet-integration.md.
+
+WALLET MONEY UPDATE (MIGRATION 084) - OCTOBER 18, 2026
+
+Migration 084 and the wallet-money service, routes and mobile screens now implement amount-based wallet operations, superseding the "receipt-linked only" limits above: provider-hosted bank/debit-card linking with ownership verification and separate funding/payout permission; withdrawal of a chosen amount (partial withdrawals); wallet-funded transfers to Linqa users; bank/card top-ups credited only after provider-confirmed settlement; and wallet-funded external payments with fee and FX quotes, returns and refunds. Each operation uses a server-owned quote, a biometric authorization bound to the exact snapshot, device and session, an atomic hold, and durable provider lookup by the original idempotency key. An unused or expired authorization is cancelled atomically through the quote-resolve action so the app's pending action cannot stick. The wallet page offers Add money, Withdraw amount, Send to Linqa user and Send outside Linqa.
+
+Verification: 43 PostgreSQL integration tests and 37 unit tests pass; server and mobile type checks pass. Not done: no live gateway, bank or provider has exercised these flows (tests use loopback synthetic records), and the development preflight remains not ready.
+
+SENDER-FEE REFUND UPDATE (MIGRATION 085): the PENDING_REFUND obligation recorded when a receiver chooses standard withdrawal after the sender paid the instant fee is now executed by a supervised wallet-fee-refunds worker (POST /funding/refunds, GET /funding/refunds/lookup/:key, capability senderFeeRefunds). It refunds only after the withdrawal completes, uses a stable idempotency key, never resubmits after a possible send, marks REFUNDED only on provider evidence matching the funding reference, amount and currency, and routes provider-declared failures to REFUND_REVIEW with an operations alert. Verified with 6 loopback gateway contract tests and 11 PostgreSQL worker scenarios (54 wallet DB tests in total, all passing); no live gateway has exercised it.
+
+Remaining blockers: LINQASEND_PROVIDER_URL/TOKEN and KMS settings are not configured; no custody accounts are registered; linqasend_wallet_money_limits has no rows, so all wallet operations are refused; the gateway must implement the /wallet-money and /bank-links endpoints (LINQASEND_MONEY_V1) and the /funding/refunds endpoints with the senderFeeRefunds capability; real money stays disabled until release gates pass. Details: docs/linqasend-wallet-money-flows.md and docs/linqasend-gateway-custody-rollout.md.
+
+REASSESSMENT STATUS
+
+The entry-page source, recipient navigation, delivery/fee explanations, Review error handling, payment recovery service, payment authentication wiring, and tokenizer availability were rechecked on October 18. The main findings below remain present in the inspected code. All 12 selected utility tests were rerun together and passed. This update replaces the previous assessment date; it does not indicate that the application defects were fixed.
+
+CARD-BY-CARD EVALUATION
+
+To Linqa User: needs correction. The route opens /linqasend/recipients, but that screen defaults to GLOBAL rather than LINQA. The hint promises account lookup, while the destination first presents saved external recipients.
+
+Outside Linqa: partly aligned. It opens the external-recipient form as expected, but the hint advertises card payout while the form currently offers BANK and MOBILE_MONEY only.
+
+Global Contacts: broadly aligned with an external saved-contact directory. It groups external contacts by country. The entry hint should clarify that these are external recipients; it currently sounds like all saved recipients. Searching for a person and then opening a country does not preserve the original query.
+
+Recent Recipients: needs implementation or relabeling. The route opens the generic recipient list without a recent mode or last-payment ordering. This is a confirmed navigation mismatch, not a test-proven payment-processing failure.
+
+Pending payment banner: valuable recovery concept, incomplete error visibility. Recovery lookup runs on focus and the card appears when stored matching data exists, but errors are suppressed and no checking/unavailable state is rendered.
+
+Bottom navigation: consistent with the module and exposes selected tab semantics. The inactive label color and physical-device layout still need accessibility validation.
+
+EVALUATION SUMMARY
+
+Visual structure from source: sound foundation; rendered/device appearance unverified.
+Navigation fidelity: requires correction before treating all four choices as complete.
+Payment communication: requires recipient-specific delivery and server-driven fee wording.
+Recovery: meaningful safeguards exist, but entry and Review error handling need improvement.
+Production card readiness: blocked in the inspected release client by absent tokenizer implementation.
+Overall: suitable for continued development and controlled validation; this review does not support declaring the entire real-money flow production-ready.
+
+1. EXECUTIVE ASSESSMENT
+
+The Send Money page has a useful foundation: a short heading, a clear instruction, large recipient-choice cards, consistent styling, and persistent navigation. The surrounding flow includes recipient selection, live quotes, funding selection, review, transaction authorization, and transfer tracking.
+
+The largest immediate problem is that the navigation does not consistently deliver what the labels promise. "To Linqa User" and "Recent Recipients" both open the same generic recipient screen, which initially selects Global Contacts. There is no recent-recipient filter on that destination. This makes two of the four primary choices unreliable descriptions of the next step.
+
+The current implementation is substantially stronger than the earlier October 16 assessment in this repository. Payment intent reconciliation, secure pending-review storage, guarded quote parsing, currency-aware amount formatting, active-session payment authentication, and resilient status polling now exist. Those older findings should not be carried forward unchanged.
+
+Recommendation: retain the visual foundation, fix recipient routing and recovery visibility first, then align delivery and fee disclosures with actual recipient/provider capabilities. Treat production payment integration as a separate release gate: the inspected release-build card tokenizer is unavailable. This review does not establish that real-money sending is operational.
+
+2. SCOPE AND EVIDENCE LIMITS
+
+This is a current-source assessment of the mobile Send entry page and the adjacent paths needed to evaluate its promises. Primary sources include:
+
+- clients/mobile/app/linqasend/send.tsx
+- clients/mobile/app/linqasend/recipients.tsx
+- clients/mobile/app/linqasend/global-contacts.tsx
+- clients/mobile/app/linqasend/add-recipient.tsx
+- clients/mobile/app/linqasend/amount.tsx
+- clients/mobile/app/linqasend/review.tsx
+- clients/mobile/app/linqasend/status.tsx
+- clients/mobile/components/linqasend/ui.tsx
+- clients/mobile/services/linqasend.service.ts
+- clients/mobile/services/send-money-validation.ts
+- clients/mobile/services/card-tokenizer.ts
+- clients/mobile/services/payment-status-polling.ts
+- server/src/auth/payment-authenticator.ts and LinqaSend route families
+
+No running app was visually inspected. Layout observations derive from React Native component structure and style values. No payment, card submission, live provider operation, account change, or production configuration change was performed. This is neither provider certification nor a legal/compliance audit. Server deployment readiness and database-backed execution were not verified. No application code was changed.
+
+3. WHAT WORKS WELL
+
+Entry-page simplicity: four large rows avoid an overwhelming form. Titles, supporting hints, icons, and chevrons communicate that each row opens another step. Twenty-pixel horizontal spacing, rounded cards, a consistent primary color, and 16-pixel card titles provide a coherent design foundation.
+
+Navigation: the Send tab reports its selected state to accessibility tools. The entry screen uses a scroll container, which is helpful on smaller displays. Main recipient choices expose button roles and labels.
+
+Recipient context: recipient rows show names, country, payout type, and receive currency. Favorites are visually identified. Global Contacts groups external recipients by country and supports filtering.
+
+Quote behavior: amount entry derives a sending currency from settings/limits; it does not simply assume USD. A 650 ms debounce reduces quote traffic. Request sequence tracking prevents an older quote response from replacing a newer one. Editing an amount clears the prior quote. Quote expiry is visible and triggers refresh.
+
+Payment safeguards: Review parses quote navigation data before rendering the payment form. Money calculations use BigInt in key areas. Review reconciles a server payment intent before allowing confirmation. The service uses a server-returned idempotency key and records an uncertain submission in account-scoped secure storage. Production confirmation requires strong biometric signing in the inspected client path.
+
+Tracking: status polling retries with backoff, offers a manual retry, restarts when the app becomes active, and explicitly explains that connection trouble does not mean a payment failed.
+
+4. FINDINGS AND PRIORITIZED RECOMMENDATIONS
+
+F1. HIGH: "To Linqa User" opens the external-recipient tab.
+Evidence: send.tsx routes this card to /linqasend/recipients without a mode parameter. recipients.tsx initializes tab to GLOBAL and only reads a country parameter.
+Impact: the first primary action sends users to a different recipient category. A new user can reasonably conclude that their Linqa contact is unavailable.
+Recommendation: pass a typed recipient mode and initialize the appropriate tab. Preserve that intent through lookup, adding a recipient, and returning from other screens.
+Acceptance: tapping "To Linqa User" opens Linqa Users immediately; external contacts are excluded from that view; back navigation preserves the expected context.
+
+F2. MEDIUM: "Recent Recipients" does not implement recency.
+Evidence: it uses the same route as "To Linqa User". The recipient screen neither reads a recent mode nor sorts by last successful transfer. Recipient objects expose createdAt, which is not a last-payment timestamp.
+Impact: a repeat sender must search a generic list, and the label creates an inaccurate expectation.
+Recommendation: derive recent recipients from transfer history or an explicit lastSentAt field. Deduplicate by stable recipient ID, order by the latest relevant payment, and define how failed/canceled transfers affect inclusion. If unavailable, remove or rename the card until implemented.
+Acceptance: recent order follows payment history, including both supported internal and external recipient types; a new account gets a useful empty state.
+
+F3. HIGH: pending-payment discovery failures are invisible.
+Evidence: send.tsx catches pendingPaymentReview() errors with an empty handler. The service returns null when pendingQuote or matching review storage is absent, and parses stored JSON without a schema. Entry-page state is not cleared or marked as loading at the beginning of a refocus check.
+Impact: missing, malformed, or unreadable recovery data can hide the resume action. A failed refresh can leave a previously displayed resume card stale. Downstream pending-payment checks add protection, but a user may first discover the problem after starting another flow.
+Recommendation: model recovery as checking, none, resumable, and unavailable states. Validate the stored record, distinguish an absent draft from a storage error, and provide a retry/status recovery action. Reconcile with the server when possible. Avoid claiming a payment failed or deleting ambiguous payment state merely to unblock navigation.
+Acceptance: app restart after a lost submission response exposes the correct recovery action; corrupt storage and offline checks show a clear recoverable state; switching accounts cannot reveal another account's review.
+
+F4. HIGH: delivery explanations assume an internal wallet for external recipients.
+Evidence: amount.tsx reads recipientType but its standard/instant helper text unconditionally says money goes straight to the receiver's wallet and describes subsequent deposits to a bank or card. The same screen is reached for external bank/mobile-money recipients.
+Impact: customers can misunderstand where funds arrive, who chooses the payout, what "instant" means, and which party pays a fee.
+Recommendation: render delivery choices and text from recipient type plus server corridor/provider capabilities. Distinguish wallet arrival from final payout. Show the actual destination, estimated availability, fee payer, and any conditions using quote data. Suppress unsupported delivery options.
+Acceptance: internal wallet, bank, and mobile-money cases each describe their actual route; no unsupported instant option is shown; amount, review, and receipt agree.
+
+F5. HIGH RELEASE GATE: production card tokenization is missing.
+Evidence: getCardTokenizer() returns the development sandbox tokenizer only when __DEV__ is true; otherwise it returns null. Review requires that tokenizer for card CVV submission. Comments describing an always-null tokenizer are also stale relative to the sandbox implementation.
+Impact: a release-build card payment cannot complete this inspected client path even if a verified card is displayed. Development success is not proof of production capability.
+Recommendation: integrate the selected provider SDK or approved hosted flow, validate setup and CVV session lifetimes, and test the release build. Expose funding-method availability before the customer reaches final confirmation. Keep readiness gates enforced.
+Acceptance: authorized certification tests cover card setup, verification, CVV failure/expiry, cancellation, interrupted submission, and reconciliation in a release build. No production-readiness claim should rely solely on sandbox tests.
+
+F6. MEDIUM: card copy advertises a recipient option that its next screen lacks.
+Evidence: "Outside Linqa" promises "Bank, card or mobile-money payout". add-recipient.tsx defines its selectable Method union as MOBILE_MONEY or BANK.
+Impact: users expecting card payout enter a path with no matching choice.
+Recommendation: remove "card" from this hint until a supported external card-recipient flow is available, or implement and gate the option by capability.
+Acceptance: every advertised destination can be selected and configured through the next screen for an eligible corridor.
+
+F7. MEDIUM: fee explanations contain conflicting and hard-coded promises.
+Evidence: amount.tsx explains that the exchange-rate margin means "there is no separate fee", while instant delivery can add a sender fee. Its delivery chips hard-code "1.85% (min 0.30)" without a currency, and standard wording can be read as an unconditional free-transfer claim.
+Impact: a customer may confuse FX margin, transfer fee, and cash-out fee. Fixed client text can drift from server pricing.
+Recommendation: disclose each cost separately: amount sent, FX rate/margin, sender fee, total charged, recipient fee, and expected net amount. Price delivery from server metadata; qualify zero-fee language by scope. Use explicit currency codes.
+Acceptance: changing a server fee changes the displayed fee and explanatory text consistently; no fee-bearing quote is described as having no separate fee.
+
+F8. MEDIUM: some failures appear as an empty funding list or require reopening Review.
+Evidence: Review converts listPaymentMethods() failures to an empty array. Its intent-reconciliation failure tells the user to reopen the review rather than offering an inline retry.
+Impact: connection problems can look like missing cards/accounts, and recovery requires navigation the customer must interpret.
+Recommendation: distinguish loading, empty, unavailable, and unauthorized states. Offer retry for funding loading and intent reconciliation while keeping confirmation disabled until reconciliation succeeds.
+Acceptance: offline funding retrieval does not present a definitive "no methods" state; retry restores the original selection when still eligible.
+
+F9. MEDIUM: accessibility needs device verification and a few source-level improvements.
+Evidence: entry cards specify accessibilityLabel as the title only, so the supporting hint is not explicitly supplied as an accessibilityHint. Inactive tab labels use faint #98A2B3; several neighboring clear-search actions have no explicit minimum touch area. Country filtering includes a 36-pixel minimum height. Main cards themselves have generous padding.
+Recommendation: supply meaningful hints, hide decorative icons from accessibility focus where appropriate, verify contrast on actual backgrounds, enlarge small targets, and test large text without clipped names or inaccessible actions. Announce recovery/error changes without repeatedly announcing quote countdowns.
+Acceptance: VoiceOver/TalkBack users can identify recipient type, selected state, destination, and recovery action; large text and a small screen remain usable. These are recommendations for validation, not a claim of completed accessibility certification.
+
+F10. LOW/MEDIUM: recipient search and saved-contact navigation add friction.
+Evidence: recipient filtering searches display name, country, country code, and preferred currency despite a placeholder promising phone/email search. Phone/email can trigger remote lookup, but are not included in the inspected local saved-recipient matching fields. Global Contacts search returns country groups; choosing a group opens a recipient screen without forwarding the original query. Lists render all items through ScrollView/map.
+Recommendation: distinguish saved-recipient search from account lookup, support verified searchable identifiers safely, preserve query/filter context, and use virtualized lists if recipient volumes justify it. A direct matching-person result would save a step when a name search finds one person.
+Acceptance: saved phone/email lookup behaves as advertised; selecting a country after a name search retains the query; large address books remain responsive.
+
+5. RECOMMENDED PAGE STRUCTURE
+
+Keep "Send Money" and a short instruction. Place any pending-payment recovery banner immediately beneath the heading, with "Check payment status" as its primary action.
+
+Use two primary choices: "Linqa user" and "Bank or mobile money" (add card only when supported). Place actual recent recipients below those choices, with name, destination type, country, and masked destination where available. Provide "View all saved recipients" as a secondary action rather than making saved and recent lists look like separate transfer types.
+
+This structure separates the destination decision from shortcuts to people already known. It reduces overlapping choices while preserving the existing visual language. It should be tested against the corrected four-card design before adopting it; the routing fixes do not depend on a redesign.
+
+6. DELIVERY PLAN
+
+First: fix Linqa-user routing, implement/remove the recent shortcut, align external-card copy, and expose recovery-check failures. These changes address directly observable entry-page behavior.
+
+Next: make delivery and fee text capability-driven, add inline recovery retries, preserve search context, and complete accessibility review on physical devices.
+
+Before real-money release: complete the production provider/tokenizer integration and verify the entire release-build path, including lost responses, restart, concurrent devices, expired quotes, revoked sessions, worker execution, webhooks, reconciliation, and receipts. The repository's existing payment controls are valuable but do not substitute for this evidence.
+
+7. VALIDATION PERFORMED AND STILL REQUIRED
+
+Executed with Node v22.18.0:
+Latest rerun: October 18, 2026. All three test files were executed together:
+node --experimental-strip-types --test tests/send-money-validation.test.ts tests/linqasend-mobile-flow.test.ts tests/payment-status-polling.test.ts
+Latest result: 12 passed, 0 failed, 0 skipped. Module-type warnings were emitted without failing the run.
+
+The breakdown below identifies what the selected tests cover:
+node --experimental-strip-types --test tests/send-money-validation.test.ts tests/linqasend-mobile-flow.test.ts
+Result: 9 tests passed, 0 failed. Covered currency parsing/formatting including large amounts, malformed review navigation, transfer timeline/status mapping, phone normalization, and country-list structure. Node emitted a module-type warning; it did not fail these tests.
+
+Also executed:
+node --experimental-strip-types --test tests/payment-status-polling.test.ts
+Result: 3 tests passed, 0 failed, covering recovery after network failure, stopping after five repeated failures without inventing a failed payment, and suppressing late responses after abort. Total across the three selected files: 12 passed, 0 failed.
+
+These are utility tests, not rendered-screen or end-to-end payment tests. They do not validate the four Send cards' navigation, current provider availability, payment execution, physical-device accessibility, biometric hardware behavior, or app-restart recovery.
+
+Recommended focused scenarios:
+- Tap each entry card and verify its destination and initial filter.
+- Load an empty account and an account with internal/external/recent recipients.
+- Interrupt submission after server acceptance; restart and reconcile without a duplicate payment.
+- Simulate unreadable pending-review storage and an unavailable status endpoint.
+- Compare wallet, bank, and mobile-money delivery promises against quoted capabilities.
+- Change delivery speed and fees; verify the final charge and recipient net amount agree everywhere.
+- Expire a quote during funding selection and authorization.
+- Test large text, screen readers, small displays, keyboard coverage, and long recipient names.
+- Verify sandbox/release funding availability is clearly represented.
+
+8. WALLET STRUCTURE: PRE-IMPLEMENTATION ASSESSMENT
+
+The wallet structure is an important architectural gap beyond the Send entry screen. The inspected source contains wallet account records, general accounting journals, and transfer-specific cash-out requests, but these do not yet demonstrate a connected, authoritative customer wallet system.
+
+Existing structure:
+- Migration 034 creates linqasend_wallet_accounts_v2, scoped by user, jurisdiction, regulatory entity, currency, and jurisdiction version. It stores ledger, pending, available, withdrawable, and held balance fields.
+- jurisdiction-v2.ts checks wallet ownership/status and creates a new wallet account on the inspected relocation path.
+- AtomicCompletionService records a completion journal against shared CLEARING_CARD and TRANSFER_PAYABLE accounts in the sending currency. That method does not credit a recipient-specific wallet account or show the destination-currency wallet posting.
+- DepositService authorizes a receiver through recipient.linqa_user_id, requires a COMPLETED transfer, and calculates a withdrawal from that transfer's receive amount. A unique transfer_id on deposit requests prevents choosing a second live cash-out for the same transfer.
+
+HIGH: wallet balances are not visibly connected to credit/debit operations.
+A search of server/src for the wallet table and balance columns found the schema, jurisdiction lookup, and relocation insertion, but no operational updates to the stored wallet balance fields. DepositService does not reserve/debit a wallet balance or post withdrawal journals. Consequently the inspected implementation behaves more like per-transfer cash-out entitlements than a reusable wallet balance. This does not prove deployed balances are incorrect; it means wallet balance correctness is not demonstrated by the inspected paths.
+
+HIGH: ambiguous deposit outcomes can become unsafe retries.
+DepositService.pay() catches a generic provider exception and marks the attempt FAILED. A later request can replace that failed row with a new deposit ID, producing a new provider idempotency key. If the original provider payout succeeded but its response was lost, that new attempt could create another payout. Preserve the original operation identity, use UNKNOWN/RECONCILING states for transport ambiguity, and query/reconcile the provider before allowing another operation. This is a source-level duplicate-payout risk, not a reproduced payout.
+
+HIGH: withdrawal processing needs durable recovery.
+releaseDue() changes due scheduled requests to PROCESSING before calling the provider. The inspected service does not show a lease/reclaim mechanism for a crash after that update, or completion reconciliation for a provider result that remains PROCESSING. Add a durable job/outbox, stable provider operation keys, webhook/poll reconciliation, and restart recovery. A separate verified worker could address this, but was not established by this review.
+
+Recommended model:
+1. A wallet account belongs to a user, currency, and regulated entity/jurisdiction. Preserve version/history without merging balances across entities or currencies.
+2. Immutable customer subledger postings are the balance authority. Stored balances are transactional projections that can be rebuilt and reconciled.
+3. Define pending incoming, posted, held/reserved, available-to-send, and available-to-withdraw amounts explicitly. Withdrawable is an eligibility view of existing funds, not an additional balance to add to the total.
+4. Credit a recipient wallet exactly once for an eligible internal transfer. Reserve funds atomically before sending or withdrawing, then settle or release that reservation through explicit state transitions.
+5. Keep internal wallet transfers distinct from direct external bank/mobile-money payouts. A direct external recipient should not be represented as having a Linqa wallet without an actual account/claim lifecycle.
+6. Record funding, customer liabilities, FX legs, fees, payout clearing, refunds, and reversals with balanced postings in each currency. Tie each provider movement to reconciliation evidence.
+7. Separate receipt completion, wallet availability, withdrawal submission, and final bank/card payout completion. A single COMPLETED label must not imply all four events.
+
+Recommended wallet UI:
+- Show a wallet home with currency, available amount, pending amount, held amount, and activity. Do not display unverified aggregate balances.
+- Use "Withdraw to bank/card" or "Transfer out" for moving money from Linqa to an external account. The current "deposit" terminology is easy to confuse with adding money to Linqa.
+- Make the funding source explicit on Send: wallet balance or a verified external method, with available funds and any hold disclosed.
+- Explain the selected payout destination, fees, expected arrival, and unknown/reconciliation state. Avoid assurances that money is "safe in your wallet" unless the ledger and provider state establish that claim.
+
+Required wallet validation includes concurrent withdrawals, send-versus-withdraw races, lost provider responses, duplicate webhooks, worker crashes, insufficient/held funds, multi-currency accounting, reversal after withdrawal, and reconciliation between customer liabilities and provider/settlement assets. No wallet-specific integration tests or live wallet movements were executed for this addition.
+
+9. CHANGE FROM THE PRIOR ASSESSMENT
+
+The earlier docs/send-money-assessment-2026-10-16.md is historical context, not current proof. Current source now includes server-resolved payment intents, pending-review persistence, parseReviewQuote(), currency-aware BigInt formatting in the assessed amount/review/status paths, payment authenticators checking active sessions/accounts, and polling retry/backoff with manual/app-active recovery. The older blanket findings about missing versions of these controls are therefore superseded at source level. Their end-to-end effectiveness still requires the validation described above.
+
+Overall decision: prioritize correctness of navigation and payment communication over additional visual decoration. The entry screen can become a dependable gateway with a relatively small set of routing and state-handling changes, while production funding readiness requires its own verified integration work.

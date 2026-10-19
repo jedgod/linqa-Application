@@ -342,7 +342,7 @@ export class TransferOrchestratorService {
 
     await this.setStatus(id, "PROCESSING", "PAYOUT_SUBMITTED");
     if (payout.status === "COMPLETED") {
-      await this.completion.complete({ transferId: id, providerReference: payout.providerRef, source: "EXECUTION_WORKER" });
+      await this.completion.complete({ transferId: id, providerReference: payout.providerRef, ...(payout.walletCredit ? {walletCredit:payout.walletCredit} : {}), source: "EXECUTION_WORKER" });
       return { status: "COMPLETED" };
     }
 

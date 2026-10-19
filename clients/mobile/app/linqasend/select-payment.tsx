@@ -98,8 +98,9 @@ export default function LinqaSendSelectPayment() {
           <Text style={s.empty}>You have no payment methods on file yet. Add one below to continue.</Text>
         ) : null}
 
+        <Pressable accessibilityRole="button" style={s.add} onPress={()=>router.push("/linqasend/wallet")}><Text style={s.addText}>Open wallet to send from your balance</Text></Pressable>
         <Text style={[s.section, { marginTop: 24 }]}>Other Ways to Pay</Text>
-        {([["Add debit/credit card", "/linqasend/add-card"], ["Add bank account", "/linqasend/payment-methods"]] as const).map(([label, route]) => (
+        {([["Add debit/credit card", "/linqasend/add-card"], ["Add bank account", "/linqasend/bank-link"]] as const).map(([label, route]) => (
           <Pressable key={label} accessibilityRole="button" style={s.add} onPress={() => router.push(route)}>
             <Ionicons name="add" size={26} color={send.primary} />
             <Text style={s.addText}>{label}</Text>

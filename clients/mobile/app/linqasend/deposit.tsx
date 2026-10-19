@@ -8,19 +8,24 @@ import { getApiBaseUrl } from "../../config/api";
 import { LinqaSendApiError, LinqaSendService, type LinqaSendDepositOptions, type LinqaSendDepositResult, type LinqaSendPaymentMethod } from "../../services/linqasend.service";
 import { accessTokenProvider } from "../../services/session";
 import { displayMoney } from "../../services/send-money-validation";
-import { requestTransactionAuth } from "../../services/transaction-auth";
 import { fonts } from "../../theme/tokens";
+import { useAccounts } from "../../account/AccountContext";
 
 const API = getApiBaseUrl();
 const DESTINATION_TYPES = ["BANK_ACCOUNT", "DEBIT_CARD"];
 const METHOD_NAME: Record<string, string> = { BANK_ACCOUNT: "Bank account", DEBIT_CARD: "Debit card" };
 const MESSAGES: Record<string, string> = {
+  WALLET_INSUFFICIENT_FUNDS: "The available wallet balance is too low. Some funds may already be held.",
+  WALLET_NOT_ACTIVE: "This wallet is not available for withdrawals.",
+  wallet_receipt_not_verified: "The provider has not confirmed this receipt as wallet funds.",
+  withdrawal_provider_not_ready: "Withdrawals are not available in this environment.",
+  withdrawal_details_changed: "Withdrawal details changed. Review the amount and authorize again.",
   transfer_not_found: "We couldn't find this transfer.",
   transfer_not_completed: "This transfer isn't complete yet.",
   deposit_already_chosen: "You've already chosen how to deposit this money.",
   deposit_destination_required: "Choose a verified bank account or debit card.",
   instant_deposit_unavailable: "The amount is too small for an instant deposit.",
-  deposit_provider_failed: "The deposit couldn't be sent right now. Your money is still safe in your wallet. Try again soon.",
+  deposit_provider_failed: "The deposit couldn't be sent right now. Check your wallet for the latest status before trying again.",
   device_bound_fresh_session_required: "Please sign in again to move money."
 };
 
@@ -33,6 +38,7 @@ const friendlyDate = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateSt
  */
 export default function LinqaSendDeposit() {
   const router = useRouter();
+  const { active: account } = useAccounts();
   const { id } = useLocalSearchParams<{ id: string }>();
   const client = useMemo(() => new LinqaSendService(API, () => accessTokenProvider.getAccessToken()), []);
   const [data, setData] = useState<LinqaSendDepositOptions | null>(null);
@@ -45,6 +51,7 @@ export default function LinqaSendDeposit() {
 
   useEffect(() => {
     let active = true;
+    setData(null);setMethods(null);setDestination(null);setDone(null);setError(null);
     Promise.all([client.depositOptions(id), client.listPaymentMethods()]).then(([options, list]) => {
       if (!active) return;
       const eligible = list.items.filter((m) => m.verificationStatus === "VERIFIED" && DESTINATION_TYPES.includes(m.type));
@@ -54,16 +61,15 @@ export default function LinqaSendDeposit() {
       setChoice(options.options.instant.available && options.senderPaidInstantFee ? "instant" : "standard");
     }).catch((cause) => { if (active) setError(describe(cause)); });
     return () => { active = false; };
-  }, [client, id]);
+  }, [client, id, account?.userId]);
 
   async function confirm() {
     if (!data || !destination || busy) return;
     setBusy(true);
     setError(null);
     try {
-      const net = choice === "instant" ? data.options.instant.netDepositMinor : data.options.standard.netDepositMinor;
-      const auth = await requestTransactionAuth({ amountLabel: `${displayMoney(net, data.currency)} ${data.currency}`, recipientName: "your bank" });
-      if (auth !== "AUTHORIZED") return;
+
+
       setDone(await client.requestDeposit(id, { option: choice, paymentMethodId: destination }));
     } catch (cause) {
       setError(describe(cause));
@@ -81,7 +87,7 @@ export default function LinqaSendDeposit() {
         <Pressable accessibilityRole="button" accessibilityLabel="Back" style={s.headerButton} onPress={() => (router.canGoBack() ? router.back() : router.replace("/linqasend/history"))}>
           <Ionicons name="arrow-back" size={26} color={send.text} />
         </Pressable>
-        <Text accessibilityRole="header" style={s.title}>Deposit to bank or card</Text>
+        <Text accessibilityRole="header" style={s.title}>Withdraw to bank or card</Text>
         <View style={s.headerButton} />
       </View>
 
@@ -91,22 +97,22 @@ export default function LinqaSendDeposit() {
       {done ? (
         <View style={s.center}>
           <Ionicons name="checkmark-circle" size={64} color={send.success} />
-          <Text style={s.doneTitle}>{done.status === "SCHEDULED" ? "Deposit scheduled" : "Deposit on its way"}</Text>
+          <Text style={s.doneTitle}>{done.releaseOn ? "Withdrawal scheduled" : "Withdrawal queued"}</Text>
           <Text style={s.help}>
             {done.status === "SCHEDULED" && done.releaseOn
-              ? `${money(done.netDepositMinor)} will be deposited on ${friendlyDate(done.releaseOn)}.`
-              : `${money(done.netDepositMinor)} is being deposited now.`}
+              ? `${money(done.netDepositMinor)} is scheduled for processing from ${friendlyDate(done.releaseOn)}. Bank arrival may be later.`
+              : `${money(done.netDepositMinor)} is queued for processing. Check your wallet for its status.`}
           </Text>
           <Pressable accessibilityRole="button" style={[s.confirm, { alignSelf: "stretch", marginTop: 24 }]} onPress={() => router.replace("/linqasend/history")}><Text style={s.confirmText}>Done</Text></Pressable>
         </View>
       ) : data ? (
         <>
           <ScrollView contentContainerStyle={s.content}>
-            <Text style={s.help}>{money(data.amountMinor)} is in your Linqa wallet. Choose how to deposit it.</Text>
-            {data.chosen ? <Text style={s.notice}>You already chose the {data.chosen.option === "instant" ? "instant" : "3 business day"} deposit for this money.</Text> : null}
+            <Text style={s.help}>{money(data.amountMinor)} is in your Linqa wallet. Choose how to withdraw it.</Text>
+            {data.chosen ? <Text style={s.notice}>Withdrawal status: {data.chosen.status.toLowerCase()}. {data.chosen.status === "RECONCILING" ? "We are checking the provider. Do not submit another withdrawal." : "Check your wallet for updates."}</Text> : null}
 
             <Pressable accessibilityRole="button" accessibilityState={{ selected: choice === "instant", disabled: !data.options.instant.available }} disabled={!data.options.instant.available || !!data.chosen} onPress={() => setChoice("instant")} style={[s.option, choice === "instant" && s.optionOn, !data.options.instant.available && { opacity: 0.45 }]}>
-              <Text style={s.optionTitle}>Instant deposit</Text>
+              <Text style={s.optionTitle}>Instant withdrawal</Text>
               <Text style={s.optionLine}>
                 {data.options.instant.feePaidBy === "sender" ? "Free: the sender covered the fee." : `Fee ${money(data.options.instant.receiverFeeMinor)} comes out of the deposit.`}
               </Text>
@@ -118,10 +124,10 @@ export default function LinqaSendDeposit() {
               <Text style={s.optionTitle}>In {data.options.standard.businessDays} business days</Text>
               <Text style={s.optionLine}>Free. Available {friendlyDate(data.options.standard.availableOn)}.</Text>
               <Text style={s.optionNet}>You receive {money(data.options.standard.netDepositMinor)}</Text>
-              {data.senderPaidInstantFee ? <Text style={s.optionLine}>The sender's instant fee is refunded to them if you wait.</Text> : null}
+              {data.senderPaidInstantFee ? <Text style={s.optionLine}>Any sender fee refund requires separate confirmation and is not included in this withdrawal.</Text> : null}
             </Pressable>
 
-            <Text style={[s.label, { marginTop: 22 }]}>Deposit to</Text>
+            <Text style={[s.label, { marginTop: 22 }]}>Withdraw to</Text>
             {methods === null ? <ActivityIndicator color={send.primary} /> : methods.length === 0 ? (
               <Pressable accessibilityRole="button" onPress={() => router.push("/linqasend/payment-methods")}><Text style={s.link}>Add a bank account or debit card</Text></Pressable>
             ) : methods.map((m) => (
@@ -133,7 +139,7 @@ export default function LinqaSendDeposit() {
           </ScrollView>
           <View style={s.footer}>
             <Pressable accessibilityRole="button" accessibilityState={{ disabled: !destination || busy || !!data.chosen }} disabled={!destination || busy || !!data.chosen} style={[s.confirm, (!destination || busy || !!data.chosen) && { opacity: 0.45 }]} onPress={confirm}>
-              {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={s.confirmText}>{choice === "instant" ? "Deposit now" : "Schedule deposit"}</Text>}
+              {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={s.confirmText}>{choice === "instant" ? "Withdraw now" : "Schedule withdrawal"}</Text>}
             </Pressable>
           </View>
         </>
@@ -144,7 +150,7 @@ export default function LinqaSendDeposit() {
 
 function describe(cause: unknown): string {
   if (cause instanceof LinqaSendApiError && typeof cause.payload.error === "string") return MESSAGES[cause.payload.error] ?? "Something went wrong. Please try again.";
-  return cause instanceof Error ? "Unable to reach LinqaSend. Check your connection and try again." : "Something went wrong.";
+  return cause instanceof Error ? cause.message : "Unable to reach LinqaSend. Check your connection and try again.";
 }
 
 const s = StyleSheet.create({
