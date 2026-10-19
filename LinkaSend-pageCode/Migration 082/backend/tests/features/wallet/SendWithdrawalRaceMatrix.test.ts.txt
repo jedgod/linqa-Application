@@ -1,0 +1,51 @@
+import { WalletFundedSendProcessor } from '../../../backend/services/WalletFundedSendProcessor';
+import { IdempotentWalletEngine } from '../../../backend/services/IdempotentWalletEngine';
+import { Pool } from 'pg';
+
+describe('Authoritative Subledger Send-vs-Withdraw High-Concurrency Race Condition Profile', () => {
+  const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+  beforeEach(async () => {
+    const client = await dbPool.connect();
+    // Reset account test variables to a baseline state of \$150.00 USD (15,000 minor units)
+    await client.query('DELETE FROM wallet_ledger_postings WHERE wallet_account_id = \$1', ['wallet_race_test_user']);
+    await client.query(`
+      INSERT INTO wallet_ledger_postings (wallet_account_id, transaction_correlation_id, balance_type, amount_minor_units, currency_iso_code, accounting_journal_code)
+      VALUES ('wallet_race_test_user', 'init_seed_001', 'POSTED', 15000, 'USD', 'INITIAL_DEPOSIT_SEED');
+    `);
+    client.release();
+  });
+
+  it('should block double-spending vulnerabilities when Send and Withdraw operations execute simultaneously', async () => {
+    // Both operations try to claim \$100.00 USD simultaneously, but total balance is only \$150.00 USD
+    const sendParams = {
+      walletId: 'wallet_race_test_user',
+      transferCorrelationId: 'race_tx_send_9918',
+      sourceAmountMinor: 10000,
+      sourceCurrency: 'USD',
+      destinationCurrency: 'GHS',
+      exchangeRate: 15.2,
+      providerCode: 'VALU_PAY_GHS'
+    };
+
+    const withdrawalTaskId = 'race_tx_withdraw_7721';
+
+    // Fire off parallel, overlapping execution paths to stress-test data boundary limits
+    const parallelExecutionTracks = [
+      WalletFundedSendProcessor.executeWalletFundedSend(sendParams),
+      IdempotentWalletEngine.orchestrateWithdrawal('wallet_race_test_user', withdrawalTaskId, 10000, 'USD')
+    ];
+
+    const processingResults = await Promise.allSettled(parallelExecutionTracks);
+    
+    const succeededOperationsCount = processingResults.filter(r => r.status === 'fulfilled').length;
+    const rejectedOperationsCount = processingResults.filter(r => r.status === 'rejected').length;
+
+    // Assert that the transactional layer processed exactly one operation and safely dropped the second
+    expect(succeededOperationsCount).toBe(1);
+    expect(rejectedOperationsCount).toBe(1);
+
+    const failureReason = processingResults.find(r => r.status === 'rejected') as PromiseRejectedResult;
+    expect(failureReason.reason.message).toMatch(/LEDGER_FAULT_INSUFFICIENT_FUNDS|LOCK_TIMEOUT/);
+  });
+});

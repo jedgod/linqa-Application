@@ -1,0 +1,53 @@
+---
+- name: Automate Production Rollout of Linqa Send Wallet Telemetry Rules
+  hosts: monitoring_servers
+  become: true
+  vars:
+    prometheus_config_path: "/etc/prometheus"
+    grafana_dashboards_path: "/var/lib/grafana/dashboards"
+
+  tasks:
+    - name: Ensure targeted configuration layout structures exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: prometheus
+        group: prometheus
+        mode: '0755'
+      loop:
+        - "{{ prometheus_config_path }}/rules"
+        - "{{ grafana_dashboards_path }}/wallet"
+
+    - name: Deploy Grafana Ingestion & Balance Reconciliation Dashboard JSON
+      ansible.builtin.copy:
+        src: "../monitoring/grafana-reconciliation-dashboard.json"
+        dest: "{{ grafana_dashboards_path }}/wallet/reconciliation.json"
+        owner: grafana
+        group: grafana
+        mode: '0644'
+
+    - name: Push Alerting Profiles to Prometheus Nodes
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ prometheus_config_path }}/rules/{{ item.dest }}"
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+      loop:
+        - { src: "../monitoring/prometheus-alerting-rules.yml", dest: "prometheus-alerting-rules.yml" }
+        - { src: "../monitoring/grafana-refund-alert-rules.yml", dest: "grafana-refund-alert-rules.yml" }
+      register: rules_update_trigger
+
+    - name: Execute pre-flight syntactic check on modified configuration parameters
+      ansible.builtin.command: "promtool check rules {{ prometheus_config_path }}/rules/{{ item }}"
+      changed_when: false
+      loop:
+        - "prometheus-alerting-rules.yml"
+        - "grafana-refund-alert-rules.yml"
+
+    - name: Hot-reload Prometheus tracking configurations to map newly injected rules
+      ansible.builtin.uri:
+        url: "http://localhost:9090/-/reload"
+        method: POST
+        status_code: 200
+      when: rules_update_trigger.changed

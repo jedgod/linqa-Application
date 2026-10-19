@@ -1,0 +1,21 @@
+//android/app/build.gradle
+
+android {
+    signingConfigs {
+        release {
+            // Inbound environment parameter hooks protect credentials from being exposed in plain text strings
+            storeFile file(System.getenv("LINQA_RELEASE_STORE_FILE") ?: "dummy.keystore")
+            storePassword System.getenv("LINQA_RELEASE_STORE_PASSWORD")
+            keyAlias System.getenv("LINQA_RELEASE_KEY_ALIAS")
+            keyPassword System.getenv("LINQA_RELEASE_KEY_PASSWORD")
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            signingConfig signingConfigs.release
+        }
+    }
+}

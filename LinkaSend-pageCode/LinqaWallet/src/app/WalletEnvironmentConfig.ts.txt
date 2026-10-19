@@ -1,0 +1,49 @@
+//src/app/WalletEnvironmentConfig.ts
+
+export interface WalletEnvironmentVariables {
+  ENVIRONMENT_MODE: 'SANDBOX' | 'PRODUCTION_LIVE';
+  WEBHOOK_INGESTION_URL: string;
+  EXPECTED_SIGNATURE_HEADER: string;
+  ENFORCE_CRYPTO_SIGNING: boolean;
+  ALLOWED_PAYOUT_PARTNERS_CIDR: string[];
+}
+
+const SANDBOX_STAGE_CONFIGURATION: WalletEnvironmentVariables = {
+  ENVIRONMENT_MODE: 'SANDBOX',
+  WEBHOOK_INGESTION_URL: 'https://linqa-send.com',
+  EXPECTED_SIGNATURE_HEADER: 'x-linqa-signature-sandbox',
+  ENFORCE_CRYPTO_SIGNING: true,
+  // Staging testing clusters subnet range definitions
+  ALLOWED_PAYOUT_PARTNERS_CIDR: ['192.168.10.0/24', '10.0.5.0/24']
+};
+
+const LIVE_PRODUCTION_CONFIGURATION: WalletEnvironmentVariables = {
+  ENVIRONMENT_MODE: 'PRODUCTION_LIVE',
+  WEBHOOK_INGESTION_URL: 'https://linqa-send.com',
+  EXPECTED_SIGNATURE_HEADER: 'x-linqa-signature',
+  ENFORCE_CRYPTO_SIGNING: true,
+  // Explicit whitelisted public IP ranges owned by verified external banking providers
+  ALLOWED_PAYOUT_PARTNERS_CIDR: ['34.226.18.4/32', '52.4.110.65/32', '3.210.67.12/32']
+};
+
+export class WalletEnvironmentProvider {
+  private static activeConfiguration: WalletEnvironmentVariables;
+
+  /**
+   * Initializes target wallet workspace parameters at application bootstrap entry points
+   */
+  public static initialize(nativeBuildFlavorFlag: string): void {
+    if (nativeBuildFlavorFlag === 'LIVE_PROD') {
+      this.activeConfiguration = Object.freeze(LIVE_PRODUCTION_CONFIGURATION);
+    } else {
+      this.activeConfiguration = Object.freeze(SANDBOX_STAGE_CONFIGURATION);
+    }
+  }
+
+  public static get current(): WalletEnvironmentVariables {
+    if (!this.activeConfiguration) {
+      throw new Error('WALLET_ENV_FAULT: Subsystem configurations accessed before initializing boot sequence.');
+    }
+    return this.activeConfiguration;
+  }
+}

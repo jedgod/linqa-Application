@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wallet-core-service
+  namespace: linqa-production
+  labels:
+    app: wallet-core
+    migration-phase: dual-write
+spec:
+  replicas: 4
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%       # Allow 1 new pod to spin up before evicting stale nodes
+      maxUnavailable: 0%  # Enforce 100% baseline capability during the deployment loop
+  selector:
+    matchLabels:
+      app: wallet-core
+  template:
+    metadata:
+      labels:
+        app: wallet-core
+    spec:
+      containers:
+        - name: wallet-engine-node
+          image: ://linqa-send.com
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          environment:
+            - name: NODE_ENV
+              value: "production"
+            - name: WALLET_MIGRATION_MODE
+              value: "DUAL_WRITE_ACTIVE" # Signals workers to write to old and new models concurrently
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: wallet-db-secrets
+                  key: database-connection-string
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1024Mi
+            requests:
+              cpu: "500m"
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 15

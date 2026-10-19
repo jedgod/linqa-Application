@@ -1,0 +1,46 @@
+//docker-compose.wallet-mesh.yml
+
+version: '3.8'
+
+networks:
+  linqa-secure-mesh:
+    driver: bridge
+
+services:
+  wallet-postgres-primary:
+    image: postgres:16-alpine
+    container_name: linqa-wallet-db
+    networks:
+      - linqa-secure-mesh
+    environment:
+      - POSTGRES_USER=ledger_admin
+      - POSTGRES_PASSWORD=ledger_secret_pass
+      - POSTGRES_DB=linqasend_wallet_v2
+    ports:
+      - "5439:5432"
+
+  outbox-worker-daemon:
+    image: node:20-alpine
+    container_name: outbox-worker-daemon
+    networks:
+      - linqa-secure-mesh
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgres://ledger_admin:ledger_secret_pass@wallet-postgres-primary:5432/linqasend_wallet_v2
+      - WORKER_LEASE_DURATION_SEC=30
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: npm run start:worker
+    restart: on-failure
+
+  # Chaos Engineering Injection Node: Simulates network dropouts and worker crashes mid-transfer
+  chaos-network-injector:
+    image: gaiaadm/pumba
+    container_name: chaos-network-injector
+    networks:
+      - linqa-secure-mesh
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Intercepts outbox-worker-daemon containers every 2 minutes, injecting a 40s kill crash cycle
+    command: --interval 2m kill --signal SIGKILL outbox-worker-daemon

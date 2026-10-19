@@ -1,0 +1,36 @@
+//src/services/TransitionMemoryProfiler.ts
+
+import * as Sentry from '@sentry/react-native';
+
+export class TransitionMemoryProfiler {
+  /**
+   * Tracks allocation memory parameters before and after component unmount transitions
+   */
+  public static traceLifecycleMemoryFootprint(
+    componentName: string,
+    lifecyclePhase: 'INITIALIZED' | 'UNMOUNT_COMPLETE'
+  ): void {
+    // Collect a standard runtime footprint sample from the processing node engine
+    const currentHeapUsed = global.performance?.memory?.usedJSHeapSize || 0;
+
+    Sentry.addBreadcrumb({
+      category: 'lifecycle.memory',
+      message: `Component structural frame validation: [${componentName}] reached state [${lifecyclePhase}]. Heap footprint calculated at: ${currentHeapUsed} bytes.`,
+      level: 'info'
+    });
+
+    // If an unmounted component leaves an abnormally large memory signature, trigger an investigation report
+    const MAXIMUM_EXPECTED_LEAK_CEILING_BYTES = 50 * 1024 * 1024; // 50MB Threshold boundary
+    if (lifecyclePhase === 'UNMOUNT_COMPLETE' && currentHeapUsed > MAXIMUM_EXPECTED_LEAK_CEILING_BYTES) {
+      Sentry.withScope((scope) => {
+        scope.setLevel('warning');
+        scope.setTag('memory.leak_hunting', 'splash_transition_eviction');
+        scope.setExtra('unmounted_heap_footprint_bytes', currentHeapUsed.toString());
+        
+        Sentry.captureException(
+          new Error(`MEMORY_MGMT_WARNING: Component [${componentName}] failed to yield memory back to heaps after unmounting.`)
+        );
+      });
+    }
+  }
+}

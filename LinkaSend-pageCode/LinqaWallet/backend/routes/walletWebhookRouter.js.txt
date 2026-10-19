@@ -1,0 +1,94 @@
+//backend/routes/walletWebhookRouter.js
+
+const express = require('express');
+const router = express.Router();
+const { Pool } = require('pg');
+const crypto = require('crypto');
+
+const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
+const WEBHOOK_SIGNING_SECRET = process.env.WEBHOOK_SIGNING_SECRET || 'secret_webhook_signing_vector_6619';
+
+/**
+ * Idempotent Webhook Ingestion Processing Router
+ * Safely transitions ledger allocations from HELD_RESERVATION to POSTED states
+ */
+router.post('/v1/webhooks/payout-callback', async (req, res) => {
+  const incomingSignature = req.headers['x-linqa-signature'];
+  const rawBodyPayload = JSON.stringify(req.body);
+
+  // 1. Enforce strict cryptographic signature validation checks
+  const calculatedSignature = crypto
+    .createHmac('sha256', WEBHOOK_SIGNING_SECRET)
+    .update(rawBodyPayload)
+    .digest('hex');
+
+  if (incomingSignature !== calculatedSignature) {
+    return res.status(401).json({ error: 'CRYPTOGRAPHIC_SIGNATURE_MISMATCH' });
+  }
+
+  const { externalTransferId, providerEventState, trackingReferenceKey } = req.body;
+  const client = await dbPool.connect();
+
+  try {
+    await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+
+    // 2. Perform idempotency pre-flight validation checks to confirm the row has not already processed
+    const outboxStatusCheck = await client.query(
+      'SELECT status_state FROM wallet_transaction_outbox WHERE aggregate_id = \$1 FOR UPDATE',
+      [externalTransferId]
+    );
+
+    if (outboxStatusCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'TRANSACTION_NOT_FOUND' });
+    }
+
+    if (outboxStatusCheck.rows[0].status_state === 'COMPLETED') {
+      await client.query('COMMIT');
+      return res.status(200).json({ status: 'ALREADY_PROCESSED_NO_MUTATION' });
+    }
+
+    if (providerEventState === 'PAYOUT_SUCCESSFUL') {
+      // 3. Settle transaction allocations: Clear the reservation hold and finalize the posted posting entry
+      const settleLedgerQuery = `
+        UPDATE wallet_ledger_postings 
+        SET balance_type = 'POSTED', 
+            accounting_journal_code = 'WITHDRAWAL_SETTLED_SUCCESS',
+            provider_operation_key = $1
+        WHERE transaction_correlation_id = $2;
+      `;
+      await client.query(settleLedgerQuery, [trackingReferenceKey, externalTransferId]);
+
+      const finalizeOutboxQuery = `
+        UPDATE wallet_transaction_outbox 
+        SET status_state = 'COMPLETED' 
+        WHERE aggregate_id = $1;
+      `;
+      await client.query(finalizeOutboxQuery, [externalTransferId]);
+    } else if (providerEventState === 'PAYOUT_REJECTED') {
+      // 4. Reverse allocation tracks gracefully if provider logs rejection states
+      const reverseLedgerQuery = `
+        DELETE FROM wallet_ledger_postings 
+        WHERE transaction_correlation_id = $1 AND balance_type = 'HELD_RESERVATION';
+      `;
+      await client.query(reverseLedgerQuery, [externalTransferId]);
+
+      const crashOutboxQuery = `
+        UPDATE wallet_transaction_outbox 
+        SET status_state = 'FAILED' 
+        WHERE aggregate_id = $1;
+      `;
+      await client.query(crashOutboxQuery, [externalTransferId]);
+    }
+
+    await client.query('COMMIT');
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    return res.status(500).json({ error: 'INTERNAL_WEBHOOK_TRANSACTION_FAULT', message: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+module.exports = router;

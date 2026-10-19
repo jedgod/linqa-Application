@@ -1,0 +1,53 @@
+//scripts/simulate-multi-node-load.ts
+
+import { Client } from 'pg';
+
+interface ClusterNodeConfig {
+  connectionString: string;
+  role: 'PRIMARY' | 'SECONDARY';
+}
+
+export class MultiNodeDatabaseSimulator {
+  private nodes: ClusterNodeConfig[] = [
+    { connectionString: 'postgres://ledger_admin:ledger_secret_pass@localhost:5433/linqasend_wallet_primary', role: 'PRIMARY' },
+    { connectionString: 'postgres://ledger_admin:ledger_secret_pass@localhost:5434/linqasend_wallet_secondary', role: 'SECONDARY' }
+  ];
+
+  /**
+   * Commits transactional writes directly to the primary cluster node and enforces artificial 
+   * replication lag on the replica node to stress-test client UI synchronization tolerances.
+   */
+  public async executeDistributedWriteWithLag(queryText: string, params: any[], injectionLagMs: number): Promise<void> {
+    const primaryNode = this.nodes.find(n => n.role === 'PRIMARY')!;
+    const secondaryNode = this.nodes.find(n => n.role === 'SECONDARY')!;
+
+    const primaryClient = new Client({ connectionString: primaryNode.connectionString });
+    const secondaryClient = new Client({ connectionString: secondaryNode.connectionString });
+
+    try {
+      await primaryClient.connect();
+      // Commit the authoritative subledger ledger mutation to the master node
+      await primaryClient.query(queryText, params);
+      console.log('✏️ MultiNodeDB: Mutation committed cleanly to Primary Cluster Node.');
+
+      // Introduce a deliberate asynchronous delay to simulate cross-region replication lag
+      setTimeout(async () => {
+        try {
+          await secondaryClient.connect();
+          await secondaryClient.query(queryText, params);
+          console.log(`⏳ MultiNodeDB: Synced to Secondary Node after deliberate ${injectionLagMs}ms lag interval.`);
+        } catch (err) {
+          console.error('❌ MultiNodeDB: Secondary replication transmission dropped out.', err);
+        } finally {
+          await secondaryClient.end();
+        }
+      }, injectionLagMs);
+
+    } catch (err) {
+      console.error('❌ MultiNodeDB: Primary transaction write failure.', err);
+      throw err;
+    } finally {
+      await primaryClient.end();
+    }
+  }
+}

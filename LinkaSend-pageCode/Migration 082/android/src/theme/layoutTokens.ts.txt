@@ -1,0 +1,41 @@
+//src/theme/layoutTokens.ts
+
+/**
+ * Authoritative Figma Layout Constraint Tokens for Screen Interface Alignment
+ */
+export const LayoutTokens = {
+  spacing: {
+    xxs: 4,
+    xs: 8,
+    sm: 12,
+    md: 16, // Standard global gutters framework parameter
+    lg: 24, // Hero card internal paddings profile
+    xl: 32,
+    xxl: 48
+  },
+  borders: {
+    radiusSm: 6,
+    radiusMd: 10,  // Checklist and text input structural corner envelopes
+    radiusLg: 16,  // Primary hero balance decks and sliding drawer elements
+    widthThin: 1,
+    widthThick: 2
+  },
+  typography: {
+    fontFamilySans: 'System',
+    scale: {
+      caption: { fontSize: 11, lineHeight: 16, fontWeight: '500' as const },
+      bodySmall: { fontSize: 13, lineHeight: 18, fontWeight: '500' as const },
+      bodyRegular: { fontSize: 15, lineHeight: 22, fontWeight: '500' as const },
+      sectionHeading: { fontSize: 18, lineHeight: 24, fontWeight: '700' as const },
+      mainHeading: { fontSize: 22, lineHeight: 28, fontWeight: '800' as const },
+      heroTitle: { fontSize: 32, lineHeight: 40, fontWeight: '900' as const }
+    }
+  },
+  zIndex: {
+    baseViewport: 1,
+    floatingControlDeck: 10,
+    navigationTabBar: 50,
+    slidingHamburgerDrawer: 100,
+    systemNetworkOverlay: 9999
+  }
+};

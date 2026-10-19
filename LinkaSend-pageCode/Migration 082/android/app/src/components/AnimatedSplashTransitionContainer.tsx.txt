@@ -1,0 +1,60 @@
+//src/components/AnimatedSplashTransitionContainer.tsx
+
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, View, Animated, Dimensions, Image } from 'react-native';
+import { AcademicYahooPalette } from '../theme/academicYahooPalette';
+
+interface TransitionProps {
+  isSyncComplete: boolean;
+  isDarkMode: boolean;
+  children: React.ReactNode;
+}
+
+const { width, height } = Dimensions.get('window');
+
+export const AnimatedSplashTransitionContainer: React.FC<TransitionProps> = ({ isSyncComplete, isDarkMode, children }) => {
+  const [isAnimationFinished, setIsAnimationFinished] = useState(false);
+  const splashOpacity = useState(new Animated.Value(1))[0];
+  
+  const theme = isDarkMode ? AcademicYahooPalette.dark : AcademicYahooPalette.light;
+
+  useEffect(() => {
+    // Trigger transition sequence exactly when global state engines confirm data parity synchronization
+    if (isSyncComplete) {
+      Animated.timing(splashOpacity, {
+        toValue: 0,
+        duration: 450, // 450ms smooth linear cross-fade transition window
+        useNativeDriver: true, // Executes opacity transforms on native compositor threads
+      }).start(() => {
+        setIsAnimationFinished(true);
+      });
+    }
+  }, [isSyncComplete]);
+
+  return (
+    <View style={styles.rootViewport}>
+      {/* Renders the central tab navigation router layout */}
+      {children}
+
+      {/* Persistent floating layout overlay rendering the un-stretched portrait branding canvas */}
+      {!isAnimationFinished && (
+        <Animated.View 
+          pointerEvents="none" 
+          style={[StyleSheet.absoluteFillObject, styles.splashLayer, { backgroundColor: theme.background, opacity: splashOpacity }]}
+        >
+          <Image
+            source={require('../../assets/theme/launch_background_logo_portrait.png')}
+            style={styles.portraitCanvasImage}
+            resizeMode="cover"
+          />
+        </Animated.View>
+      )}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  rootViewport: { flex: 1 },
+  splashLayer: { width: width, height: height, justifyContent: 'center', alignItems: 'center', zIndex: 99999 },
+  portraitCanvasImage: { width: '100%', height: '100%' }
+});

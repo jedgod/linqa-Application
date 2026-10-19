@@ -1,0 +1,38 @@
+//docker/entrypoint.sh
+
+#!/usr/bin/env bash
+
+# ============================================================================
+# Linqa Send Wallet Container Startup Orchestration & Boot Script
+# ============================================================================
+
+set -Eeuo pipefail
+
+DB_HOST="linqa-wallet-db"
+DB_PORT=5432
+MAX_CONNECTION_RETRIES=30
+RETRY_COUNT=0
+
+echo "⏳ Step 1: Checking database connectivity at ${DB_HOST}:${DB_PORT}..."
+
+# Loop until a clean TCP handshake is established or timeout thresholds are reached
+until nc -z "$DB_HOST" "$DB_PORT" || [ "$RETRY_COUNT" -eq "$MAX_CONNECTION_RETRIES" ]; do
+  RETRY_COUNT=$((RETRY_COUNT+1))
+  echo "⚠️ Database cluster unavailable. Retrying connection... ($RETRY_COUNT/$MAX_CONNECTION_RETRIES)"
+  sleep 2
+done
+
+if [ "$RETRY_COUNT" -eq "$MAX_CONNECTION_RETRIES" ]; then
+  echo "🚨 CRITICAL BOOT FAULT: Database cluster connection timeout. Terminating boot sequence." >&2
+  exit 1
+fi
+
+echo "✅ Database connection verified healthy."
+
+# Step 2: Run pending schema upgrades automatically before launching long-lived threads
+echo "🗄️ Step 2: Applying outstanding structural database migrations (Enforcing Migration 082)..."
+npx knex migrate:latest --knexfile ./db/knexfile.ts
+
+# Step 3: Launch the persistent background daemon with a clean process wrapper
+echo "🤖 Step 3: Launching the outbox processing daemon thread..."
+exec node ./dist/backend/workers/OutboxWorkerDaemon.js

@@ -1,0 +1,33 @@
+//db/knex/migrations/20261018201200_harden_subledger_pii_fields.ts
+
+import { Knex } from 'knex';
+
+/**
+ * Migration schema adding cryptographic columns to protect archived student transaction PII data
+ */
+export async function up(knex: Knex): Promise<void> {
+  await knex.schema.alterTable('wallet_ledger_postings', (table) => {
+    // Drop plain-text reference paths to maintain strict data privacy compliance limits
+    table.dropColumn('accounting_journal_code');
+  });
+
+  await knex.schema.alterTable('wallet_ledger_postings', (table) => {
+    // 1. Encrypted Cryptographic Ciphertext Container
+    table.text('encrypted_journal_metadata_payload').nullable(); // Base64-encoded payload string
+    
+    // 2. Integrity Verification Vectors Mapping
+    table.string('initialization_vector_hex', 24).nullable(); // 12-byte initialization vector hex
+    table.string('authentication_tag_hex', 32).nullable();    // 16-byte authentication tag hex
+    table.string('crypto_epoch_version', 10).notNullable().defaultTo('v1');
+  });
+}
+
+export async function down(knex: Knex): Promise<void> {
+  await knex.schema.alterTable('wallet_ledger_postings', (table) => {
+    table.dropColumn('crypto_epoch_version');
+    table.dropColumn('authentication_tag_hex');
+    table.dropColumn('initialization_vector_hex');
+    table.dropColumn('encrypted_journal_metadata_payload');
+    table.string('accounting_journal_code').notNullable().defaultTo('LEGACY_UNENCRYPTED_MIGRATION_RESTORE');
+  });
+}

@@ -1,0 +1,25 @@
+# monitoring/grafana-refund-alert-rules.yml
+groups:
+  - name: linqa_wallet_refund_outbox_telemetry_alerts
+    rules:
+      # 1. Flag when the automated refund queue accumulates latency bottlenecks
+      - alert: WalletRefundQueueBacklogAccumulating
+        expr: sum(wallet_refund_outbox_pending_count) > 50
+        for: 5m
+        labels:
+          severity: warning
+          tier: ledger-recovery
+        annotations:
+          summary: "Automated Refund Outbox Queue Accumulating High Latency Backlogs"
+          description: "The volume of unexecuted refund items in the outbox has stayed above 50 rows for over 5 minutes (Current Count: {{ $value }}). Automated recovery loops may be bottlenecked."
+
+      # 2. Flag critical failure trends inside compensating refund execution pipelines
+      - alert: CriticalRefundExecutionFailures
+        expr: sum(rate(wallet_refund_outbox_status_changes_total{status="REJECTED"}[10m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          tier: core-accounting
+        annotations:
+          summary: "Critical Refund Execution Failures Detected inside Ledger Pipelines"
+          description: "The compensating refund recovery daemon has encountered terminal rejections inside transaction loops within the past 10 minutes. Requires manual balance reconciliation checking."

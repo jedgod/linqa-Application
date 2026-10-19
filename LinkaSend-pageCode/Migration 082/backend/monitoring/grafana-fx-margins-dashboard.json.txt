@@ -1,0 +1,60 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Real-Time Gross Capture Rate of FX Exchange Spread Margin Revenues",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "id": 10,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus_production" },
+          "editorMode": "code",
+          "expr": "sum(rate(linqasend_wallet_fx_spread_margin_total[5m])) by (source_currency, destination_currency)",
+          "legendFormat": "{{source_currency}} ➡️ {{destination_currency}} Spread Rate",
+          "range": true,
+          "refId": "FX_MARGIN_RATE"
+        }
+      ],
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "right" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Cumulative Daily FX Spread Revenue Yield per Target Currency Vector",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 9 },
+      "id": 11,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus_production" },
+          "editorMode": "code",
+          "expr": "sum(increase(linqasend_wallet_fx_spread_margin_total[24h])) by (destination_currency)",
+          "legendFormat": "Total Derived From {{destination_currency}}",
+          "range": true,
+          "refId": "FX_CUMULATIVE_YIELD"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "hideFrom": { "legend": false, "tooltip": false, "viz": false } },
+          "unit": "short"
+        }
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["wallet-payouts", "fx-accounting", "telemetry"],
+  "time": { "from": "now-24h", "to": "now" },
+  "timezone": "utc",
+  "title": "LinqaSend Authoritative Subledger FX Spread Margin Monitor"
+}

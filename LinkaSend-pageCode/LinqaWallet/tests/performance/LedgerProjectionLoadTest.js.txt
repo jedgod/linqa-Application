@@ -1,0 +1,45 @@
+//tests/performance/LedgerProjectionLoadTest.js
+
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+
+export const options = {
+  scenarios: {
+    sustained_projection_stress: {
+      executor: 'ramping-arrival-rate',
+      startRate: 50,
+      timeUnit: '1s',
+      preAllocatedVUs: 100,
+      maxVUs: 500,
+      stages: [
+        { duration: '1m', target: 500 },  // Scale up to 500 concurrent evaluations per second
+        { duration: '3m', target: 500 },  // Maintain peak load to stress-test relational table indexes
+        { duration: '1m', target: 0 }    // Cool down down to base state
+      ],
+    },
+  },
+  thresholds: {
+    http_req_duration: ['p(95)<150'], // 95% of aggregate math requests must compute within 150ms
+    http_req_failed: ['rate<0.005'],  // Error drop tolerances must remain below 0.5%
+  },
+};
+
+export default function () {
+  const TARGET_GATEWAY_PERIMETER_URL = 'https://linqa-send.com';
+  
+  // Distribute randomized mock student tokens to simulate standard production tracking profiles
+  const simulatedStudentId = Math.floor(Math.random() * 10000) + 1;
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.SimulationStudentUser_${simulatedStudentId}`
+  };
+
+  const response = http.get(TARGET_GATEWAY_PERIMETER_URL, { headers: requestHeaders });
+
+  check(response, {
+    'Ledger successfully generated balance projection (HTTP 200)': (r) => r.status === 200,
+  });
+
+  // Introduce dynamic pacing delays to mimic human interaction profiles
+  sleep(Math.random() * 2 + 1);
+}

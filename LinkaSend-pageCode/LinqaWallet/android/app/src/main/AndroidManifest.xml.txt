@@ -1,0 +1,19 @@
+<manifest xmlns:android="http://android.com">
+    <application>
+        <activity
+            android:name=".MainActivity"
+            android:launchMode="singleTask"
+            android:exported="true">
+            
+            <!-- Inbound Wallet Intent Filter Router Configuration -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                
+                <data android:scheme="linqawallet" android:host="receipt" />
+                <data android:scheme="https" android:host="*.linqa-send.com" android:pathPrefix="/wallet/receipt/" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

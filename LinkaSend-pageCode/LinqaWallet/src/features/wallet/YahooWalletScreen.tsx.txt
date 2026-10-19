@@ -1,0 +1,102 @@
+/*src/features/wallet/YahooWalletScreen.tsx*/
+
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Dimensions } from 'react-native';
+import { ApiClient } from '../../services/apiClient';
+
+interface ProfferedWalletBalance {
+  currencyCode: string;
+  postedAvailableUnits: number;
+  pendingIncomingUnits: number;
+  heldReservationUnits: number;
+}
+
+export const YahooWalletScreen: React.FC<{ isDarkMode: boolean; navigation: any }> = ({ isDarkMode, navigation }) => {
+  const [wallet, setWallet] = useState<ProfferedWalletBalance | null>(null);
+  const [loading, setLoading] = useState(true);
+  
+  const colors = isDarkMode ? darkThemeTokens : lightThemeTokens;
+
+  useEffect(() => {
+    ApiClient.request<ProfferedWalletBalance>('/wallet/balance-summary', { method: 'GET' })
+      .then((res) => {
+        setWallet(res);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return <View style={[styles.centered, { backgroundColor: colors.background }]}><ActivityIndicator size="large" color={colors.primary} /></View>;
+  }
+
+  const formatCurrency = (minorUnits: number) => (minorUnits / 100).toFixed(2);
+
+  return (
+    <ScrollView style={[styles.viewport, { backgroundColor: colors.background }]}>
+      {/* 🟣 Yahoo Style Consolidated Wallet Value Deck */}
+      <View style={[styles.totalBalanceHeroDeck, { backgroundColor: colors.primary }]}>
+        <Text style={styles.heroCurrencyLabel}>{wallet?.currencyCode || 'USD'} Account Balance</Text>
+        <Text style={styles.heroPrimaryAmount}>${formatCurrency(wallet?.postedAvailableUnits || 0)}</Text>
+        <Text style={styles.heroSubtextAvailability}>Authoritative Ledger Verified</Text>
+      </View>
+
+      {/* 📊 High-Precision Structural Allocation Grid */}
+      <View style={[styles.breakdownCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <View style={styles.metricRow}>
+          <Text style={[styles.metricLabel, { color: colors.textSecondary }]}>Available to Send/Withdraw</Text>
+          <Text style={[styles.metricValue, { color: colors.textPrimary }]}>${formatCurrency(wallet?.postedAvailableUnits || 0)}</Text>
+        </View>
+        <View style={[styles.divider, { backgroundColor: colors.border }]} />
+        <View style={styles.metricRow}>
+          <Text style={[styles.metricLabel, { color: colors.textSecondary }]}>Pending Incoming Funds</Text>
+          <Text style={[styles.metricValue, { color: colors.accentBlue }]}>+${formatCurrency(wallet?.pendingIncomingUnits || 0)}</Text>
+        </View>
+        <View style={[styles.divider, { backgroundColor: colors.border }]} />
+        <View style={styles.metricRow}>
+          <Text style={[styles.metricLabel, { color: colors.textSecondary }]}>Held / Reserved Constraints</Text>
+          <Text style={[styles.metricValue, { color: colors.alertRed }]}>-${formatCurrency(wallet?.heldReservationUnits || 0)}</Text>
+        </View>
+      </View>
+
+      {/* 💳 Clear Action Triggers Panel */}
+      <View style={styles.actionClusterDeck}>
+        <TouchableOpacity 
+          style={[styles.primaryActionAnchor, { backgroundColor: colors.primary }]}
+          onPress={() => navigation.navigate('SendMoneyForm', { balanceSource: 'WALLET' })}
+        >
+          <Text style={styles.actionAnchorText}>⚡ Send to International Recipient</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={[styles.secondaryActionAnchor, { backgroundColor: colors.surface, borderColor: colors.primary }]}
+          onPress={() => navigation.navigate('WithdrawalForm')}
+        >
+          <Text style={[styles.actionAnchorTextSecondary, { color: colors.primary }]}>🏦 Transfer Out to Bank / Card</Text>
+        </TouchableOpacity>
+      </View>
+    </ScrollView>
+  );
+};
+
+const lightThemeTokens = { background: '#F5F8FA', surface: '#FFFFFF', primary: '#6001D2', textPrimary: '#1D2531', textSecondary: '#626F82', border: '#E1E5EA', accentBlue: '#2196F3', alertRed: '#FF3B30' };
+const darkThemeTokens = { background: '#0F1115', surface: '#181B22', primary: '#8A3BFF', textPrimary: '#F8FAFC', textSecondary: '#94A3B8', border: '#262B35', accentBlue: '#3B82F6', alertRed: '#EF4444' };
+
+const styles = StyleSheet.create({
+  viewport: { flex: 1 },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  totalBalanceHeroDeck: { paddingVertical: 40, paddingHorizontal: 24, alignItems: 'center', borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
+  heroCurrencyLabel: { color: '#FFFFFFCC', fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1 },
+  heroPrimaryAmount: { color: '#FFFFFF', fontSize: 42, fontWeight: '800', marginVertical: 8 },
+  heroSubtextAvailability: { color: '#FFFFFF90', fontSize: 12, fontWeight: '500' },
+  breakdownCard: { margin: 16, padding: 20, borderRadius: 16, borderWidth: 1, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4 },
+  metricRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12 },
+  metricLabel: { fontSize: 14, fontWeight: '600' },
+  metricValue: { fontSize: 15, fontWeight: '700' },
+  divider: { height: 1, width: '100%' },
+  actionClusterDeck: { paddingHorizontal: 16, marginTop: 12 },
+  primaryActionAnchor: { paddingVertical: 16, borderRadius: 12, alignItems: 'center', marginBottom: 12 },
+  secondaryActionAnchor: { paddingVertical: 16, borderRadius: 12, alignItems: 'center', borderWidth: 1.5 },
+  actionAnchorText: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 },
+  actionAnchorTextSecondary: { fontWeight: '800', fontSize: 15 }
+});

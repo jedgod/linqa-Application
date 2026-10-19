@@ -1,0 +1,55 @@
+import React from 'react';
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { YahooPalette } from '../theme/yahooPalette';
+
+interface LockIndicatorProps {
+  isLockedForSettlement: boolean;
+  isDarkMode: boolean;
+}
+
+export const OptimisticBalanceLockIndicator: React.FC<LockIndicatorProps> = ({ isLockedForSettlement, isDarkMode }) => {
+  if (!isLockedForSettlement) return null;
+  
+  const theme = isDarkMode ? YahooPalette.dark : YahooPalette.light;
+
+  return (
+    <View style={[styles.inlineAlertLockRow, { backgroundColor: theme.filterPillActive || '#EEF2FF', borderColor: theme.border }]}>
+      <ActivityIndicator size="small" color={theme.primaryBrand} style={styles.spinnerSpacing} />
+      <View style={styles.textColumn}>
+        <Text style={[styles.lockTitle, { color: theme.textPrimary }]}>Verification In Progress</Text>
+        <Text style={[styles.lockSubtext, { color: theme.textSecondary }]}>
+          Your recent transfer request is undergoing remote settlement verification. Your available balance will automatically refresh.
+        </Text>
+      </View>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  inlineAlertLockRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginHorizontal: 16,
+    marginTop: 12,
+  },
+  spinnerSpacing: {
+    marginRight: 12,
+    marginTop: 2
+  },
+  textColumn: {
+    flex: 1,
+  },
+  lockTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  lockSubtext: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+});

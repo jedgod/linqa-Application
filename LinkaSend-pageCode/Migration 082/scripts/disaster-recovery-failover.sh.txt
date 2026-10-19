@@ -1,0 +1,46 @@
+#scripts/disaster-recovery-failover.sh
+
+#!/usr/bin/env bash
+
+# ============================================================================
+# Linqa Send Wallet: Active Multi-Region Database Manual Failover Runbook
+# Scope: Controlled Maintenance Switchover & Primary Failover Validation
+# ============================================================================
+
+set -Eeuo pipefail
+trap 'echo "🚨 DISASTER RECOVERY FAULT: Failover runbook execution aborted at line $LINENO"' ERR
+
+CLUSTER_NAME="linqa-ledger-cluster"
+PRIMARY_NODE="ledger-node-us-east-primary"
+STANDBY_NODE="ledger-node-us-west-standby"
+PATRONICTL_PATH="/usr/local/bin/patronictl"
+
+echo "🏁 [$(date -u)] Initializing multi-region cluster failover sequence..."
+
+# 1. Pre-Flight Health Evaluation Check: Assert standby parity before executing promotion
+echo "🔍 Evaluating synchronous replication data status on Standby Node: ${STANDBY_NODE}..."
+REPLICATION_LAG_BYTES=$($PATRONICTL_PATH -c /etc/patroni/patroni.yml list | grep "$STANDBY_NODE" | awk '{print $7}' || echo "0")
+
+if [ "$REPLICATION_LAG_BYTES" != "0" ] && [ "$REPLICATION_LAG_BYTES" != "-" ]; then
+    echo "🚨 FAILOVER ABORTED: Standby replication lag detected ($REPLICATION_LAG_BYTES bytes). Clean switchover blocked to prevent data loss." >&2
+    exit 1
+fi
+
+# 2. Trigger Controlled Patroni Switchover Execution
+echo "🔄 Executing controlled switchover from ${PRIMARY_NODE} to ${STANDBY_NODE}..."
+$PATRONICTL_PATH -c /etc/patroni/patroni.yml switchover --master "$PRIMARY_NODE" --candidate "$STANDBY_NODE" --scheduled now --force
+
+# 3. Validation Loop: Monitor routing status until the new primary node reports alive
+echo "⏳ Monitoring cluster promotion progress..."
+sleep 5
+
+CURRENT_PRIMARY=$($PATRONICTL_PATH -c /etc/patroni/patroni.yml list | grep "Leader" | awk '{print $2}' || echo "")
+
+if [ "$CURRENT_PRIMARY" == "$STANDBY_NODE" ]; then
+    echo "✅ FAILOVER SUCCESSFUL: Node ${STANDBY_NODE} promoted to primary cluster leader."
+    echo "📱 Re-routing system edge transaction proxies to newly promoted data node..."
+    exit 0
+else
+    echo "🚨 CRITICAL FAILOVER ANOMALY: Cluster leader resolution mismatch. Current leader: $CURRENT_PRIMARY" >&2
+    exit 1
+fi

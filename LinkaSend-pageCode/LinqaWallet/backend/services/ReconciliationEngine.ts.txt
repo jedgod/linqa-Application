@@ -1,0 +1,68 @@
+//backend/services/ReconciliationEngine.ts
+
+import { Pool } from 'pg';
+
+interface ProviderAssetSnapshot {
+  provider_id: string;
+  currency: string;
+  settled_balance_minor_units: number;
+}
+
+export class ReconciliationEngine {
+  private dbPool: Pool;
+
+  constructor(connectionPool: Pool) {
+    this.dbPool = connectionPool;
+  }
+
+  /**
+   * Reconciles internal liabilities against third-party provider settlement data
+   */
+  public async executeReconciliationPass(
+    providerAssets: ProviderAssetSnapshot[]
+  ): Promise<{ discrepanciesDiscovered: number }> {
+    const client = await this.dbPool.connect();
+    let discrepanciesDiscovered = 0;
+
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+
+      for (const asset of providerAssets) {
+        // 1. Aggregate complete internal customer liabilities across specific currency indices
+        const liabilityQuery = `
+          SELECT COALESCE(SUM(amount_minor_units), 0) as total_liabilities
+          FROM wallet_ledger_postings
+          WHERE currency_iso_code = $1 AND balance_type = 'POSTED';
+        `;
+        const liabilityRes = await client.query(liabilityQuery, [asset.currency]);
+        const calculatedLiabilities = Math.abs(parseInt(liabilityRes.rows[0].total_liabilities));
+
+        // 2. Evaluate structural parity boundaries between internal balance tracks and external asset snapshots
+        if (calculatedLiabilities !== asset.settled_balance_minor_units) {
+          discrepanciesDiscovered++;
+          const varianceDelta = calculatedLiabilities - asset.settled_balance_minor_units;
+
+          // 3. Log any detected variance into an isolated data table for administrative tracking
+          const logDiscrepancyQuery = `
+            INSERT INTO reconciliation_discrepancy_logs (
+              provider_id, currency_iso_code, internal_liability_minor, external_asset_minor, variance_delta_minor, status_state
+            ) VALUES ($1, $2, $3, $4, $5, 'UNRESOLVED');
+          `;
+          await client.query(logDiscrepancyQuery, [
+            asset.provider_id, asset.currency, calculatedLiabilities, asset.settled_balance_minor_units, varianceDelta
+          ]);
+          
+          console.warn(`🚨 [Reconciliation Audit Warning] Variance anomaly mapped in currency sector: ${asset.currency}. Delta: ${varianceDelta} minor units.`);
+        }
+      }
+
+      await client.query('COMMIT');
+      return { discrepanciesDiscovered };
+    } catch (fault) {
+      await client.query('ROLLBACK');
+      throw fault;
+    } finally {
+      client.release();
+    }
+  }
+}

@@ -1,0 +1,57 @@
+//src/services/WalletDegradationManager.ts
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ApiClient } from './apiClient';
+
+export interface ResilientWalletBalances {
+  currencyCode: string;
+  postedAvailableUnits: number;
+  pendingIncomingUnits: number;
+  heldReservationUnits: number;
+  cachedAtTimestamp?: number;
+}
+
+export class WalletDegradationManager {
+  private static readonly STORAGE_CACHE_KEY = 'com.linqa.wallet.secure_cache_mirror';
+
+  /**
+   * High-precision resilience wrapper to intercept network dropouts and serve cached subledger metrics
+   */
+  public static async executeSafeBalanceFetch(): Promise<{
+    balances: ResilientWalletBalances;
+    isDegradedOfflineState: boolean;
+  }> {
+    try {
+      // 1. Attempt to execute authoritative fetch directly across live network tunnels
+      const livePayloadResponse = await ApiClient.request<ResilientWalletBalances>('/wallet/balance-summary', {
+        method: 'GET'
+      });
+
+      // Mirror the verified server payload onto local storage layers to prepare for future dropout events
+      const cacheEnvelope: ResilientWalletBalances = { ...livePayloadResponse, cachedAtTimestamp: Date.now() };
+      await AsyncStorage.setItem(this.STORAGE_CACHE_KEY, JSON.stringify(cacheEnvelope));
+
+      return {
+        balances: livePayloadResponse,
+        isDegradedOfflineState: false
+      };
+    } catch (networkTransportOrTimeoutError) {
+      // 2. Intercept disconnection dropouts and attempt local device cache extraction
+      const localCacheString = await AsyncStorage.getItem(this.STORAGE_CACHE_KEY);
+
+      if (localCacheString) {
+        const decodedCachePayload: ResilientWalletBalances = JSON.parse(localCacheString);
+        return {
+          balances: decodedCachePayload,
+          isDegradedOfflineState: true
+        };
+      }
+
+      // 3. Absolute Ground-State Emergency Recovery: Return blank structures to keep UI views intact without crashing
+      return {
+        balances: { currencyCode: 'USD', postedAvailableUnits: 0, pendingIncomingUnits: 0, heldReservationUnits: 0 },
+        isDegradedOfflineState: true
+      };
+    }
+  }
+}

@@ -1,0 +1,44 @@
+---
+- name: Provision Self-Hosted Mobile Continuous Integration Runner Infrastructure
+  hosts: ci_runners
+  become: true
+  vars:
+    node_version: "20.x"
+    ruby_version: "3.2"
+
+  tasks:
+    - name: Core System Subsystem Package Updates
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+
+    - name: Install Development System Dependency Toolsets
+      ansible.builtin.apt:
+        name:
+          - curl
+          - git
+          - unzip
+          - build-essential
+          - libssl-dev
+          - netcat-openbsd
+        state: present
+
+    - name: Install Secure Node.js 20 Framework Environment Engine
+      ansible.builtin.shell: |
+        curl -fsSL https://nodesource.com_{{ node_version }} | bash -
+        apt-get install -y nodejs
+      args:
+        creates: /usr/bin/node
+
+    - name: Configure Ruby Runtime Environment Hooks for Fastlane Compliance
+      ansible.builtin.apt:
+        name:
+          - ruby
+          - ruby-dev
+        state: present
+
+    - name: Pin System Bundler Versions
+      ansible.builtin.gem:
+        name: bundler
+        state: present
+        user_install: false

@@ -1,0 +1,29 @@
+# monitoring/prometheus-storage-alerts.yml
+
+groups:
+  - name: linqa_wallet_cache_resilience_alerts
+    rules:
+      # 1. Trigger warning track notification alerts for localized hardware anomalies
+      - alert: WalletLocalCacheReadFailuresSpike
+        expr: |
+          sum(rate(sentry_errors_total{io_subsystem="wallet_local_cache", network_carrier_type="CELLULAR"}[5m])) 
+          / 
+          sum(rate(sentry_errors_total{io_subsystem="wallet_local_cache"}[5m])) * 100 > 5.0
+        for: 3m
+        labels:
+          severity: warning
+          tier: mobile-client-cache
+        annotations:
+          summary: "Wallet Local Cache Read Failure Rate Elevated"
+          description: "Local storage cache read failure rates have exceeded 5.0% over a 5-minute window during cellular transitions (Current Value: {{ $value }}%). Client balance views may be showing degraded offline data."
+
+      # 2. Trigger high-priority critical alerts if local storage reads fail entirely
+      - alert: CriticalStorageCacheCorrupted
+        expr: sum(rate(sentry_errors_total{hardware_exception_message="HARDWARE_IO_READ_FAULT"}[10m])) > 10
+        for: 2m
+        labels:
+          severity: critical
+          tier: core-persistence
+        annotations:
+          summary: "Critical Hardware I/O Read Failures Encountered"
+          description: "Persistent structural device read loops have hit total I/O failures across multiple concurrent devices within the past 10 minutes. Requires immediate storage model inspection."

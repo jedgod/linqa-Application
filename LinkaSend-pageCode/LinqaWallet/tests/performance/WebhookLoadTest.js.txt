@@ -1,0 +1,55 @@
+//tests/performance/WebhookLoadTest.js
+
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+import crypto from 'k6/crypto';
+
+export const options = {
+  scenarios: {
+    webhook_burst_load: {
+      executor: 'constant-arrival-rate',
+      rate: 200,                // Fire 200 webhook invocations per second
+      timeUnit: '1s',
+      duration: '3m',          // Sustain peak processing load for 3 minutes
+      preAllocatedVUs: 50,
+      maxVUs: 200,
+    },
+  },
+  thresholds: {
+    http_req_duration: ['p(99)<350'], // 99% of webhooks must process within 350ms
+    http_req_failed: ['rate<0.001'],  // Drop limit: Error tolerance under 0.1%
+  },
+};
+
+const WEBHOOK_SIGNING_SECRET = 'secret_webhook_signing_vector_6619';
+
+export default function () {
+  const LOCAL_INGESTION_GATEWAY = 'https://linqa-send.com';
+  
+  // 1. Generate unique deterministic transaction fields for every virtual iteration pass
+  const externalTransferId = `tx_burst_${__VU}_${__ITER}`;
+  const trackingReferenceKey = `prov_ref_${crypto.randomBytes(8).toString('hex')}`;
+
+  const requestBodyPayload = JSON.stringify({
+    externalTransferId: externalTransferId,
+    providerEventState: 'PAYOUT_SUCCESSFUL',
+    trackingReferenceKey: trackingReferenceKey,
+  });
+
+  // 2. Pre-compute the cryptographic signature header matching production encryption gates
+  const signatureHasher = crypto.createHMAC('sha256', WEBHOOK_SIGNING_SECRET);
+  signatureHasher.update(requestBodyPayload);
+  const calculatedSignature = signatureHasher.digest('hex');
+
+  const customHeaders = {
+    'Content-Type': 'application/json',
+    'X-Linqa-Signature': calculatedSignature,
+  };
+
+  // 3. Dispatch the payload request to the edge gateway perimeter
+  const response = http.post(LOCAL_INGESTION_GATEWAY, requestBodyPayload, { headers: customHeaders });
+
+  check(response, {
+    'Gateway accepted callback with status 200': (r) => r.status === 200,
+  });
+}

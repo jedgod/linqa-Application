@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://android.com">
+    <!-- Background layer using the authoritative academic brand token -->
+    <background android:drawable="@color/brand_primary_indigo" />
+    <!-- Foreground layer holding the geometric letter "A" open book logomark -->
+    <foreground android:drawable="@drawable/ic_brand_logo_foreground" />
+</adaptive-icon>

@@ -1,0 +1,29 @@
+//monitoring/prometheus-alerting-rules.yml
+
+groups:
+  - name: linqa_wallet_webhook_ingestion_alerts
+    rules:
+      # 1. Intercept Critical Webhook Ingestion Failure Spikes
+      - alert: WebhookIngestionHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5..", endpoint="/api/v1/webhooks/payout-callback"}[5m]))
+          /
+          sum(rate(http_requests_total{endpoint="/api/v1/webhooks/payout-callback"}[5m])) * 100 > 1.0
+        for: 2m
+        labels:
+          severity: critical
+          tier: perimeter-gateway
+        annotations:
+          summary: "Critical Webhook Ingestion Failure Spike (Wallet Service)"
+          description: "Inbound webhook processing error rate has exceeded 1.0% over a rolling 5-minute interval (Current Value: {{ $value }}%). Immediate data boundary audit required."
+
+      # 2. Intercept Ingestion Latency Degradation
+      - alert: WebhookIngestionLatencySpike
+        expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{endpoint="/api/v1/webhooks/payout-callback"}[5m]) ) by (le)) > 0.350
+        for: 3m
+        labels:
+          severity: warning
+          tier: subledger-engine
+        annotations:
+          summary: "Webhook Processing Ingestion Latency Degradation Detected"
+          description: "99th percentile of webhook ingestion latency has degraded beyond the 350ms performance baseline for over 3 minutes (Current Value: {{ $value }}s)."

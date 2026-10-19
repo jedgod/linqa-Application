@@ -1,0 +1,21 @@
+# monitoring/reconciliation-cron.sh
+
+#!/usr/bin/env bash
+# ============================================================================
+# Linqa automated nightly reconciliation trigger cron loop execution script
+# Execution Cadence: Nightly at 00:00 UTC
+# ============================================================================
+set -Eeuo pipefail
+
+export DATABASE_URL="postgres://audit_supervisor:audit_secure_pass@localhost:5439/linqasend_reconciled_v2"
+export LOG_PATH="/var/log/linqa/reconciliation_cron.log"
+
+echo "⏳ [$(date -u)] Starting scheduled nightly multi-currency ledger reconciliation pass..." >> "$LOG_PATH"
+
+# Trigger compilation and run the production service module
+if /usr/bin/node /app/dist/backend/services/runReconciliation.js >> "$LOG_PATH" 2>&1; then
+    echo "✅ [$(date -u)] Nightly reconciliation matching pass completed cleanly." >> "$LOG_PATH"
+else
+    echo "🚨 [$(date -u)] CRITICAL CRON FAILURE: Reconciliation pipeline crashed." >> "$LOG_PATH" >&2
+    exit 1
+fi

@@ -1,0 +1,141 @@
+//src/features/wallet/SendMoneyForm.tsx inside an Expo layout structure)
+
+import React, { useState, useEffect } from 'react';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, SafeAreaView, ScrollView, ActivityIndicator, Alert, StatusBar } from 'react-native';
+
+export default function App() {
+  const [transferAmount, setTransferAmount] = useState('100.00');
+  const [calculating, setCalculating] = useState(false);
+  const [feeBreakdown, setFeeBreakdown] = useState({ fee: 4.99, rate: 1.34, payout: 127.31 });
+
+  // Recalculate transaction metrics smoothly upon input adjustments
+  useEffect(() => {
+    setCalculating(true);
+    const delayDebouncePipeline = setTimeout(() => {
+      const parsedAmount = parseFloat(transferAmount) || 0;
+      setFeeBreakdown({
+        fee: parsedAmount > 500 ? 0.00 : 4.99, // Waive structural fees for large tiers
+        rate: 1.34,
+        payout: Math.max(0, (parsedAmount - (parsedAmount > 500 ? 0 : 4.99)) * 1.34)
+      });
+      setCalculating(false);
+    }, 400);
+
+    return () => clearTimeout(delayDebouncePipeline);
+  }, [transferAmount]);
+
+  const triggerTransactionExecution = () => {
+    Alert.alert(
+      "Confirm International Transfer",
+      `Are you sure you want to transfer out $${transferAmount} USD from your available balance? Funds will process down secure validation rails immediately.`,
+      [
+        { text: "Cancel Check", style: "cancel" },
+        { text: "Authorize Transfer", style: "default", onPress: () => Alert.alert("Success", "Transaction securely enqueued into outbox distribution queues.") }
+      ]
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.viewSafeLayout}>
+      <StatusBar barStyle="light-content" backgroundColor="#6001D2" />
+      
+      {/* Yahoo-Inspired Header Banner */}
+      <View style={styles.headerBanner}>
+        <Text style={styles.headerTitle}>Secure International Transfer</Text>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.scrollCanvasContainer}>
+        {/* Funding Vector Entry Box */}
+        <View style={styles.inputCard}>
+          <Text style={styles.cardFieldLabel}>Amount to Send (USD)</Text>
+          <View style={styles.inputInlineRow}>
+            <Text style={styles.currencyPrefixMarker}>\$</Text>
+            <TextInput
+              keyboardType="numeric"
+              value={transferAmount}
+              onChangeText={setTransferAmount}
+              style={styles.numericTextInputField}
+            />
+          </View>
+          <Text style={styles.availableBalanceIndicator}>Source Profile: Authoritative Wallet Subledger</Text>
+        </View>
+
+        {/* Dynamic Transparent Fee & Cost Validation Sheet */}
+        <View style={styles.validationCostSheetCard}>
+          <Text style={styles.sectionHeaderTitle}>Transparent Pricing Breakdown</Text>
+          
+          {calculating ? (
+            <View style={styles.loaderArea}><ActivityIndicator size="small" color="#6001D2" /></View>
+          ) : (
+            <View style={styles.metricsWrapperStack}>
+              <View style={styles.costDataRow}>
+                <Text style={styles.costLabelField}>Interbank Processing Fee</Text>
+                <Text style={styles.costValueField}>\${feeBreakdown.fee.toFixed(2)} USD</Text>
+              </View>
+              
+              <View style={styles.costDataRow}>
+                <Text style={styles.costLabelField}>Guaranteed FX Conversion Rate</Text>
+                <Text style={styles.costValueField}>1 USD = {feeBreakdown.rate.toFixed(2)} CAD</Text>
+              </View>
+
+              <View style={styles.structuralDividerLine} />
+
+              <View style={styles.costDataRow}>
+                <Text style={styles.totalPayoutLabel}>Total Destination Payout</Text>
+                <Text style={styles.totalPayoutValue}>\${feeBreakdown.payout.toFixed(2)} CAD</Text>
+              </View>
+            </View>
+          )}
+        </View>
+
+        {/* Expected Arrival Timeline Notification Banner */}
+        <View style={styles.deliveryTimelineMessageCard}>
+          <Text style={styles.timelineGlyphIndicator}>⏱️</Text>
+          <View style={styles.timelineTextContextWrap}>
+            <Text style={styles.timelinePrimaryNotice}>Expected Arrival Horizon: 1-2 Banking Days</Text>
+            <Text style={styles.timelineSubTextDetails}>Subject to automated compliance clearance and secondary node liquidity parameters.</Text>
+          </View>
+        </View>
+
+        {/* Final Execution CTA Trigger */}
+        <TouchableOpacity 
+          style={[styles.executionCallToActionButton, { backgroundColor: (parseFloat(transferAmount) || 0) <= 0 ? '#94A3B8' : '#6001D2' }]}
+          disabled={(parseFloat(transferAmount) || 0) <= 0}
+          onPress={triggerTransactionExecution}
+        >
+          <Text style={styles.executionButtonTextLabel}>Authorize & Disburs Funds</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  viewSafeLayout: { flex: 1, backgroundColor: '#F5F8FA' },
+  headerBanner: { height: 60, backgroundColor: '#6001D2', justifyContent: 'center', alignItems: 'center', px: 16 },
+  headerTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  scrollCanvasContainer: { padding: 16 },
+  inputCard: { backgroundColor: '#FFFFFF', padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#E1E5EA', marginBottom: 16 },
+  cardFieldLabel: { fontSize: 12, fontWeight: '700', color: '#626F82', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
+  inputInlineRow: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1.5, borderBottomColor: '#6001D2', paddingBottom: 4 },
+  currencyPrefixMarker: { fontSize: 28, fontWeight: '700', color: '#1D2531', marginRight: 6 },
+  numericTextInputField: { flex: 1, fontSize: 28, fontWeight: '700', color: '#1D2531', padding: 0 },
+  availableBalanceIndicator: { fontSize: 11, fontWeight: '500', color: '#626F82', marginTop: 8 },
+  validationCostSheetCard: { backgroundColor: '#FFFFFF', padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#E1E5EA', marginBottom: 16 },
+  sectionHeaderTitle: { fontSize: 14, fontWeight: '700', color: '#1D2531', marginBottom: 16 },
+  loaderArea: { height: 110, justifyContent: 'center', alignItems: 'center' },
+  metricsWrapperStack: { width: '100%' },
+  costDataRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 },
+  costLabelField: { fontSize: 14, fontWeight: '500', color: '#626F82' },
+  costValueField: { fontSize: 14, fontWeight: '600', color: '#1D2531' },
+  structuralDividerLine: { height: 1, backgroundColor: '#E1E5EA', my: 8, marginVertical: 12 },
+  totalPayoutLabel: { fontSize: 14, fontWeight: '700', color: '#1D2531' },
+  totalPayoutValue: { fontSize: 18, fontWeight: '800', color: '#2196F3' },
+  deliveryTimelineMessageCard: { backgroundColor: '#FFFFFF', padding: 16, borderRadius: 16, borderWidth: 1, borderColor: '#E1E5EA', flexDirection: 'row', alignItems: 'flex-start', marginBottom: 24, borderLeftWidth: 4, borderLeftColor: '#F59E0B' },
+  timelineGlyphIndicator: { fontSize: 20, marginRight: 12, marginTop: 2 },
+  timelineTextContextWrap: { flex: 1 },
+  timelinePrimaryNotice: { fontSize: 14, fontWeight: '700', color: '#1D2531' },
+  timelineSubTextDetails: { fontSize: 12, fontWeight: '500', color: '#626F82', marginTop: 4, lineHeight: 18 },
+  executionCallToActionButton: { paddingVertical: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  executionButtonTextLabel: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 }
+});

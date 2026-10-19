@@ -1,0 +1,34 @@
+name: EAS Update Preview Continuous Deployment
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy-eas-preview:
+    name: Build and Push Preview Bundle to EAS
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Source Code Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Build Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Remote Expo EAS Command Line System
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install Architecture System Dependencies
+        run: npm ci
+
+      - name: Distribute Live Iterative Preview via EAS Update Channels
+        run: eas update --branch main --message "${{ github.event.head_commit.message }}"
+        env:
+          EXPO_PROJECT_ID: ${{ secrets.EXPO_PROJECT_ID }}

@@ -1,0 +1,52 @@
+//scripts/verify-ledger-parity.ts
+
+import { Client } from 'pg';
+
+const PRIMARY_CONNECTION_STRING = process.env.DATABASE_URL_PRIMARY!; // The promoted master instance
+const REPLICA_CONNECTION_STRING = process.env.DATABASE_URL_REPLICA!; // The secondary instance
+
+async function verifyClusterParity() {
+  console.log('🏁 Starting automated post-failover data parity verification checks...');
+
+  const primaryClient = new Client({ connectionString: PRIMARY_CONNECTION_STRING });
+  const replicaClient = new Client({ connectionString: REPLICA_CONNECTION_STRING });
+
+  try {
+    await primaryClient.connect();
+    await replicaClient.connect();
+
+    // 1. Calculate an aggregate transaction hash checksum from the primary node ledger entries
+    const checksumQuery = `
+      SELECT md5(string_agg(id::text || balance_type || amount_minor_units::text, '' ORDER BY id)) as ledger_hash,
+             COUNT(*) as record_count,
+             COALESCE(SUM(amount_minor_units), 0) as balance_sum
+      FROM wallet_ledger_postings;
+    `;
+
+    const primaryResult = await primaryClient.query(checksumQuery);
+    const replicaResult = await replicaClient.query(checksumQuery);
+
+    const primaryData = primaryResult.rows[0];
+    const replicaData = replicaResult.rows[0];
+
+    console.log(`📊 Primary Node Snapshot: Hash=[${primaryData.ledger_hash}] Count=[${primaryData.record_count}] Sum=[${primaryData.balance_sum}]`);
+    console.log(`📊 Replica Node Snapshot: Hash=[${replicaData.ledger_hash}] Count=[${replicaData.record_count}] Sum=[${replicaData.balance_sum}]`);
+
+    // 2. Evaluate structural parity parameters between cluster endpoints
+    if (primaryData.ledger_hash === replicaData.ledger_hash && primaryData.record_count === replicaData.record_count) {
+      console.log('✅ PARITY VERIFIED: Ledger structures are fully synchronized across multi-region datastores.');
+      process.exit(0);
+    } else {
+      console.error('🚨 CRITICAL LEDGER DRIFT DETECTED: Cluster nodes contain asymmetric transaction profiles!');
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error('❌ Parity checking pipeline encountered an operational failure:', error);
+    process.exit(1);
+  } finally {
+    await primaryClient.end();
+    await replicaClient.end();
+  }
+}
+
+verifyClusterParity();

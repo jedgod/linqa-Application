@@ -1,0 +1,50 @@
+//tests/features/wallet/HardwareLatencyInjection.test.ts
+
+import { WalletDegradationManager } from '../../../src/services/WalletDegradationManager';
+import { PerformanceTrackingWrapper } from '../../../src/services/PerformanceTrackingWrapper';
+import { ApiClient } from '../../../src/services/apiClient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+jest.mock('../../../src/services/apiClient');
+jest.mock('@react-native-async-storage/async-storage');
+
+describe('Structural System Latency Injection Resilience Tests', () => {
+  const mockCacheEnvelope = {
+    currencyCode: 'USD',
+    postedAvailableUnits: 75000,
+    pendingIncomingUnits: 0,
+    heldReservationUnits: 0,
+    cachedAtTimestamp: Date.now()
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should redirect executions out to secondary hardware local cache paths under critical latency conditions', async () => {
+    // 1. Force ApiClient to trigger a slow response that times out past your latency threshold limits
+    (ApiClient.request as jest.Mock).mockImplementation(() => {
+      return new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('GATEWAY_PERIMETER_TIMEOUT_LATENCY_BREACH'));
+        }, 3000); // 3-second delay forces circuit breaker trip
+      });
+    });
+
+    // 2. Seed memory layer data paths with historical verification payloads
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(JSON.stringify(mockCacheEnvelope));
+
+    // 3. Wrap target execution inside the high-precision profiling harness
+    const operationalTaskThunk = () => WalletDegradationManager.executeSafeBalanceFetch();
+    
+    const performanceResult = await PerformanceTrackingWrapper.profileNetworkLatency(
+      '/wallet/balance-summary',
+      operationalTaskThunk
+    );
+
+    // 4. Assert degradation behavior handles the error and falls back cleanly without breaking the view
+    expect(performanceResult.isDegradedOfflineState).toBe(true);
+    expect(performanceResult.balances.postedAvailableUnits).toBe(75000);
+    expect(AsyncStorage.getItem).toHaveBeenCalledWith('com.linqa.wallet.secure_cache_mirror');
+  });
+});

@@ -1,0 +1,56 @@
+version: '3.8'
+
+networks:
+  linqa-e2e-mesh:
+    driver: bridge
+
+services:
+  wallet-gateway-api:
+    image: node:20-alpine
+    container_name: linqa-wallet-gateway-api
+    networks:
+      - linqa-e2e-mesh
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=development
+      - PORT=8080
+      - REDIS_COORDINATOR_URL=redis://redis-cluster-coordinator:6379
+      - DB_CLUSTER_NODES=db-primary-node,db-secondary-node
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: npm run start:gateway-api
+
+  redis-cluster-coordinator:
+    image: redis:7-alpine
+    container_name: redis-cluster-coordinator
+    networks:
+      - linqa-e2e-mesh
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+
+  db-primary-node:
+    image: postgres:16-alpine
+    container_name: db-primary-node
+    networks:
+      - linqa-e2e-mesh
+    environment:
+      - POSTGRES_USER=ledger_admin
+      - POSTGRES_PASSWORD=ledger_secret_pass
+      - POSTGRES_DB=linqasend_wallet_primary
+    ports:
+      - "5433:5432"
+
+  db-secondary-node:
+    image: postgres:16-alpine
+    container_name: db-secondary-node
+    networks:
+      - linqa-e2e-mesh
+    environment:
+      - POSTGRES_USER=ledger_admin
+      - POSTGRES_PASSWORD=ledger_secret_pass
+      - POSTGRES_DB=linqasend_wallet_secondary
+    ports:
+      - "5434:5432"

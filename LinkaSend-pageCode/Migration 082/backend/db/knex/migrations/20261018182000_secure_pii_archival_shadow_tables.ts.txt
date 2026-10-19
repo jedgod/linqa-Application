@@ -1,0 +1,27 @@
+//db/knex/migrations/20261018182000_secure_pii_archival_shadow_tables.ts
+
+import { Knex } from 'knex';
+
+/**
+ * Migration schema provisioning cryptographic storage fields for archived transactional PII data
+ */
+export async function up(knex: Knex): Promise<void> {
+  await knex.schema.createTable('archived_transaction_pii_vault', (table) => {
+    table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
+    table.string('transaction_correlation_id').notNullable().index();
+    
+    // Encrypted Ciphertext Blocks
+    table.text('encrypted_recipient_identity_block').notNullable(); // Base64 cipher text payload
+    
+    // Cryptographic Authentication Attributes
+    table.string('initialization_vector_hex', 24).notNullable(); // 12-byte initialization vector string
+    table.string('authentication_tag_hex', 32).notNullable();    // 16-byte authentication tag string
+    
+    table.string('encryption_key_epoch_version').notNullable().defaultTo('v1');
+    table.timestamp('archived_at', { useTz: true }).defaultTo(knex.fn.now());
+  });
+}
+
+export async function down(knex: Knex): Promise<void> {
+  await knex.schema.dropTableIfExists('archived_transaction_pii_vault');
+}

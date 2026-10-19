@@ -1,0 +1,44 @@
+//backend/services/IncidentEscalationEngine.ts
+
+import axios from 'axios';
+
+export class IncidentEscalationEngine {
+  private static readonly SLACK_WEBHOOK_URL = process.env.SLACK_OPS_WEBHOOK || '';
+  private static readonly PAGERDUTY_EVENTS_API = 'https://pagerduty.com';
+  private static readonly PAGERDUTY_ROUTING_KEY = process.env.PAGERDUTY_ROUTING_KEY || '';
+
+  /**
+   * Evaluates variance severity logs and triggers real-time incident tracking streams
+   */
+  public static async dispatchVarianceIncident(
+    currency: string, 
+    varianceDeltaMinor: number, 
+    unresolvedCount: number
+  ): Promise<void> {
+    const isCriticalThreshold = Math.abs(varianceDeltaMinor) > 500000; // Trigger critical tier for variations > \$5,000.00
+    const readableVarianceAmount = (varianceDeltaMinor / 100).toFixed(2);
+
+    // 1. Fire Asynchronous Notification Alerts into Operations Slack Channels
+    if (this.SLACK_WEBHOOK_URL) {
+      await axios.post(this.SLACK_WEBHOOK_URL, {
+        text: `🚨 *Linqa Financial Reconciliation Variance Alert* 🚨\n*Status:* Unresolved Discrepancies Count: ${unresolvedCount}\n*Currency Sector:* ${currency}\n*Calculated Variance Delta:* \$${readableVarianceAmount}\n*Severity Assessment:* ${isCriticalThreshold ? '🔴 CRITICAL_SEVERITY_TIER_1' : '🟡 WARNING_SEVERITY_TIER_2'}`
+      }).catch(() => console.error('⚠️ Secondary Telemetry Channel: Slack drop.'));
+    }
+
+    // 2. Escalate directly to PagerDuty Call Rotas if variance boundaries breach the critical threshold
+    if (isCriticalThreshold && this.PAGERDUTY_ROUTING_KEY) {
+      await axios.post(this.PAGERDUTY_EVENTS_API, {
+        payload: {
+          summary: `CRITICAL_RECONCILIATION_OUTAGE: Delta variance drift of \$${readableVarianceAmount} discovered in ${currency} ledger tracking assets.`,
+          severity: 'critical',
+          source: 'linqa-wallet-subledger-reconciler',
+          component: 'subledger-reconciliation-engine',
+          group: 'financial-core'
+        },
+        routing_key: this.PAGERDUTY_ROUTING_KEY,
+        event_action: 'trigger',
+        dedup_key: `reconcile_variance_fault_${currency}_${Date.now()}`
+      }).catch(() => console.error('⚠️ Critical Telemetry Channel: PagerDuty escalation connection timeout.'));
+    }
+  }
+}

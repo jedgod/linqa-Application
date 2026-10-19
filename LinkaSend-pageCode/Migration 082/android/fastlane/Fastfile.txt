@@ -1,0 +1,25 @@
+#fastlane/Fastfile
+
+platform :android do
+  desc "Inject branding logo assets into native resource directories and compile production release candidates"
+  lane :build_production_release do
+    # 1. Process application branding logomarks into native mipmap layers
+    android_appicon(
+      appicon_image: "assets/brand/app_icon_source.png",
+      appicon_v26_background: "assets/brand/adaptive_bg.png",
+      appicon_v26_foreground: "assets/brand/adaptive_fg.png"
+    )
+
+    # 2. Inject the custom portrait background splash asset straight into drawable folders
+    copy_artifacts(
+      target_path: "android/app/src/main/res/drawable/launch_background_logo.png",
+      artifacts: ["assets/brand/launch_background_logo_portrait.png"]
+    )
+
+    # 3. Invoke Gradle task configurations to assemble the obfuscated, signed production Android App Bundle (.aab)
+    gradle(
+      task: "bundle",
+      build_type: "Release"
+    )
+  end
+end

@@ -1,0 +1,34 @@
+version: '3.8'
+
+networks:
+  linqa-mobile-mesh:
+    driver: bridge
+
+services:
+  wallet-core-gateway:
+    image: ://linqa-send.com
+    container_name: wallet-core-gateway
+    networks:
+      - linqa-mobile-mesh
+    ports:
+      - "8081:8080"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgres://ledger_admin:ledger_secret_pass@linqa-wallet-db:5432/linqasend_wallet_v2
+
+  # Chaos Ingress Injector: Simulates moving cars dropping cell tower connections mid-transfer
+  cellular-link-saboteur:
+    image: gaiaadm/pumba
+    container_name: cellular-link-saboteur
+    networks:
+      - linqa-mobile-mesh
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Every 60 seconds, injects a 15-second latency bubble (3000ms delay, 20% packet drop rate) 
+    # to force client network sockets into transient timeout recovery states
+    command: >
+      --interval 60s
+      netem --duration 15s
+      --delay 3000
+      --loss 20
+      wallet-core-gateway

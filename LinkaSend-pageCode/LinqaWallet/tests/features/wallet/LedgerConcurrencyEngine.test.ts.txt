@@ -1,0 +1,33 @@
+//tests/features/wallet/LedgerConcurrencyEngine.test.ts
+
+import { IdempotentWalletEngine } from '../../../backend/services/IdempotentWalletEngine';
+import { Pool } from 'pg';
+
+describe('Authoritative Balance Ledger Concurrency & Race Verification Matrix', () => {
+  const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+  it('should reject overlapping duplicate withdrawals and guarantee atomic balance locks during a race condition', async () => {
+    const targetedTestWalletId = 'wallet_uuid_alpha_9918';
+    const distinctWithdrawalIdA = 'with_id_001_aaa';
+    const distinctWithdrawalIdB = 'with_id_002_bbb';
+
+    // Fire off concurrent, parallel execution tasks to trigger race condition boundaries
+    const executionThunksRace = [
+      IdempotentWalletEngine.orchestrateWithdrawal(targetedTestWalletId, distinctWithdrawalIdA, 10000, 'USD'),
+      IdempotentWalletEngine.orchestrateWithdrawal(targetedTestWalletId, distinctWithdrawalIdB, 10000, 'USD')
+    ];
+
+    const results = await Promise.allSettled(executionThunksRace);
+    
+    const succeededCount = results.filter(r => r.status === 'fulfilled').length;
+    const rejectedCount = results.filter(r => r.status === 'rejected').length;
+
+    // Verify that the atomic row isolation layer blocked dual-allocation vulnerabilities
+    expect(succeededCount).toBe(1);
+    expect(rejectedCount).toBe(1);
+    
+    if (results[1].status === 'rejected') {
+      expect((results[1] as PromiseRejectedResult).reason.message).toMatch(/INSUFFICIENT_FUNDS|LOCK_TIMEOUT/);
+    }
+  });
+});

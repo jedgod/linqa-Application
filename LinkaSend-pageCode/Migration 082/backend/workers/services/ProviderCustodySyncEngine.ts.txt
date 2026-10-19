@@ -1,0 +1,70 @@
+import axios from 'axios';
+import { Pool } from 'pg';
+import { TelemetryEngine } from '../../src/services/TelemetryEngine';
+
+export class ProviderCustodySyncEngine {
+  private dbPool: Pool;
+  private readonly PROVIDER_API_BASE = 'https://external-payout-partner.com';
+
+  constructor(pool: Pool) {
+    this.dbPool = pool;
+  }
+
+  /**
+   * Orchestrates an explicit balance sync sweep across third-party liquidity providers
+   */
+  public async executeProviderBalanceSweep(providerCode: string, currency: string): Promise<void> {
+    const client = await this.dbPool.connect();
+
+    try {
+      // 1. Fetch live balance state from authoritative third-party provider core endpoint
+      const response = await axios.get(`${this.PROVIDER_API_BASE}/accounts/balances`, {
+        headers: { 'Authorization': `Bearer ${process.env.PROVIDER_SECRET_TOKEN}` },
+        params: { account_currency: currency }
+      });
+
+      const externalBalanceMinor = parseInt(response.data.balance_minor_units);
+
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+
+      // 2. Extract current internal custody tracking projection metrics
+      const internalCheckQuery = `
+        SELECT custody_balance_minor_units 
+        FROM linqa_provider_custody_accounts 
+        WHERE provider_code_identifier = $1 AND currency_iso_code = $2 
+        FOR UPDATE;
+      `;
+      const internalRes = await client.query(internalCheckQuery, [providerCode, currency]);
+
+      if (internalRes.rows.length > 0) {
+        const internalBalanceMinor = parseInt(internalRes.rows[0].custody_balance_minor_units);
+        
+        // 3. Evaluate matching metrics to find discrepancies indicating external leakage
+        if (internalBalanceMinor !== externalBalanceMinor) {
+          const varianceDelta = internalBalanceMinor - externalBalanceMinor;
+          
+          TelemetryEngine.captureException(
+            new Error(`RECONCILIATION_WARN_PROVIDER_CUSTODY_MISMATCH: ${providerCode}`),
+            { providerCode, currency, internalBalanceMinor: String(internalBalanceMinor), externalBalanceMinor: String(externalBalanceMinor), varianceDelta: String(varianceDelta) }
+          );
+        }
+      }
+
+      // 4. Update the local tracking tables with the verified provider balance metrics
+      const updateCustodyQuery = `
+        INSERT INTO linqa_provider_custody_accounts (provider_code_identifier, currency_iso_code, custody_balance_minor_units, last_reconciled_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (provider_code_identifier, currency_iso_code) 
+        DO UPDATE SET custody_balance_minor_units = EXCLUDED.custody_balance_minor_units, last_reconciled_at = NOW();
+      `;
+      await client.query(updateCustodyQuery, [providerCode, currency, externalBalanceMinor]);
+
+      await client.query('COMMIT');
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      TelemetryEngine.captureException(error, { providerCode, currency, context: 'PROVIDER_CUSTODY_SYNC_FAILURE' });
+    } finally {
+      client.release();
+    }
+  }
+}

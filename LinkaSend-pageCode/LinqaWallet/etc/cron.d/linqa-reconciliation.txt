@@ -1,0 +1,3 @@
+cron
+# Enforce cron execution tracking environment variables to run explicitly at 00:00 midnight daily
+0 0 * * * root /bin/bash /app/scripts/reconciliation-cron.sh

@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ledger-parity-verification-job
+  namespace: linqa-production
+spec:
+  schedule: "0 */6 * * *" # Runs standard evaluation scans every 6 hours automatically
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: ledger-parity-checker
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: parity-validator
+              image: ://linqa-send.com
+              imagePullPolicy: IfNotPresent
+              command: ["node", "./dist/scripts/verify-ledger-parity.js"]
+              env:
+                - name: DATABASE_URL_PRIMARY
+                  valueFrom:
+                    secretKeyRef:
+                      name: wallet-db-secrets
+                      key: db-primary-connection-string
+                - name: DATABASE_URL_REPLICA
+                  valueFrom:
+                    secretKeyRef:
+                      name: wallet-db-secrets
+                      key: db-replica-connection-string
+              resources:
+                limits:
+                  cpu: "500m"
+                  memory: 512Mi
+                requests:
+                  cpu: "250m"
+                  memory: 256Mi

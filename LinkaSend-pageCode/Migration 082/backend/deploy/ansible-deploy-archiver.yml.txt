@@ -1,0 +1,40 @@
+---
+- name: Deploy Linqa Send Wallet Monthly Partition Archiver
+  hosts: database_servers
+  become: true
+  vars:
+    archive_script_src: "../scripts/linqa-ledger-cold-archiver.sh"
+    archive_script_dest: "/usr/local/bin/linqa-ledger-cold-archiver.sh"
+    cron_log_path: "/var/log/linqa/cold_archiver.log"
+
+  tasks:
+    - name: Ensure target application directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: ledger_admin
+        group: ledger_admin
+        mode: '0755'
+      loop:
+        - "/var/backup/linqa/cold_storage"
+        - "/var/log/linqa"
+
+    - name: Deploy partition archiver executable script
+      ansible.builtin.copy:
+        src: "{{ archive_script_src }}"
+        dest: "{{ archive_script_dest }}"
+        owner: ledger_admin
+        group: ledger_admin
+        mode: '0750'
+
+    - name: Register monthly cron job for data lifecycle tracking
+      ansible.builtin.cron:
+        name: "linqa_wallet_monthly_partition_archiver"
+        minute: "0"
+        hour: "2"
+        day: "1"
+        month: "*"
+        weekday: "*"
+        user: "root"
+        job: "/bin/bash {{ archive_script_dest }} >> {{ cron_log_path }} 2>&1"
+        state: present

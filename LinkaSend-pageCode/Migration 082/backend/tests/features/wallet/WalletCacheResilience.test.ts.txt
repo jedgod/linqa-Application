@@ -1,0 +1,52 @@
+//tests/features/wallet/WalletCacheResilience.test.ts
+
+import { WalletDegradationManager, ResilientWalletBalances } from '../../../src/services/WalletDegradationManager';
+import { ApiClient } from '../../../src/services/apiClient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+jest.mock('../../../src/services/apiClient');
+jest.mock('@react-native-async-storage/async-storage');
+
+describe('Wallet Local Cache Fallback Resilience & Graceful Degradation Matrix', () => {
+  const mockCacheEnvelope: ResilientWalletBalances = {
+    currencyCode: 'USD',
+    postedAvailableUnits: 55000, // \$550.00
+    pendingIncomingUnits: 1000,
+    heldReservationUnits: 2000,
+    cachedAtTimestamp: Date.now() - 60000
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should cleanly serve local cache snapshots when network transport layers time out', async () => {
+    // 1. Force the primary API client to simulate a strict hardware timeout dropout
+    (ApiClient.request as jest.Mock).mockRejectedValue(new Error('NETWORK_TIMEOUT_LATENCY_GATEWAY_DOWN'));
+    
+    // 2. Mock storage layer to return an uncorrupted, historical cached envelope
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(JSON.stringify(mockCacheEnvelope));
+
+    // 3. Execute balance retrieval pass through the resilience engine manager
+    const outcome = await WalletDegradationManager.executeSafeBalanceFetch();
+
+    // 4. Assert data parity with local storage parameters and verify the offline status flag
+    expect(outcome.isDegradedOfflineState).toBe(true);
+    expect(outcome.balances.postedAvailableUnits).toBe(55000);
+    expect(outcome.balances.currencyCode).toBe('USD');
+    expect(ApiClient.request).toHaveBeenCalledTimes(1);
+    expect(AsyncStorage.getItem).toHaveBeenCalledWith('com.linqa.wallet.secure_cache_mirror');
+  });
+
+  it('should fall back to absolute ground-state blank metrics if both network and local storage fail', async () => {
+    // Force complete failure across both channels
+    (ApiClient.request as jest.Mock).mockRejectedValue(new Error('NETWORK_DISCONNECTED'));
+    (AsyncStorage.getItem as jest.Mock).mockRejectedValue(new Error('HARDWARE_IO_READ_FAULT'));
+
+    const outcome = await WalletDegradationManager.executeSafeBalanceFetch();
+
+    expect(outcome.isDegradedOfflineState).toBe(true);
+    expect(outcome.balances.postedAvailableUnits).toBe(0); // Ground-state safety ceiling
+    expect(outcome.balances.currencyCode).toBe('USD');
+  });
+});

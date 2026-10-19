@@ -1,0 +1,49 @@
+name: Android Production App Bundle Continuous Deployment
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy-android:
+    name: Build and Package Signed Android App Bundle
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Source Code Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Build Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java Development Kit (JDK) Env
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Ruby and Bundler Subsystems
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+
+      - name: Install Application Dependencies
+        run: npm ci
+
+      - name: Inject Production Signing Keystore Payload
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/production.keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+
+      - name: Execute Fastlane Ingress & Compile Lane
+        run: bundle exec fastlane android build_production_release
+        env:
+          AKNOWLOGE_RELEASE_STORE_FILE: "production.keystore"
+          AKNOWLEDGE_RELEASE_STORE_PASSWORD: ${{ secrets.AKNOWLEDGE_RELEASE_STORE_PASSWORD }}
+          AKNOWLEDGE_RELEASE_KEY_ALIAS: ${{ secrets.AKNOWLEDGE_RELEASE_KEY_ALIAS }}
+          AKNOWLEDGE_RELEASE_KEY_PASSWORD: ${{ secrets.AKNOWLEDGE_RELEASE_KEY_PASSWORD }}

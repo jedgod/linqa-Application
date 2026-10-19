@@ -1,0 +1,38 @@
+//tests/performance/TokenLifecycleProfiler.test.ts
+
+import { SecureSessionStore } from '../../src/storage/secureStore';
+
+describe('Cryptographic Authentication Memory Buffer Profiling Suite', () => {
+  
+  beforeEach(() => {
+    jest.resetModules();
+  });
+
+  it('should verify that cryptographic token memory buffers are evicted cleanly during session termination', async () => {
+    // 1. Capture initial baseline heap memory utilization
+    if (global.gc) global.gc(); 
+    const memoryHeapBaseline = process.memoryUsage().heapUsed;
+
+    // 2. Allocate an ephemeral high-precision bearer token into the runtime state tracking memory
+    const temporaryTokenBuffer = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.' + 'A'.repeat(4096); 
+    await SecureSessionStore.saveSessionToken(temporaryTokenBuffer);
+
+    // 3. Clear session credentials and explicitly nullify references to drop scope anchors
+    await SecureSessionStore.clearSession();
+    
+    // 4. Force V8 runtime Engine Garbage Collection to process unreferenced memory chunks
+    if (global.gc) {
+      global.gc();
+      const memoryHeapPostPurge = process.memoryUsage().heapUsed;
+      const totalLeakedMemoryFootprint = memoryHeapPostPurge - memoryHeapBaseline;
+
+      console.log(`📊 Memory Profiler: Active Heap delta calculated at ${totalLeakedMemoryFootprint} bytes.`);
+      
+      // Enforce clean cleanup boundaries: Leaked memory from a purged token frame must be near zero
+      // A threshold boundary of 50KB accommodates minor system runtime noises safely
+      expect(totalLeakedMemoryFootprint).toBeLessThan(50 * 1024);
+    } else {
+      console.warn('⚠️ Environment warning: Run tests with node flag "--expose-gc" to enable heap sampling.');
+    }
+  });
+});

@@ -1,0 +1,10 @@
+//ios/LinqaWalletApp.xcodeproj/project.pbxproj
+
+// ============================================================================
+// Production Identity signing profiles for App Store Connect distribution
+// ============================================================================
+CODE_SIGN_IDENTITY = "Apple Distribution";
+CODE_SIGN_STYLE = Manual;
+DEVELOPMENT_TEAM = 7A293K291A;
+PROVISIONING_PROFILE_SPECIFIER = "Linqa Send Wallet App Store Production Provisioning Profile";
+PRODUCT_BUNDLE_IDENTIFIER = com.linqa.wallet.send;

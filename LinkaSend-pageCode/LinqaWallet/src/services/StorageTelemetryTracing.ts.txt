@@ -1,0 +1,42 @@
+//src/services/StorageTelemetryTracing.ts
+
+import * as Sentry from '@sentry/react-native';
+import NetInfo from '@react-native-community/netinfo';
+
+export class StorageTelemetryTracing {
+  /**
+   * Tracks local storage access loops and flags critical I/O dropouts during connection shifts
+   */
+  public static async traceStorageTransaction<T>(
+    operationName: string,
+    storageActionThunk: () => Promise<T>
+  ): Promise<T> {
+    const startHardwareTimer = performance.now();
+    const currentNetworkState = await NetInfo.fetch();
+
+    try {
+      const operationOutputResult = await storageActionThunk();
+      return operationOutputResult;
+    } catch (storageHardwareException: any) {
+      const executionDurationMs = performance.now() - startHardwareTimer;
+
+      // Log a structured exceptional telemetry event immediately into your Sentry cluster
+      Sentry.withScope((scope) => {
+        scope.setLevel('warning');
+        scope.setTag('io.subsystem', 'wallet_local_cache');
+        scope.setTag('io.action_target', operationName);
+        scope.setTag('network.carrier_type', currentNetworkState.type.toUpperCase());
+        scope.setTag('network.is_connected', String(currentNetworkState.isConnected));
+        
+        scope.setExtra('io_duration_ms', executionDurationMs.toFixed(2));
+        scope.setExtra('hardware_exception_message', storageHardwareException.message || 'UNKNOWN_IO_IO_FAULT');
+
+        Sentry.captureException(
+          new Error(`WALLET_CACHE_READ_FAULT: Hardware isolation layer failure during tracking pass [${operationName}].`)
+        );
+      });
+
+      throw storageHardwareException;
+    }
+  }
+}

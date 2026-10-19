@@ -1,0 +1,50 @@
+//tests/performance/PerimeterGatewayStress.js
+
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+
+export const options = {
+  stages: [
+    { duration: '1m', target: 300 },  // Scale traffic up to 300 concurrent virtual users
+    { duration: '4m', target: 300 },  // Sustain constant peak transaction load
+    { duration: '1m', target: 1000 }, // Burst load verification scaling pass
+    { duration: '2m', target: 0 }     // Graceful cooldown loop down to zero state
+  ],
+  thresholds: {
+    http_req_duration: ['p(95)<300'], // 95% of perimeter transactions must process within 300ms
+    http_req_failed: ['rate<0.001']   // Structural drops tolerance must stay beneath 0.1%
+  }
+};
+
+export default function () {
+  const CORE_PERIMETER_GATEWAY_URL = 'https://linqa-send.com';
+  
+  const targetHeaders = {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.SimulationAuthoritativeWalletTokenRecord'
+  };
+
+  // 1. High-Concurrency Subledger Balance Projection Rebuild Request
+  const balanceResponse = http.get(`${CORE_PERIMETER_GATEWAY_URL}/wallet/balance-summary`, { headers: targetHeaders });
+  check(balanceResponse, {
+    'Balance tracking response returns status 200': (r) => r.status === 200,
+    'Response payload holds valid isolated structure': (r) => r.body.includes('postedAvailableUnits')
+  });
+
+  sleep(1);
+
+  // 2. High-Concurrency Outbox Settlement Entry Submission Pass
+  const sendMoneyPayload = JSON.stringify({
+    walletId: 'wallet_uuid_perf_01',
+    amountMinorUnits: 5000, // \$50.00 transactional simulation
+    currencyIsoCode: 'USD',
+    payoutDestinationAccount: 'payout_acc_99218'
+  });
+
+  const sendResponse = http.post(`${CORE_PERIMETER_GATEWAY_URL}/wallet/transfer-out`, sendMoneyPayload, { headers: targetHeaders });
+  check(sendResponse, {
+    'Disbursement transaction request processed successfully': (r) => r.status === 202
+  });
+
+  sleep(2);
+}

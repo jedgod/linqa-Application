@@ -1,0 +1,56 @@
+//src/utilities/SecureLogArchiver.ts
+
+import crypto from 'crypto';
+
+export class SecureLogArchiver {
+  private static readonly ALGORITHM_AES_256_GCM = 'aes-256-gcm';
+  private static readonly SECRET_KEY_HEX = process.env.LOG_ENCRYPTION_KEY_HEX || '0'.repeat(64); // 32-byte key descriptor
+
+  /**
+   * Encrypts sensitive cleartext JSON payloads into secure strings
+   */
+  public static encryptLogPayload(rawPayload: Record<string, any>): {
+    encryptedData: string;
+    initializationVectorHex: string;
+    authenticationTagHex: string;
+  } {
+    const serializationText = JSON.stringify(rawPayload);
+    const initializationVector = crypto.randomBytes(12); // Standard 12-byte initialization vector allocation
+    const runtimeKeyBuffer = Buffer.from(this.SECRET_KEY_HEX, 'hex');
+
+    const cipher = crypto.createCipheriv(this.ALGORITHM_AES_256_GCM, runtimeKeyBuffer, initializationVector);
+    
+    let encryptedString = cipher.update(serializationText, 'utf8', 'hex');
+    encryptedString += cipher.final('hex');
+
+    // Extract the authentication tag to guarantee cryptographic payload integrity verification checks
+    const authenticationTag = cipher.getAuthTag();
+
+    return {
+      encryptedData: encryptedString,
+      initializationVectorHex: initializationVector.toString('hex'),
+      authenticationTagHex: authenticationTag.toString('hex')
+    };
+  }
+
+  /**
+   * Decrypts archived log data fields back into plain cleartext JSON objects
+   */
+  public static decryptLogPayload(
+    encryptedData: string,
+    initializationVectorHex: string,
+    authenticationTagHex: string
+  ): Record<string, any> {
+    const runtimeKeyBuffer = Buffer.from(this.SECRET_KEY_HEX, 'hex');
+    const ivBuffer = Buffer.from(initializationVectorHex, 'hex');
+    const tagBuffer = Buffer.from(authenticationTagHex, 'hex');
+
+    const decipher = crypto.createDecipheriv(this.ALGORITHM_AES_256_GCM, runtimeKeyBuffer, ivBuffer);
+    decipher.setAuthTag(tagBuffer);
+
+    let decryptedText = decipher.update(encryptedData, 'hex', 'utf8');
+    decryptedText += decipher.final('utf8');
+
+    return JSON.parse(decryptedText);
+  }
+}

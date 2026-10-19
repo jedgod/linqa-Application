@@ -1,0 +1,64 @@
+//backend/workers/AutomatedRefundDaemon.ts
+
+import { Pool } from 'pg';
+
+export class AutomatedRefundDaemon {
+  private dbPool: Pool;
+  private isProcessing = false;
+
+  constructor(pool: Pool) {
+    this.dbPool = pool;
+  }
+
+  /**
+   * Scans and processes pending entries within the refund outbox system
+   */
+  public async processPendingRefunds(): Promise<void> {
+    if (this.isProcessing) return;
+    this.isProcessing = true;
+
+    const client = await this.dbPool.connect();
+
+    try {
+      // Lease outstanding refund targets inside an isolated transaction lock row
+      const selectPendingQuery = `
+        SELECT id, original_transfer_id, wallet_account_id, refund_amount_minor_units, currency_iso_code 
+        FROM wallet_refund_outbox 
+        WHERE refund_status = 'PENDING' 
+        LIMIT 10 FOR UPDATE SKIP LOCKED;
+      `;
+      const pendingRes = await client.query(selectPendingQuery);
+
+      for (const row of pendingRes.rows) {
+        try {
+          await client.query('BEGIN');
+
+          // 1. Update the tracking row status to block double-processing attempts
+          await client.query('UPDATE wallet_refund_outbox SET refund_status = \'PROCESSING\' WHERE id = \$1', [row.id]);
+
+          // 2. Commit a compensating credit entry into the authoritative subledger journal
+          const compensationIdempotencyKey = `refund_compensate_link_${row.original_transfer_id}`;
+          const refundCreditQuery = `
+            INSERT INTO wallet_ledger_postings (wallet_account_id, transaction_correlation_id, provider_operation_key, balance_type, amount_minor_units, currency_iso_code, accounting_journal_code)
+            VALUES ($1, $2, $3, 'POSTED', $4, $5, 'AUTOMATED_REFUND_COMPENSATION_CREDIT');
+          `;
+          await client.query(refundCreditQuery, [row.wallet_account_id, row.original_transfer_id, compensationIdempotencyKey, row.refund_amount_minor_units, row.currency_iso_code]);
+
+          // 3. Mark the refund outbox item as finalized
+          await client.query('UPDATE wallet_refund_outbox SET refund_status = \'SETTLED\' WHERE id = \$1', [row.id]);
+
+          await client.query('COMMIT');
+          console.log(`✅ [Refund Worker] Successfully credited \$${(row.refund_amount_minor_units / 100).toFixed(2)} ${row.currency_iso_code} back to wallet: ${row.wallet_account_id}`);
+        } catch (txnError) {
+          await client.query('ROLLBACK');
+          await client.query('UPDATE wallet_refund_outbox SET refund_status = \'PENDING\' WHERE id = \$1', [row.id]);
+        }
+      }
+    } catch (globalError) {
+      console.error('❌ [Refund Worker] Pipeline execution pass failed:', globalError);
+    } finally {
+      client.release();
+      this.isProcessing = false;
+    }
+  }
+}

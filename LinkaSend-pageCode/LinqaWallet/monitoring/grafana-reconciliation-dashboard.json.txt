@@ -1,0 +1,76 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Subledger Customer Liabilities vs. Provider Settlement Assets Tracking",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus_production" },
+          "editorMode": "code",
+          "expr": "sum(wallet_ledger_postings_posted_amount_units) by (currency_iso_code)",
+          "legendFormat": "Internal Liabilities ({{currency_iso_code}})",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus_production" },
+          "editorMode": "code",
+          "expr": "sum(external_provider_settled_balance_units) by (currency_iso_code)",
+          "legendFormat": "External Provider Assets ({{currency_iso_code}})",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "legend": { "calcs": ["last"], "displayMode": "table", "placement": "right" },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Active Reconciliation Discrepancy Variance Anomaly Counter",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 9 },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus_production" },
+          "editorMode": "code",
+          "expr": "sum(reconciliation_discrepancies_unresolved_count)",
+          "legendFormat": "Unresolved Anomaly Logs",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["subledger", "reconciliation", "telemetry"],
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": { "refresh_intervals": ["5s", "10s", "30s"] },
+  "timezone": "utc",
+  "title": "LinqaSend Authoritative Wallet Reconciliation Control Desk"
+}

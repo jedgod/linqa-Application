@@ -1,0 +1,54 @@
+//migrations/20261018174700_migration_082_provider_custody_and_ledger_expansion.ts
+
+import { Knex } from 'knex';
+
+/**
+ * Executes Migration 082 to provision provider custody tracking and FX subledger layers
+ */
+export async function up(knex: Knex): Promise<void> {
+  // 1. Provider Custody Accounts Registry
+  await knex.schema.createTable('linqa_provider_custody_accounts', (table) => {
+    table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
+    table.string('provider_code_identifier').notNullable().index(); // e.g., 'VALU_PAY_GHS', 'FLUTTERWAVE_NGN'
+    table.string('currency_iso_code', 3).notNullable();
+    table.bigInteger('custody_balance_minor_units').notNullable().defaultTo(0); // Mirror of current provider holdings
+    table.timestamp('last_reconciled_at', { useTz: true }).nullable();
+    table.timestamps(true, true);
+
+    table.unique(['provider_code_identifier', 'currency_iso_code']);
+  });
+
+  // 2. Multi-Currency FX Ledger Legs Expansion
+  await knex.schema.createTable('wallet_fx_ledger_legs', (table) => {
+    table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
+    table.string('transaction_correlation_id').notNullable().references('transaction_correlation_id').inTable('wallet_ledger_postings').onDelete('RESTRICT');
+    
+    // Explicit Double-Entry Balanced Leg Mapping
+    table.string('source_currency', 3).notNullable();
+    table.bigInteger('source_amount_minor').notNullable();
+    table.string('destination_currency', 3).notNullable();
+    table.bigInteger('destination_amount_minor').notNullable();
+    
+    table.decimal('applied_exchange_rate', 18, 6).notNullable();
+    table.bigInteger('spread_margin_minor_units').notNullable(); // Captured internal revenue leg
+    table.timestamp('executed_at', { useTz: true }).defaultTo(knex.fn.now());
+  });
+
+  // 3. Automated Refund Outbox Queue
+  await knex.schema.createTable('wallet_refund_outbox', (table) => {
+    table.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
+    table.string('original_transfer_id').notNullable().unique();
+    table.uuid('wallet_account_id').notNullable().references('id').inTable('linqasend_wallet_accounts_v2').onDelete('RESTRICT');
+    table.bigInteger('refund_amount_minor_units').notNullable();
+    table.string('currency_iso_code', 3).notNullable();
+    table.enum('refund_status', ['PENDING', 'PROCESSING', 'SETTLED', 'REJECTED']).notNullable().defaultTo('PENDING');
+    table.text('reason_code').notNullable();
+    table.timestamps(true, true);
+  });
+}
+
+export async function down(knex: Knex): Promise<void> {
+  await knex.schema.dropTableIfExists('wallet_refund_outbox');
+  await knex.schema.dropTableIfExists('wallet_fx_ledger_legs');
+  await knex.schema.dropTableIfExists('linqa_provider_custody_accounts');
+}

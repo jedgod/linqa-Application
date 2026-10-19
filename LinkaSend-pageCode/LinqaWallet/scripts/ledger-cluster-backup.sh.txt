@@ -1,0 +1,43 @@
+#scripts/ledger-cluster-backup.sh
+
+#!/usr/bin/env bash
+
+# ============================================================================
+# Authoritative Wallet Subledger Multi-Node Cluster Automated Backup Script
+# Targets: PostgreSQL 16 Distributed Cluster Assemblies
+# ============================================================================
+
+set -Eeuo pipefail
+trap 'echo "🚨 BACKUP CRITICAL FAULT: Processing aborted due to compilation layer failure at line $LINENO"' ERR
+
+BACKUP_LOCAL_DEST_DIR="/var/backup/linqa/ledger"
+CURRENT_EXECUTION_TIME=$(date +"%Y%m%d_%H%M%S")
+TARGET_PRIMARY_DB_NAME="linqasend_wallet_v2"
+PRIMARY_CLUSTER_PORT=5439
+CLUSTER_ADMIN_USER="ledger_admin"
+RETENTION_THRESHOLD_LIMIT_DAYS=30
+
+echo "🚀 [${CURRENT_EXECUTION_TIME}] Initializing transactionally isolated backup sequence..."
+mkdir -p "${BACKUP_LOCAL_DEST_DIR}"
+
+FINAL_COMPRESSED_ARCHIVE_PATH="${BACKUP_LOCAL_DEST_DIR}/${TARGET_PRIMARY_DB_NAME}_backup_${CURRENT_EXECUTION_TIME}.sql.gz"
+
+export PGPASSWORD="${POSTGRES_PASSWORD:-ledger_secret_pass}"
+
+# 1. Execute an immutable, transaction-isolated data dump from the primary cluster node
+pg_dump -h "localhost" -p "${PRIMARY_CLUSTER_PORT}" -U "${CLUSTER_ADMIN_USER}" "${TARGET_PRIMARY_DB_NAME}" \
+  | gzip -3 > "${FINAL_COMPRESSED_ARCHIVE_PATH}"
+
+# 2. Assert generation size thresholds to confirm zero byte corruption faults occur
+if [ ! -s "${FINAL_COMPRESSED_ARCHIVE_PATH}" ]; then
+    echo "🚨 BACKUP POLICY CRITICAL FAULT: Generated cluster dump archive is empty or corrupted." >&2
+    exit 1
+fi
+
+echo "✅ Backup archive compiled cleanly: ${FINAL_COMPRESSED_ARCHIVE_PATH} ($(du -sh "${FINAL_COMPRESSED_ARCHIVE_PATH}" | cut -f1))"
+
+# 3. Enforce rolling data retention rules to evict stale archives outside the 30-day storage window
+echo "🧹 Purging historical snapshots exceeding the ${RETENTION_THRESHOLD_LIMIT_DAYS}-day threshold limit..."
+find "${BACKUP_LOCAL_DEST_DIR}" -name "${TARGET_PRIMARY_DB_NAME}_backup_*.sql.gz" -mtime "+${RETENTION_WINDOW_LIMIT_DAYS}" -exec rm -f {} \;
+
+echo "🎉 Backup policy pass completed cleanly and verified."

@@ -1,0 +1,50 @@
+//tests/features/wallet/PartitionParityVerification.test.ts
+
+import { Pool } from 'pg';
+
+describe('Range-Partitioned Subledger Data Parity & Schema Verification Suite', () => {
+  const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+  afterAll(async () => {
+    await dbPool.end();
+  });
+
+  it('should verify that monthly declarative table partitions hold valid chronological records with zero unmapped data drops', async () => {
+    const client = await dbPool.connect();
+
+    try {
+      // 1. Query the master database engine registry to isolate all active child partitions
+      const partitionQuery = `
+        SELECT child.relname AS partition_name
+        FROM pg_inherits
+        JOIN pg_class parent ON pg_inherits.inhparent = parent.oid
+        JOIN pg_class child  ON pg_inherits.inhrelid = child.oid
+        WHERE parent.relname = 'wallet_ledger_postings';
+      `;
+      const partitionResult = await client.query(partitionQuery);
+      const activePartitionNames = partitionResult.rows.map(row => row.partition_name);
+
+      // Assert that core structural monthly tracking components were successfully provisioned
+      expect(activePartitionNames).toContain('wallet_postings_y2026m10');
+      expect(activePartitionNames).toContain('wallet_postings_y2026m11');
+
+      // 2. Cross-check balance alignment between child partitions and parent ledger totals
+      const internalCheckQuery = `
+        SELECT 
+          (SELECT COALESCE(SUM(amount_minor_units), 0) FROM wallet_ledger_postings) as parent_sum,
+          (SELECT COALESCE(SUM(amount_minor_units), 0) FROM wallet_postings_y2026m10) +
+          (SELECT COALESCE(SUM(amount_minor_units), 0) FROM wallet_postings_y2026m11) +
+          (SELECT COALESCE(SUM(amount_minor_units), 0) FROM wallet_postings_y2026m12) as aggregate_child_sum;
+      `;
+      const comparisonResult = await client.query(internalCheckQuery);
+      const { parent_sum, aggregate_child_sum } = comparisonResult.rows[0];
+
+      // Verify mathematical balance parity across partitioned layers
+      expect(parseInt(parent_sum)).toBe(parseInt(aggregate_child_sum));
+      console.log(`📊 Partition Parity Checked: Master Ledger Total [${parent_sum}] matches Child Partition sum [${aggregate_child_sum}].`);
+
+    } finally {
+      client.release();
+    }
+  });
+});

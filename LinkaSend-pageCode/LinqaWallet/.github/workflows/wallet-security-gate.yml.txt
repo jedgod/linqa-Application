@@ -1,0 +1,33 @@
+name: Financial Modules Automated Security Audit
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  wallet-security-sast:
+    name: Subledger Code Vulnerability & Secret Scanning
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Source Code Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan Repository for Leaked Cryptographic Keys or Secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --only-verified
+
+      - name: Execute Semgrep Static Application Security Testing (SAST)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/src" returntocorp/semgrep semgrep scan \
+            --config=p/typescript \
+            --config=p/node \
+            --error

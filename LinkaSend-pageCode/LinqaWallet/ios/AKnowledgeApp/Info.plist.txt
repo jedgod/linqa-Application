@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+<plist version="1.0">
+<dict>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.linqa.wallet</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>linqawallet</string>
+            </array>
+        </dict>
+    </array>
+    <key>NSUniversalLinks</key>
+    <dict>
+        <key>Apps</key>
+        <array/>
+        <key>Details</key>
+        <array>
+            <dict>
+                <key>AppID</key>
+                <string>7A293K291A.com.aknowledge.student</string>
+                <key>Paths</key>
+                <array>
+                    <string>/wallet/receipt/*</string>
+                </array>
+            </dict>
+        </array>
+    </dict>
+</dict>
+</plist>

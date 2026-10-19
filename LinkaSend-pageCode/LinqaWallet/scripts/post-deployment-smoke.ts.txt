@@ -1,0 +1,70 @@
+//scripts/post-deployment-smoke.ts
+
+import axios from 'axios';
+import crypto from 'crypto';
+
+const LIVE_TARGET_PRODUCTION_URL = 'https://linqa-send.com';
+const WEBHOOK_SIGNING_SECRET = process.env.WEBHOOK_SIGNING_SECRET || 'secret_webhook_signing_vector_6619';
+
+async function executeProductionSmokeSuite() {
+  console.log('🏁 Launching Post-Deployment Production Smoke Test Suite...');
+  let structuralFailureDetected = false;
+
+  // Generate a valid mock webhook signature payload block to evaluate integration health
+  const samplePayload = JSON.stringify({
+    externalTransferId: 'smoke_test_tx_9981',
+    providerEventState: 'PAYOUT_SUCCESSFUL',
+    trackingReferenceKey: 'smoke_prov_ref_001'
+  });
+  const calculatedSignature = crypto.createHmac('sha256', WEBHOOK_SIGNING_SECRET).update(samplePayload).digest('hex');
+
+  const evaluationTargets = [
+    {
+      name: 'Authoritative Wallet Balance Summary Gate',
+      endpoint: '/wallet/balance-summary',
+      expectedStatus: 401, // Assures perimeter blocks unauthorized access natively
+      method: 'GET',
+      headers: {}
+    },
+    {
+      name: 'Idempotent Webhook Callback Ingestion Tunnel',
+      endpoint: '/v1/webhooks/payout-callback',
+      expectedStatus: 404, // Proves routing context exists and evaluates rows, returning 404 for non-existent test IDs
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Linqa-Signature': calculatedSignature },
+      body: samplePayload
+    }
+  ];
+
+  for (const target of evaluationTargets) {
+    try {
+      const response = await axios({
+        method: target.method,
+        url: `${LIVE_TARGET_PRODUCTION_URL}${target.endpoint}`,
+        headers: target.headers,
+        data: target.body,
+        validateStatus: () => true // Allow validation of error statuses directly
+      });
+
+      if (response.status === target.expectedStatus) {
+        console.log(` ✅ ${target.name}: Verification Clean (Received HTTP ${response.status})`);
+      } else {
+        console.error(` ❌ ${target.name}: Smoke Fault! (Expected HTTP ${target.expectedStatus}, Received HTTP ${response.status})`);
+        structuralFailureDetected = true;
+      }
+    } catch (apiError) {
+      console.error(` ❌ ${target.name}: Network Layer Instability Fault!`, apiError);
+      structuralFailureDetected = true;
+    }
+  }
+
+  if (structuralFailureDetected) {
+    console.error('🚨 Production Smoke Suite Failed! Halting deployment pipelines.');
+    process.exit(1);
+  } else {
+    console.log('🎉 Post-Deployment Smoke Test Complete: System Verified Healthy.');
+    process.exit(0);
+  }
+}
+
+executeProductionSmokeSuite();

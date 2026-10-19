@@ -1,0 +1,124 @@
+import { Pool, PoolClient } from 'pg';
+import { IdempotentWalletEngine } from '../services/IdempotentWalletEngine';
+
+const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
+const WORKER_ID = `worker_daemon_${Math.random().toString(36).substring(2, 9)}`;
+const MAX_RETRY_LIMIT = 5;
+
+export class OutboxWorkerDaemon {
+  private active = false;
+
+  public async start(): Promise<void> {
+    this.active = true;
+    console.log(`🤖 [Outbox Worker] Instance ${WORKER_ID} initialized. Starting lease poll loop.`);
+    
+    while (this.active) {
+      try {
+        await this.pollAndProcessNextTask();
+      } catch (error) {
+        console.error('🚨 [Outbox Worker] Loop error encountered:', error);
+      }
+      // Pacing interval to throttle database polling overhead
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  private async pollAndProcessNextTask(): Promise<void> {
+    const client = await dbPool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Lease an available outbox task, ensuring we skip rows locked by other parallel workers
+      const leaseQuery = `
+        UPDATE wallet_transaction_outbox
+        SET status_state = 'PROCESSING',
+            lease_owner_id = $1,
+            lease_expires_at = NOW() + INTERVAL '30 seconds'
+        WHERE id = (
+          SELECT id 
+          FROM wallet_transaction_outbox
+          WHERE (status_state = 'PENDING' AND retry_attempts_count < $2)
+             OR (status_state = 'PROCESSING' AND lease_expires_at < NOW())
+          ORDER BY created_at ASC
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id, aggregate_id, payload_data, retry_attempts_count;
+      `;
+
+      const result = await client.query(leaseQuery, [WORKER_ID, MAX_RETRY_LIMIT]);
+
+      if (result.rows.length === 0) {
+        await client.query('COMMIT');
+        return;
+      }
+
+      const task = result.rows[0];
+      const payload = typeof task.payload_data === 'string' ? JSON.parse(task.payload_data) : task.payload_data;
+      await client.query('COMMIT');
+
+      // Calculate localized backoff delay based on historical retry counts
+      if (task.retry_attempts_count > 0) {
+        const backoffDelayMs = Math.pow(2, task.retry_attempts_count) * 1000;
+        console.log(`⏳ [Outbox Worker] Throttling retry for task ${task.id}. Delaying ${backoffDelayMs}ms.`);
+        await new Promise(resolve => setTimeout(resolve, backoffDelayMs));
+      }
+
+      await this.executeTaskPayload(task.id, task.aggregate_id, payload);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async executeTaskPayload(taskId: string, withdrawalId: string, payload: any): Promise<void> {
+    const client = await dbPool.connect();
+    try {
+      // Execute the idempotent transport call out to the external payout partner
+      const providerResponse = await fetch('https://external-payout-partner.com', {
+        method: 'POST',
+        headers: { 
+          'Authorization': 'Bearer PROV_SECRET', 
+          'Idempotency-Key': payload.systemProviderIdempotencyKey, 
+          'Content-Type': 'application/json' 
+        },
+        body: JSON.stringify({ external_id: withdrawalId, amount: payload.amountMinor, currency: payload.currency })
+      });
+
+      if (providerResponse.ok || providerResponse.status === 409) {
+        // Settle the transaction ledger locks upon verified provider acknowledgment
+        await client.query('BEGIN');
+        await client.query(
+          "UPDATE wallet_ledger_postings SET balance_type = 'POSTED', accounting_journal_code = 'WITHDRAWAL_SETTLED_SUCCESS' WHERE transaction_correlation_id = \$1;",
+          [withdrawalId]
+        );
+        await client.query("UPDATE wallet_transaction_outbox SET status_state = 'COMPLETED' WHERE id = \$1;", [taskId]);
+        await client.query('COMMIT');
+        console.log(`✅ [Outbox Worker] Successfully settled task assignment: ${taskId}`);
+      } else {
+        throw new Error('PROVIDER_TRANSIENT_REJECTION');
+      }
+    } catch {
+      await client.query('BEGIN');
+      // Increment the retry metadata and return the record back to the poll pool
+      await client.query(`
+        UPDATE wallet_transaction_outbox 
+        SET status_state = 'PENDING', 
+            retry_attempts_count = retry_attempts_count + 1,
+            lease_owner_id = NULL,
+            lease_expires_at = NULL
+        WHERE id = $1;
+      `, [taskId]);
+      await client.query('COMMIT');
+      console.log(`⚠️ [Outbox Worker] Task ${taskId} failed. Incremented retry counter.`);
+    } finally {
+      client.release();
+    }
+  }
+
+  public stop(): void {
+    this.active = false;
+  }
+}

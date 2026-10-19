@@ -1,0 +1,40 @@
+version: '3.8'
+
+networks:
+  linqa-audit-mesh:
+    driver: bridge
+
+services:
+  ledger-db-primary:
+    image: postgres:16-alpine
+    container_name: ledger-db-primary
+    networks:
+      - linqa-audit-mesh
+    environment:
+      - POSTGRES_USER=audit_supervisor
+      - POSTGRES_PASSWORD=audit_secure_pass
+      - POSTGRES_DB=linqasend_reconciled_v2
+    ports:
+      - "5439:5432"
+    volumes:
+      - ledger_data_volume:/var/lib/postgresql/data
+
+  reconciliation-runner:
+    image: node:20-alpine
+    container_name: reconciliation-runner
+    networks:
+      - linqa-audit-mesh
+    environment:
+      - NODE_ENV=test
+      - DATABASE_URL=postgres://audit_supervisor:audit_secure_pass@ledger-db-primary:5432/linqasend_reconciled_v2
+      - INJECT_VARIANCE_SIMULATION=true # Signals testing harness to distort provider asset arrays purposefully
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: npm run test:reconciliation
+    depends_on:
+      - ledger-db-primary
+
+volumes:
+  ledger_data_volume:
+    driver: local
