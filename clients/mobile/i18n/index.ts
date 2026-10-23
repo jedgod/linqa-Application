@@ -1,0 +1,10 @@
+import { createInstance } from 'i18next';
+import { initReactI18next } from 'react-i18next';
+import { catalogs } from '../../shared/i18n/catalogs';
+export { languages, resolveLanguage } from '../../shared/i18n/catalogs';
+export type { AppLanguage } from '../../shared/i18n/catalogs';
+export const i18n = createInstance();
+void i18n.use(initReactI18next).init({ resources: Object.fromEntries(Object.entries(catalogs).map(([key,translation])=>[key,{translation}])), lng:'en', fallbackLng:'en', keySeparator:false, nsSeparator:false, interpolation:{escapeValue:false}, initAsync:false });
+export const t = (key: string, options?: { count?: number }) => String(i18n.t(key, options));
+export const formatDate = (date: Date, options?: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(i18n.language, options).format(date);
+export const formatNumber = (value: number, options?: Intl.NumberFormatOptions) => new Intl.NumberFormat(i18n.language, options).format(value);

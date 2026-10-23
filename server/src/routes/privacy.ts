@@ -13,10 +13,23 @@ export async function registerPrivacyRoutes(
 ) {
   const authenticate = createAuthenticator(config);
 
+  app.get("/v1/privacy/settings", async (request, reply) => {
+    try {
+      const principal = await authenticate(request);
+      requireScope(principal, "privacy:read");
+      reply.header("cache-control", "no-store");
+      return await privacy.get(principal.userId);
+    } catch (error) {
+      request.log.warn({ err: error }, "privacy settings read rejected");
+      return reply.code(400).send({ error: "invalid_request" });
+    }
+  });
+
   app.put("/v1/privacy/settings", async (request, reply) => {
     try {
       const principal = await authenticate(request);
-      requireScope(principal, "profile:write");
+      // A device token carries privacy:write; profile:write (the older requirement) is still accepted.
+      requireScope(principal, principal.scopes.has("profile:write") ? "profile:write" : "privacy:write");
 
       const body = z.object({
         profileVisibility: Visibility,

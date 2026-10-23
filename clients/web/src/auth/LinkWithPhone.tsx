@@ -1,3 +1,6 @@
+import { LanguagePicker } from '../i18n/LanguagePicker';
+import { t } from '../i18n';
+import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { getApiBaseUrl } from "../app/apiSession";
@@ -14,6 +17,7 @@ type Phase = "starting" | "waiting" | "linking" | "denied" | "expired" | "error"
  * This computer then registers its own device keys, so no password or code is ever typed here.
  */
 export function LinkWithPhone({ onLinked }: { onLinked?: () => void }) {
+  useTranslation();
   const [phase, setPhase] = useState<Phase>("starting");
   const [qr, setQr] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -87,24 +91,25 @@ export function LinkWithPhone({ onLinked }: { onLinked?: () => void }) {
   return (
     <main style={styles.page}>
       <section style={styles.card} aria-labelledby="link-title">
-        <h1 id="link-title" style={styles.title}>Link with your phone</h1>
+        <LanguagePicker />
+        <h1 id="link-title" style={styles.title}>{t("Link with your phone")}</h1>
         <ol style={styles.steps}>
-          <li>Open Linqa on your phone</li>
-          <li>Go to <strong>Settings</strong> then <strong>Linked devices</strong></li>
-          <li>Tap <strong>Scan QR code</strong> and point it here</li>
+          <li>{t("Open Linqa on your phone")}</li>
+          <li>{t("Go to Settings, then Linked devices.")}</li>
+          <li>{t("Tap Scan QR code and point it here.")}</li>
         </ol>
 
         <div style={styles.qrBox} aria-live="polite">
-          {phase === "waiting" && qr ? <img src={qr} alt="QR code to scan with the Linqa app on your phone" width={280} height={280} /> : null}
-          {phase === "starting" ? <p style={styles.status}>Getting a code…</p> : null}
-          {phase === "linking" ? <p style={styles.status}>Approved. Setting up secure keys on this computer…</p> : null}
-          {phase === "denied" ? <p style={styles.status}>The phone declined this link.</p> : null}
-          {phase === "expired" ? <p style={styles.status}>This code expired.</p> : null}
-          {phase === "error" ? <p role="alert" style={styles.status}>{message}</p> : null}
+          {phase === "waiting" && qr ? <img src={qr} alt={t("QR code to scan with the Linqa app on your phone")} width={280} height={280} /> : null}
+          {phase === "starting" ? <p style={styles.status}>{t("Getting a code…")}</p> : null}
+          {phase === "linking" ? <p style={styles.status}>{t("Approved. Setting up secure keys on this computer…")}</p> : null}
+          {phase === "denied" ? <p style={styles.status}>{t("The phone declined this link.")}</p> : null}
+          {phase === "expired" ? <p style={styles.status}>{t("This code expired.")}</p> : null}
+          {phase === "error" ? <p role="alert" style={styles.status}>{message ? t(message) : null}</p> : null}
         </div>
 
-        {retry ? <button type="button" onClick={() => void start()} style={styles.button}>Show a new code</button> : null}
-        <p style={styles.fine}>Your messages stay end-to-end encrypted. This computer gets its own keys; your phone shares nothing but a one-time approval.</p>
+        {retry ? <button type="button" onClick={() => void start()} style={styles.button}>{t("Show a new code")}</button> : null}
+        <p style={styles.fine}>{t("Your messages stay end-to-end encrypted. This computer gets its own keys; your phone shares nothing but a one-time approval.")}</p>
       </section>
     </main>
   );

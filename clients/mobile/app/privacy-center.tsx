@@ -11,6 +11,7 @@ import {
 import { accessTokenProvider } from "../services/session";
 import { LinkedDeviceAlertCard } from "../components/LinkedDeviceAlertCard";
 import { getApiBaseUrl } from "../config/api";
+import { PrivacyControlsSection } from "../components/PrivacyControls";
 
 export default function PrivacyCenterScreen() {
   const router = useRouter();
@@ -47,6 +48,11 @@ export default function PrivacyCenterScreen() {
   if (error) {
     return (
       <SafeAreaView style={styles.screen}>
+        <View style={{ alignItems: "flex-end", padding: 16 }}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Close" hitSlop={8} onPress={() => (router.canGoBack() ? router.back() : router.replace("/(tabs)/linqa"))} style={styles.close}>
+            <Ionicons name="close" size={20} color="#F5FBFF" />
+          </Pressable>
+        </View>
         <Text style={styles.loading}>{error}</Text>
       </SafeAreaView>
     );
@@ -64,7 +70,7 @@ export default function PrivacyCenterScreen() {
     <SafeAreaView style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.eyebrow}>TRUST CENTER</Text>
             <Text style={styles.title}>Privacy Center</Text>
           </View>
@@ -72,6 +78,9 @@ export default function PrivacyCenterScreen() {
             <Text style={styles.scoreValue}>{summary.privacyScore}</Text>
             <Text style={styles.scoreLabel}>Score</Text>
           </View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Close" hitSlop={8} onPress={() => (router.canGoBack() ? router.back() : router.replace("/(tabs)/linqa"))} style={styles.close}>
+            <Ionicons name="close" size={20} color="#F5FBFF" />
+          </Pressable>
         </View>
 
         <SecurityItem
@@ -80,6 +89,8 @@ export default function PrivacyCenterScreen() {
           subtitle={summary.secureCoreReady ? "Secure core ready" : "Core unavailable"}
           tone={summary.secureCoreReady ? "good" : "warn"}
         />
+
+        <PrivacyControlsSection />
 
         {alerts.length ? (
           <Section title="Device alerts">
@@ -165,14 +176,16 @@ export default function PrivacyCenterScreen() {
           <SecurityItem
             icon="download-outline"
             title="Export your data"
-            subtitle="Create a secure account export"
+            subtitle="Request a copy of your data"
             tone="neutral"
+            onPress={() => router.push("/settings/privacy-rights")}
           />
           <SecurityItem
             icon="trash-outline"
             title="Delete account"
             subtitle="Schedule permanent account deletion"
             tone="danger"
+            onPress={() => router.push("/settings/privacy-rights")}
           />
         </Section>
       </ScrollView>
@@ -200,11 +213,13 @@ function SecurityItem({
   title,
   subtitle,
   tone,
+  onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   title: string;
   subtitle: string;
   tone: "good" | "warn" | "danger" | "neutral";
+  onPress?: () => void;
 }) {
   const color =
     tone === "good"
@@ -216,7 +231,7 @@ function SecurityItem({
           : "#7F98AA";
 
   return (
-    <Pressable style={styles.item}>
+    <Pressable style={styles.item} onPress={onPress} accessibilityRole={onPress ? "button" : undefined}>
       <View style={styles.itemIcon}>
         <Ionicons name={icon} size={20} color={color} />
       </View>
@@ -247,6 +262,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.3,
   },
   title: { color: "#F5FBFF", fontSize: 28, fontWeight: "900", marginTop: 2 },
+  close: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: "#17445A", backgroundColor: "#082536", alignItems: "center", justifyContent: "center", marginLeft: 10 },
   score: {
     width: 70,
     height: 70,

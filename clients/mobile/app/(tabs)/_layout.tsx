@@ -1,3 +1,5 @@
+import { t } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tabs, usePathname, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -71,6 +73,7 @@ function badgeValue(count: number | undefined): number | undefined {
 }
 
 function AccountHeader() {
+  useTranslation();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { accounts, active, activate } = useAccounts();
@@ -79,7 +82,7 @@ function AccountHeader() {
   return (
     <View style={[s.header, { height: 58 + insets.top, paddingTop: insets.top }] }>
       <Text style={s.brand}>Linqa</Text>
-      <Pressable style={s.avatarBtn} onPress={() => setSwitcherOpen(true)} accessibilityLabel="Switch account">
+      <Pressable style={s.avatarBtn} onPress={() => setSwitcherOpen(true)} accessibilityLabel={t("Switch account")}>
         <Ionicons name="person-circle-outline" size={26} color="#12D6AE" />
         {active?.label || active?.displayName ? <Text style={s.avatarLabel}>{active.label || active.displayName}</Text> : null}
       </Pressable>
@@ -112,6 +115,7 @@ function AccountHeader() {
 }
 
 export default function TabsLayout() {
+  useTranslation();
   const router = useRouter();
   const pathname = usePathname();
   const [createOpen, setCreateOpen] = useState(false);
@@ -154,7 +158,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="home"
         options={{
-          title: "Home",
+          title: t("Home"),
           headerShown: false,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="home" size={size} color={color} />
@@ -164,11 +168,11 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="calls"
         options={{
-          title: "Calls",
+          title: t("Calls"),
           tabBarBadge: badgeValue(badges?.calls),
           tabBarAccessibilityLabel: badges?.calls
-            ? `Calls, ${badges.calls} missed`
-            : "Calls",
+            ? t("missedCalls", { count: badges.calls })
+            : t("Calls"),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="call-outline" size={size} color={color} />
           )
@@ -177,14 +181,14 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="create"
         options={{
-          title: "Create",
+          title: t("Create"),
           tabBarLabel: () => null,
           tabBarButton: () => (
             <Pressable
               style={s.createButton}
               onPress={() => setCreateOpen(true)}
               accessibilityRole="button"
-              accessibilityLabel="Create"
+              accessibilityLabel={t("Create")}
             >
               <Ionicons name="add" size={36} color="#FFFFFF" />
             </Pressable>
@@ -194,14 +198,14 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="chats"
         options={{
-          title: "Chats",
+          title: t("Chats"),
           // Chats draws its own dark header; the shared account header would
           // sit above it as a light band.
           headerShown: false,
           tabBarBadge: badgeValue(badges?.chats),
           tabBarAccessibilityLabel: badges?.chats
-            ? `Chats, ${badges.chats} unread`
-            : "Chats",
+            ? t("unreadChats", { count: badges.chats })
+            : t("Chats"),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="chatbubbles-outline" size={size} color={color} />
           )
@@ -225,7 +229,7 @@ export default function TabsLayout() {
         visible={createOpen}
         onClose={() => setCreateOpen(false)}
         actions={actions}
-        contextLabel={pathname === "/" || pathname.includes("home") ? "Start something new in Linqa" : "Actions for this part of Linqa"}
+        contextLabel="Quick actions"
         onAction={(key) => {
           const selected = actions.find((item) => item.key === key);
           setCreateOpen(false);

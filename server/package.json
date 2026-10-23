@@ -45,6 +45,7 @@
     "@fastify/rate-limit": "^10.0.0",
     "@fastify/websocket": "^11.0.0",
     "@simplewebauthn/server": "^13.3.2",
+    "country-to-currency": "3.0.1",
     "fast-xml-parser": "^5.11.1",
     "fastify": "^5.12.5",
     "fastify-raw-body": "^6.0.1",

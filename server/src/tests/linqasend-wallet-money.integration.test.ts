@@ -27,6 +27,8 @@ suite('amount-based wallet money on disposable PostgreSQL',()=>{
     if(BigInt(initial)>0n)await tx(c=>ledger.post(c,{ref:`fixture:${wallet}`,kind:'RECEIPT',currency:'USD',legs:[{walletId:wallet,bucket:'AVAILABLE',amount:BigInt(initial)},{bucket:'CUSTODY_CLEARING',amount:-BigInt(initial)}]}));
     await db.query(`INSERT INTO linqasend_payment_methods(id,user_id,provider,provider_payment_method_ref,type,last4,billing_country,verification_status) VALUES($1,$2,'money-provider',$3,'BANK_ACCOUNT','1234','US','VERIFIED')`,[method,user,`vault:${method}`]);
     await db.query(`INSERT INTO linqasend_verified_bank_capabilities(payment_method_id,user_id,provider_id,country,currency,funding_enabled,payout_enabled,ownership_verified_at,expires_at,evidence_sha256) VALUES($1,$2,'money-provider','US','USD',true,true,now(),now()+interval '1 day',$3)`,[method,user,'a'.repeat(64)]);
+    // Wallet service exists only where an active corridor serves the country and currency.
+    await db.query(`INSERT INTO linqasend_corridors(source_country,destination_country,source_currency,destination_currency,min_amount_minor,max_amount_minor,base_margin_bps,min_margin_bps,max_margin_bps,provider) VALUES('US','US','USD','USD',100,100000000,0,0,0,'money-provider') ON CONFLICT DO NOTHING`);
     return {user,wallet,method};
   }
   async function balance(user:string){return (await ledger.summary(user)).items[0]!;}
@@ -113,9 +115,12 @@ suite('amount-based wallet money on disposable PostgreSQL',()=>{
     await db.query(`INSERT INTO linqasend_recipients(id,owner_user_id,recipient_type,linqa_user_id,display_name,country,preferred_currency) VALUES($1,$2,'LINQA_USER',$3,'Receiver','US','USD')`,[recipient,a.user,b.user]);
     let calls=0;const s=new WalletMoneyService(db,gateway({execute:async()=>{calls++;throw new Error('must not fund');}}),allow);
     const q=await s.quote(a.user,{kind:'INTERNAL',walletId:a.wallet,amountMinor:'2500',targetId:recipient});
+    expect(q).toMatchObject({feeMinor:'250',totalMinor:'2750',amountMinor:'2500',receiveAmountMinor:'2500'});
     await Promise.all([s.submit(a.user,q.id,authorize),s.submit(a.user,q.id,authorize)]);
-    expect((await balance(a.user)).availableMinor).toBe('7500');expect((await balance(b.user)).availableMinor).toBe('2500');expect(calls).toBe(0);
-    expect((await db.query(`SELECT sum(amount_minor)::text AS n FROM linqasend_wallet_postings WHERE wallet_id=ANY($1::uuid[])`,[[a.wallet,b.wallet]])).rows[0].n).toBe('10000');
+    // The recipient gets the full amount; the sender pays amount + 10% fee, and the fee posts once to FEE_REVENUE.
+    expect((await balance(a.user)).availableMinor).toBe('7250');expect((await balance(b.user)).availableMinor).toBe('2500');expect(calls).toBe(0);
+    expect((await db.query(`SELECT sum(amount_minor)::text AS n FROM linqasend_wallet_postings WHERE wallet_id=ANY($1::uuid[])`,[[a.wallet,b.wallet]])).rows[0].n).toBe('9750');
+    expect((await db.query(`SELECT sum(amount_minor)::text AS n FROM linqasend_wallet_postings WHERE bucket='FEE_REVENUE' AND journal_id IN (SELECT id FROM linqasend_wallet_journals WHERE operation_id=$1)`,[q.id])).rows[0].n).toBe('250');
   });
   it('does not allow cross-entity internal balance adjustments',async()=>{
     const a=await fixture(),b=await fixture(),recipient=randomUUID();await db.query(`UPDATE linqasend_wallet_accounts_v2 SET regulatory_entity_id='other' WHERE id=$1`,[b.wallet]);
@@ -140,7 +145,7 @@ suite('amount-based wallet money on disposable PostgreSQL',()=>{
     await db.query(`INSERT INTO linqasend_recipients(id,owner_user_id,recipient_type,linqa_user_id,display_name,country,preferred_currency) VALUES($1,$2,'LINQA_USER',$3,'B','US','USD'),($4,$3,'LINQA_USER',$2,'A','US','USD')`,[ar,a.user,b.user,br]);
     const s=new WalletMoneyService(db,gateway(),allow),qa=await s.quote(a.user,{kind:'INTERNAL',walletId:a.wallet,amountMinor:'2000',targetId:ar}),qb=await s.quote(b.user,{kind:'INTERNAL',walletId:b.wallet,amountMinor:'3000',targetId:br});
     await Promise.all([s.submit(a.user,qa.id,authorize),s.submit(b.user,qb.id,authorize)]);
-    expect((await balance(a.user)).availableMinor).toBe('11000');expect((await balance(b.user)).availableMinor).toBe('9000');
+    expect((await balance(a.user)).availableMinor).toBe('10800');expect((await balance(b.user)).availableMinor).toBe('8700');
     expect((await s.list(b.user)).items.some((r:any)=>r.id===qa.id&&r.direction==='RECEIVED')).toBe(true);
   });
   it('executes an explicit external FX quote without inventing a second currency wallet credit',async()=>{
@@ -148,8 +153,11 @@ suite('amount-based wallet money on disposable PostgreSQL',()=>{
     await db.query(`INSERT INTO linqasend_external_recipients_v1(id,owner_user_id,recipient_kind,display_name,country_code,currency,verification_status) VALUES($1,$2,'EXTERNAL_PERSON','External','GB','GBP','VERIFIED')`,[external,f.user]);
     await db.query(`INSERT INTO linqasend_payout_endpoints_v1(external_recipient_id,delivery_method,provider,provider_token,masked_display,country_code,currency,status,verified_at) VALUES($1,'BANK','money-provider',$2,'Account ending 9999','GB','GBP','ACTIVE',now())`,[external,reference]);
     await db.query(`INSERT INTO linqasend_recipients(id,owner_user_id,recipient_type,external_recipient_id,display_name,country,preferred_currency,payout_profile_ref,payout_provider) VALUES($1,$2,'BANK',$3,'External','GB','GBP',$4,'money-provider')`,[recipient,f.user,external,reference]);
-    const g=gateway(),s=new WalletMoneyService(db,{...g,quote:async input=>({...await g.quote(input),receiveAmountMinor:'3900',fxRate:'0.78'})},allow),q=await s.quote(f.user,{kind:'EXTERNAL',walletId:f.wallet,amountMinor:'5000',targetId:recipient});
-    await s.submit(f.user,q.id,authorize);await s.runOnce();expect(await status(q.id)).toBe('COMPLETED');expect((await balance(f.user)).availableMinor).toBe('4900');
+    let sent:any;const g=gateway({execute:async r=>{sent=r;return outcome(r.snapshot);}}),s=new WalletMoneyService(db,{...g,quote:async input=>({...await g.quote(input),receiveAmountMinor:'3900',fxRate:'0.78'})},allow),q=await s.quote(f.user,{kind:'EXTERNAL',walletId:f.wallet,amountMinor:'5000',targetId:recipient});
+    await s.submit(f.user,q.id,authorize);await s.runOnce();expect(await status(q.id)).toBe('COMPLETED');expect((await balance(f.user)).availableMinor).toBe('4200');
+    expect(q).toMatchObject({feeMinor:'800',totalMinor:'5800'}); // 15.99% of 5000 (799.5, half up) exceeds the provider's 100
+    // The rail is told to pay the base amount (in the recipient's currency) and nothing of the retained fee.
+    expect(sent.payout).toEqual({sourceAmountMinor:'5000',sourceCurrency:'USD',recipientAmountMinor:'3900',recipientCurrency:'GBP',platformFeeMinor:'800',platformFeeRetained:true});
     expect((await db.query(`SELECT count(*)::int AS n FROM linqasend_wallet_journals WHERE operation_id=$1 AND currency='GBP'`,[q.id])).rows[0].n).toBe(0);
   });
   it('durably requests one refund and reconciles a lost refund response without resubmitting',async()=>{
@@ -168,6 +176,25 @@ suite('amount-based wallet money on disposable PostgreSQL',()=>{
     const bank=new BankLinkService(db,g,vault),session=await bank.begin(f.user),result=await bank.confirm(f.user,session.id);
     expect(await bank.confirm(f.user,session.id)).toEqual(result);expect(stores).toBe(1);
     expect((await db.query(`SELECT funding_enabled,payout_enabled FROM linqasend_verified_bank_capabilities WHERE payment_method_id=$1`,[result.paymentMethodId])).rows[0]).toEqual({funding_enabled:true,payout_enabled:true});
+  });
+  it('pages wallet activity with a stable cursor, and only shows an operation to its participants',async()=>{
+    const f=await fixture(),s=new WalletMoneyService(db,gateway(),allow),ids:string[]=[];
+    for(let i=0;i<3;i++){const q=await quote(s,f,'100');await s.submit(f.user,q.id,authorize);ids.push(q.id);}
+    const seen:string[]=[];let cursor:string|null=null;
+    do{const page=await s.list(f.user,{limit:2,cursor});expect(page.items.length).toBeLessThanOrEqual(2);seen.push(...page.items.map((r:any)=>r.id));cursor=page.nextCursor;}while(cursor);
+    expect(seen).toHaveLength(3);expect(new Set(seen).size).toBe(3);expect([...seen].sort()).toEqual([...ids].sort());
+    await expect(s.get(f.user,ids[0]!)).resolves.toMatchObject({id:ids[0],direction:'SENT'});
+    await expect(s.get(randomUUID(),ids[0]!)).rejects.toThrow('WALLET_OPERATION_NOT_FOUND');
+    await expect(s.list(f.user,{cursor:'not-a-cursor!'})).rejects.toThrow('WALLET_CURSOR_INVALID');
+  });
+  it('opens wallets and moves money only where an active corridor serves the country and currency',async()=>{
+    const f=await fixture(),s=new WalletMoneyService(db,gateway(),allow);
+    await expect(s.open(f.user,'EUR')).rejects.toThrow('WALLET_CURRENCY_NOT_AVAILABLE');
+    await expect(s.open(f.user,'USD')).resolves.toMatchObject({currency:'USD'});
+    const served=()=>db.query(`UPDATE linqasend_corridors SET active=$1 WHERE source_country='US' AND source_currency='USD'`,[true]);
+    await db.query(`UPDATE linqasend_corridors SET active=false WHERE source_country='US' AND destination_country='US'`);
+    try{await expect(quote(s,f)).rejects.toThrow('WALLET_CURRENCY_NOT_AVAILABLE');}finally{await served();}
+    expect((await quote(s,f)).currency).toBe('USD');
   });
   it('keeps quotes and provider events immutable',async()=>{
     const f=await fixture(),s=new WalletMoneyService(db,gateway(),allow),q=await quote(s,f);await s.submit(f.user,q.id,authorize);await s.runOnce();

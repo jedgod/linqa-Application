@@ -299,6 +299,11 @@ export function ModuleRouteScreen({ moduleKey }: { moduleKey: string }) {
     );
   }
 
+  function close() {
+    if (router.canGoBack()) router.back();
+    else router.replace("/(tabs)/linqa" as never);
+  }
+
   function handleAction(actionKey: string) {
     setPendingAction(actionKey);
     const route = ACTION_ROUTES[actionKey];
@@ -345,6 +350,14 @@ export function ModuleRouteScreen({ moduleKey }: { moduleKey: string }) {
               <Ionicons name="search" size={20} color={colors.accent} />
             </Pressable>
           )}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            onPress={close}
+            style={({ pressed }) => [styles.searchButton, styles.closeButton, pressed && styles.actionPressed]}
+          >
+            <Ionicons name="close" size={22} color={colors.text} />
+          </Pressable>
         </View>
         {capabilitiesLoaded && !currentAvailable ? (
           <View style={styles.runtimeNotice}>
@@ -387,6 +400,7 @@ const makeStyles = (colors: Palette) => StyleSheet.create({
   eyebrow: { color: colors.accent, fontSize: 12, fontWeight: "800", letterSpacing: 1.2 },
   title: { color: colors.text, fontSize: 28, fontWeight: "900", marginTop: 3 },
   subtitle: { color: colors.textMuted, marginTop: 4 },
+  closeButton: { marginLeft: 8 },
   searchButton: {
     width: 40,
     height: 40,

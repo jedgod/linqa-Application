@@ -17,7 +17,7 @@ export default function CreateScreen() {
       <CreateEventConnected
         config={config}
         heading={type === "event" ? "Create Event" : "Create Post"}
-        onClose={() => router.replace("/(tabs)/home")}
+        onClose={() => (router.canGoBack() ? router.back() : router.replace("/(tabs)/home"))}
         onPublished={({ localId, payload }) => (active ? afterPublished(active.userId, localId, payload) : undefined)}
       />
     </SafeAreaView>

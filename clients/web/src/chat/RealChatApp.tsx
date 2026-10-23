@@ -1,3 +1,5 @@
+import { t, i18n } from '../i18n';
+import { useTranslation } from 'react-i18next';
 import { ForwardBatch } from "../../../mobile/services/forward-batch";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeBrowser } from "../auth/deviceLinkClient";
@@ -56,13 +58,13 @@ const timeLabel = (iso: string | null) => {
   if (!iso) return "";
   const d = new Date(iso);
   const now = new Date();
-  if (sameDay(d, now)) return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (sameDay(d, now)) return d.toLocaleTimeString(i18n.language, { hour: "numeric", minute: "2-digit" });
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
-  return sameDay(d, yesterday) ? "Yesterday" : d.toLocaleDateString([], { month: "short", day: "numeric" });
+  return sameDay(d, yesterday) ? t("Yesterday") : d.toLocaleDateString(i18n.language, { month: "short", day: "numeric" });
 };
-const clock = (iso: string | Date) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-const short = (d: Date) => d.toLocaleDateString([], { month: "short", day: "numeric" });
+const clock = (iso: string | Date) => new Date(iso).toLocaleTimeString(i18n.language, { hour: "numeric", minute: "2-digit" });
+const short = (d: Date) => d.toLocaleDateString(i18n.language, { month: "short", day: "numeric" });
 const initialsOf = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join("") || "?";
 
 /** "Oct 8" for one day, "Oct 8–9" within a month, "Oct 30–Nov 2" across months. */
@@ -119,6 +121,7 @@ function foldPolls(rows: Shown[]): Shown[] {
 }
 
 function Avatar({ chat, size = "md" }: { chat: Pick<InboxChat, "title" | "initials" | "isGroup">; size?: "md" | "lg" }) {
+  useTranslation();
   const hue = Array.from(chat.title).reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
   return (
     <span className="lc-avatar" data-size={size} data-group={chat.isGroup || undefined} style={chat.isGroup ? undefined : { background: `hsl(${hue} 55% 52%)` }} aria-hidden>
@@ -129,16 +132,18 @@ function Avatar({ chat, size = "md" }: { chat: Pick<InboxChat, "title" | "initia
 
 /** Linqa on a computer: the chats of the account this browser was linked to, opened and sent with this computer's own keys. */
 export function RealChatApp({ onSignedOut }: { onSignedOut: () => void }) {
+  useTranslation();
   const runtime = useLinkedChat();
   useEffect(() => { if (runtime.status === "signed-out") onSignedOut(); }, [runtime.status, onSignedOut]);
 
-  if (runtime.status === "loading") return <main className="lc-page"><div className="lc-center"><p>Opening your chats…</p></div></main>;
+  if (runtime.status === "loading") return <main className="lc-page"><div className="lc-center"><p>{t("Opening your chats…")}</p></div></main>;
   if (runtime.status === "error") return <main className="lc-page"><div className="lc-center"><p role="alert">Linqa could not start: {runtime.message}</p></div></main>;
   if (runtime.status === "signed-out") return null;
   return <DesktopCallHost runtime={runtime}><ChatShell runtime={runtime}/></DesktopCallHost>;
 }
 
 function ChatShell({ runtime }: { runtime: Ready }) {
+  useTranslation();
   const { api, messaging, peers, userId, signOut } = runtime;
   const store = useMemo(() => new HistoryStore(), []);
   const [chats, setChats] = useState<InboxChat[]>([]);
@@ -374,26 +379,26 @@ function ChatShell({ runtime }: { runtime: Ready }) {
   const syncing = ["requesting", "waiting", "transferring", "opening"].includes(sync.state.step);
   const chip = (kind: Exclude<View["kind"], "list">, label: string, count?: number, icon?: ReactNode) => (
     <button type="button" className="lc-chip" data-on={view.kind === kind} aria-pressed={view.kind === kind} onClick={() => setView({ kind })}>
-      {icon}{label}{count ? <span className="lc-chip-count">{count}</span> : null}
+      {icon}{t(label)}{count ? <span className="lc-chip-count">{count}</span> : null}
     </button>
   );
 
   return (
     <main className="lc-page">
       <div className="lc-shell" data-panel={panel ?? undefined} style={{ "--lc-side": `${sideWidth}px` } as React.CSSProperties}>
-        <aside className="lc-side" aria-label="Chats">
+        <aside className="lc-side" aria-label={t("Chats")}>
           <header className="lc-brand">
             <LinqaMark size={36} /><h1>Linqa</h1>
-            <button type="button" className="lc-me" aria-label={`Settings for ${myName || "your account"}`} title="Settings" onClick={() => setPanel((v) => (v === "settings" ? null : "settings"))}>
+            <button type="button" className="lc-me" aria-label={`Settings for ${myName || "your account"}`} title={t("Settings")} onClick={() => setPanel((v) => (v === "settings" ? null : "settings"))}>
               {initialsOf(myName || "?")}
             </button>
           </header>
 
-          <button type="button" className="lc-new" onClick={() => setDialog("new")}><PlusIcon size={20} />New chat</button>
+          <button type="button" className="lc-new" onClick={() => setDialog("new")}><PlusIcon size={20} />{t("New chat")}</button>
 
           <label className="lc-search">
             <SearchIcon size={18} />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search conversations" aria-label="Search conversations" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("Search conversations")} aria-label={t("Search conversations")} />
           </label>
 
           <div className="lc-chips" role="group" aria-label="Filter chats">
@@ -403,26 +408,26 @@ function ChatShell({ runtime }: { runtime: Ready }) {
           </div>
           <div className="lc-chips" role="group" aria-label="More filters">
             {chip("groups", "Groups", undefined, <UsersIcon size={15} />)}
-            <button type="button" className="lc-chip" data-on={view.kind === "list"} aria-expanded={listsOpen} onClick={() => setListsOpen((v) => !v)}><ListIcon size={15} />Lists<ChevronDownIcon size={14} /></button>
+            <button type="button" className="lc-chip" data-on={view.kind === "list"} aria-expanded={listsOpen} onClick={() => setListsOpen((v) => !v)}><ListIcon size={15} />{t("Lists")}<ChevronDownIcon size={14} /></button>
             <div className="lc-menu-wrap">
               <button type="button" className="lc-chip lc-chip-plus" aria-label="Create or manage" aria-haspopup="menu" aria-expanded={plusMenu} onClick={(e) => { e.stopPropagation(); setPlusMenu((v) => !v); }}><PlusIcon size={16} /></button>
               {plusMenu ? (
                 <div className="lc-menu lc-menu-left" role="menu">
-                  <button type="button" role="menuitem" onClick={() => setDialog("list")}><PlusIcon size={18} />Create a list</button>
-                  <button type="button" role="menuitem" onClick={() => setDialog("group")}><UsersIcon size={18} />Create a group</button>
-                  <button type="button" role="menuitem" disabled={!active?.isGroup} title={active?.isGroup ? undefined : "Open a group first"} onClick={() => setDialog("addPeople")}><UserPlusIcon size={18} />Add people</button>
-                  <button type="button" role="menuitem" onClick={() => setDialog("manageLists")}><ListIcon size={18} />Manage lists</button>
+                  <button type="button" role="menuitem" onClick={() => setDialog("list")}><PlusIcon size={18} />{t("Create a list")}</button>
+                  <button type="button" role="menuitem" onClick={() => setDialog("group")}><UsersIcon size={18} />{t("Create a group")}</button>
+                  <button type="button" role="menuitem" disabled={!active?.isGroup} title={active?.isGroup ? undefined : "Open a group first"} onClick={() => setDialog("addPeople")}><UserPlusIcon size={18} />{t("Add people")}</button>
+                  <button type="button" role="menuitem" onClick={() => setDialog("manageLists")}><ListIcon size={18} />{t("Manage lists")}</button>
                 </div>
               ) : null}
             </div>
           </div>
           <button type="button" className="lc-archived-row" data-on={view.kind === "archived"} onClick={() => setView({ kind: view.kind === "archived" ? "all" : "archived" })}>
-            <ArchiveIcon size={18} />Archived<span>{counts.archived}</span>
+            <ArchiveIcon size={18} />{t("Archived")}<span>{counts.archived}</span>
           </button>
 
           {listsOpen && lists.length > 0 ? (
             <div className="lc-mylists">
-              <p className="lc-section">My lists</p>
+              <p className="lc-section">{t("My lists")}</p>
               {lists.map((l) => (
                 <button key={l.id} type="button" className="lc-listrow" data-color={l.color} data-on={view.kind === "list" && view.listId === l.id} onClick={() => setView({ kind: "list", listId: l.id })}>
                   <FolderIcon size={17} />{l.name}<span>{l.count}</span>
@@ -449,11 +454,11 @@ function ChatShell({ runtime }: { runtime: Ready }) {
             {visible.length === 0 ? <li className="lc-empty">{query ? "No conversations match." : view.kind === "all" ? "No chats yet. Choose New chat to start one." : "Nothing here yet."}</li> : null}
           </ul>
 
-          <nav className="lc-bottom" aria-label="Account">
+          <nav className="lc-bottom" aria-label={t("Account")}>
             <button type="button" onClick={() => setPanel((v) => (v === "linqa" ? null : "linqa"))}><GridIcon size={20} />Linqa Menu{requestCount > 0 ? <span className="lc-badge">{requestCount}</span> : null}</button>
-            <button type="button" onClick={() => setDialog("devices")}><LaptopIcon size={20} />Linked devices</button>
-            <button type="button" onClick={() => setPanel((v) => (v === "settings" ? null : "settings"))}><GearIcon size={20} />Settings</button>
-            <button type="button" onClick={confirmSignOut}><SignOutIcon size={20} />Sign out</button>
+            <button type="button" onClick={() => setDialog("devices")}><LaptopIcon size={20} />{t("Linked devices")}</button>
+            <button type="button" onClick={() => setPanel((v) => (v === "settings" ? null : "settings"))}><GearIcon size={20} />{t("Settings")}</button>
+            <button type="button" onClick={confirmSignOut}><SignOutIcon size={20} />{t("Sign out")}</button>
           </nav>
 
           <div
@@ -593,6 +598,7 @@ function Thread({ chat, runtime, store, storeVersion, openText, onSent, connecte
   onCancelSync: () => void;
   onDevices: () => void;
 }) {
+  useTranslation();
   const { api, messaging, userId } = runtime;
   const calls=useDesktopCalls();
   const [feature,setFeature]=useState<DesktopFeature|null>(null);
@@ -790,7 +796,7 @@ function Thread({ chat, runtime, store, storeVersion, openText, onSent, connecte
           </span>
         </div>
         <div className="lc-actions">
-          <button type="button" className="lc-icon" aria-label="Search in this chat" aria-pressed={find !== null} title="Search in this chat" onClick={() => setFind((v) => (v === null ? "" : null))}><SearchIcon size={22} /></button>
+          <button type="button" className="lc-icon" aria-label={t("Search in this chat")} aria-pressed={find !== null} title={t("Search in this chat")} onClick={() => setFind((v) => (v === null ? "" : null))}><SearchIcon size={22} /></button>
           <button type="button" className="lc-icon" aria-label="Voice call" title="Voice call" onClick={() => openFeature("voice-call")}><PhoneIcon size={22} /></button>
           <button type="button" className="lc-icon" aria-label="Video call" title="Video call" onClick={() => openFeature("video-call")}><VideoIcon size={22} /></button>
           <div className="lc-menu-wrap">
@@ -798,13 +804,13 @@ function Thread({ chat, runtime, store, storeVersion, openText, onSent, connecte
             {menu ? (
               <div className="lc-menu" role="menu" onMouseLeave={() => setMenu(false)}>
                 <button type="button" role="menuitem" onClick={() => { setMenu(false); onControl("contact"); }}><InfoIcon size={18} />{chat.isGroup ? "Group info" : "Contact info"}</button>
-                <button type="button" role="menuitem" onClick={() => { setMenu(false); setFind(""); }}><SearchIcon size={18} />Search</button>
+                <button type="button" role="menuitem" onClick={() => { setMenu(false); setFind(""); }}><SearchIcon size={18} />{t("Search")}</button>
                 <button type="button" role="menuitem" onClick={() => { setMenu(false); setSelecting(true); }}><CheckSquareIcon size={18} />Select messages</button>
                 <button type="button" role="menuitem" onClick={() => { setMenu(false); onToggleMute(); }}><BellOffIcon size={18} />{chat.muted ? "Unmute notifications" : "Mute notifications"}</button>
                 <button type="button" role="menuitem" onClick={() => { setMenu(false); onControl("disappearing"); }}><TimerIcon size={18} />Disappearing messages</button>
                 <button type="button" role="menuitem" onClick={() => { setMenu(false); onFavorite(); }}><StarIcon size={18} />{chat.pinned ? "Remove from favorites" : "Add to favorites"}</button>
                 <button type="button" role="menuitem" onClick={() => { setMenu(false); onArchive(); }}><ArchiveIcon size={18} />{chat.archived ? "Unarchive" : "Archive"}</button>
-                {chat.isGroup ? <button type="button" role="menuitem" onClick={() => { setMenu(false); onAddPeople(); }}><UserPlusIcon size={18} />Add people</button> : null}
+                {chat.isGroup ? <button type="button" role="menuitem" onClick={() => { setMenu(false); onAddPeople(); }}><UserPlusIcon size={18} />{t("Add people")}</button> : null}
                 {lists.length > 0 ? <p className="lc-menu-label">Add to list</p> : null}
                 {lists.map((l) => (
                   <button key={l.id} type="button" role="menuitemcheckbox" aria-checked={chat.listIds?.includes(l.id) ?? false} onClick={() => onToggleList(l.id)}>
@@ -819,7 +825,7 @@ function Thread({ chat, runtime, store, storeVersion, openText, onSent, connecte
                 <button type="button" role="menuitem" className="lc-danger" onClick={() => { setMenu(false); onControl("delete"); }}><TrashIcon size={18} />Delete chat</button>
                 <hr className="lc-rule" />
                 <button type="button" role="menuitem" onClick={() => { setMenu(false); setAbout((v) => !v); }}><ShieldIcon size={18} />Security details</button>
-                <button type="button" role="menuitem" onClick={() => { setMenu(false); onDevices(); }}><LaptopIcon size={18} />Linked devices</button>
+                <button type="button" role="menuitem" onClick={() => { setMenu(false); onDevices(); }}><LaptopIcon size={18} />{t("Linked devices")}</button>
                 <button type="button" role="menuitem" onClick={() => { setMenu(false); void load(); }}>Refresh</button>
               </div>
             ) : null}
@@ -839,7 +845,7 @@ function Thread({ chat, runtime, store, storeVersion, openText, onSent, connecte
       {find !== null ? (
         <div className="lc-find">
           <SearchIcon size={16} />
-          <input autoFocus value={find} onChange={(e) => setFind(e.target.value)} placeholder="Search in this chat" aria-label="Search in this chat" onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setFind(null); } }} />
+          <input autoFocus value={find} onChange={(e) => setFind(e.target.value)} placeholder={t("Search in this chat")} aria-label={t("Search in this chat")} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setFind(null); } }} />
           <button type="button" className="lc-icon" aria-label="Close search" onClick={() => setFind(null)}><CloseIcon size={16} /></button>
         </div>
       ) : null}
@@ -861,7 +867,7 @@ function Thread({ chat, runtime, store, storeVersion, openText, onSent, connecte
             {syncing ? (
               <>
                 <button type="button" className="lc-banner-link" onClick={onHistory}>Details</button>
-                <button type="button" className="lc-banner-btn" onClick={onCancelSync}>Cancel</button>
+                <button type="button" className="lc-banner-btn" onClick={onCancelSync}>{t("Cancel")}</button>
               </>
             ) : (
               <>
@@ -888,8 +894,8 @@ function Thread({ chat, runtime, store, storeVersion, openText, onSent, connecte
       {selecting ? (
         <div className="lc-selectbar">
           <span>{picked.size} selected</span>
-          <button type="button" className="lc-btn lc-btn-primary" disabled={picked.size === 0} onClick={() => void copyPicked()}>Copy</button>
-          <button type="button" className="lc-btn" onClick={stopSelecting}>Cancel</button>
+          <button type="button" className="lc-btn lc-btn-primary" disabled={picked.size === 0} onClick={() => void copyPicked()}>{t("Copy")}</button>
+          <button type="button" className="lc-btn" onClick={stopSelecting}>{t("Cancel")}</button>
         </div>
       ) : sendable ? (
         <>
@@ -905,7 +911,7 @@ function Thread({ chat, runtime, store, storeVersion, openText, onSent, connecte
             {emoji ? <EmojiPicker onClose={() => setEmoji(false)} onPick={(e) => { setDraft((d) => d + e); input.current?.focus(); }} /> : null}
           </div>
           <textarea
-            ref={input} rows={1} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={`Message ${chat.title}`} aria-label="Message" maxLength={4000}
+            ref={input} rows={1} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={t("Type a message")} aria-label={t("Message")} maxLength={4000}
             aria-keyshortcuts={enterToSend ? "Enter" : "Control+Enter"}
             onKeyDown={(e) => {
               if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
@@ -919,7 +925,7 @@ function Thread({ chat, runtime, store, storeVersion, openText, onSent, connecte
             <i className="lc-tools-rule" />
             <button type="button" className="lc-tool" aria-label="Voice message" title="Voice message" onClick={() => openFeature("voice")}><MicIcon size={22} /></button>
           </div>
-          <button type="submit" className="lc-send" disabled={!canSend} title={canSend ? "Send" : "Type a message to send"}><SendPlaneIcon size={20} />Send</button>
+          <button type="submit" className="lc-send" disabled={!canSend} title={canSend ? "Send" : "Type a message to send"}><SendPlaneIcon size={20} />{t("Send")}</button>
         </form>
         </>
       ) : <p className="lc-note-bar">This chat cannot be replied to from a computer yet. Use your phone.</p>}
@@ -935,6 +941,7 @@ function Thread({ chat, runtime, store, storeVersion, openText, onSent, connecte
 }
 
 function MessageBubble({ m, userId, chatTitle, onReply, onForward, onCopy, onJump, onRetry, onDiscard, onVote, onDelete, select }: { m: Shown; userId: string; chatTitle?: string; onReply?: () => void; onForward?: (text: string) => void; onCopy?: () => void; onJump?: (id: string) => void; onRetry?: () => void; onDiscard?: () => void; onVote?: (boardId: string, choice: number) => void; onDelete?:(scope:'me'|'everyone')=>Promise<void>; select?: { picked: boolean; toggle: () => void } }) {
+  useTranslation();
   const [deleteOpen,setDeleteOpen]=useState(false);
   const [deleteBusy,setDeleteBusy]=useState(false);
   const [deleteError,setDeleteError]=useState(false);
@@ -995,8 +1002,8 @@ function MessageBubble({ m, userId, chatTitle, onReply, onForward, onCopy, onJum
       {canReply ? <span className="lc-swipe-hint" data-side={m.mine ? "right" : "left"} style={{ opacity: Math.min(dx / 64, 1) }} aria-hidden><ReplyIcon size={22} /></span> : null}
       {(canReply || forwardable) && !select ? (
         <div className="lc-msg-actions" role="toolbar" aria-label="Message actions">
-          {canReply ? <button type="button" aria-label="Reply" title="Reply" onClick={onReply}><ReplyIcon size={17} /></button> : null}
-          {forwardable ? <button type="button" aria-label="Forward" title="Forward" onClick={() => onForward?.(m.text)}><ForwardIcon size={17} /></button> : null}
+          {canReply ? <button type="button" aria-label={t("Reply")} title={t("Reply")} onClick={onReply}><ReplyIcon size={17} /></button> : null}
+          {forwardable ? <button type="button" aria-label={t("Forward")} title={t("Forward")} onClick={() => onForward?.(m.text)}><ForwardIcon size={17} /></button> : null}
           {!m.poll && !m.sealed && m.text ? <button type="button" aria-label="Copy text" title="Copy text" onClick={onCopy}><CopyIcon size={17} /></button> : null}
         </div>
       ) : null}
@@ -1021,13 +1028,13 @@ function MessageBubble({ m, userId, chatTitle, onReply, onForward, onCopy, onJum
           <small>{votes.length} {votes.length === 1 ? "vote" : "votes"}{mine === undefined ? " · tap an option to vote" : ""}</small>
         </div>
       ) : <DesktopMessage raw={m.raw} text={m.text} sender={m.sender}/> }
-      {onDelete && !select ? <div className="lc-message-delete"><button type="button" disabled={deleteBusy} onClick={()=>setDeleteOpen(v=>!v)} aria-label="Delete message" aria-expanded={deleteOpen}>Delete</button>{deleteOpen?<><button type="button" disabled={deleteBusy} onClick={()=>void remove('me')}>Delete for me</button>{m.mine?<button type="button" disabled={deleteBusy} onClick={()=>void remove('everyone')}>Delete for everyone</button>:null}<button type="button" disabled={deleteBusy} onClick={()=>setDeleteOpen(false)}>Cancel</button></>:null}{deleteError?<span role="alert">Could not delete. Please try again.</span>:null}</div>:null}
+      {onDelete && !select ? <div className="lc-message-delete"><button type="button" disabled={deleteBusy} onClick={()=>setDeleteOpen(v=>!v)} aria-label="Delete message" aria-expanded={deleteOpen}>{t("Delete")}</button>{deleteOpen?<><button type="button" disabled={deleteBusy} onClick={()=>void remove('me')}>Delete for me</button>{m.mine?<button type="button" disabled={deleteBusy} onClick={()=>void remove('everyone')}>Delete for everyone</button>:null}<button type="button" disabled={deleteBusy} onClick={()=>setDeleteOpen(false)}>{t("Cancel")}</button></>:null}{deleteError?<span role="alert">Could not delete. Please try again.</span>:null}</div>:null}
       <time>
         {m.state === "failed" ? (
           <>
             <span className="lc-failed">Not sent</span>
             <button type="button" className="lc-retry" onClick={onRetry}>Retry</button>
-            <button type="button" className="lc-retry" onClick={onDiscard}>Delete</button>
+            <button type="button" className="lc-retry" onClick={onDiscard}>{t("Delete")}</button>
           </>
         ) : (
           <>

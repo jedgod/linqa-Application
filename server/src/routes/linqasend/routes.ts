@@ -31,6 +31,7 @@ import { biometricPrincipal } from "../biometrics.js";
 import { CARD_FUNDING_TYPES, CvvError, CvvRecollectionService, resolveCardProvider } from "../../services/linqasend/cvv-recollection.service.js";
 import { registerWalletRoutes } from "./wallet-routes.js";
 import { registerWalletMoneyRoutes } from './wallet-money-routes.js';
+import { registerWalletV2Routes } from './wallet-v2-routes.js';
 
 function withErrors<T>(handler: (request: FastifyRequest, reply: FastifyReply) => Promise<T>) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
@@ -121,6 +122,7 @@ export async function registerLinqaSendRoutes(
   }));
   await registerWalletRoutes(app, config, db, providers.payout, biometrics);
   await registerWalletMoneyRoutes(app, config, db, providers, biometrics);
+  await registerWalletV2Routes(app, config, db, { linkingConfigured: !!providers.walletMoney });
   const fxPricing = new FxPricingService();
   const fxRates = new FxRateRepository(db);
   const quotes = new QuoteService(db, fxPricing, fxRates);

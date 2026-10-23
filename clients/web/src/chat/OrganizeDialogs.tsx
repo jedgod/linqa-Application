@@ -1,3 +1,6 @@
+import { LanguagePicker } from '../i18n/LanguagePicker';
+import { t } from '../i18n';
+import { useTranslation } from 'react-i18next';
 import { useEffect, useState } from "react";
 import type { ChatApi, ChatListInfo, ListColor } from "./chatApi";
 import { ChatApiError } from "./chatApi";
@@ -23,6 +26,7 @@ const reason = (cause: unknown, fallback: string) => {
 };
 
 export function ListDialog({ api, onClose, onDone }: { api: ChatApi; onClose: () => void; onDone: (list: ChatListInfo) => void }) {
+  useTranslation();
   const [name, setName] = useState("");
   const [color, setColor] = useState<ListColor>("violet");
   const [busy, setBusy] = useState(false);
@@ -34,7 +38,7 @@ export function ListDialog({ api, onClose, onDone }: { api: ChatApi; onClose: ()
     catch (cause) { setError(reason(cause, "The list could not be created.")); setBusy(false); }
   };
   return (
-    <Dialog title="Create a list" onClose={onClose}>
+    <Dialog title={t("Create a list")} onClose={onClose}>
       <form className="lc-form" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <label htmlFor="lc-list-name">List name</label>
         <input id="lc-list-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Work, Family, …" autoFocus />
@@ -50,6 +54,7 @@ export function ListDialog({ api, onClose, onDone }: { api: ChatApi; onClose: ()
 }
 
 export function ManageListsDialog({ api, lists, onClose, onChanged }: { api: ChatApi; lists: ChatListInfo[]; onClose: () => void; onChanged: () => void }) {
+  useTranslation();
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +69,7 @@ export function ManageListsDialog({ api, lists, onClose, onChanged }: { api: Cha
     try { await api.deleteList(list.id); onChanged(); } catch (cause) { setError(reason(cause, "The list could not be deleted.")); }
   };
   return (
-    <Dialog title="Manage lists" onClose={onClose}>
+    <Dialog title={t("Manage lists")} onClose={onClose}>
       {lists.length === 0 ? <p className="lc-dialog-note">You have no lists yet. Use + then Create a list.</p> : (
         <ul className="lc-devices">
           {lists.map((l) => (
@@ -73,13 +78,13 @@ export function ManageListsDialog({ api, lists, onClose, onChanged }: { api: Cha
               {editing === l.id ? (
                 <form className="lc-inline-form" onSubmit={(e) => { e.preventDefault(); void rename(l.id); }}>
                   <input aria-label="List name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} autoFocus />
-                  <button type="submit" className="lc-btn lc-btn-primary" disabled={!name.trim()}>Save</button>
+                  <button type="submit" className="lc-btn lc-btn-primary" disabled={!name.trim()}>{t("Save")}</button>
                 </form>
               ) : (
                 <>
                   <div><strong>{l.name}</strong><span>{l.count} {l.count === 1 ? "chat" : "chats"}</span></div>
                   <button type="button" className="lc-btn" onClick={() => { setEditing(l.id); setName(l.name); }}>Rename</button>
-                  <button type="button" className="lc-btn" onClick={() => void remove(l)}>Delete</button>
+                  <button type="button" className="lc-btn" onClick={() => void remove(l)}>{t("Delete")}</button>
                 </>
               )}
             </li>
@@ -92,6 +97,7 @@ export function ManageListsDialog({ api, lists, onClose, onChanged }: { api: Cha
 }
 
 function PeoplePicker({ contacts, chosen, onToggle }: { contacts: Contact[]; chosen: Set<string>; onToggle: (id: string) => void }) {
+  useTranslation();
   if (contacts.length === 0) return <p className="lc-dialog-note">You have no one to add yet. Start a chat with someone first.</p>;
   return (
     <ul className="lc-people" aria-label="People">
@@ -107,6 +113,7 @@ function PeoplePicker({ contacts, chosen, onToggle }: { contacts: Contact[]; cho
 const toggled = (set: Set<string>, id: string) => { const next = new Set(set); if (next.has(id)) next.delete(id); else next.add(id); return next; };
 
 export function GroupDialog({ api, contacts, onClose, onCreated }: { api: ChatApi; contacts: Contact[]; onClose: () => void; onCreated: (conversationId: string) => void }) {
+  useTranslation();
   const [title, setTitle] = useState("");
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -118,7 +125,7 @@ export function GroupDialog({ api, contacts, onClose, onCreated }: { api: ChatAp
     catch (cause) { setError(reason(cause, "The group could not be created.")); setBusy(false); }
   };
   return (
-    <Dialog title="Create a group" onClose={onClose}>
+    <Dialog title={t("Create a group")} onClose={onClose}>
       <form className="lc-form" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <label htmlFor="lc-group-name">Group name</label>
         <input id="lc-group-name" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={60} autoFocus />
@@ -133,6 +140,7 @@ export function GroupDialog({ api, contacts, onClose, onCreated }: { api: ChatAp
 }
 
 export function AddPeopleDialog({ api, groupId, groupName, existing, contacts, onClose, onDone }: { api: ChatApi; groupId: string; groupName: string; existing: string[]; contacts: Contact[]; onClose: () => void; onDone: () => void }) {
+  useTranslation();
   const candidates = contacts.filter((c) => !existing.includes(c.userId));
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -162,6 +170,7 @@ export function SettingsPanel(props: {
   favorites: number; archived: number; lists: number;
   onManageLists: () => void; onFavorites: () => void; onArchived: () => void; onSignOut: () => void; onClose: () => void;
 }) {
+  useTranslation();
   const [name, setName] = useState(getComputerName() || props.defaultName);
   const [saved, setSaved] = useState(false);
   useEffect(() => {
@@ -170,38 +179,39 @@ export function SettingsPanel(props: {
     return () => window.removeEventListener("keydown", onKey);
   }, [props]);
   return (
-    <aside className="lc-panel" aria-label="Settings">
-      <header><h2>Settings</h2><button type="button" className="lc-icon" aria-label="Close settings" onClick={props.onClose}><CloseIcon size={20} /></button></header>
+    <aside className="lc-panel" aria-label={t("Settings")}>
+      <LanguagePicker />
+      <header><h2>{t("Settings")}</h2><button type="button" className="lc-icon" aria-label={t("Close settings")} onClick={props.onClose}><CloseIcon size={20} /></button></header>
       <section>
-        <h3>This computer</h3>
-        <p className="lc-dialog-note">This name helps you recognize this device in your linked devices.</p>
+        <h3>{t("This computer")}</h3>
+        <p className="lc-dialog-note">{t("This name helps you recognize this device in your linked devices.")}</p>
         <form className="lc-inline-form" onSubmit={(e) => { e.preventDefault(); setComputerName(name); props.onSaved(name.trim() || props.defaultName); setSaved(true); setTimeout(() => setSaved(false), 2000); }}>
-          <input aria-label="Name of this computer" value={name} onChange={(e) => { setName(e.target.value); setSaved(false); }} maxLength={60} />
-          <button type="submit" className="lc-btn lc-btn-primary">{saved ? "Saved" : "Save"}</button>
+          <input aria-label={t("Name of this computer")} value={name} onChange={(e) => { setName(e.target.value); setSaved(false); }} maxLength={60} />
+          <button type="submit" className="lc-btn lc-btn-primary">{saved ? t("Saved") : t("Save")}</button>
         </form>
       </section>
       <section>
-        <h3>Chat organization</h3>
+        <h3>{t("Chat organization")}</h3>
         <ul className="lc-shortcuts">
-          <li><button type="button" onClick={props.onManageLists}><GearIcon size={18} />Manage chat lists<span>{props.lists}</span></button></li>
-          <li><button type="button" onClick={props.onFavorites}><span aria-hidden className="lc-star">★</span>Favorites<span>{props.favorites}</span></button></li>
-          <li><button type="button" onClick={props.onArchived}><span aria-hidden>▣</span>Archived chats<span>{props.archived}</span></button></li>
+          <li><button type="button" onClick={props.onManageLists}><GearIcon size={18} />{t("Manage chat lists")}<span>{props.lists}</span></button></li>
+          <li><button type="button" onClick={props.onFavorites}><span aria-hidden className="lc-star">★</span>{t("Favorites")}<span>{props.favorites}</span></button></li>
+          <li><button type="button" onClick={props.onArchived}><span aria-hidden>▣</span>{t("Archived chats")}<span>{props.archived}</span></button></li>
         </ul>
-        <p className="lc-dialog-note">Lists organize chats. Groups are shared conversations.</p>
+        <p className="lc-dialog-note">{t("Lists organize chats. Groups are shared conversations.")}</p>
       </section>
       <section>
-        <h3>Messaging</h3>
-        <label className="lc-check"><input type="checkbox" checked={props.enterToSend} onChange={(e) => props.onEnterToSend(e.target.checked)} />Enter to send</label>
-        <p className="lc-dialog-note">{props.enterToSend ? "Shift+Enter starts a new line." : "Enter starts a new line. Use the Send button, or Ctrl+Enter, to send."}</p>
+        <h3>{t("Messaging")}</h3>
+        <label className="lc-check"><input type="checkbox" checked={props.enterToSend} onChange={(e) => props.onEnterToSend(e.target.checked)} />{t("Enter to send")}</label>
+        <p className="lc-dialog-note">{props.enterToSend ? t("Shift+Enter starts a new line.") : t("Enter starts a new line. Use the Send button, or Ctrl+Enter, to send.")}</p>
         <label className="lc-switch">
-          <span>Desktop notifications</span>
+          <span>{t("Desktop notifications")}</span>
           <input type="checkbox" role="switch" checked={props.notifications} disabled={props.notificationsBlocked} onChange={(e) => props.onNotifications(e.target.checked)} />
         </label>
-        {props.notificationsBlocked ? <p className="lc-dialog-note">Notifications are blocked in this browser. Allow them in the site settings to turn this on.</p> : null}
+        {props.notificationsBlocked ? <p className="lc-dialog-note">{t("Notifications are blocked in this browser. Allow them in the site settings to turn this on.")}</p> : null}
       </section>
       <section>
-        <button type="button" className="lc-btn" onClick={props.onSignOut}>Sign out of this computer</button>
-        <p className="lc-dialog-note">Your chats stay on your phone. You can link this computer again any time.</p>
+        <button type="button" className="lc-btn" onClick={props.onSignOut}>{t("Sign out of this computer")}</button>
+        <p className="lc-dialog-note">{t("Your chats stay on your phone. You can link this computer again any time.")}</p>
       </section>
     </aside>
   );

@@ -18,7 +18,7 @@ try{
     const hash=createHash('sha256').update(await readFile(new URL(`../db/migrations/${file}`,import.meta.url))).digest('hex');
     if(row.dirty||row.checksum_sha256!==hash)throw new Error('EXISTING_MIGRATION_NOT_VERIFIED');
   }
-  const allowed=['082_linqasend_wallet_subledger.sql','083_linqasend_provider_custody.sql','084_linqasend_wallet_money.sql','085_linqasend_sender_fee_refunds.sql'];
+  const allowed=['082_linqasend_wallet_subledger.sql','083_linqasend_provider_custody.sql','084_linqasend_wallet_money.sql','085_linqasend_sender_fee_refunds.sql','086_wallet_api_idempotency.sql','087_wallet_invoices.sql'];
   if(pending.some(p=>!allowed.includes(p)))throw new Error('UNRELATED_MIGRATIONS_PENDING');
   if(!process.argv.includes('--apply'))console.log(JSON.stringify({mode:'plan',pending},null,2));
   else{

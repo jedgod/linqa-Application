@@ -9,7 +9,7 @@ const storage = new AccountSecureStorage();
 const VAULT_KEY = "vault.key.v1";
 
 /** This account's vault key. Created on first use and kept only in the phone's secure storage. */
-async function vaultKeyFor(accountId: string, random: (n: number) => Uint8Array): Promise<Uint8Array> {
+export async function vaultKeyFor(accountId: string, random: (n: number) => Uint8Array): Promise<Uint8Array> {
   const existing = await storage.get(accountId, VAULT_KEY);
   if (existing) {
     const bytes = base64ToBytes(existing);

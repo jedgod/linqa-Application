@@ -56,7 +56,7 @@ export const DRAWER_SECTIONS: DrawerSection[] = [
     divider: true,
     items: [
       { key: 'send', label: 'Linqa Send', icon: 'paper-plane-outline', href: '/linqasend' },
-      { key: 'wallet', label: 'Wallet', icon: 'wallet-outline', href: '/modules/wallet' },
+      { key: 'wallet', label: 'Wallet', icon: 'wallet-outline', href: '/wallet' },
       { key: 'business', label: 'Business', icon: 'business-outline', href: '/modules/enterprise' },
     ],
   },

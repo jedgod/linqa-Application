@@ -1,3 +1,5 @@
+import { t, i18n } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 // Calls screen for the mobile app, displaying call history, scheduled calls, and contact interactions.
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -75,14 +77,14 @@ const flagOf = (code?: string | null) =>
 
 function toCall(item: CallHistoryItem): Call {
   const when = new Date(item.createdAt);
-  const today = callDateBucket(item.createdAt) === "Today";
+  const today = new Date(item.createdAt).toDateString() === new Date().toDateString();
   return {
     id: item.id,
     peerUserId: item.peerUserId,
     name: item.peerDisplayName,
     country: item.peerCountryName ?? undefined,
     flag: flagOf(item.peerCountryCode),
-    time: today ? when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : callDateBucket(item.createdAt),
+    time: today ? when.toLocaleTimeString(i18n.language, { hour: "numeric", minute: "2-digit" }) : callDateBucket(item.createdAt),
     missed: item.status === "MISSED",
     direction: item.direction === "INCOMING" ? "incoming" : "outgoing",
     kind: item.callType === "VIDEO" ? "video" : "audio",
@@ -99,13 +101,15 @@ const FILTERS: Array<{ label: Filter; icon?: IoniconName }> = [
 ];
 
 export default function CallsScreen() {
+  useTranslation();
   const { width } = useWindowDimensions();
   const pageWidth = Math.min(width, 540);
   const scale = Math.min(1, pageWidth / 432);
   const [filter, setFilter] = useState<Filter>("All");
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [history, setHistory] = useState<Call[]>([]);
+  const [historyItems, setHistoryItems] = useState<CallHistoryItem[]>([]);
+  const history = useMemo(() => historyItems.map(toCall), [historyItems, i18n.language]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [zoom, setZoom] = useState<{ uri: string; name: string } | null>(null);
   const router = useRouter();
@@ -115,7 +119,7 @@ export default function CallsScreen() {
   useEffect(() => {
     let alive = true;
     const service = new CallsService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
-    service.listHistory(30).then((items) => { if (alive) setHistory(items.map(toCall)); }).catch(() => undefined).finally(() => { if (alive) setHistoryLoaded(true); });
+    service.listHistory(30).then((items) => { if (alive) setHistoryItems(items); }).catch(() => undefined).finally(() => { if (alive) setHistoryLoaded(true); });
     return () => { alive = false; };
   }, [profile?.id]);
 
@@ -218,13 +222,14 @@ export default function CallsScreen() {
 }
 
 function Header({ photoUri, onPhoto, onSearch, onSchedule }: { photoUri: string | null; onPhoto: () => void; onSearch: () => void; onSchedule: () => void }) {
+  useTranslation();
   const { displayUri } = useAvatarImage(photoUri);
   return (
     <View style={styles.header}>
       <LinearGradient colors={["#10D8EA", "#0786FF"]} style={styles.brandMark}>
         <Ionicons name="link" size={29} color="#02152A" />
       </LinearGradient>
-      <Text style={styles.headerTitle}>Calls</Text>
+      <Text style={styles.headerTitle}>{t("Calls")}</Text>
       <View style={styles.headerSpacer} />
       <IconPressable icon="search-outline" label="Search calls" onPress={onSearch} size={29} />
       <IconPressable icon="calendar-outline" label="Scheduled calls" onPress={onSchedule} size={27} />
@@ -236,6 +241,7 @@ function Header({ photoUri, onPhoto, onSearch, onSchedule }: { photoUri: string 
 }
 
 function IconPressable({ icon, label, onPress, size = 24 }: { icon: IoniconName; label: string; onPress: () => void; size?: number }) {
+  useTranslation();
   return (
     <Pressable
       accessibilityRole="button"
@@ -250,6 +256,7 @@ function IconPressable({ icon, label, onPress, size = 24 }: { icon: IoniconName;
 }
 
 function Hero({ scale, onNewCall, onSchedule }: { scale: number; onNewCall: () => void; onSchedule: () => void }) {
+  useTranslation();
   return (
     <LinearGradient
       colors={["#12347A", "#032950", "#151054"]}
@@ -293,6 +300,7 @@ function Hero({ scale, onNewCall, onSchedule }: { scale: number; onNewCall: () =
 }
 
 function FilterBar({ selected, onChange }: { selected: Filter; onChange: (filter: Filter) => void }) {
+  useTranslation();
   return (
     <View style={styles.filterFrame}>
       <View style={styles.rule} />
@@ -313,11 +321,13 @@ function FilterBar({ selected, onChange }: { selected: Filter; onChange: (filter
 }
 
 function SectionTitle({ title, compact = false }: { title: string; compact?: boolean }) {
+  useTranslation();
   return <Text style={[styles.sectionTitle, compact && styles.sectionTitleCompact]}>{title}</Text>;
 }
 
 /** What this person added to Linqa from chats; the sample card below only shows while there is nothing of their own. */
 function MyUpcoming({ fallback }: { fallback: React.ReactElement }) {
+  useTranslation();
   const router = useRouter();
   const { items } = useMyEvents();
   const next = upcomingOf(items).slice(0, 3);
@@ -334,7 +344,7 @@ function MyUpcoming({ fallback }: { fallback: React.ReactElement }) {
               </View>
               <View style={styles.upcomingCopy}>
                 <Text style={styles.upcomingTitle} numberOfLines={2}>{e.title}</Text>
-                <Text style={styles.upcomingTime}>{d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} · {d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</Text>
+                <Text style={styles.upcomingTime}>{d.toLocaleDateString(i18n.language, { weekday: "short", month: "short", day: "numeric" })} · {d.toLocaleTimeString(i18n.language, { hour: "numeric", minute: "2-digit" })}</Text>
                 {e.place ? <Text style={[styles.upcomingTime, { color: "#94A3B8" }]} numberOfLines={1}>{e.place}</Text> : null}
               </View>
             </View>
@@ -346,6 +356,7 @@ function MyUpcoming({ fallback }: { fallback: React.ReactElement }) {
 }
 
 function ScheduledCalls({ version, onSchedule }: { version: number; onSchedule: () => void }) {
+  useTranslation();
   const [items, setItems] = useState<ScheduledCall[] | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [, relock] = useState(0);
@@ -422,6 +433,7 @@ function ScheduledCalls({ version, onSchedule }: { version: number; onSchedule: 
 }
 
 function CallRow({ call, last, onAudio, onVideo, onPhoto }: { call: Call; last: boolean; onAudio: () => void; onVideo: () => void; onPhoto: () => void }) {
+  useTranslation();
   const { width } = useWindowDimensions();
   const { displayUri } = useAvatarImage(call.photoUrl);
   const timeWidth = Math.min(100, Math.max(72, width * 0.23));
@@ -477,6 +489,7 @@ function CallRow({ call, last, onAudio, onVideo, onPhoto }: { call: Call; last: 
 }
 
 function SearchModal({ visible, value, onChange, onClose }: { visible: boolean; value: string; onChange: (text: string) => void; onClose: () => void }) {
+  useTranslation();
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
       <Pressable style={styles.modalBackdrop} onPress={onClose}>

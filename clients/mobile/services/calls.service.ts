@@ -1,3 +1,4 @@
+import { t, i18n } from '../i18n';
 export type CallType = "AUDIO" | "VIDEO" | "SCREEN_SHARE";
 export type CallStatus = "MISSED" | "REJECTED" | "COMPLETED" | "FAILED" | "CANCELLED";
 export type PrivacyMode = "STANDARD" | "RELAY_ONLY";
@@ -288,15 +289,15 @@ export function formatTalkTime(seconds: number): string {
  */
 export function callDateBucket(iso: string, now = new Date()): string {
   const when = new Date(iso);
-  if (Number.isNaN(when.getTime())) return "Earlier";
+  if (Number.isNaN(when.getTime())) return t("Earlier");
 
   const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   const dayDelta = Math.round((startOfDay(now) - startOfDay(when)) / 86_400_000);
 
-  if (dayDelta <= 0) return "Today";
-  if (dayDelta === 1) return "Yesterday";
-  if (dayDelta < 7) return when.toLocaleDateString(undefined, { weekday: "long" });
-  return when.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  if (dayDelta <= 0) return t("Today");
+  if (dayDelta === 1) return t("Yesterday");
+  if (dayDelta < 7) return when.toLocaleDateString(i18n.language, { weekday: "long" });
+  return when.toLocaleDateString(i18n.language, { month: "short", day: "numeric" });
 }
 
 /** Stable identity colour, so the same person keeps the same avatar tint. */
@@ -337,7 +338,7 @@ export function schedulePresets(now = new Date()): Array<{ key: string; label: s
 export function formatScheduledFor(iso: string, now = new Date()): string {
   const when = new Date(iso);
   if (Number.isNaN(when.getTime())) return "";
-  const time = when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const time = when.toLocaleTimeString(i18n.language, { hour: "numeric", minute: "2-digit" });
   const bucket = callDateBucket(iso, now);
   const isPast = when.getTime() < now.getTime();
   if (isPast) return `${time} (overdue)`;
@@ -345,6 +346,6 @@ export function formatScheduledFor(iso: string, now = new Date()): string {
   const dayDelta = Math.round((startOfDay(when) - startOfDay(now)) / 86_400_000);
   if (dayDelta === 0) return `Today ${time}`;
   if (dayDelta === 1) return `Tomorrow ${time}`;
-  if (dayDelta < 7) return `${when.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
+  if (dayDelta < 7) return `${when.toLocaleDateString(i18n.language, { weekday: "short" })} ${time}`;
   return `${bucket} ${time}`;
 }

@@ -1,3 +1,4 @@
+import './i18n/LanguagePicker';
 import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";

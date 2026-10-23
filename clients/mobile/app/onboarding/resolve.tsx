@@ -1,3 +1,5 @@
+import { t } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -15,6 +17,7 @@ const routes: Record<OnboardingNextStep, string> = {
 };
 
 export default function OnboardingResolver() {
+  useTranslation();
   const router = useRouter();
   const params = useLocalSearchParams<{ flow?: string }>();
   const client = useMemo(() => new OnboardingApiService(API, accessTokenProvider), []);
@@ -47,7 +50,7 @@ export default function OnboardingResolver() {
     {!error && <ActivityIndicator color="#6558DC" />}
     <Text accessibilityRole={error ? "alert" : undefined} style={s.text}>{error ?? "Securely resuming your Linqa account…"}</Text>
     {error && <>
-      <Pressable accessibilityRole="button" style={s.button} onPress={() => setAttempt((value) => value + 1)}><Text style={s.buttonText}>Try again</Text></Pressable>
+      <Pressable accessibilityRole="button" style={s.button} onPress={() => setAttempt((value) => value + 1)}><Text style={s.buttonText}>{t("Try again")}</Text></Pressable>
       <Pressable accessibilityRole="button" style={s.button} onPress={() => router.replace("/welcome")}><Text style={s.buttonText}>Back to welcome</Text></Pressable>
     </>}
   </SafeAreaView>;

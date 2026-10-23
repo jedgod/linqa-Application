@@ -1,33 +1,19 @@
-import { useEffect, useRef } from "react";
-import { AccessibilityInfo, Animated, Easing, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { t } from '../i18n';
+import { useTranslation } from 'react-i18next';
+import { LanguagePicker } from '../i18n/LanguagePicker';
+import { Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { SpinningGlobe } from "../components/SpinningGlobe";
 
 export default function WelcomeScreen() {
+  useTranslation();
   const router = useRouter();
-  const rotation = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    let disposed = false;
-    let animation: Animated.CompositeAnimation | undefined;
-    const update = (reduceMotion: boolean) => {
-      animation?.stop();
-      rotation.setValue(0);
-      if (disposed || reduceMotion) return;
-      animation = Animated.loop(Animated.timing(rotation, {
-        toValue: 1, duration: 180_000, easing: Easing.linear, useNativeDriver: true,
-        isInteraction: false,
-      }));
-      animation.start();
-    };
-    void AccessibilityInfo.isReduceMotionEnabled().then(update).catch(() => update(false));
-    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", update);
-    return () => { disposed = true; animation?.stop(); subscription.remove(); };
-  }, [rotation]);
   const { width, height } = useWindowDimensions();
   const compact = height < 720;
-  const globeSize = Math.max(220, Math.min(width - 12, height * (compact ? 0.3 : 0.39), 360));
+  const globeSize = Math.max(220, Math.min(width - 56, height * (compact ? 0.26 : 0.33), 300));
 
   return (
     <View style={styles.gradient}>
@@ -38,38 +24,34 @@ export default function WelcomeScreen() {
         <View style={styles.content}>
           <View style={styles.hero}>
             <Ionicons name="location-outline" size={compact ? 56 : 66} color="#FFFFFF" accessibilityElementsHidden />
-            <Text adjustsFontSizeToFit numberOfLines={1} style={[styles.tagline, compact && styles.taglineCompact]}>Connect Locally. Connect Globally.</Text>
-            <Text style={[styles.promise, compact && styles.promiseCompact]}>Secure, Private, Yours</Text>
+            <Text adjustsFontSizeToFit numberOfLines={1} style={[styles.tagline, compact && styles.taglineCompact]}>{t("Connect Locally. Connect Globally.")}</Text>
+            <Text style={[styles.promise, compact && styles.promiseCompact]}>{t("Secure, Private, Yours")}</Text>
             <View style={styles.globeWrap}>
-              <Animated.Image
-                accessibilityLabel="Dotted map of the world"
-                source={require("../assets/welcome-globe.png")}
-                resizeMode="cover"
-                style={{ width: globeSize, height: globeSize * (358 / 388), transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "-360deg"] }) }] }}
-              />
+              <SpinningGlobe size={globeSize} />
             </View>
-            <Text accessibilityRole="header" style={[styles.title, compact && styles.titleCompact]}>Welcome To Linqa</Text>
+            <Text accessibilityRole="header" style={[styles.title, compact && styles.titleCompact]}>{t("Welcome To Linqa")}</Text>
             <Text style={[styles.subtitle, compact && styles.subtitleCompact]}>
-              The secure messenger{"\n"}built for real connections
+              {t("The secure messenger built for real connections")}
             </Text>
           </View>
 
           <View style={styles.actions}>
+            <View style={styles.languageWrap}><LanguagePicker light /></View>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Get Started, create a Linqa account"
+              accessibilityLabel={t("Get Started, create a Linqa account")}
               style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
               onPress={() => router.push("/onboarding/detect-country")}
             >
-              <Text style={styles.primaryText}>Get Started</Text>
+              <Text style={styles.primaryText}>{t("Get Started")}</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Log in to an existing Linqa account"
+              accessibilityLabel={t("Log in to an existing Linqa account")}
               style={({ pressed }) => [styles.login, pressed && styles.loginPressed]}
               onPress={() => router.push({ pathname: "/account/sign-up", params: { purpose: "LOGIN" } })}
             >
-              <Text style={styles.loginText}>Log In</Text>
+              <Text style={styles.loginText}>{t("Log In")}</Text>
             </Pressable>
           </View>
         </View>
@@ -85,7 +67,8 @@ const styles = StyleSheet.create({
   glowTop: { position: "absolute", top: -120, left: -40, right: -40, height: 360, borderRadius: 180, backgroundColor: "rgba(139,83,255,0.26)" },
   glowBottom: { position: "absolute", bottom: -180, left: -90, width: 330, height: 420, borderRadius: 210, backgroundColor: "rgba(19,20,91,0.27)" },
   content: { flex: 1, paddingHorizontal: 30, paddingTop: 24, paddingBottom: 10 },
-  hero: { flex: 1, alignItems: "center" },
+  hero: { flex: 1, alignItems: "center", paddingBottom: 26 },
+  languageWrap: { marginBottom: 12 },
   title: { marginTop: 0, color: "#FFFFFF", fontSize: 32, lineHeight: 39, fontWeight: "800", letterSpacing: -0.8, textAlign: "center" },
   titleCompact: { marginTop: 2, fontSize: 28, lineHeight: 34 },
   tagline: { marginTop: 11, color: "rgba(230,224,255,0.9)", fontSize: 18, lineHeight: 25, fontWeight: "500", letterSpacing: -0.3, textAlign: "center" },
@@ -94,7 +77,7 @@ const styles = StyleSheet.create({
   promiseCompact: { marginTop: 4, fontSize: 12, lineHeight: 17 },
   subtitle: { marginTop: 3, color: "rgba(230,224,255,0.82)", fontSize: 15, lineHeight: 21, fontWeight: "400", textAlign: "center" },
   subtitleCompact: { marginTop: 2, fontSize: 13, lineHeight: 18 },
-  globeWrap: { flex: 1, minHeight: 170, justifyContent: "flex-end", alignItems: "center", marginTop: 0, paddingBottom: 4 },
+  globeWrap: { flex: 1, minHeight: 170, justifyContent: "center", alignItems: "center", marginTop: 0, paddingBottom: 4 },
   actions: { gap: 6 },
   primary: { height: 66, borderRadius: 18, backgroundColor: "#FFFFFF", justifyContent: "center", alignItems: "center", shadowColor: "#09092B", shadowOpacity: 0.22, shadowRadius: 20, shadowOffset: { width: 0, height: 10 }, elevation: 7 },
   primaryText: { color: "#4E2BD4", fontSize: 22, fontWeight: "800", letterSpacing: -0.3 },

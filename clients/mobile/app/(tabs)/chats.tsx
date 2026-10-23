@@ -1,10 +1,12 @@
+import { t } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { useChatPreviews } from "../../services/chat-previews";
 import { startSecureCallForPeer } from "../../services/secure-call-rooms";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, FlatList, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { CHAT_FILTERS, ChatInboxService, deduplicateConversations, type ChatFilter, type ChatInboxPayload, type ChatList, type ChatSummary } from "../../services/chat-inbox.service";
 import { callController } from "../../services/call-controller";
 import { CallsService } from "../../services/calls.service";
@@ -28,12 +30,15 @@ import { avatarUri } from "../../lib/profileApi";
 const API = getApiBaseUrl();
 
 export default function ChatsScreen() {
+  useTranslation();
   const { active } = useAccounts();
   return <ChatsInbox key={active?.userId ?? "signed-out"} />;
 }
 
 function ChatsInbox() {
+  useTranslation();
   const router = useRouter();
+  const params = useLocalSearchParams<{ action?: string }>();
   const { accounts, active, activate } = useAccounts();
   const inbox = useMemo(
     () => new ChatInboxService(API, () => accessTokenProvider.getAccessToken()),
@@ -288,6 +293,14 @@ function ChatsInbox() {
     }
   }
 
+  // The Create sheet opens Chats with ?action=new (new chat) or ?action=group (new group).
+  useEffect(() => {
+    if (!params.action) return;
+    if (params.action === "new") void openCompose();
+    else if (params.action === "group") setGroupOpen(true);
+    router.setParams({ action: "" }); // undefined would leave it set, and the same shortcut would then do nothing next time
+  }, [params.action]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function startConversation(contact: HubContact) {
     if (creatingConversation.current) return;
     creatingConversation.current = true;
@@ -371,7 +384,7 @@ function ChatsInbox() {
           {active?.label || active?.displayName || "Linqa"}
         </Text>
         <View style={s.headerSpacer} />
-        <HeaderButton label="Search" icon="search-outline" onPress={() => go("/search")} />
+        <HeaderButton label={t("Search")} icon="search-outline" onPress={() => go("/search")} />
         <HeaderButton
           label={hubOpen ? "Close create menu" : "Create"}
           icon={hubOpen ? "close-outline" : "add-outline"}
@@ -380,7 +393,7 @@ function ChatsInbox() {
         />
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Switch account"
+          accessibilityLabel={t("Switch account")}
           onPress={() => setSwitcherOpen(true)}
           style={{ paddingLeft: 3 }}
         >
@@ -457,7 +470,7 @@ function ChatsInbox() {
                   key={key}
                   accessibilityRole="tab"
                   accessibilityState={{ selected: filter === key }}
-                  accessibilityLabel={`${FILTER_LABELS[key]}, ${counts[key]}`}
+                  accessibilityLabel={`${t(FILTER_LABELS[key])}, ${counts[key]}`}
                   onPress={() => { setListId(null); setFilter(key); }}
                   style={[s.filter, filter === key && !listId && s.filterActive]}
                 >
@@ -489,9 +502,9 @@ function ChatsInbox() {
                   <View style={[s.filterCount, listId === list.id && s.filterCountActive]}><Text style={[s.filterCountText, listId === list.id && s.filterCountTextActive]}>{list.count}</Text></View>
                 </Pressable>
               ))}
-              <Pressable accessibilityRole="button" accessibilityLabel="Create a list" onPress={() => setNewListOpen(true)} style={s.filter}>
+              <Pressable accessibilityRole="button" accessibilityLabel={t("Create a list")} onPress={() => setNewListOpen(true)} style={s.filter}>
                 <Ionicons name="add" size={16} color={C.teal} />
-                <Text style={[s.filterText, { color: C.teal }]}>New list</Text>
+                <Text style={[s.filterText, { color: C.teal }]}>{t("New list")}</Text>
               </Pressable>
             </ScrollView>
             {organizeNote ? <Text accessibilityRole="alert" style={s.modalHint}>{organizeNote}</Text> : null}
@@ -539,14 +552,14 @@ function ChatsInbox() {
       >
         <View style={s.modalBackdrop}>
           <View style={s.modalCard}>
-            <Text style={s.modalTitle}>New chat</Text>
+            <Text style={s.modalTitle}>{t("New chat")}</Text>
             <ScrollView style={s.modalScroll} keyboardShouldPersistTaps="handled">
               <Text style={s.modalHint}>Find someone by their full phone number</Text>
               <TextInput accessibilityLabel="Find contact by phone number" value={phone} maxLength={40} keyboardType="phone-pad" autoCorrect={false} placeholder="+1 202 555 0123" placeholderTextColor={C.muted} editable={startingContact === null} onChangeText={value => { lookupVersion.current++; setPhone(value); setFoundContact(null); setLookupNotice(null); setFindingPhone(false); }} style={{ color: C.white, borderColor: C.border, borderWidth: 1, borderRadius: 12, padding: 12, minHeight: 48 }} />
               <Pressable accessibilityRole="button" accessibilityLabel="Find Linqa contact" disabled={!phone.trim() || findingPhone || startingContact !== null} onPress={() => void findPhone()} style={{ padding: 12, minHeight: 44, alignItems: "center", opacity: !phone.trim() || findingPhone ? 0.5 : 1 }}><Text style={{ color: C.teal }}>{findingPhone ? "Searching…" : "Find contact"}</Text></Pressable>
               {lookupNotice ? <Text accessibilityRole="alert" style={s.modalHint}>{lookupNotice}</Text> : null}
               {foundContact ? <Pressable accessibilityRole="button" accessibilityLabel={`Start chat with ${foundContact.displayName}`} disabled={startingContact !== null} onPress={() => void startConversation(foundContact)} style={s.contactRow}><Avatar seed={foundContact.id} initials={foundContact.initials} size={38} /><View style={{ flex: 1 }}><Text style={s.contactName}>{foundContact.displayName}</Text><Text style={s.modalHint}>{phone}</Text></View><Text style={{ color: C.teal }}>{startingContact === foundContact.id ? "Opening…" : "Chat"}</Text></Pressable> : null}
-              <Text style={s.modalHint}>Recent contacts</Text>
+              <Text style={s.modalHint}>{t("Recent contacts")}</Text>
               {contacts.map((contact) => (
                 <Pressable
                   key={contact.id}
@@ -568,13 +581,13 @@ function ChatsInbox() {
               ))}
               {contactsLoading ? <ActivityIndicator accessibilityLabel="Loading contacts" color={C.teal} /> : null}
               {composeError ? <Text accessibilityRole="alert" style={s.modalHint}>{composeError}</Text> : null}
-              {composeError && contacts.length === 0 ? <Pressable accessibilityRole="button" onPress={() => void openCompose()}><Text style={s.modalHint}>Try again</Text></Pressable> : null}
+              {composeError && contacts.length === 0 ? <Pressable accessibilityRole="button" onPress={() => void openCompose()}><Text style={s.modalHint}>{t("Try again")}</Text></Pressable> : null}
               {!contactsLoading && !composeError && contacts.length === 0 ? (
                 <Text style={s.modalHint}>No contacts are available to message yet.</Text>
               ) : null}
             </ScrollView>
             <Pressable onPress={closeCompose} style={s.modalCancel}>
-              <Text style={s.modalCancelText}>Cancel</Text>
+              <Text style={s.modalCancelText}>{t("Cancel")}</Text>
             </Pressable>
           </View>
         </View>
@@ -588,13 +601,13 @@ function ChatsInbox() {
             <TextInput accessibilityLabel="List name" value={newListName} maxLength={40} autoFocus placeholder="Work, Family, …" placeholderTextColor={C.muted} onChangeText={(v) => { setNewListName(v); setNewListError(null); }} onSubmitEditing={() => void createList()} style={{ color: C.white, borderColor: C.border, borderWidth: 1, borderRadius: 12, padding: 12, minHeight: 48 }} />
             {newListError ? <Text accessibilityRole="alert" style={s.modalHint}>{newListError}</Text> : null}
             <Pressable accessibilityRole="button" disabled={!newListName.trim()} onPress={() => void createList()} style={{ padding: 12, minHeight: 44, alignItems: "center", opacity: newListName.trim() ? 1 : 0.5 }}><Text style={{ color: C.teal }}>{renaming ? "Save" : "Create list"}</Text></Pressable>
-            <Pressable onPress={() => { setNewListOpen(false); setNewListName(""); setNewListError(null); setRenaming(null); }} style={s.modalCancel}><Text style={s.modalCancelText}>Cancel</Text></Pressable>
+            <Pressable onPress={() => { setNewListOpen(false); setNewListName(""); setNewListError(null); setRenaming(null); }} style={s.modalCancel}><Text style={s.modalCancelText}>{t("Cancel")}</Text></Pressable>
           </View>
         </View>
       </Modal>
 
       <PeopleSheet
-        visible={groupOpen} theme={THEMES.dark} title="New group" confirm="Create group" maxPick={4} askName
+        visible={groupOpen} theme={THEMES.dark} title={t("New group")} confirm={t("Create group")} maxPick={4} askName
         people={((data?.conversations ?? []).filter((c) => !c.isGroup && c.peerUserId).map((c): PickPerson => ({ userId: c.peerUserId!, name: c.title })))}
         onClose={() => setGroupOpen(false)}
         onConfirm={async (userIds, name) => {

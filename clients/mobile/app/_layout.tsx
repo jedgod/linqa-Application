@@ -5,6 +5,8 @@
 // "crypto.getRandomValues must be defined" the first time a device
 // generates its enrollment keypair.
 import "react-native-get-random-values";
+import '../i18n';
+import { LanguageBootstrap } from '../i18n/LanguagePicker';
 import { SecureCallHost } from "../components/calls/SecureCallHost";
 import { HistoryTransferHost } from "../components/HistoryTransferHost";
 import { useEffect, useState } from "react";
@@ -105,6 +107,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
     <SafeAreaProvider>
       <AccountProvider>
+        <LanguageBootstrap />
         <AccountSessionBridge />
         <CallHost />
         <StatusBar style="auto" />

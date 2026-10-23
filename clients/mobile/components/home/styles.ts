@@ -27,7 +27,7 @@ export const s = StyleSheet.create({
   preferenceHint: { color: colors.textFaint, fontSize: 12, fontFamily: fonts.regular, marginTop: 2, lineHeight: 15 },
   screen: { flex: 1, backgroundColor: "#F4F6FB" },
   content: { paddingHorizontal: GUTTER, paddingTop: 10, paddingBottom: 16 },
-  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12 },
+  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 },
   brandWrap: { flexDirection: "row", alignItems: "center", gap: 9 },
   logoCircle: {
     width: 30,
@@ -60,7 +60,7 @@ export const s = StyleSheet.create({
   },
   avatarMiniText: { color: "#0F172A", fontSize: 12.5, fontFamily: fonts.extrabold },
   onlineDot: { position: "absolute", right: -1, bottom: -1, width: 10, height: 10, borderRadius: 5, backgroundColor: "#22C55E", borderWidth: 2, borderColor: "#FFFFFF" },
-  greeting: { marginTop: 18, color: "#111827", fontSize: 20, fontFamily: fonts.extrabold, letterSpacing: -0.25 },
+  greeting: { marginTop: 6, color: "#111827", fontSize: 20, fontFamily: fonts.extrabold, letterSpacing: -0.25 },
   emoji: { fontSize: 18, fontFamily: fonts.regular },
   subtitle: { color: "#475569", fontSize: 12.5, fontFamily: fonts.regular, marginTop: 2 },
   heroWrap: { marginTop: 14, position: "relative" },

@@ -15,6 +15,7 @@ import { createWalletMoneyPolicy } from '../../services/linqasend/wallet-money-p
 import { ProviderTokenVaultService } from '../../services/linqasend/provider-token-vault.service.js';
 import { AwsProductionKmsProvider } from '../../security/kms/production-kms-provider.js';
 import { BankLinkService } from '../../services/linqasend/bank-link.service.js';
+import { WalletAvailabilityService } from '../../services/linqasend/wallet-availability.service.js';
 
 export async function registerWalletMoneyRoutes(app:FastifyInstance,config:AppConfig,db:Database,providers:LinqaSendProviders,bio?:BiometricAuthorizationService){
   const auth=createPaymentAuthenticator(config,db);
@@ -28,6 +29,8 @@ export async function registerWalletMoneyRoutes(app:FastifyInstance,config:AppCo
   }};
   const id=(r:FastifyRequest)=>z.object({id:z.string().uuid()}).parse(r.params).id;
   const rate={config:{rateLimit:{max:20,timeWindow:'1 minute'}}};
+  const availability=new WalletAvailabilityService(db);
+  app.get('/v1/linqasend/wallet-profile',wrap(async r=>{const p=await auth(r);requireScope(p,'linqasend:read');return availability.profile(p.userId);}));
   app.post('/v1/linqasend/wallets/open',rate,wrap(async r=>{const p=await auth(r);requireScope(p,'linqasend:write');return money.open(p.userId,z.object({currency:z.string().regex(/^[A-Z]{3}$/)}).strict().parse(r.body).currency);}));
   app.post('/v1/linqasend/bank-links',rate,wrap(async r=>{const p=await auth(r);requireScope(p,'linqasend:write');const input=z.object({type:z.enum(['BANK_ACCOUNT','DEBIT_CARD']).default('BANK_ACCOUNT')}).strict().parse(r.body);return bank.begin(p.userId,input.type);}));
   app.post('/v1/linqasend/bank-links/:id/confirm',rate,wrap(async r=>{const p=await auth(r);requireScope(p,'linqasend:write');return bank.confirm(p.userId,id(r));}));
@@ -38,7 +41,13 @@ export async function registerWalletMoneyRoutes(app:FastifyInstance,config:AppCo
     return {items:(await db.query(`SELECT id,recipient_type AS type,display_name AS name,preferred_currency AS currency,country FROM linqasend_recipients WHERE owner_user_id=$1 AND CASE WHEN $2='INTERNAL' THEN recipient_type='LINQA_USER' ELSE recipient_type::text IN ('BANK','BANK_ACCOUNT','CARD','MOBILE_WALLET') END ORDER BY created_at DESC LIMIT 100`,[p.userId,kind])).rows};
   }));
   app.post('/v1/linqasend/wallet-money/quotes',rate,wrap(async r=>{const p=await auth(r);requireScope(p,'linqasend:write');return money.quote(p.userId,moneyRequest.parse(r.body));}));
-  app.get('/v1/linqasend/wallet-money/operations',wrap(async r=>{const p=await auth(r);requireScope(p,'linqasend:read');return money.list(p.userId);}));
+  app.post('/v1/linqasend/wallet-money/invoices/:id/quotes',rate,wrap(async r=>{const p=await auth(r);requireScope(p,'linqasend:write');return money.quoteInvoice(p.userId,id(r));}));
+  app.get('/v1/linqasend/wallet-money/operations',wrap(async r=>{
+    const p=await auth(r);requireScope(p,'linqasend:read');
+    const q=z.object({limit:z.coerce.number().int().min(1).max(100).optional(),cursor:z.string().max(120).optional()}).strict().parse(r.query);
+    return money.list(p.userId,q);
+  }));
+  app.get('/v1/linqasend/wallet-money/operations/:id',wrap(async r=>{const p=await auth(r);requireScope(p,'linqasend:read');return money.get(p.userId,id(r));}));
   app.post('/v1/linqasend/wallet-money/quotes/:id/challenge',rate,wrap(async r=>{
     const p=await auth(r);requireScope(p,'linqasend:write');const principal=biometricPrincipal(p,r);
     if(!bio||config.LINQASEND_REAL_MONEY_ENABLED!==true)throw new Error('WALLET_MONEY_RELEASE_NOT_READY');

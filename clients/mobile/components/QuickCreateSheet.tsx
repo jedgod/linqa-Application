@@ -4,6 +4,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CreateAction, CreateActionKey, GLOBAL_CREATE_ACTIONS } from "../navigation/information-architecture";
 
+const ACCENT: Partial<Record<CreateActionKey, string>> = {
+  chat: "#5B8CFF", call: "#22C58B", send: "#FF8A3D", save: "#8C7BFF", event: "#FF5C8A",
+  post: "#2EC4D6", note: "#F5B72E", group: "#4DA3FF", wallet: "#12D6AE"
+};
+
 export function QuickCreateSheet({
   visible, onClose, onAction, actions = GLOBAL_CREATE_ACTIONS, contextLabel
 }: {
@@ -23,16 +28,16 @@ export function QuickCreateSheet({
               <Text style={styles.title}>Create</Text>
               <Text style={styles.subtitle}>{contextLabel || "Start something new in Linqa"}</Text>
             </View>
-            <Pressable style={styles.close} onPress={onClose}>
+            <Pressable style={styles.close} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
               <Ionicons name="close" size={20} color="#A8BDC9" />
             </Pressable>
           </View>
 
           <View style={styles.grid}>
             {actions.map(({ key, icon, label }) => (
-              <Pressable key={key} style={styles.item} onPress={() => onAction(key)} accessibilityRole="button">
-                <View style={styles.itemIcon}>
-                  <Ionicons name={icon} size={23} color="#12D6AE" />
+              <Pressable key={key} style={styles.item} onPress={() => onAction(key)} accessibilityRole="button" accessibilityLabel={label}>
+                <View style={[styles.itemIcon, { backgroundColor: `${ACCENT[key] ?? "#12D6AE"}26` }]}>
+                  <Ionicons name={icon} size={23} color={ACCENT[key] ?? "#12D6AE"} />
                 </View>
                 <Text style={styles.itemText}>{label}</Text>
               </Pressable>

@@ -56,6 +56,7 @@ import { registerOnboardingRoutes } from "../routes/onboarding.js";
 import { registerOperationsRoutes } from "../routes/operations/index.js";
 import { registerPasskeyRoutes } from "../routes/passkeys.js";
 import { registerPrivacyRoutes } from "../routes/privacy.js";
+import { registerModulesRoutes } from "../routes/modules.routes.js";
 import { registerProtocolCapabilityRoutes } from "../routes/protocol-capability.js";
 import { registerPushRoutes } from "../routes/push.js";
 import { registerRecordedVideoRoutes } from "../routes/recorded-videos.js";
@@ -70,6 +71,7 @@ import { registerPublishingRoutes } from "../routes/publishing.js";
 import { registerProtectedMediaRoutes } from "../routes/protected-media.js";
 import { registerLocalVaultBlobRoutes } from "../services/storage/local-vault-object-storage.js";
 import { registerAssistantRoutes } from "../ai/assistant.routes.js";
+import { registerWalletSupportRoutes } from "../ai/wallet-support.routes.js";
 import { registerVertical2Routes } from "../routes/vertical-2.routes.js";
 import type { MetricsRegistry } from "../observability/metrics-registry.js";
 import type { ServiceContainer } from "./service-container.js";
@@ -125,6 +127,7 @@ export async function registerAll(
   await registerSearchRoutes(app, config, db);
   await registerPublishingRoutes(app, config, db);
   await registerPrivacyRoutes(app, config, services.privacySettings);
+  await registerModulesRoutes(app, config, services.modules);
   await registerEntitlementRoutes(app, config, services.entitlements);
   await registerProtocolCapabilityRoutes(
     app,
@@ -135,6 +138,7 @@ export async function registerAll(
   await registerRuntimeRoutes(app, config, db, services.runtimeCapabilities);
   await registerFinalUnwiredRoutes(app, config, services);
   await registerAssistantRoutes(app, config, db);
+  await registerWalletSupportRoutes(app, config, db);
   await registerMilestonePlatformRoutes(app, config, {
     milestones: services.milestones,
     collaboration: services.collaboration,

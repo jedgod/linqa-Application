@@ -43,6 +43,7 @@ export const ENROLLED_DEVICE_SCOPES = [
   "notes:write",
   "premium:read",
   "privacy:read",
+  "privacy:write",
   "security:read",
   "settings:write",
   "status:react",
@@ -54,7 +55,9 @@ export const ENROLLED_DEVICE_SCOPES = [
   "wallet:read",
   "wallet:write",
   "emergency:read",
-  "emergency:write"
+  "emergency:write",
+  // Read-only. What an organization shows is decided by the caller's membership, not by this scope.
+  "enterprise:read"
 ];
 
 const CompleteSchema = z.object({

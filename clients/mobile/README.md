@@ -1,5 +1,32 @@
 # Linqa mobile
 
+## Start over Wi-Fi
+
+Keep the computer and phone on the same Wi-Fi network. Connect and authorize the
+phone over USB for initial configuration, then double-click `launch-linqa-wifi.cmd`
+in the repository root, or run `npm run launch:wifi` here. Authorized wireless ADB
+also works. Install the native Android debug build first; Expo Go does not include
+Linqa's custom native modules.
+
+The launcher detects the Wi-Fi IPv4 address, starts a LAN API and Metro, checks
+both endpoints from the phone, builds the Android bundle, and sets the phone's
+bundle location before opening Linqa. Disconnect USB after the launcher succeeds.
+Metro normally uses port 8084 to avoid reusing a USB bundle with a localhost API
+URL. Logs are under `.runtime/mobile-launch/wifi-*.log`.
+
+After initial setup, the same launcher works with USB disconnected: it starts
+the Wi-Fi services, then you open Linqa on the phone yourself. Use
+`node scripts/start-mobile-wifi.mjs --serve` from the repository root to start
+only the services even when an ADB device is connected. Keep both devices on
+the same Wi-Fi and leave the computer/server processes running.
+
+Set `LINQA_WIFI_HOST` to select a LAN IPv4 address, `LINQA_WIFI_METRO_PORT` to choose
+a Metro port, or `ANDROID_SERIAL` when multiple devices are connected. If the Wi-Fi
+IP changes, stop the Wi-Fi Metro process recorded in
+`.runtime/mobile-launch/wifi-state.json` and launch again. App/account data is
+preserved. The phone's endpoint checks report when Windows Firewall or Wi-Fi
+isolation prevents access.
+
 The Expo / React Native client is installed as **com.linqa.mobile**. The Kotlin client in ../android is a separate application, **com.linqa.app**. This USB workflow launches the Expo client.
 
 ## Start on a USB-connected Android phone

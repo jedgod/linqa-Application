@@ -6,7 +6,7 @@
 //  - posts come from the publishing server instead of sample data, and each shows its tagged people and feeling.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, BackHandler, FlatList, Image, RefreshControl, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, BackHandler, Image, RefreshControl, SectionList, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -92,7 +92,8 @@ export default function PostsFeedScreen() {
       const response = await fetch(`${getApiBaseUrl()}/api/publishing/events?limit=50`, { headers: { Authorization: `Bearer ${token}` } });
       if (!response.ok) throw new Error('unavailable');
       const { events } = (await response.json()) as { events: Row[] };
-      const me = JSON.parse(atobSafe(token.split('.')[1] ?? ''))?.sub as string | undefined;
+      // The account's user id is the token's user_id claim; sub is a different identifier and never matches a post's creator.
+      const me = (JSON.parse(atobSafe(token.split('.')[1] ?? '')) as { user_id?: string }).user_id;
       setPosts(events.map((e) => ({
         id: e.id, author: e.creator_name ?? 'Linqa user', authorId: e.creator_id, timestamp: ago(e.created_at),
         title: e.title, content: e.description, media: e.media ?? [], tagged: e.tagged ?? [], feeling: e.feeling_activity,
@@ -102,6 +103,12 @@ export default function PostsFeedScreen() {
     } catch { setError('Could not load posts. Pull down to try again.'); setPosts((now) => now ?? []); }
   }, []);
   useEffect(() => { void load(); }, [load]);
+
+  // Your own posts first, then public posts other people have shared.
+  const sections = React.useMemo(() => [
+    { key: 'mine', title: 'My Posts', hint: 'Everything you have posted', icon: 'person-circle-outline' as const, tint: '#6041B8', empty: "You haven't posted yet. Use Post on Home to share your first one.", data: (posts ?? []).filter((p) => p.mine) },
+    { key: 'world', title: 'Shared Around the World', hint: 'Public posts from people on Linqa', icon: 'earth-outline' as const, tint: '#0E9F8E', empty: 'No public posts from other people yet.', data: (posts ?? []).filter((p) => !p.mine) }
+  ], [posts]);
 
   const renderPostItem = ({ item }: { item: FeedPost }) => (
     <View style={styles.card}>
@@ -150,21 +157,32 @@ export default function PostsFeedScreen() {
       {/* Top banner navigation row */}
       <View style={styles.topBar}>
         <Text style={styles.heading}>Linqa Discover</Text>
-        <TouchableOpacity onPress={() => { if (bigMap) setBigMap(null); else router.replace('/(tabs)/home'); }} accessibilityRole="button" accessibilityLabel={bigMap ? 'Close map' : 'Close'} style={styles.closeBtn}>
+        <TouchableOpacity onPress={() => { if (bigMap) setBigMap(null); else if (router.canGoBack()) router.back(); else router.replace('/(tabs)/linqa'); }} accessibilityRole="button" accessibilityLabel={bigMap ? 'Close map' : 'Close'} style={styles.closeBtn}>
           <Ionicons name="close" size={22} color="#1D4ED8" />
         </TouchableOpacity>
       </View>
 
       <View style={{ flex: 1 }}>
       {posts === null ? <ActivityIndicator style={{ marginTop: 40 }} color="#6041B8" /> : (
-        <FlatList
-          data={posts}
+        <SectionList
+          sections={sections}
           keyExtractor={(item) => item.id}
           renderItem={renderPostItem}
+          stickySectionHeadersEnabled={false}
+          renderSectionHeader={({ section }) => (
+            <View style={styles.sectionHead} accessibilityRole="header">
+              <View style={[styles.sectionIcon, { backgroundColor: `${section.tint}1A` }]}><Ionicons name={section.icon} size={18} color={section.tint} /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sectionTitle}>{section.title}</Text>
+                <Text style={styles.sectionHint}>{section.hint}</Text>
+              </View>
+              <View style={[styles.sectionCount, { backgroundColor: `${section.tint}1A` }]}><Text style={[styles.sectionCountText, { color: section.tint }]}>{section.data.length}</Text></View>
+            </View>
+          )}
+          renderSectionFooter={({ section }) => (section.data.length ? null : <Text style={styles.sectionEmpty}>{error ?? section.empty}</Text>)}
           contentContainerStyle={{ padding: 12, paddingBottom: 30 + insets.bottom }}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void load().finally(() => setRefreshing(false)); }} />}
-          ListEmptyComponent={<Text style={[styles.muted, { textAlign: 'center', marginTop: 40 }]}>{error ?? 'No posts yet. Use Post on Home to share the first one.'}</Text>}
         />
       )}
       {bigMap ? (
@@ -189,6 +207,13 @@ const styles = StyleSheet.create({
   heading: { fontSize: 20, fontWeight: '900', letterSpacing: -0.4, color: '#111827' },
   embedded: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10, backgroundColor: '#E9EBE8' },
   closeBtn: { padding: 8, backgroundColor: '#EFF6FF', borderRadius: 20 },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 6, paddingBottom: 12, paddingHorizontal: 4 },
+  sectionIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  sectionTitle: { fontSize: 17, fontWeight: '900', letterSpacing: -0.3, color: '#111827' },
+  sectionHint: { fontSize: 12, color: '#6B7280', marginTop: 1 },
+  sectionCount: { minWidth: 28, height: 24, borderRadius: 12, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center' },
+  sectionCountText: { fontSize: 12, fontWeight: '800' },
+  sectionEmpty: { fontSize: 13, color: '#6B7280', textAlign: 'center', paddingVertical: 18, paddingHorizontal: 20, marginBottom: 10, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#F3F4F6', overflow: 'hidden' },
   card: { backgroundColor: '#FFFFFF', marginBottom: 16, borderRadius: 16, borderWidth: 1, borderColor: '#F3F4F6', overflow: 'hidden', elevation: 1 },
   cardHead: { flexDirection: 'row', alignItems: 'center', padding: 16 },
   headText: { flex: 1, marginLeft: 12 },

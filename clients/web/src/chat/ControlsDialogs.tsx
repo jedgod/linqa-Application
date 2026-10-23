@@ -1,3 +1,5 @@
+import { t, i18n } from '../i18n';
+import { useTranslation } from 'react-i18next';
 import type {DesktopFeature} from './features/DesktopFeatures';
 import { useEffect, useState, type ReactNode } from "react";
 import type { BlockedPerson, ChatApi, ChatControlsInfo, MessageRequestInfo, ReportCategory } from "./chatApi";
@@ -7,9 +9,10 @@ import {
   CameraIcon, CloseIcon, LockSolidIcon, MicIcon, PaperclipIcon, PhoneIcon, ShieldIcon, UserPlusIcon, VideoIcon,
 } from "./ChatIcons";
 
-const since = (iso: string) => new Date(iso).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+const since = (iso: string) => new Date(iso).toLocaleDateString(i18n.language, { year: "numeric", month: "short", day: "numeric" });
 
 export function ConfirmDialog({ title, body, confirm, danger, onConfirm, onClose }: { title: string; body: string; confirm: string; danger?: boolean; onConfirm: () => Promise<void>; onClose: () => void }) {
+  useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const go = async () => {
@@ -21,7 +24,7 @@ export function ConfirmDialog({ title, body, confirm, danger, onConfirm, onClose
       <p className="lc-dialog-note">{body}</p>
       {error ? <p className="lc-dialog-note" role="alert" data-warn>{error}</p> : null}
       <div className="lc-dialog-actions">
-        <button type="button" className="lc-btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="lc-btn" onClick={onClose}>{t("Cancel")}</button>
         <button type="button" className={danger ? "lc-btn lc-btn-danger" : "lc-btn lc-btn-primary"} disabled={busy} onClick={() => void go()}>{busy ? "Working…" : confirm}</button>
       </div>
     </Dialog>
@@ -29,12 +32,13 @@ export function ConfirmDialog({ title, body, confirm, danger, onConfirm, onClose
 }
 
 export function ContactInfoDialog({ info, onClose }: { info: ChatControlsInfo; onClose: () => void }) {
+  useTranslation();
   return (
     <Dialog title={info.isGroup ? "Group info" : "Contact info"} onClose={onClose}>
       <div className="lc-info-head"><strong>{info.title}</strong>{info.peer ? <span className="lc-presence" data-off={!info.peer.online}><i />{info.peer.online ? "Online" : "Offline"}</span> : null}</div>
       <dl className="lc-info">
         <div><dt>Encryption</dt><dd><LockSolidIcon size={14} /> End-to-end encrypted</dd></div>
-        <div><dt>Notifications</dt><dd>{info.muted ? "Muted" : "On"}</dd></div>
+        <div><dt>{t("Notifications")}</dt><dd>{info.muted ? "Muted" : "On"}</dd></div>
         <div><dt>Disappearing messages</dt><dd>{disappearLabel(info.disappearAfterSeconds)}</dd></div>
         <div><dt>Chat started</dt><dd>{since(info.createdAt)}</dd></div>
         {info.peer?.blockedByMe ? <div><dt>Status</dt><dd>You blocked this person</dd></div> : null}
@@ -55,6 +59,7 @@ export const DISAPPEAR_OPTIONS: Array<{ seconds: 86400 | 604800 | 2419200 | null
 export const disappearLabel = (seconds: number | null) => DISAPPEAR_OPTIONS.find((o) => o.seconds === seconds)?.label ?? "Off";
 
 export function DisappearingDialog({ api, info, onClose, onChanged }: { api: ChatApi; info: ChatControlsInfo; onClose: () => void; onChanged: () => void }) {
+  useTranslation();
   const [value, setValue] = useState(info.disappearAfterSeconds);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +77,7 @@ export function DisappearingDialog({ api, info, onClose, onChanged }: { api: Cha
       </div>
       {error ? <p className="lc-dialog-note" role="alert" data-warn>{error}</p> : null}
       <div className="lc-dialog-actions">
-        <button type="button" className="lc-btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="lc-btn" onClick={onClose}>{t("Cancel")}</button>
         <button type="button" className="lc-btn lc-btn-primary" disabled={busy || value === info.disappearAfterSeconds} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button>
       </div>
     </Dialog>
@@ -85,6 +90,7 @@ const CATEGORIES: Array<{ id: ReportCategory; label: string }> = [
 ];
 
 export function ReportDialog({ api, info, onClose, onDone }: { api: ChatApi; info: ChatControlsInfo; onClose: () => void; onDone: () => void }) {
+  useTranslation();
   const [category, setCategory] = useState<ReportCategory>("HARASSMENT");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -94,7 +100,7 @@ export function ReportDialog({ api, info, onClose, onDone }: { api: ChatApi; inf
     setBusy(true); setError(null);
     try { await api.report(info.conversationId, category, text.trim()); setSent(true); onDone(); } catch { setError("The report could not be sent. Try again."); setBusy(false); }
   };
-  if (sent) return <Dialog title="Report sent" onClose={onClose}><p className="lc-dialog-note">Thank you. Our safety team will review it. Messages are end-to-end encrypted, so only what you wrote here is shared.</p><div className="lc-dialog-actions"><button type="button" className="lc-btn lc-btn-primary" onClick={onClose}>Done</button></div></Dialog>;
+  if (sent) return <Dialog title="Report sent" onClose={onClose}><p className="lc-dialog-note">Thank you. Our safety team will review it. Messages are end-to-end encrypted, so only what you wrote here is shared.</p><div className="lc-dialog-actions"><button type="button" className="lc-btn lc-btn-primary" onClick={onClose}>{t("Done")}</button></div></Dialog>;
   return (
     <Dialog title={`Report ${info.title}`} onClose={onClose}>
       <form className="lc-form" onSubmit={(e) => { e.preventDefault(); void send(); }}>
@@ -104,7 +110,7 @@ export function ReportDialog({ api, info, onClose, onDone }: { api: ChatApi; inf
         <textarea id="lc-report-text" className="lc-textarea" rows={4} value={text} onChange={(e) => setText(e.target.value)} maxLength={4000} placeholder="At least 10 characters" />
         {error ? <p className="lc-dialog-note" role="alert" data-warn>{error}</p> : null}
         <div className="lc-dialog-actions">
-          <button type="button" className="lc-btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="lc-btn" onClick={onClose}>{t("Cancel")}</button>
           <button type="submit" className="lc-btn lc-btn-primary" disabled={busy || text.trim().length < 10}>{busy ? "Sending…" : "Send report"}</button>
         </div>
       </form>
@@ -114,6 +120,7 @@ export function ReportDialog({ api, info, onClose, onDone }: { api: ChatApi; inf
 
 /** A poll: the question and 2 to 5 options. It is sent as the same "decision" message the phone sends. */
 export function PollDialog({ chatTitle, onClose, onSend }: { chatTitle: string; onClose: () => void; onSend: (title: string, options: string[]) => Promise<void> }) {
+  useTranslation();
   const [title, setTitle] = useState("");
   const [options, setOptions] = useState(["", ""]);
   const [busy, setBusy] = useState(false);
@@ -137,7 +144,7 @@ export function PollDialog({ chatTitle, onClose, onSend }: { chatTitle: string; 
         {clean.length >= 2 && new Set(clean).size !== clean.length ? <p className="lc-dialog-note" data-warn>Each option must be different.</p> : null}
         {error ? <p className="lc-dialog-note" role="alert" data-warn>{error}</p> : null}
         <div className="lc-dialog-actions">
-          <button type="button" className="lc-btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="lc-btn" onClick={onClose}>{t("Cancel")}</button>
           <button type="submit" className="lc-btn lc-btn-primary" disabled={!valid || busy}>{busy ? "Sending…" : "Send poll"}</button>
         </div>
       </form>
@@ -146,6 +153,7 @@ export function PollDialog({ chatTitle, onClose, onSend }: { chatTitle: string; 
 }
 
 export function MessageRequestsDialog({ api, onClose, onChanged }: { api: ChatApi; onClose: () => void; onChanged: () => void }) {
+  useTranslation();
   const [items, setItems] = useState<MessageRequestInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = () => api.messageRequests().then(setItems, () => { setItems([]); setError("Could not load requests."); });
@@ -175,6 +183,7 @@ export function MessageRequestsDialog({ api, onClose, onChanged }: { api: ChatAp
 }
 
 export function BlockedDialog({ api, onClose, onChanged }: { api: ChatApi; onClose: () => void; onChanged: () => void }) {
+  useTranslation();
   const [items, setItems] = useState<BlockedPerson[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = () => api.blockedPeople().then(setItems, () => { setItems([]); setError("Could not load blocked people."); });
@@ -198,6 +207,7 @@ export function BlockedDialog({ api, onClose, onChanged }: { api: ChatApi; onClo
 }
 
 function Row({ icon, title, note, status, onClick }: { icon: ReactNode; title: string; note: string; status: "ready" | "phone" | "chat"; onClick?: () => void }) {
+  useTranslation();
   const live = status === "ready";
   return (
     <li>
@@ -215,6 +225,7 @@ export function LinqaMenuPanel(props: {
   activeTitle: string | null; requestCount: number; canPoll: boolean;onFeature:(mode:DesktopFeature)=>void;
   onPoll: () => void; onRequests: () => void; onBlocked: () => void; onClose: () => void;
 }) {
+  useTranslation();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") props.onClose(); };
     window.addEventListener("keydown", onKey);
@@ -225,7 +236,7 @@ export function LinqaMenuPanel(props: {
       <header><h2>Linqa Menu</h2><button type="button" className="lc-icon" aria-label="Close Linqa Menu" onClick={props.onClose}><CloseIcon size={20} /></button></header>
       <section>
         <p className="lc-dialog-note">{props.activeTitle?`In ${props.activeTitle}`:"Open a chat to use its tools. Vault is available without a chat."}</p>
-        <h3>Calls</h3>
+        <h3>{t("Calls")}</h3>
         <ul className="lc-menu-list">
           <Row icon={<PhoneIcon size={20} />} title="Voice call" note="Call from this computer" status={props.activeTitle?"ready":"chat"} onClick={()=>props.onFeature('voice-call')} />
           <Row icon={<VideoIcon size={20}/>} title="Video call" note="Call with your camera" status={props.activeTitle?"ready":"chat"} onClick={()=>props.onFeature('video-call')}/>

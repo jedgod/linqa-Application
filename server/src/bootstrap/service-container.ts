@@ -72,6 +72,7 @@ import { PhoneRegistrationService } from "../services/phone-registration.service
 import { PhoneRiskService } from "../services/phone-risk.service.js";
 import { PrivacyRightsService } from "../services/privacy-rights.service.js";
 import { PrivacySettingsService } from "../services/privacy-settings.service.js";
+import { ModulesService } from "../services/modules.service.js";
 import { ProductionKillSwitchService } from "../services/production-kill-switch.service.js";
 import { ProtocolCapabilityService } from "../services/protocol-capability.service.js";
 import { PushV2Service, FailClosedPushV2Provider } from "../services/push-v2.service.js";
@@ -332,6 +333,7 @@ export function createServiceContainer(config: AppConfig, db: Database) {
     phoneRegistration,
     privacyRights: new PrivacyRightsService(db),
     privacySettings: new PrivacySettingsService(db),
+    modules: new ModulesService(db),
     productionKillSwitches: new ProductionKillSwitchService(db),
     promotions: new ReleasePromotionService(db),
     protocolCapabilities: new ProtocolCapabilityService(db),

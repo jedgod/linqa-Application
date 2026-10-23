@@ -1,3 +1,6 @@
+import { t } from '../../i18n';
+import { useTranslation } from 'react-i18next';
+import { LanguagePicker } from '../../i18n/LanguagePicker';
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -37,6 +40,7 @@ const SECTIONS = [
 ] as const;
 
 export default function SettingsScreen() {
+  useTranslation();
   const router = useRouter();
   const { active } = useAccounts();
   const displayName = active?.displayName || active?.label || "Linqa account";
@@ -46,9 +50,9 @@ export default function SettingsScreen() {
     <SafeAreaView edges={["left", "right"]} style={s.screen}>
       <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
         <View style={s.heading}>
-          <Text style={s.eyebrow}>YOUR LINQA</Text>
-          <Text style={s.title}>Settings</Text>
-          <Text style={s.subtitle}>Account, privacy and app preferences in one place.</Text>
+          <Text style={s.eyebrow}>{t("YOUR LINQA")}</Text>
+          <Text style={s.title}>{t("Settings")}</Text>
+          <Text style={s.subtitle}>{t("Account, privacy and app preferences in one place.")}</Text>
         </View>
 
         <Pressable style={s.profileCard} onPress={() => router.push("/account/manage")} accessibilityRole="button">
@@ -57,16 +61,17 @@ export default function SettingsScreen() {
             <Text style={s.profileName}>{displayName}</Text>
             <Text style={s.profileMeta}>{active?.countryIso2 === "US" ? "United States" : active?.countryIso2 || "Verified Linqa account"}{active?.phoneSuffix ? `  •••• ${active.phoneSuffix}` : ""}</Text>
           </View>
-          <View style={s.verified}><Ionicons name="checkmark-circle" size={17} color="#12805C" /><Text style={s.verifiedText}>Verified</Text></View>
+          <View style={s.verified}><Ionicons name="checkmark-circle" size={17} color="#12805C" /><Text style={s.verifiedText}>{t("Verified")}</Text></View>
         </Pressable>
 
+        <LanguagePicker />
         {SECTIONS.map((section) => (
-          <View key={section.title} style={s.section}>
+          <View key={t(section.title)} style={s.section}>
             <Text style={s.sectionTitle}>{section.title}</Text>
             <View style={s.card}>
               {section.items.map((item, index) => (
                 <Pressable
-                  key={item.title}
+                  key={t(item.title)}
                   onPress={() => router.push(item.route as never)}
                   style={({ pressed }) => [s.row, index < section.items.length - 1 && s.divider, pressed && s.rowPressed]}
                   accessibilityRole="button"
@@ -77,7 +82,7 @@ export default function SettingsScreen() {
                   </View>
                   <View style={s.rowCopy}>
                     <Text style={s.rowTitle}>{item.title}</Text>
-                    <Text style={s.rowSubtitle}>{item.copy}</Text>
+                    <Text style={s.rowSubtitle}>{t(item.copy)}</Text>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#A3A9B8" />
                 </Pressable>

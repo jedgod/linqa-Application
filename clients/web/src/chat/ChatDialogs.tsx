@@ -1,3 +1,5 @@
+import { t, i18n } from '../i18n';
+import { useTranslation } from 'react-i18next';
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChatApiError, type ChatApi, type FoundContact, type LinkedDeviceInfo } from "./chatApi";
 import { CloseIcon, LaptopIcon, LockIcon, PhoneIcon } from "./ChatIcons";
@@ -6,6 +8,7 @@ import { FAILURE_TEXT, type HistorySyncState } from "./historySync";
 
 /** A centred dialog. Escape or a click outside closes it, and focus starts inside it. */
 export function Dialog({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  useTranslation();
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -16,7 +19,7 @@ export function Dialog({ title, onClose, children, wide }: { title: string; onCl
   return (
     <div className="lc-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="lc-dialog" data-wide={wide ? "true" : undefined} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={box}>
-        <header className="lc-dialog-head"><h2>{title}</h2><button type="button" className="lc-icon" aria-label="Close" onClick={onClose}><CloseIcon size={22} /></button></header>
+        <header className="lc-dialog-head"><h2>{title}</h2><button type="button" className="lc-icon" aria-label={t("Close")} onClick={onClose}><CloseIcon size={22} /></button></header>
         <div className="lc-dialog-body">{children}</div>
       </div>
     </div>
@@ -25,6 +28,7 @@ export function Dialog({ title, onClose, children, wide }: { title: string; onCl
 
 /** Start a chat with someone by phone number. The server looks the number up; nothing is sent until you write a message. */
 export function NewChatDialog({ api, onClose, onOpened }: { api: ChatApi; onClose: () => void; onOpened: (conversationId: string) => void }) {
+  useTranslation();
   const [phone, setPhone] = useState("");
   const [found, setFound] = useState<FoundContact | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -48,7 +52,7 @@ export function NewChatDialog({ api, onClose, onOpened }: { api: ChatApi; onClos
   };
 
   return (
-    <Dialog title="New chat" onClose={onClose}>
+    <Dialog title={t("New chat")} onClose={onClose}>
       <form onSubmit={(e) => { e.preventDefault(); void look(); }} className="lc-form">
         <label htmlFor="lc-phone">Phone number</label>
         <input id="lc-phone" value={phone} onChange={(e) => { setPhone(e.target.value); setFound(undefined); }} placeholder="+1 240 555 0100" inputMode="tel" autoComplete="off" autoFocus />
@@ -68,10 +72,11 @@ export function NewChatDialog({ api, onClose, onOpened }: { api: ChatApi; onClos
 }
 
 const platformName = (platform: string) => (platform === "WEB" ? "Web browser" : platform === "DESKTOP" ? "Desktop app" : platform === "ANDROID" ? "Android phone" : platform === "IOS" ? "iPhone" : platform);
-const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
+const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(i18n.language, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
 
 /** Everything signed in to this account. A computer can remove other computers; only a phone can remove a phone. */
 export function LinkedDevicesDialog({ api, onClose }: { api: ChatApi; onClose: () => void }) {
+  useTranslation();
   const [devices, setDevices] = useState<LinkedDeviceInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = async () => { try { setDevices(await api.devices()); setError(null); } catch { setError("Could not load your devices."); } };
@@ -84,7 +89,7 @@ export function LinkedDevicesDialog({ api, onClose }: { api: ChatApi; onClose: (
   const isComputer = (p: string) => p === "WEB" || p === "DESKTOP";
 
   return (
-    <Dialog title="Linked devices" onClose={onClose} wide>
+    <Dialog title={t("Linked devices")} onClose={onClose} wide>
       <p className="lc-dialog-note">To link another computer, open Linqa on your phone: <strong>Settings &gt; Linked devices &gt; Scan QR code</strong>.</p>
       {error ? <p className="lc-dialog-note" role="alert">{error}</p> : null}
       {devices === null && !error ? <p className="lc-dialog-note">Loading…</p> : null}
@@ -103,21 +108,22 @@ export function LinkedDevicesDialog({ api, onClose }: { api: ChatApi; onClose: (
 }
 
 export function SettingsDialog({ defaultName, enterToSend, onEnterToSend, onSaved, onSignOut, onClose }: { defaultName: string; enterToSend: boolean; onEnterToSend: (on: boolean) => void; onSaved: (name: string) => void; onSignOut: () => void; onClose: () => void }) {
+  useTranslation();
   const [name, setName] = useState(getComputerName() || defaultName);
   return (
-    <Dialog title="Settings" onClose={onClose}>
+    <Dialog title={t("Settings")} onClose={onClose}>
       <form className="lc-form" onSubmit={(e) => { e.preventDefault(); setComputerName(name); onSaved(name.trim() || defaultName); onClose(); }}>
-        <label htmlFor="lc-computer-name">Name of this computer</label>
+        <label htmlFor="lc-computer-name">{t("Name of this computer")}</label>
         <input id="lc-computer-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
-        <button type="submit" className="lc-btn lc-btn-primary">Save</button>
+        <button type="submit" className="lc-btn lc-btn-primary">{t("Save")}</button>
       </form>
       <p className="lc-dialog-note">The name is shown at the top of your chats on this computer.</p>
       <hr className="lc-rule" />
-      <label className="lc-check"><input type="checkbox" checked={enterToSend} onChange={(e) => onEnterToSend(e.target.checked)} />Enter to send</label>
+      <label className="lc-check"><input type="checkbox" checked={enterToSend} onChange={(e) => onEnterToSend(e.target.checked)} />{t("Enter to send")}</label>
       <p className="lc-dialog-note">{enterToSend ? "Enter sends the message. Shift+Enter starts a new line." : "Enter starts a new line. Use the Send button, or Ctrl+Enter, to send."}</p>
       <hr className="lc-rule" />
-      <button type="button" className="lc-btn" onClick={onSignOut}>Sign out of this computer</button>
-      <p className="lc-dialog-note">Your chats stay on your phone. You can link this computer again any time.</p>
+      <button type="button" className="lc-btn" onClick={onSignOut}>{t("Sign out of this computer")}</button>
+      <p className="lc-dialog-note">{t("Your chats stay on your phone. You can link this computer again any time.")}</p>
     </Dialog>
   );
 }
@@ -134,6 +140,7 @@ function stepIndex(state: HistorySyncState): number {
 }
 
 export function HistoryDialog({ state, onStart, onCancel, onClose }: { state: HistorySyncState; onStart: () => void; onCancel: () => void; onClose: () => void }) {
+  useTranslation();
   const running = ["requesting", "waiting", "transferring", "opening"].includes(state.step);
   const at = stepIndex(state);
   const detail =
@@ -169,9 +176,9 @@ export function HistoryDialog({ state, onStart, onCancel, onClose }: { state: Hi
         </>
       )}
       <div className="lc-dialog-actions">
-        {running ? <button type="button" className="lc-btn" onClick={onCancel}>Cancel</button> : null}
+        {running ? <button type="button" className="lc-btn" onClick={onCancel}>{t("Cancel")}</button> : null}
         {state.step === "idle" ? <button type="button" className="lc-btn lc-btn-primary" onClick={onStart}>Ask my phone</button> : null}
-        {state.step === "failed" ? <button type="button" className="lc-btn lc-btn-primary" onClick={onStart}>Try again</button> : null}
+        {state.step === "failed" ? <button type="button" className="lc-btn lc-btn-primary" onClick={onStart}>{t("Try again")}</button> : null}
         {state.step === "complete" || state.step === "failed" || state.step === "idle" ? <button type="button" className="lc-btn" onClick={onClose}>{state.step === "complete" ? "Done" : "Close"}</button> : null}
       </div>
     </Dialog>
@@ -180,6 +187,7 @@ export function HistoryDialog({ state, onStart, onCancel, onClose }: { state: Hi
 
 const EMOJI = ["😀", "😂", "😍", "🥰", "😊", "😉", "😎", "🤔", "😢", "😭", "😡", "🙏", "👍", "👎", "👏", "🙌", "💪", "🔥", "🎉", "❤️", "💜", "💯", "✅", "🌟", "☀️", "🌙", "🍕", "☕", "🎶", "👋"];
 export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => void; onClose: () => void }) {
+  useTranslation();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);

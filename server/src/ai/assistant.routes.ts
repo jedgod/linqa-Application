@@ -4,6 +4,7 @@ import type { AppConfig } from "../config.js";
 import type { Database } from "../db/pool.js";
 import { createAuthenticator, requireScope } from "../auth/jwt.js";
 import { simpleRateLimit } from "../services/countrylinqa/final/rate-limit.js";
+import { askGemini, defaultModels, type GeminiContent } from "./gemini.js";
 
 /**
  * Linqa AI: a question-and-answer assistant that lives inside the app.
@@ -64,8 +65,6 @@ const Body = z.object({
 
 const limit = simpleRateLimit({ windowMs: 60_000, max: 15, keyPrefix: "ai-assistant" });
 
-type GeminiPart = { text?: string; inlineData?: { mimeType: string; data: string } };
-
 export async function registerAssistantRoutes(app: FastifyInstance, config: AppConfig, db: Database) {
   const authenticate = createAuthenticator(config);
 
@@ -110,56 +109,21 @@ export async function registerAssistantRoutes(app: FastifyInstance, config: AppC
       system.push(`The person chose to share the following with you: "${body.shared.label.replace(/[<>]/g, "")}".\n<shared_content>\n${fenced}\n</shared_content>`);
     }
 
-    const contents = body.messages.map((message, index): { role: string; parts: GeminiPart[] } => {
-      const parts: GeminiPart[] = [{ text: message.text }];
+    const contents = body.messages.map((message, index): GeminiContent => {
+      const parts: GeminiContent["parts"] = [{ text: message.text }];
       if (body.image && index === body.messages.length - 1) {
         parts.push({ inlineData: { mimeType: body.image.mimeType, data: body.image.dataBase64 } });
       }
       return { role: message.role === "assistant" ? "model" : "user", parts };
     });
 
-    // The main model first; if it is slow, busy or erroring, the lighter one answers instead of making the person wait or fail.
-    const models = [config.GEMINI_MODEL ?? "gemini-3.5-flash", "gemini-3.5-flash-lite"];
-    let response: Response | null = null;
-    let model = models[0]!;
-    for (const [index, candidate] of models.entries()) {
-      model = candidate;
-      try {
-        response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidate)}:generateContent`, {
-          method: "POST",
-          headers: { "content-type": "application/json", "x-goog-api-key": config.GEMINI_API_KEY },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: system.join("\n\n") }] },
-            contents,
-            generationConfig: { temperature: 0.4, maxOutputTokens: 2048 }
-          }),
-          signal: AbortSignal.timeout(index === 0 ? 20_000 : 30_000)
-        });
-        if (response.ok || (response.status !== 429 && response.status < 500 && response.status !== 404)) break;
-        request.log.warn({ status: response.status, model: candidate }, "assistant model unavailable, trying the next");
-      } catch (error) {
-        request.log.warn({ err: error, model: candidate }, "assistant model did not answer in time");
-        response = null;
-      }
-    }
-    if (!response) return reply.code(502).send({ error: { code: "AI_UNAVAILABLE", requestId: request.id } });
-
-    if (response.status === 429) return reply.code(429).send({ error: { code: "AI_BUSY", requestId: request.id } });
-    if (!response.ok) {
-      // The provider's error text can echo parts of the request, so only the status is logged.
-      request.log.warn({ status: response.status }, "assistant provider refused the request");
-      return reply.code(502).send({ error: { code: "AI_UNAVAILABLE", requestId: request.id } });
-    }
-
-    const data = (await response.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> }; finishReason?: string }>;
-      promptFeedback?: { blockReason?: string };
-    };
-    const text = data.candidates?.[0]?.content?.parts?.filter((part) => !part.thought).map((part) => part.text ?? "").join("").trim();
+    const result = await askGemini({ apiKey: config.GEMINI_API_KEY, models: defaultModels(config.GEMINI_MODEL), system: system.join("\n\n"), contents, log: request.log });
+    if (result.kind === "busy") return reply.code(429).send({ error: { code: "AI_BUSY", requestId: request.id } });
+    if (result.kind === "unavailable") return reply.code(502).send({ error: { code: "AI_UNAVAILABLE", requestId: request.id } });
     void reply.header("Cache-Control", "private, no-store");
-    if (!text) {
-      return reply.code(200).send({ reply: "I can't help with that one. Try rephrasing, or ask me something about Linqa.", model });
+    if (result.kind === "empty") {
+      return reply.code(200).send({ reply: "I can't help with that one. Try rephrasing, or ask me something about Linqa.", model: result.model });
     }
-    return reply.code(200).send({ reply: text, model });
+    return reply.code(200).send({ reply: result.text, model: result.model });
   });
 }

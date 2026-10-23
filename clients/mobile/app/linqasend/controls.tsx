@@ -14,7 +14,7 @@ type Settings = Awaited<ReturnType<LinqaSendService["getSettings"]>>;
 type Entry = { label: string; hint: string; icon: keyof typeof Ionicons.glyphMap; route: string };
 
 const ENTRIES: Entry[] = [
-  { label: "Wallet", hint: "Available, pending and held money", icon: "wallet-outline", route: "/linqasend/wallet" },
+  { label: "Wallet", hint: "Available, pending and held money", icon: "wallet-outline", route: "/wallet" },
   { label: "Dashboard", hint: "Totals and recent activity", icon: "stats-chart-outline", route: "/linqasend/dashboard" },
   { label: "Transaction History", hint: "Sent and received transfers", icon: "receipt-outline", route: "/linqasend/history" },
   { label: "Transfer Limits", hint: "What you can still send", icon: "speedometer-outline", route: "/linqasend/transfer-limits" },

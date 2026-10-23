@@ -1,3 +1,5 @@
+import { t } from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import { useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -21,6 +23,7 @@ function flagForRegion(region: string): string {
 }
 
 export default function DetectCountryScreen() {
+  useTranslation();
   const router = useRouter();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -31,7 +34,7 @@ export default function DetectCountryScreen() {
       <View style={styles.content}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Go back"
+          accessibilityLabel={t("Go back")}
           onPress={() => router.back()}
           style={styles.back}
         >
@@ -39,30 +42,29 @@ export default function DetectCountryScreen() {
         </Pressable>
 
         <View style={styles.main}>
-          <Text style={styles.step}>STEP 2 OF 15</Text>
+          <Text style={styles.step}>{t("STEP 2 OF 15")}</Text>
           <View style={styles.icon}>
             <Ionicons name="globe-outline" size={38} color={colors.accent} />
           </View>
-          <Text accessibilityRole="header" style={styles.title}>Detect your country</Text>
+          <Text accessibilityRole="header" style={styles.title}>{t("Detect your country")}</Text>
           <Text style={styles.copy}>
-            We use your device&rsquo;s regional setting to get started. Your location is not accessed.
+            {t("We use your device’s regional setting to get started. Your location is not accessed.")}
           </Text>
           <View style={styles.regionCard}>
             <Text style={styles.flag}>{flagForRegion(region)}</Text>
             <View style={styles.regionText}>
-              <Text style={styles.regionLabel}>Suggested region</Text>
+              <Text style={styles.regionLabel}>{t("Suggested region")}</Text>
               <Text style={styles.regionCode}>{region}</Text>
             </View>
             <Ionicons name="checkmark-circle" size={24} color="#12B76A" />
           </View>
           <Text style={styles.note}>
-            You can enter your phone number in international format on the next screen.
-          </Text>
+            {t("You can enter your phone number in international format on the next screen.")}</Text>
         </View>
 
         <View style={styles.bottom}>
           <PrimaryButton
-            label="Continue"
+            label={t("Continue")}
             onPress={() => router.push({
               pathname: "/account/sign-up",
               params: { purpose: "REGISTRATION", countryCode: region }

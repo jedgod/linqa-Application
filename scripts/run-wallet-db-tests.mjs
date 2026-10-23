@@ -17,7 +17,7 @@ try{
   await admin.query(`CREATE DATABASE "${name}"`);created=true;url.pathname=`/${name}`;
   pool=new Pool({connectionString:url.href});const client=await pool.connect();
   try{await migrate(client,path.join(server,"src/db/migrations"),"wallet-disposable-test");}finally{client.release();}
-  const result=await promisify(execFile)(process.execPath,["node_modules/vitest/vitest.mjs","run","src/tests/linqasend-wallet.integration.test.ts","src/tests/linqasend-wallet-money.integration.test.ts","src/tests/linqasend-fee-refund.integration.test.ts","--maxWorkers=1"],{
+  const result=await promisify(execFile)(process.execPath,["node_modules/vitest/vitest.mjs","run","src/tests/linqasend-wallet.integration.test.ts","src/tests/linqasend-wallet-money.integration.test.ts","src/tests/linqasend-fee-refund.integration.test.ts","src/tests/wallet-idempotency.integration.test.ts","--maxWorkers=1"],{
     cwd:server,windowsHide:true,timeout:300000,maxBuffer:8000000,
     env:{...process.env,NODE_ENV:"test",DATABASE_URL:url.href,LINQA_WALLET_DISPOSABLE_TEST_DB:"1",LINQA_REQUIRE_DB_TESTS:"1"}
   });process.stdout.write(result.stdout);process.stderr.write(result.stderr);

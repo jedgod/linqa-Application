@@ -30,7 +30,7 @@ export class GapClosureService {
   async privacySummary(userId:string) {
     const [devices,sessions,blocks,settings]=await Promise.all([
       this.db.query(`SELECT id,device_name,platform,status,last_seen_at,registered_at FROM devices WHERE user_id=$1 ORDER BY registered_at DESC`,[userId]),
-      this.db.query(`SELECT id,device_id,created_at,expires_at,revoked_at FROM auth_sessions WHERE user_id=$1 ORDER BY created_at DESC`,[userId]),
+      this.db.query(`SELECT id,device_id,issued_at AS created_at,expires_at,revoked_at FROM auth_sessions WHERE user_id=$1 ORDER BY issued_at DESC`,[userId]),
       this.db.query(`SELECT blocked_user_id,created_at FROM blocked_users WHERE blocker_user_id=$1`,[userId]),
       this.db.query(`SELECT * FROM privacy_settings WHERE user_id=$1`,[userId])
     ]);

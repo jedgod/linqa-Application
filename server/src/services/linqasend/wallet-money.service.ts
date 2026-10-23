@@ -1,8 +1,11 @@
+import { scheduledFee } from './wallet-fee-schedule.js';
+import { assertInvoicePayable } from './wallet-invoice.service.js';
+import { WalletAvailabilityService } from './wallet-availability.service.js';
 import { createHash,randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { Database } from '../../db/pool.js';
 import { canonical } from '../../security/biometrics/canonical.js';
-import { checkedPricing,moneySnapshot,moneyOutcome,type MoneyRequest,type MoneySnapshot,type MoneyOutcome,type WalletMoneyGateway } from '../../integrations/linqasend/wallet-money.contracts.js';
+import { checkedPricing,moneySnapshot,moneyOutcome,payoutInstruction,type MoneyRequest,type MoneySnapshot,type MoneyOutcome,type WalletMoneyGateway } from '../../integrations/linqasend/wallet-money.contracts.js';
 import { WalletLedgerService } from './wallet-ledger.service.js';
 import { denyWalletMoneyPolicy,type WalletMoneyPolicy } from './wallet-money-policy.js';
 
@@ -17,6 +20,7 @@ export class WalletMoneyService {
       const p=(await c.query(`SELECT p.* FROM user_jurisdiction_profiles_v2 p JOIN users u ON u.id=p.user_id AND u.status='ACTIVE'
         JOIN linqasend_financial_entities_v7 e ON e.id=p.regulatory_entity_id AND e.status='ACTIVE' AND e.due_diligence_status='APPROVED' WHERE p.user_id=$1 FOR SHARE OF p,u,e`,[userId])).rows[0];
       if(!p)throw new Error('WALLET_PROFILE_REQUIRED');
+      await new WalletAvailabilityService(c).assertServed(c,p.regulatory_jurisdiction,currency);
       await c.query(`INSERT INTO linqasend_wallet_accounts_v2(user_id,jurisdiction,regulatory_entity_id,currency,jurisdiction_version) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id,jurisdiction,currency,jurisdiction_version) DO NOTHING`,[userId,p.regulatory_jurisdiction,p.regulatory_entity_id,currency,p.jurisdiction_version]);
       const w=(await c.query(`SELECT * FROM linqasend_wallet_accounts_v2 WHERE user_id=$1 AND jurisdiction=$2 AND currency=$3 AND jurisdiction_version=$4 FOR UPDATE`,[userId,p.regulatory_jurisdiction,currency,p.jurisdiction_version])).rows[0];
       if(w.status!=='ACTIVE'||w.regulatory_entity_id!==p.regulatory_entity_id)throw new Error('WALLET_NOT_ACTIVE');
@@ -25,9 +29,10 @@ export class WalletMoneyService {
       return {id:w.id,currency};
     });
   }
-  private async context(userId:string,input:MoneyRequest,q:Reader=this.db){
+  private async context(userId:string,input:MoneyRequest,q:Reader=this.db,invoiceId?:string){
     const w=(await q.query(`SELECT * FROM linqasend_wallet_accounts_v2 WHERE id=$1 AND user_id=$2 AND status='ACTIVE' AND subledger_enabled`,[input.walletId,userId])).rows[0];
     if(!w)throw new Error('WALLET_NOT_ACTIVE');
+    await new WalletAvailabilityService(q).assertServed(q,w.jurisdiction,w.currency);
     let target:any,reference:string;
     if(input.kind==='WITHDRAW'||input.kind==='TOPUP'){
       target=(await q.query(`SELECT m.*,b.currency AS target_currency FROM linqasend_payment_methods m JOIN linqasend_verified_bank_capabilities b ON b.payment_method_id=m.id AND b.user_id=m.user_id AND b.provider_id=m.provider AND b.country=m.billing_country
@@ -36,6 +41,18 @@ export class WalletMoneyService {
       if(!target)throw new Error('VERIFIED_OWNED_BANK_OR_CARD_REQUIRED');
       reference=target.provider_payment_method_ref;
       target={...target,country:target.billing_country,currency:target.target_currency.trim(),provider:target.provider,targetWalletId:null};
+    }else if(invoiceId){
+      // A one-time invoice is the target: the receiver is the invoice's own wallet, with the same same-entity, same-currency rules as an internal send.
+      if(input.kind!=='INTERNAL'||input.targetId!==invoiceId)throw new Error('INVOICE_NOT_PAYABLE');
+      const inv=(await q.query(`SELECT * FROM linqasend_wallet_invoices WHERE id=$1`,[invoiceId])).rows[0];
+      assertInvoicePayable(inv,userId);
+      if(inv.currency.trim()!==w.currency.trim()||BigInt(inv.amount_minor)!==BigInt(input.amountMinor)||inv.regulatory_entity_id!==w.regulatory_entity_id)throw new Error('INVOICE_NOT_PAYABLE');
+      const receiver=(await q.query(`SELECT w.* FROM linqasend_wallet_accounts_v2 w JOIN user_jurisdiction_profiles_v2 p ON p.user_id=w.user_id AND p.jurisdiction_version=w.jurisdiction_version AND p.regulatory_entity_id=w.regulatory_entity_id AND p.regulatory_jurisdiction=w.jurisdiction
+        WHERE w.id=$1 AND w.user_id=$2 AND w.regulatory_entity_id=$3 AND w.currency=$4 AND w.jurisdiction=$5 AND w.status='ACTIVE' AND w.subledger_enabled`,[inv.merchant_wallet_id,inv.merchant_user_id,w.regulatory_entity_id,w.currency,w.jurisdiction])).rows[0];
+      if(!receiver)throw new Error('RECIPIENT_WALLET_SAME_ENTITY_REQUIRED');
+      const a=(await q.query(`SELECT provider_id FROM linqasend_provider_custody_accounts WHERE regulatory_entity_id=$1 AND currency=$2 AND active ORDER BY provider_id LIMIT 1`,[w.regulatory_entity_id,w.currency])).rows[0];
+      if(!a)throw new Error('CUSTODY_ACCOUNTS_NOT_CONFIGURED');
+      reference=receiver.id;target={id:inv.id,country:receiver.jurisdiction,currency:receiver.currency.trim(),provider:a.provider_id,targetWalletId:receiver.id,type:'INVOICE',invoiceExpiresAt:new Date(inv.expires_at).toISOString()};
     }else{
       target=(await q.query(`SELECT * FROM linqasend_recipients WHERE id=$1 AND owner_user_id=$2`,[input.targetId,userId])).rows[0];
       if(!target)throw new Error('WALLET_RECIPIENT_NOT_FOUND');
@@ -56,17 +73,34 @@ export class WalletMoneyService {
     }
     return {wallet:w,target,reference,hash:moneyHash({reference,country:target.country,currency:target.currency,provider:target.provider,targetWalletId:target.targetWalletId,type:target.type??target.recipient_type})};
   }
-  async quote(userId:string,input:MoneyRequest){
-    const {wallet:w,target:t,reference,hash}=await this.context(userId,input),id=randomUUID();
+  /** Prices paying a one-time invoice from the payer's own wallet in the invoice currency. The result is an ordinary wallet quote, authorized and submitted like any other. */
+  async quoteInvoice(userId:string,invoiceId:string){
+    const inv=(await this.db.query(`SELECT * FROM linqasend_wallet_invoices WHERE id=$1`,[invoiceId])).rows[0];
+    assertInvoicePayable(inv,userId);
+    const w=(await this.db.query(`SELECT id FROM linqasend_wallet_accounts_v2 WHERE user_id=$1 AND currency=$2 AND regulatory_entity_id=$3 AND status='ACTIVE' AND subledger_enabled ORDER BY created_at LIMIT 1`,[userId,inv.currency,inv.regulatory_entity_id])).rows[0];
+    if(!w)throw new Error('WALLET_NOT_ACTIVE');
+    return this.quote(userId,{walletId:w.id,kind:'INTERNAL',amountMinor:String(inv.amount_minor),targetId:invoiceId},invoiceId);
+  }
+  async quote(userId:string,input:MoneyRequest,invoiceId?:string){
+    const {wallet:w,target:t,reference,hash}=await this.context(userId,input,this.db,invoiceId),id=randomUUID();
     let pricing;
-    if(input.kind==='INTERNAL')pricing={quoteId:null,amountMinor:input.amountMinor,currency:w.currency.trim(),feeMinor:'0',totalMinor:input.amountMinor,receiveAmountMinor:input.amountMinor,receiveCurrency:w.currency.trim(),expiresAt:new Date(Date.now()+90_000).toISOString(),estimatedArrival:'On successful authorization',fxRate:'1'};
+    if(input.kind==='INTERNAL'){
+      const fee=scheduledFee('INTERNAL',w.currency.trim(),input.amountMinor);
+      if(fee===null)throw new Error('WALLET_FEE_SCHEDULE_MISSING');
+      pricing={quoteId:null,amountMinor:input.amountMinor,currency:w.currency.trim(),feeMinor:fee.toString(),totalMinor:(BigInt(input.amountMinor)+fee).toString(),receiveAmountMinor:input.amountMinor,receiveCurrency:w.currency.trim(),expiresAt:new Date(Math.min(Date.now()+90_000,invoiceId?Date.parse(t.invoiceExpiresAt):Infinity)).toISOString(),estimatedArrival:'On successful authorization',fxRate:'1'};
+    }
     else {
       if(!this.gateway)throw new Error('WALLET_MONEY_GATEWAY_REQUIRED');
       const caps=await this.gateway.capabilities();
       if(!caps.returns||!caps.refunds||!(input.kind==='TOPUP'?caps.settledTopups:input.kind==='WITHDRAW'?caps.amountWithdrawals:caps.externalPayments))throw new Error('WALLET_MONEY_GATEWAY_CAPABILITY_MISSING');
       pricing=checkedPricing(await this.gateway.quote({operationId:id,kind:input.kind,userId,amountMinor:input.amountMinor,currency:w.currency.trim(),receiveCurrency:t.currency,targetReference:await this.policy.resolve(reference,userId),entityId:w.regulatory_entity_id}),input.amountMinor,w.currency.trim(),t.currency,input.kind);
+      if(input.kind==='EXTERNAL'){
+        // The platform schedule is a floor: the customer never pays less than the provider quoted or less than the schedule.
+        const floor=scheduledFee('EXTERNAL',w.currency.trim(),input.amountMinor);
+        if(floor!==null&&floor>BigInt(pricing.feeMinor))pricing={...pricing,feeMinor:floor.toString(),totalMinor:(BigInt(input.amountMinor)+floor).toString()};
+      }
     }
-    const snapshot=moneySnapshot.parse({id,userId,walletId:w.id,kind:input.kind,amountMinor:pricing.amountMinor,feeMinor:pricing.feeMinor,totalMinor:pricing.totalMinor,currency:pricing.currency,receiveAmountMinor:pricing.receiveAmountMinor,receiveCurrency:pricing.receiveCurrency,entityId:w.regulatory_entity_id,country:w.jurisdiction,jurisdictionVersion:w.jurisdiction_version,targetId:input.targetId,targetCountry:t.country,targetHash:hash,targetWalletId:t.targetWalletId,providerId:t.provider,providerQuoteId:pricing.quoteId,expiresAt:pricing.expiresAt,estimatedArrival:pricing.estimatedArrival,fxRate:pricing.fxRate});
+    const snapshot=moneySnapshot.parse({id,userId,walletId:w.id,kind:input.kind,amountMinor:pricing.amountMinor,feeMinor:pricing.feeMinor,totalMinor:pricing.totalMinor,currency:pricing.currency,receiveAmountMinor:pricing.receiveAmountMinor,receiveCurrency:pricing.receiveCurrency,entityId:w.regulatory_entity_id,country:w.jurisdiction,jurisdictionVersion:w.jurisdiction_version,targetId:input.targetId,targetCountry:t.country,targetHash:hash,targetWalletId:t.targetWalletId,providerId:t.provider,providerQuoteId:pricing.quoteId,expiresAt:pricing.expiresAt,estimatedArrival:pricing.estimatedArrival,fxRate:pricing.fxRate,...(invoiceId?{invoiceId}:{})});
     await this.policy.authorize(snapshot);
     await this.db.query(`INSERT INTO linqasend_wallet_money_quotes(id,user_id,wallet_id,snapshot,destination_ref,expires_at) VALUES($1,$2,$3,$4,$5,$6)`,[id,userId,w.id,JSON.stringify(snapshot),input.kind==='INTERNAL'?null:reference,snapshot.expiresAt]);
     return snapshot;
@@ -84,14 +118,21 @@ export class WalletMoneyService {
       await c.query(`SELECT id FROM users WHERE id=$1 FOR UPDATE`,[userId]);
       const concurrent=(await c.query(`SELECT id,status FROM linqasend_wallet_money_operations WHERE id=$1 AND user_id=$2`,[quoteId,userId])).rows[0];if(concurrent)return concurrent;
       await c.query(`SELECT id FROM linqasend_wallet_accounts_v2 WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE`,[[s.walletId,...(s.targetWalletId?[s.targetWalletId]:[])]]);
-      const current=await this.context(userId,{walletId:s.walletId,kind:s.kind,amountMinor:s.amountMinor,targetId:s.targetId},c);
+      // Wallets first, then the invoice, so a second payer waits here and then finds the invoice already paid.
+      if(s.invoiceId){if(s.kind!=='INTERNAL')throw new Error('INVOICE_NOT_PAYABLE');await c.query(`SELECT id FROM linqasend_wallet_invoices WHERE id=$1 FOR UPDATE`,[s.invoiceId]);}
+      const current=await this.context(userId,{walletId:s.walletId,kind:s.kind,amountMinor:s.amountMinor,targetId:s.targetId},c,s.invoiceId);
       if(current.hash!==s.targetHash)throw new Error('WALLET_DESTINATION_CHANGED');
       await this.policy.authorize(s,c);
       await c.query(`INSERT INTO linqasend_wallet_money_operations(id,user_id,wallet_id,kind,status,snapshot,authorization_context) VALUES($1,$2,$3,$4,'QUEUED',$5,$6)`,[s.id,userId,s.walletId,s.kind,JSON.stringify(s),JSON.stringify(principal??{})]);
       if(s.kind!=='TOPUP')await this.ledger.reserve(c,s.walletId,userId,BigInt(s.totalMinor),s.currency,s.id);
       if(s.kind==='INTERNAL'){
-        await this.ledger.post(c,{ref:`money:${s.id}:settled`,kind:'SETTLE',currency:s.currency,operationId:s.id,evidence:s,legs:[{walletId:s.walletId,bucket:'HELD',amount:-BigInt(s.totalMinor)},{walletId:s.targetWalletId!,bucket:'AVAILABLE',amount:BigInt(s.amountMinor)}]});
+        await this.ledger.post(c,{ref:`money:${s.id}:settled`,kind:'SETTLE',currency:s.currency,operationId:s.id,evidence:s,legs:[{walletId:s.walletId,bucket:'HELD',amount:-BigInt(s.totalMinor)},{walletId:s.targetWalletId!,bucket:'AVAILABLE',amount:BigInt(s.amountMinor)},...(BigInt(s.feeMinor)>0n?[{bucket:'FEE_REVENUE' as const,amount:BigInt(s.feeMinor)}]:[])]});
         await c.query(`UPDATE linqasend_wallet_money_operations SET status='COMPLETED',updated_at=now() WHERE id=$1`,[s.id]);
+        // Same transaction as the transfer: the invoice is paid exactly when the money moved, never one without the other.
+        if(s.invoiceId){
+          const paid=await c.query(`UPDATE linqasend_wallet_invoices SET status='PAID',paid_operation_id=$2,paid_at=now() WHERE id=$1 AND status='OPEN' AND merchant_wallet_id=$3 AND amount_minor=$4 AND currency=$5 RETURNING id`,[s.invoiceId,s.id,s.targetWalletId,s.amountMinor,s.currency]);
+          if(paid.rowCount!==1)throw new Error('INVOICE_NOT_PAYABLE');
+        }
       }
       return {id:s.id,status:s.kind==='INTERNAL'?'COMPLETED':'QUEUED'};
     });
@@ -142,9 +183,11 @@ export class WalletMoneyService {
         const ctx=await this.context(s.userId,{walletId:s.walletId,kind:s.kind,amountMinor:s.amountMinor,targetId:s.targetId});if(ctx.hash!==s.targetHash)throw new Error('WALLET_DESTINATION_CHANGED');
         await this.policy.authorize(s);
         const ref=await this.policy.resolve(row.destination_ref,s.userId);
+        // Built before the operation is marked submitted: an inconsistent quote must fail here, not after money is in flight.
+        const payout=s.kind==='EXTERNAL'||s.kind==='WITHDRAW'?payoutInstruction(s):undefined;
         const dispatch=await this.db.query(`UPDATE linqasend_wallet_money_operations SET submitted_at=now(),status='PROCESSING' WHERE id=$1 AND lease_token=$2 AND lease_expires_at>now() AND submitted_at IS NULL RETURNING id`,[s.id,token]);
         if(!dispatch.rowCount)return 1;
-        result=await this.gateway.execute({snapshot:s,snapshotHash:moneyHash(s),targetReference:ref,idempotencyKey:key});
+        result=await this.gateway.execute({snapshot:s,snapshotHash:moneyHash(s),targetReference:ref,idempotencyKey:key,...(payout?{payout}:{})});
       }
       if(result)await this.applyOutcome(s.id,token,result);
       else await this.defer(s.id,token,'PROVIDER_OUTCOME_UNKNOWN');
@@ -190,5 +233,39 @@ export class WalletMoneyService {
       await c.query(`UPDATE linqasend_wallet_money_operations SET status=$2,provider_ref=$3,action_url=$4,failure_code=NULL,next_check_at=now()+interval '5 minutes',lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=$1`,[id,status,outcome.providerRef,outcome.status==='ACTION_REQUIRED'?outcome.actionUrl??null:null]);
     });
   }
-  async list(userId:string){return {items:(await this.db.query(`SELECT id,kind,status,snapshot,CASE WHEN user_id=$1 THEN action_url ELSE NULL END AS action_url,returned_minor::text,created_at,updated_at,CASE WHEN user_id=$1 THEN 'SENT' ELSE 'RECEIVED' END AS direction FROM linqasend_wallet_money_operations WHERE user_id=$1 OR kind='INTERNAL' AND snapshot->>'targetWalletId' IN (SELECT id::text FROM linqasend_wallet_accounts_v2 WHERE user_id=$1) ORDER BY created_at DESC LIMIT 100`,[userId])).rows};}
+  /**
+   * Own operations plus internal sends received into one of the user's wallets, newest first. Keyset paging over
+   * (created_at, id): the cursor carries the row's exact microsecond timestamp, so rows are neither skipped nor repeated.
+   */
+  async list(userId:string,opts:{limit?:number|undefined;cursor?:string|null|undefined}={}){
+    const limit=Math.min(Math.max(Math.trunc(opts.limit??30),1),100);
+    const after=opts.cursor?decodeOperationCursor(opts.cursor):null;
+    const rows=(await this.db.query(`SELECT id,kind,status,snapshot,CASE WHEN user_id=$1 THEN action_url ELSE NULL END AS action_url,returned_minor::text,created_at,updated_at,CASE WHEN user_id=$1 THEN 'SENT' ELSE 'RECEIVED' END AS direction,
+        to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
+      FROM linqasend_wallet_money_operations
+      WHERE (user_id=$1 OR kind='INTERNAL' AND snapshot->>'targetWalletId' IN (SELECT id::text FROM linqasend_wallet_accounts_v2 WHERE user_id=$1))
+        AND ($2::timestamptz IS NULL OR (created_at,id)<($2::timestamptz,$3::uuid))
+      ORDER BY created_at DESC,id DESC LIMIT $4`,[userId,after?.ts??null,after?.id??null,limit+1])).rows;
+    const page=rows.slice(0,limit);
+    const last=page.at(-1);
+    return {items:page.map(({cursor_ts:_cursor,...row})=>row),nextCursor:rows.length>limit&&last?encodeOperationCursor(last.cursor_ts,last.id):null};
+  }
+  /** One operation the user may see: their own, or an internal send received into their wallet. */
+  async get(userId:string,id:string){
+    const row=(await this.db.query(`SELECT id,kind,status,snapshot,CASE WHEN user_id=$1 THEN action_url ELSE NULL END AS action_url,returned_minor::text,created_at,updated_at,CASE WHEN user_id=$1 THEN 'SENT' ELSE 'RECEIVED' END AS direction
+      FROM linqasend_wallet_money_operations WHERE id=$2 AND (user_id=$1 OR kind='INTERNAL' AND snapshot->>'targetWalletId' IN (SELECT id::text FROM linqasend_wallet_accounts_v2 WHERE user_id=$1))`,[userId,id])).rows[0];
+    if(!row)throw new Error('WALLET_OPERATION_NOT_FOUND');
+    return row;
+  }
+}
+
+const CURSOR_TS=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+const CURSOR_ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function encodeOperationCursor(ts:string,id:string):string{return Buffer.from(`${ts}|${id}`,'utf8').toString('base64url');}
+/** Strictly validated: a cursor is client-controlled input that reaches SQL parameters. */
+export function decodeOperationCursor(cursor:string):{ts:string;id:string}{
+  if(cursor.length>120||!/^[A-Za-z0-9_-]+$/.test(cursor))throw new Error('WALLET_CURSOR_INVALID');
+  const [ts,id,...rest]=Buffer.from(cursor,'base64url').toString('utf8').split('|');
+  if(rest.length||!ts||!id||!CURSOR_TS.test(ts)||!CURSOR_ID.test(id))throw new Error('WALLET_CURSOR_INVALID');
+  return {ts,id};
 }

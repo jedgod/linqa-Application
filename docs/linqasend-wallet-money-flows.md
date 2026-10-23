@@ -8,6 +8,10 @@ The "Missing" rows in the map below describe the pre-084 baseline and are kept a
 
 Lifecycle: quote (server-owned amount, fee, FX, expiry) -> biometric challenge bound to the exact snapshot, device, session and installation -> submit (atomic hold) -> durable leased worker -> provider execute/lookup by original idempotency key -> settle, release, or return. Unknown outcomes keep the hold. An expired or unused authorization can be resolved via `POST /v1/linqasend/wallet-money/quotes/:id/resolve`, which cancels the quote atomically so the app's pending action cannot stick. Refund requests are separately idempotent and bounded by the original operation; return/refund amounts are cumulative and monotone.
 
+Payout instruction (October 23, 2026): when the service dispatches a cash out or an outside send, the request to `POST /wallet-money/operations` carries an explicit `payout` block beside the quote: `sourceAmountMinor`/`sourceCurrency` (the wallet debit excluding the fee), `recipientAmountMinor`/`recipientCurrency` (what the recipient must receive), `platformFeeMinor`, and `platformFeeRetained: true`. The gateway must pay out exactly the recipient amount; the fee stays with the platform and is never part of the payout. The block is built before the operation is marked submitted and the dispatch is refused (`WALLET_PAYOUT_INSTRUCTION_INVALID`) if the quote's total is not amount plus fee. Settlement evidence must still echo the base `amountMinor` and the quote hash. This is a contract the gateway has to honor; it cannot be proven from this side what a real gateway actually delivered, so it needs a controlled end-to-end check with the gateway owner. A gateway that rejects unknown request fields must be updated to accept `payout`.
+
+Send fees (October 22, 2026): `wallet-fee-schedule.ts` prices wallet sends in integer minor units, rounded half up, charged on top of the amount (the recipient receives the full amount). INTERNAL (wallet to Linqa user) is 10.00% with a 0.45 minimum; EXTERNAL (wallet to outside recipient) is 15.99% with a 0.65 minimum, applied as a floor over the provider's quoted fee, so a customer never pays less than the provider quoted. The internal fee posts to `FEE_REVENUE` in the same journal as the transfer. Only USD has a schedule: an INTERNAL send in another currency is refused (`WALLET_FEE_SCHEDULE_MISSING`) rather than priced at zero, and EXTERNAL keeps the provider fee there. These rates are product inputs, not provider-verified costs; the gateway must accept a quote whose fee is above its own.
+
 Fail-closed controls: no row in `linqasend_wallet_money_limits` (per-operation and daily, per entity and currency, `active=true`) means no new operation; bank linking requires `ownershipVerified` plus per-method `funding_enabled`/`payout_enabled` evidence; challenge and submit require `LINQASEND_REAL_MONEY_ENABLED=true`; hosted bank-link URLs must be HTTPS on the gateway's origin.
 
 Not claimed: no live gateway, bank, or provider has exercised these flows. The gateway must implement the `/wallet-money` endpoints (`capabilities`, `quotes`, `operations`, `operations/lookup/:key`, `refunds`) and `/bank-links` (`POST`, `GET /:id`) with capability version `LINQASEND_MONEY_V1`.
@@ -90,3 +94,22 @@ Recommendation: wallet -> chosen external recipient -> amount/fee/FX quote -> po
 Accounting acceptance: every change has a balanced immutable journal; customer liabilities reconcile by custody entity and currency; external evidence identifies the specific operation; money values remain integer minor units; restricted routes cannot bypass policy; unknown results never release a hold or trigger a replacement payment blindly.
 
 Primary source evidence: `server/src/services/linqasend/wallet-ledger.service.ts`, `atomic-completion.service.ts`, `deposit.service.ts`, `deposit-options.ts`, `withdrawal-policy.ts`, `transfer-orchestrator.service.ts`, `provider-payout-reconciliation.service.ts`; `server/src/routes/linqasend/wallet-routes.ts`, `routes.ts`, `module-surface-routes.ts`; mobile `wallet.tsx`, `receive.tsx`, `deposit.tsx`, `select-payment.tsx`, `payment-methods.tsx`.
+
+## Wallet support chat (Help & Support, Ask Linqa AI)
+
+`POST /v2/wallet/support-chat` (scopes `ai:use` and `linqasend:read`) answers questions about how the Wallet works, using the Gemini
+key already configured for Linqa AI (`GEMINI_API_KEY`, `GEMINI_MODEL`; the shared client is `server/src/ai/gemini.ts`).
+
+- **Opt-in.** Refused (`AI_DISABLED`) unless the person's AI privacy setting is `CONFIDENTIAL_CLOUD`, the same rule as Linqa AI.
+- **The model is given only the conversation** (up to 16 messages of 800 characters) and a fixed prompt. No balance, activity,
+  recipients, limits or account details. Nothing is stored or logged, and responses are `no-store`.
+- **Grounded fees.** The prompt's fee numbers are read from `feeScheduleView()`, the schedule the wallet charges from, so the
+  assistant cannot quote a stale price. Everything else in its facts is the product behaviour described in this document.
+- **Cannot act.** It explains and points to Contact support for a specific payment or an account problem. It is told not to promise
+  refunds or timings, not to answer from outside its facts (interest, rewards, insurance, countries, limits), and to treat reports of
+  unauthorised payments as a support and device-check matter.
+- **Secrets are refused before they leave.** A message that looks like a card or account number (a run of 9 or more digits) or a
+  secret given with its name ("pin is 4821", "code: 123456") is refused with `SENSITIVE_DATA` by the app and again by the server.
+- **Free tier.** This uses Google's Gemini free tier through the existing key, with the lighter model as a fallback when the main one
+  is busy. Rate limit: 12 questions a minute per person. A free tier can return busy or be rate limited; the app says so and points
+  to Contact support. ChatGPT is not used: it has no free API.

@@ -12,7 +12,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Allow Linqa to scan your payment card so you don't have to type the details.",
         "NSFaceIDUsageDescription": "Use Face ID to unlock LinqaVault and authorize LinqaSend transfers.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleAllowMixedLocalizations": true
       },
       "entitlements": {
         "com.apple.developer.devicecheck.appattest-environment": "production"
@@ -73,12 +74,58 @@
       "expo-sharing",
       "@react-native-community/datetimepicker",
       "react-native-blob-util",
-      ["expo-location", { "locationWhenInUsePermission": "Allow Linqa to share a location you choose." }],
-      ["expo-contacts", { "contactsPermission": "Allow Linqa to select and save contact cards." }],
-      ["expo-calendar", { "calendarPermission": "Allow Linqa to add events and meetings you choose." }],
-      ["expo-media-library", { "photosPermission": "Allow Linqa to select photos.", "savePhotosPermission": "Allow Linqa to save attachments you choose." }],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Linqa to share a location you choose."
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow Linqa to select and save contact cards."
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Allow Linqa to add events and meetings you choose."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Linqa to select photos.",
+          "savePhotosPermission": "Allow Linqa to save attachments you choose."
+        }
+      ],
       "expo-notifications",
-      "./plugins/with-chat-features.cjs"
+      "./plugins/with-chat-features.cjs",
+      [
+        "expo-localization",
+        {
+          "supportedLocales": {
+            "ios": [
+              "en",
+              "fr",
+              "pt-PT",
+              "zh-Hans",
+              "ja",
+              "hi",
+              "es-ES"
+            ],
+            "android": [
+              "en",
+              "fr",
+              "pt-PT",
+              "zh-CN",
+              "ja",
+              "hi-IN",
+              "es-ES"
+            ]
+          }
+        }
+      ]
     ],
     "extra": {
       "router": {},

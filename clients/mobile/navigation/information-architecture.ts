@@ -7,7 +7,7 @@ export type CreateActionKey =
   | "chat" | "group" | "call" | "video" | "schedule" | "call-link"
   | "secure-file" | "ai" | "send" | "request" | "recipient" | "payment"
   | "save" | "scan" | "intake" | "folder" | "event" | "post" | "live"
-  | "note" | "reminder" | "community-event";
+  | "note" | "reminder" | "community-event" | "wallet";
 
 export type CreateAction = {
   key: CreateActionKey;
@@ -21,14 +21,15 @@ const action = (key: CreateActionKey, label: string, icon: LinqaIcon, route: str
 });
 
 export const GLOBAL_CREATE_ACTIONS: readonly CreateAction[] = [
-  action("chat", "New chat", "chatbubble-outline", "/(tabs)/chats"),
-  action("call", "New call", "call-outline", "/(tabs)/calls"),
+  action("chat", "New chat", "chatbubble-outline", "/(tabs)/chats?action=new"),
+  action("call", "New call", "call-outline", "/(tabs)/calls?action=new"),
   action("send", "Send money", "paper-plane-outline", "/linqasend"),
-  action("save", "Save to Vault", "lock-closed-outline", "/modules/file-vault"),
-  action("event", "Create event", "calendar-outline", "/countrylinqa/create?type=event"),
+  action("save", "Save to Vault", "lock-closed-outline", "/vault/upload"),
+  action("event", "Create event", "calendar-outline", "/calendar?new=1"),
   action("post", "Create post", "create-outline", "/countrylinqa/create?type=post"),
-  action("note", "New note", "document-text-outline", "/modules/notes"),
-  action("group", "New group", "people-outline", "/modules/chats")
+  action("note", "New note", "document-text-outline", "/notes?new=1"),
+  action("group", "New group", "people-outline", "/(tabs)/chats?action=group"),
+  action("wallet", "Wallet", "wallet-outline", "/wallet")
 ];
 
 const CONTEXT_ACTIONS: Record<string, readonly CreateAction[]> = {
@@ -44,8 +45,8 @@ const CONTEXT_ACTIONS: Record<string, readonly CreateAction[]> = {
     action("schedule", "Schedule call", "calendar-outline", "/(tabs)/calls")
   ],
   chats: [
-    action("chat", "New chat", "chatbubble-outline", "/(tabs)/chats"),
-    action("group", "New group", "people-outline", "/modules/chats"),
+    action("chat", "New chat", "chatbubble-outline", "/(tabs)/chats?action=new"),
+    action("group", "New group", "people-outline", "/(tabs)/chats?action=group"),
     action("secure-file", "Secure file", "shield-checkmark-outline", "/modules/file-vault"),
     action("ai", "Ask Linqa AI", "sparkles-outline", "/modules/ai")
   ],
@@ -62,7 +63,7 @@ const CONTEXT_ACTIONS: Record<string, readonly CreateAction[]> = {
     action("payment", "Payment method", "card-outline", "/linqasend")
   ],
   calendar: [
-    action("event", "New event", "calendar-outline", "/modules/calendar"),
+    action("event", "New event", "calendar-outline", "/calendar?new=1"),
     action("schedule", "Scheduled call", "call-outline", "/modules/calendar"),
     action("reminder", "Reminder", "alarm-outline", "/modules/calendar"),
     action("community-event", "Community event", "people-outline", "/countrylinqa/create?type=event")
@@ -107,7 +108,7 @@ export const LINQA_HUB_SERVICES: readonly HubService[] = [
   { key: "communities", title: "Communities", description: "Groups, events and live discussions", icon: "people-circle-outline", color: "#13BFA6", route: "/(tabs)/communities", group: "Discover" },
   { key: "status", title: "Status & Posts", description: "Share updates with your audience", icon: "radio-outline", color: "#EE4778", route: "/modules/status", group: "Discover" },
   { key: "send", title: "LinqaSend", description: "Transfers, recipients and activity", icon: "paper-plane-outline", color: "#E86B22", route: "/linqasend", group: "Money & Business" },
-  { key: "wallet", title: "Wallet", description: "Cards, passes and identity", icon: "wallet-outline", color: "#4F6EF7", route: "/modules/wallet", group: "Money & Business" },
+  { key: "wallet", title: "Wallet", description: "Balance, load money, cash out and cards", icon: "wallet-outline", color: "#4F6EF7", route: "/wallet", group: "Money & Business" },
   { key: "enterprise", title: "Business", description: "Teams, policies and administration", icon: "business-outline", color: "#344563", route: "/modules/enterprise", group: "Money & Business" },
   { key: "privacy", title: "Privacy", description: "Audience and data controls", icon: "eye-off-outline", color: "#5966E9", route: "/privacy-center", group: "Safety & Settings" },
   { key: "security", title: "Security", description: "Devices, passkeys and encryption", icon: "shield-checkmark-outline", color: "#11A778", route: "/modules/security", group: "Safety & Settings" },

@@ -19,6 +19,19 @@ export interface PrivacySettings {
 export class PrivacySettingsService {
   constructor(private readonly db: Database) {}
 
+  /** The stored settings, or the table's defaults for an account that has never saved any. */
+  async get(userId: string): Promise<PrivacySettings> {
+    const r = await this.db.query(
+      `SELECT profile_visibility,phone_discoverability,email_discoverability,username_discoverability,read_receipts,typing_indicators,last_seen_visibility
+         FROM privacy_settings WHERE user_id=$1`, [userId]);
+    const row = r.rows[0];
+    return {
+      profileVisibility: row?.profile_visibility ?? "CONTACTS", phoneDiscoverability: row?.phone_discoverability ?? true,
+      emailDiscoverability: row?.email_discoverability ?? true, usernameDiscoverability: row?.username_discoverability ?? true,
+      readReceipts: row?.read_receipts ?? true, typingIndicators: row?.typing_indicators ?? true, lastSeenVisibility: row?.last_seen_visibility ?? "CONTACTS"
+    };
+  }
+
   async update(userId: string, settings: PrivacySettings): Promise<void> {
     await this.db.query(
       `INSERT INTO privacy_settings (
