@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tabs, usePathname, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { AccountSwitcherSheet } from "../../components/AccountSwitcherSheet";
 import { QuickCreateSheet } from "../../components/QuickCreateSheet";
 import { useAccounts } from "../../account/AccountContext";
 import { createActionsForPath } from "../../navigation/information-architecture";
@@ -15,7 +14,8 @@ import { accessTokenProvider } from "../../services/session";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getApiBaseUrl } from "../../config/api";
 import { isMoneyRoute, useLinqaSendAvailability } from "../../services/linqasend-availability";
-import { ACCOUNT_SWITCH_LANDING_ROUTE } from "../../account/landing";
+import { AccountSwitchButton } from "../../components/AccountSwitchButton";
+import { useIsTablet } from "../../hooks/useIsTablet";
 
 const API = getApiBaseUrl();
 
@@ -73,43 +73,12 @@ function badgeValue(count: number | undefined): number | undefined {
 }
 
 function AccountHeader() {
-  useTranslation();
-  const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { accounts, active, activate } = useAccounts();
-  const [switcherOpen, setSwitcherOpen] = useState(false);
 
   return (
     <View style={[s.header, { height: 58 + insets.top, paddingTop: insets.top }] }>
       <Text style={s.brand}>Linqa</Text>
-      <Pressable style={s.avatarBtn} onPress={() => setSwitcherOpen(true)} accessibilityLabel={t("Switch account")}>
-        <Ionicons name="person-circle-outline" size={26} color="#12D6AE" />
-        {active?.label || active?.displayName ? <Text style={s.avatarLabel}>{active.label || active.displayName}</Text> : null}
-      </Pressable>
-
-      <AccountSwitcherSheet
-        visible={switcherOpen}
-        accounts={accounts}
-        activeUserId={active?.userId}
-        onClose={() => setSwitcherOpen(false)}
-        onSwitch={(userId) => {
-          activate(userId);
-          setSwitcherOpen(false);
-          router.replace(ACCOUNT_SWITCH_LANDING_ROUTE);
-        }}
-        onAdd={() => {
-          setSwitcherOpen(false);
-          router.push(accounts.length >= 3 ? "/account/max-limit" : "/account/add-another");
-        }}
-        onManage={() => {
-          setSwitcherOpen(false);
-          router.push("/account/manage");
-        }}
-        onSettings={() => {
-          setSwitcherOpen(false);
-          router.push("/account/settings");
-        }}
-      />
+      <AccountSwitchButton />
     </View>
   );
 }
@@ -120,6 +89,7 @@ export default function TabsLayout() {
   const pathname = usePathname();
   const [createOpen, setCreateOpen] = useState(false);
   const insets = useSafeAreaInsets();
+  const isTablet = useIsTablet();
   const moneyAvailable = useLinqaSendAvailability() === true;
   const actions = useMemo(
     () => createActionsForPath(pathname).filter((item) => moneyAvailable || !isMoneyRoute(item.route)),
@@ -146,9 +116,13 @@ export default function TabsLayout() {
     <>
       <Tabs
         screenOptions={{
-          headerShown: true,
+          // On tablets AdaptiveNavigation (root layout) provides the breadcrumb bar
+          // and sidebar, so the phone header and bottom tab bar are not rendered.
+          headerShown: !isTablet,
           header: () => <AccountHeader />,
-          tabBarStyle: [s.tabBar, { height: 64 + Math.max(insets.bottom, 8), paddingBottom: Math.max(insets.bottom, 8) }],
+          tabBarStyle: isTablet
+            ? { display: "none" as const }
+            : [s.tabBar, { height: 64 + Math.max(insets.bottom, 8), paddingBottom: Math.max(insets.bottom, 8) }],
           tabBarLabelStyle: s.tabLabel,
           tabBarBadgeStyle: s.tabBadge,
           tabBarActiveTintColor: "#5B4CFF",
@@ -252,8 +226,6 @@ const s = StyleSheet.create({
     justifyContent: "space-between"
   },
   brand: { color: "#10132E", fontWeight: "900", fontSize: 19 },
-  avatarBtn: { flexDirection: "row", alignItems: "center", gap: 6 },
-  avatarLabel: { color: "#596078", fontSize: 12, fontWeight: "700" },
   tabBar: {
     height: 72,
     paddingTop: 8,

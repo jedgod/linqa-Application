@@ -30,6 +30,7 @@ import { setActiveAccountSessionResolver } from "../services/session";
 import { createSessionRefresher } from "../services/session-refresh";
 import { useTheme } from "../theme/tokens";
 import { getApiBaseUrl } from "../config/api";
+import { AdaptiveNavigation } from "../components/AdaptiveNavigation";
 import { CallOverlay } from "../components/calls/CallOverlay";
 import { ScheduledCallToast } from "../components/calls/ScheduledCallToast";
 import { usePublishingSync } from "../hooks/usePublishingSync";
@@ -111,6 +112,7 @@ export default function RootLayout() {
         <AccountSessionBridge />
         <CallHost />
         <StatusBar style="auto" />
+        <AdaptiveNavigation>
         <Stack screenOptions={{ headerShown: false, animation: "slide_from_right" }}>
         <Stack.Screen name="welcome" />
         <Stack.Screen name="(tabs)" />
@@ -212,6 +214,7 @@ export default function RootLayout() {
         <Stack.Screen name="onboarding/complete" />
         <Stack.Screen name="onboarding/security-review" />
         </Stack>
+        </AdaptiveNavigation>
       </AccountProvider>
     </SafeAreaProvider>
     </GestureHandlerRootView>
