@@ -1,7 +1,7 @@
 # Stabilization and release-gate evidence — 2026-10-24
 
-Code verified at commits `af8270c` (dark theme) and `99f752b` (CI + docs), on branch `agent/production-module-hardening`
-(`main` is at `135fc20`; it has not been advanced to these commits). This record is the only change made after them.
+Code verified at commits `af8270c` (dark theme), `99f752b` (CI + docs) and `668e559` (secure-core fix), on branch `agent/production-module-hardening`
+(`main` is at `135fc20`; it has not been advanced to these commits). This record is the only change made after them (later commits are listed in the git log).
 
 **Release status: NOT production-ready.** The G0–G4 evidence gates are red by design (see "Remaining failures").
 Nothing here is certification evidence; it is a development-build verification record.
@@ -66,10 +66,14 @@ above 7. Dividers (`#34383F`, 1.59:1) are decorative separators in your specific
    (correct, fail-closed). Its image build, which was failing, is fixed and verified locally.
 3. **CI on the latest commits is unverified.** The repository now returns 404 to anonymous requests (it appears to have been
    made private), so Actions results could not be read from here. Check the Actions tab for `af8270c` and `99f752b`.
-4. **Intermittent `SECURE_CORE_AUTHENTICATION_FAILED`.** On one cold start (5:36 PM) every message in the thread failed to open;
-   the same messages opened on the starts before and after it (4:30–5:24 PM, 5:41 PM). No related JS error or API rejection was
-   found and I did not change secure-core code. Cause unknown; secure messaging is **not** considered validated until this is
-   explained or ruled out.
+4. **Intermittent `SECURE_CORE_AUTHENTICATION_FAILED`: mechanism found and fixed (commit `668e559`); field soak still short.**
+   Cause: overlapping opens of the same message. The core refuses a second open of an envelope (replay protection) and
+   `decrypt_message` reports every core error as the opaque `AuthenticationFailed`, so a duplicate open looks like a crypto
+   failure. On cold start the thread's receiver is rebuilt when the outbox database finishes opening, which re-opens the thread
+   while the first pass may still be running. `SecureCoreMessaging.open()` now shares one in-flight open per message. Details,
+   guarantees and what was deliberately not added: `docs/SECURE_CORE_RECOVERY.md`. The one real incident (5:36 PM) had no logs,
+   so it is attributed to this mechanism by inference; the mechanism itself is reproduced in tests that failed before the fix.
+   See "Cold-start repetition" below for what the device run does and does not show.
 5. **Unexplained saved state.** The phone's saved default wallpaper was Vintage Lavender although I only meant to set a
    per-chat override during an earlier demo. The button wiring was re-read and is correct, and saving/clearing persists
    correctly; I could not determine how the default got set. It was reset to Classic Dark Doodle.
@@ -87,3 +91,72 @@ above 7. Dividers (`#34383F`, 1.59:1) are decorative separators in your specific
   was left alone.
 - `.tmp/`: a stale local PostgreSQL 18.3 cluster and logs from 2026-10-18 (only built-in databases; dead pid; no listener; no
   references; the supported wallet runner does not use it). **Removed**, and `.tmp/` is now gitignored.
+
+## Secure Core fix (commit `668e559`)
+
+| Check | Result |
+|---|---|
+| Reproduction tests, run **before** the fix | 3 failed with the core's `replay` error (concurrent opens; whole thread opened twice at once; different content for one id) |
+| `tests/secure-core.test.ts` after the fix | **22 / 22 pass** (adds real-failure guard, context mismatch, account-scope change mid-open, cross-account isolation) |
+| CI's secure-core step (`messaging-gate-security` + `secure-core`) | 25 / 25 pass |
+| Regression tests (CI list, 20 files) | **221 / 221 pass** (was 215) |
+| Mobile typecheck | pass |
+
+Also in that commit: `scripts/run-wallet-db-tests.mjs` now fails when vitest reports any wallet suite as skipped, todo or
+failed. A zero exit does not prove the suites ran, which is how 78 tests skipped silently. Re-verified against a disposable
+PostgreSQL 18: 6 files, 78 / 78 pass, exit 0.
+
+## Cold-start repetition (post-fix, Galaxy A03s)
+
+Method: `scripts/` is not used; a Node script drove adb, finding every button from the UI tree (no fixed coordinates), and
+classified each launch: force-stop, launch, wait 75 s, open Chats, open the Greene conversation, wait 60 s, read the screen.
+
+| Run | Thread opened | Messages readable | "Can't open" | `SECURE_CORE_AUTHENTICATION_FAILED` | Still sealed |
+|---|---|---|---|---|---|
+| 1 | yes | 7 | 0 | 0 | 0 |
+| 2 | yes | 7 | 0 | 0 | 0 |
+| 3 | yes | 7 | 0 | 0 | 0 |
+| 4 | yes | 7 | 0 | 0 | 0 |
+| 5 | yes | 7 | 0 | 0 | 0 |
+| 6 | not counted: the conversation row was not found on screen | | | | |
+
+**Read this honestly:** 5 clean launches. Before the fix the failure appeared on about 1 launch in 7, so 5 clean launches would
+happen about 46% of the time even if nothing had changed. This run is consistent with the fix but does **not** prove it. The
+proof is the reproduction tests, which fail without the fix and pass with it. More cold starts (and a second device) would
+strengthen the field evidence.
+
+## Environment incident during this run (not an app defect)
+
+The development API on port 8088 stopped (its `node --watch` process restarted 11 times, then exited: "Failed running
+'src/index.ts'"; the same flapping seen earlier today, likely from file-change events in the OneDrive-synced folder). With the
+API down, the app showed "Linqa could not connect. Check your connection" and **kept the stored session**, which is the intended
+offline behaviour (`session-refresh.ts` only discards a session on an explicit 401). My first automation then tapped "Back to
+welcome" by fixed coordinates, which looked like a sign-out; no session, account or device key was lost. The API was restarted
+without `--watch` for this session. Recommendation: run the dev API without `--watch` on this machine, or move the repo out of
+OneDrive.
+
+## Status against the "mandatory release validation" list
+
+| Item | Status |
+|---|---|
+| Secure Core cold starts, no unexplained failures | mechanism fixed and tested; 5/5 counted device launches clean; soak short |
+| Account switching, no cross-account leakage | covered by unit tests (scope change mid-open, cross-account isolation); **not tested on a device with two accounts** |
+| Offline message recovery | not re-tested beyond cold-start readability; the app keeps its session offline (see above) |
+| Database integration, zero skips | 1,239 / 1,239 server tests pass against PostgreSQL 18.4; wallet runner now rejects skips; CI runs it |
+| Wallet / ledger tests execute in CI | wired into `ci.yml`; **CI result not observable from here** (repo private) |
+| Android physical device | repeated cold starts done (one device) |
+| iOS physical device | **not done** |
+| G0–G4 genuine signed evidence | **not available**; see `docs/RELEASE_GATE_REMEDIATION.md` |
+| Signed API Image production verifier | requires the readiness envelope; not available |
+| Release owner approval of the exact SHA | **not obtained** |
+
+## Not adopted from the pasted "v4.0" plan, and why
+
+- `SecureCoreStartupGate`, its engine interface and tests: the repo already has single-flight init (`SecureCoreDevice.ensure`),
+  a locked/not-ready refusal, account-scope generation checks and post-decrypt scope checks; a second gate would add a place for
+  state to disagree. The real defect was elsewhere (see above), and the proposed gate would not have caught it.
+- `verify-database-certification.mjs`: it consumes a hand-shaped JSON report; the repo's runner now enforces "no skips" directly
+  from the test run, which is the property that mattered.
+- `verify-release-evidence.mjs` and `linqa-release-certification.yml`: they wrap an executable named in an environment variable
+  and call a runner script that does not exist here; the repository's own signed-evidence verifier and workflows already do this
+  work with signature, revision and environment binding.
