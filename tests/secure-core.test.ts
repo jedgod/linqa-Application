@@ -318,6 +318,19 @@ test("a whole thread opened twice at once (receiver rebuilt mid-load) opens ever
   assert.equal(bob.core.decrypts, thread.length);
 });
 
+test("clear() drops pending opens and cached plaintext, and a stale open does not repopulate the cache", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const directory = await directoryOf([alice, bob]);
+  const sealed = await messaging(alice, directory).seal("secret", { conversationId: CONV, senderUserId: USER_A, clientMessageId: "99999999-9999-4999-8999-999999999999" });
+  const b = messaging(bob, directory);
+  const ctx = { conversationId: CONV, senderUserId: USER_A, messageId: "srv-clear" };
+  const pending = code(b.open(sealed, ctx));
+  b.clear();
+  assert.equal(await pending, "ACCOUNT_CHANGED");
+  assert.equal((b as unknown as { opened: Map<string, unknown> }).opened.size, 0);
+});
+
 test("a genuinely bad envelope still fails (sharing never turns a failure into a success), and a later retry is allowed", async () => {
   const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
   const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);

@@ -30,7 +30,7 @@ export interface SharedSecure {
 const sessions = new Map<string, SharedSecure | null>();
 // The native module holds one core. A session's readiness cannot survive
 // switching which account's keys that core has loaded.
-registerAccountScopeReset('secure-session',()=>{sessions.clear();sendPeer.current=null;sendGroup.current=null;});
+registerAccountScopeReset('secure-session',()=>{for(const s of sessions.values())s?.messaging.clear();sessions.clear();sendPeer.current=null;sendGroup.current=null;});
 
 export function sharedSecureSession(selfId: string): SharedSecure | null {
   if (!selfId) return null;
@@ -50,4 +50,4 @@ export function sharedSecureSession(selfId: string): SharedSecure | null {
 }
 
 /** Forget an account's session (sign out), so a later sign-in builds a fresh one. */
-export function dropSharedSecureSession(selfId: string): void { sessions.delete(selfId); }
+export function dropSharedSecureSession(selfId: string): void { sessions.get(selfId)?.messaging.clear(); sessions.delete(selfId); }

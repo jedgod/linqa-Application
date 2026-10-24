@@ -215,6 +215,11 @@ export class SecureCoreMessaging implements SecureMessaging {
     now?: () => number;
   }) {}
 
+  private generation = 0;
+
+  /** Drops every opened plaintext and in-flight open (account switch / sign out). Opens started before this will not repopulate the cache. */
+  clear() { this.generation++; this.opened.clear(); this.opening.clear(); }
+
   private now() { return Math.floor((this.deps.now?.() ?? Date.now()) / 1000); }
 
   /** Every device of `userId` whose package the core accepts and that names who it says it is; the rest are ignored. */
@@ -269,10 +274,12 @@ export class SecureCoreMessaging implements SecureMessaging {
   }
 
   async open(ciphertextBase64: string, context: { conversationId: string; senderUserId: string; messageId: string }): Promise<string> {
+    const generation = this.generation;
     await this.deps.device.ensure();
     await assertMessagingUnlocked(this.deps.device.asNativeCore());
-    const key = `${context.conversationId}:${context.messageId}`;
+    const key = JSON.stringify([context.conversationId, context.messageId]);
     const known = this.opened.get(key);
+    if (generation !== this.generation) return fail("ACCOUNT_CHANGED");
     if(known!==undefined){
       if(known.ciphertext!==ciphertextBase64||known.senderUserId!==context.senderUserId)return fail("MESSAGE_CONTEXT_MISMATCH");
       return known.plaintext;
@@ -284,7 +291,7 @@ export class SecureCoreMessaging implements SecureMessaging {
       return running.promise;
     }
     // A failure is shared by the callers waiting on this open but never remembered: once it settles, a retry opens afresh.
-    const promise: Promise<string> = this.openUncached(ciphertextBase64, context, key).finally(() => {
+    const promise: Promise<string> = this.openUncached(ciphertextBase64, context, key, generation).finally(() => {
       if (this.opening.get(key)?.promise === promise) this.opening.delete(key);
     });
     this.opening.set(key,{promise,ciphertext:ciphertextBase64,senderUserId:context.senderUserId});
@@ -292,7 +299,7 @@ export class SecureCoreMessaging implements SecureMessaging {
   }
 
   /** The one real open: reaches the core, so it must run at most once per message at a time (see `opening`). */
-  private async openUncached(ciphertextBase64: string, context: { conversationId: string; senderUserId: string; messageId: string }, key: string): Promise<string> {
+  private async openUncached(ciphertextBase64: string, context: { conversationId: string; senderUserId: string; messageId: string }, key: string, generation: number): Promise<string> {
     await this.deps.device.ensure();
     const selfDevice = await this.deps.device.deviceId();
     const bundle = fromJsonB64<Bundle>(ciphertextBase64);
@@ -312,6 +319,7 @@ export class SecureCoreMessaging implements SecureMessaging {
     await this.deps.device.ensure();
     const inner = JSON.parse(text(base64ToBytes(plain))) as Inner;
     if (inner?.v !== 1 || inner.c !== context.conversationId || inner.s !== context.senderUserId || typeof inner.t !== "string") return fail("MESSAGE_CONTEXT_MISMATCH");
+    if (generation !== this.generation) return fail("ACCOUNT_CHANGED");
     if (this.opened.size >= CACHE_LIMIT) this.opened.delete(this.opened.keys().next().value as string);
     this.opened.set(key,{plaintext:inner.t,ciphertext:ciphertextBase64,senderUserId:context.senderUserId});
     return inner.t;
