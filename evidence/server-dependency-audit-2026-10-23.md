@@ -52,3 +52,14 @@ To address all issues, run:
 - `npm audit --audit-level=high` (CI gate, all deps): 0 vulnerabilities
 - `npm run build`: pass
 - `npm test` (local, Node 22.18): 950 passed; 2 integration files (historical-sender-key, protected-media) cannot load config here because DATABASE_URL and other secrets are not set; environmental, not dependency-related. CI result is authoritative.
+
+## Mobile client (clients/mobile) — follow-up
+
+`audit-ci` failed on GHSA-mrhx-c7xc-m3w5 (zod 3.25.76, high) reached via expo > @expo/cli.
+No patched Expo exists (latest SDK 57 @expo/cli 57.0.32 still depends on zod ^3.25.76) and
+`npm audit fix --force` would install expo@44.0.6, so it was not used.
+
+Action: npm `overrides` forcing zod ^4.6.7 under @expo/cli only (resolves 4.6.7).
+Local verification: `npm ci`, `audit-ci --config audit-ci.jsonc` passes, `npm run typecheck` passes,
+`expo export --platform android` succeeds (8.8 MB Hermes bundle). Gate config and allowlist untouched.
+Revisit when Expo ships an @expo/cli that depends on a patched zod; then drop the override.
