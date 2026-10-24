@@ -157,7 +157,15 @@ test("switching accounts never routes by the account's display label", async () 
   const offenders = routeFiles.filter((file) => /\.(label|displayName)\b[^;\n]*\.includes\(\s*["'](business|research)["']/i.test(fs.readFileSync(file, "utf8"))
     || /label\.includes\(\s*["'](business|research)["']/i.test(fs.readFileSync(file, "utf8")));
   assert.deepEqual(offenders.map((f) => path.relative(mobile, f)), []);
-  for (const name of ["app/(tabs)/chats.tsx", "app/(tabs)/_layout.tsx", "app/account/manage.tsx", "app/account/switcher.tsx"]) {
+  // The tab layout delegates account switching to AccountSwitchButton.
+  // Verify both the delegation and the actual secure navigation handler.
+  const tabsLayout = fs.readFileSync(path.join(mobile, "app/(tabs)/_layout.tsx"), "utf8");
+  assert.match(tabsLayout, /<AccountSwitchButton\s*\/>/);
+  const switchButton = fs.readFileSync(path.join(mobile, "components/AccountSwitchButton.tsx"), "utf8");
+  assert.match(switchButton, /ACCOUNT_SWITCH_LANDING_ROUTE/);
+  assert.match(switchButton, /activate\(userId\)/);
+  assert.match(switchButton, /router\.replace\(ACCOUNT_SWITCH_LANDING_ROUTE\)/);
+  for (const name of ["app/(tabs)/chats.tsx", "app/account/manage.tsx", "app/account/switcher.tsx"]) {
     assert.match(fs.readFileSync(path.join(mobile, name), "utf8"), /ACCOUNT_SWITCH_LANDING_ROUTE/, `${name} should use the shared landing route`);
   }
 });
