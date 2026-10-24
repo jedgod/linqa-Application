@@ -1,0 +1,8 @@
+{
+  "commitSha": "REPLACE_WITH_FULL_40_CHARACTER_SHA",
+  "records": [
+    {"kind":"android-two-account","result":"pending","deviceId":"","testRunId":"","artifactDigest":"","evidenceUri":""},
+    {"kind":"ios-physical","result":"pending","deviceId":"","testRunId":"","artifactDigest":"","evidenceUri":""},
+    {"kind":"lifecycle","result":"pending","deviceId":"","testRunId":"","artifactDigest":"","evidenceUri":""}
+  ]
+}

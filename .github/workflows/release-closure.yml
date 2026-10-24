@@ -1,0 +1,20 @@
+name: Linqa release closure
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify gate evidence using existing trusted verifier
+        env:
+          LINQA_APPROVED_GATE_VERIFIER: ./scripts/verify-production-readiness.sh
+        run: node linqa-release-closure/scripts/verify-release-closure.mjs
