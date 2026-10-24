@@ -12,7 +12,8 @@ import { LocationCard } from "../features/location/Location";
 import { ContactCard } from "../features/contact/Contact";
 import { VoicePlayer } from "../features/voice/Voice";
 import { ProtectedContentBubble } from "../../../components/protected/ProtectedContentBubble";
-import { palette as c, space } from "../ui/tokens";
+import { palette as light, space } from "../ui/tokens";
+import { Palette, useThemed } from "../ui/ThreadPalette";
 import { ThreadIndex, rsvpsFor, votesFor } from "./threadIndex";
 
 export interface ContentBubbleProps {
@@ -29,6 +30,7 @@ export interface ContentBubbleProps {
 }
 
 export function ContentBubble(p: ContentBubbleProps) {
+  const { c, styles } = useThemed(makeStyles);
   const { content } = p.message;
   const out = p.message.outgoing;
   if (HIDDEN_TYPES.has(content.type)) return null;
@@ -90,6 +92,7 @@ export function ContentBubble(p: ContentBubbleProps) {
 }
 
 function FileBubble({ file, outgoing, attachments, onOpen }: { file: FileContent; outgoing: boolean; attachments: AttachmentService; onOpen: () => void }) {
+  const { c, styles } = useThemed(makeStyles);
   // Photos decrypt automatically for a thumbnail; everything else waits for a tap.
   const [thumb, setThumb] = useState<string | null>(null);
   const [voicePath, setVoicePath] = useState<string | null>(null);
@@ -119,7 +122,7 @@ function FileBubble({ file, outgoing, attachments, onOpen }: { file: FileContent
             <View style={styles.play}>
               <Text style={styles.playText}>▶</Text>
             </View>
-            <Text style={[styles.meta, outgoing && { color: "#C9DBE0" }]}>Voice message{file.durationMs ? `, ${Math.round(file.durationMs / 1000)}s` : ""}</Text>
+            <Text style={[styles.meta, outgoing && { color: c.outgoingInk }]}>Voice message{file.durationMs ? `, ${Math.round(file.durationMs / 1000)}s` : ""}</Text>
           </Pressable>
         )}
         {failed ? <Text style={styles.err}>Couldn't load. Tap to try again.</Text> : null}
@@ -154,7 +157,7 @@ function FileBubble({ file, outgoing, attachments, onOpen }: { file: FileContent
         <Text style={[styles.fileName, outgoing && { color: c.outgoingInk }]} numberOfLines={2}>
           {file.name}
         </Text>
-        <Text style={[styles.meta, outgoing && { color: "#C9DBE0" }]}>
+        <Text style={[styles.meta, outgoing && { color: c.outgoingInk }]}>
           {formatBytes(file.size)}
           {file.replaces ? ", edited version" : ""}
         </Text>
@@ -164,6 +167,7 @@ function FileBubble({ file, outgoing, attachments, onOpen }: { file: FileContent
 }
 
 function LiveBanner({ ended, screen, who, onJoin }: { ended: boolean; screen: boolean; who: string; onJoin: () => void }) {
+  const { c, styles } = useThemed(makeStyles);
   if (ended) {
     return (
       <View style={styles.liveEnded}>
@@ -184,7 +188,7 @@ function LiveBanner({ ended, screen, who, onJoin }: { ended: boolean; screen: bo
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   text: { maxWidth: "80%", borderRadius: 18, paddingHorizontal: 14, paddingVertical: 9 },
   textIn: { backgroundColor: c.surface, borderBottomLeftRadius: 6, alignSelf: "flex-start" },
   textOut: { backgroundColor: c.outgoing, borderBottomRightRadius: 6, alignSelf: "flex-end" },
@@ -193,7 +197,7 @@ const styles = StyleSheet.create({
   cardIn: { backgroundColor: c.surface, borderBottomLeftRadius: 6 },
   cardOut: { backgroundColor: c.outgoing, borderBottomRightRadius: 6 },
   row: { flexDirection: "row", alignItems: "center", gap: 12 },
-  docIcon: { width: 40, height: 48, borderRadius: 6, backgroundColor: "#F4F8F9", alignItems: "center", justifyContent: "flex-end", paddingBottom: 6, borderWidth: 1, borderColor: c.line },
+  docIcon: { width: 40, height: 48, borderRadius: 6, backgroundColor: c.bg, alignItems: "center", justifyContent: "flex-end", paddingBottom: 6, borderWidth: 1, borderColor: c.line },
   docExt: { fontSize: 9, fontWeight: "700", color: c.danger },
   fileName: { fontSize: 15, fontWeight: "600", color: c.ink },
   meta: { fontSize: 13, color: c.muted },
@@ -204,12 +208,12 @@ const styles = StyleSheet.create({
   aiTag: { position: "absolute", left: 8, top: 8, backgroundColor: c.surface, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: c.warn },
   aiText: { fontSize: 11, fontWeight: "600", color: c.warn },
   play: { width: 40, height: 40, borderRadius: 20, backgroundColor: c.secure, alignItems: "center", justifyContent: "center" },
-  playText: { color: "#fff" },
-  live: { alignSelf: "stretch", flexDirection: "row", alignItems: "center", gap: 12, padding: 12, borderRadius: 16, backgroundColor: c.ink, marginVertical: space.xs },
+  playText: { color: c.onSecure },
+  live: { alignSelf: "stretch", flexDirection: "row", alignItems: "center", gap: 12, padding: 12, borderRadius: 16, backgroundColor: light.night, marginVertical: space.xs },
   liveTag: { backgroundColor: c.danger, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  liveTagText: { color: "#fff", fontSize: 11, fontWeight: "600" },
+  liveTagText: { color: c.onDanger, fontSize: 11, fontWeight: "600" },
   liveTitle: { flex: 1, color: "#fff", fontSize: 15, fontWeight: "600" },
   joinPill: { backgroundColor: "#fff", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8 },
-  joinText: { color: c.ink, fontWeight: "600", fontSize: 14 },
+  joinText: { color: light.ink, fontWeight: "600", fontSize: 14 },
   liveEnded: { alignSelf: "center", backgroundColor: c.surface, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 4 },
 });

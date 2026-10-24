@@ -1,17 +1,16 @@
 import { useCallback, useMemo, useState } from "react";
-import { useColorScheme } from "react-native";
 import { resolveWallpaper, type Wallpaper } from "../../services/wallpapers";
 import { wallpaperStore } from "../../services/wallpaper-prefs";
 import { useWallpaperRevision } from "./WallpaperContext";
 
 export interface WallpaperState {
-  /** The wallpaper in effect here: this chat's own, else the person's default, else the one matching the phone's appearance. */
+  /** The wallpaper in effect here: this chat's own, else the person's default, else Classic Dark Doodle. */
   wallpaper: Wallpaper;
-  /** False only while nothing is chosen anywhere and the wallpaper is following the phone's light/dark appearance. */
+  /** False only while nothing is chosen anywhere and the built-in default is showing. */
   explicit: boolean;
   /** How much the wallpaper is darkened behind messages, 0 to 0.6. */
   dim: number;
-  /** The person's main wallpaper, or null if they never set one (then it matches the phone's appearance). */
+  /** The person's main wallpaper, or null if they never set one (then Classic Dark Doodle is the default). */
   defaultId: string | null;
   /** This chat's own wallpaper, or null if it follows the default. */
   chatId: string | null;
@@ -24,13 +23,12 @@ export interface WallpaperState {
 /**
  * This account's wallpaper choices for one chat. Reads are synchronous, so the very first render already shows the
  * saved wallpaper (no flash of another one first). Any save, from any screen, re-reads everywhere through the shared
- * WallpaperProvider, and a change to the phone's light/dark setting is followed live while nothing is chosen.
+ * WallpaperProvider. The phone's light/dark setting is not consulted.
  */
 export function useWallpaper(userId: string, conversationId: string | undefined): WallpaperState {
   const shared = useWallpaperRevision();
   const [localRevision, setLocalRevision] = useState(0);
   const revision = shared ? shared.revision : localRevision;
-  const systemScheme = useColorScheme();
 
   const saved = useMemo(
     () => ({
@@ -51,6 +49,6 @@ export function useWallpaper(userId: string, conversationId: string | undefined)
   const setForChat = useCallback((id: string | null) => commit(Boolean(userId && conversationId) && wallpaperStore.saveChat(userId, conversationId!, id)), [userId, conversationId, commit]);
   const setDim = useCallback((level: number) => commit(Boolean(userId) && wallpaperStore.saveDim(userId, level)), [userId, commit]);
 
-  const resolved = useMemo(() => resolveWallpaper(saved.chatId, saved.defaultId, systemScheme), [saved.chatId, saved.defaultId, systemScheme]);
+  const resolved = useMemo(() => resolveWallpaper(saved.chatId, saved.defaultId), [saved.chatId, saved.defaultId]);
   return { ...resolved, dim: saved.dim, defaultId: saved.defaultId, chatId: saved.chatId, setDefault, setForChat, setDim };
 }

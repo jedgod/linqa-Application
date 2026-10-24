@@ -9,6 +9,9 @@ export const palette = {
   outgoingInk: "#F4F8F9",
   secure: "#2F6F5E",
   secureTint: "#E6F0EC",
+  // Text on secure / danger fills (buttons, tags). White on the light theme's dark greens and reds; dark on the dark theme's light ones.
+  onSecure: "#FFFFFF",
+  onDanger: "#FFFFFF",
   sealed: "#5F6F7D",
   warn: "#96560F",
   warnSurface: "#FBF1E3",

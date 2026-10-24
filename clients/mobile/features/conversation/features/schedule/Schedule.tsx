@@ -12,7 +12,8 @@ import { useAccounts } from "../../../../account/AccountContext";
 import { addMyEvent, isInMyEvents } from "../../../../services/my-events";
 import { Field, ToggleRow } from "../polls/Poll";
 import { FormShell, Segmented } from "../../ui/Form";
-import { palette as c, space } from "../../ui/tokens";
+import { palette as light, space } from "../../ui/tokens";
+import { Palette, useThemed } from "../../ui/ThreadPalette";
 
 type Kind = "Meeting" | "Event";
 const MEETING_LENGTHS = { "15 min": 15, "30 min": 30, "45 min": 45, "1 hr": 60 } as const;
@@ -23,6 +24,7 @@ export function ScheduleComposer(props: {
   onSend: (content: EventContent | MeetingContent) => Promise<void>;
   onCancel: () => void;
 }) {
+  const { c, styles } = useThemed(makeStyles);
   const { active } = useAccounts();
   const [kind, setKind] = useState<Kind>(props.initialKind ?? "Meeting");
   const [title, setTitle] = useState("");
@@ -126,6 +128,7 @@ export function ScheduleComposer(props: {
 }
 
 function PickerField({ label, value, onPress }: { label: string; value: string; onPress: () => void }) {
+  const { c, styles } = useThemed(makeStyles);
   return (
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={`${label}, ${value}. Change`} style={[styles.field, { flex: 1 }]}>
       <Text style={styles.label}>{label}</Text>
@@ -144,6 +147,7 @@ export function EventCard(props: {
   outgoing: boolean;
   onRsvp: (r: RsvpResponse) => void;
 }) {
+  const { c, styles } = useThemed(makeStyles);
   const { event } = props;
   const rsvps = useMemo(() => rsvpTally(event, props.messages), [event, props.messages]);
   const mine = rsvps.get(props.selfId);
@@ -181,6 +185,7 @@ const RSVP_LABEL: Record<RsvpResponse, string> = { going: "Going", maybe: "Maybe
 const RSVP_PHRASE: Record<RsvpResponse, string> = { going: "is going", maybe: "might go", declined: "can't go" };
 
 export function MeetingCard(props: { meeting: MeetingContent; outgoing: boolean; onJoin: () => void }) {
+  const { c, styles } = useThemed(makeStyles);
   const { meeting } = props;
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -212,6 +217,7 @@ export function MeetingCard(props: { meeting: MeetingContent; outgoing: boolean;
 }
 
 function CalendarLink({ item }: { item: EventContent | MeetingContent }) {
+  const { c, styles } = useThemed(makeStyles);
   const {active}=useAccounts();const userId=active?.userId;
   const [added,setAdded]=useState(false);const [onPhone,setOnPhone]=useState(false);const [busy,setBusy]=useState(false);const working=useRef(false);
   const id = item.type === "meeting" ? item.meetingId : item.eventId;
@@ -273,7 +279,7 @@ function nextHalfHour(): Date {
   return d;
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   form: { padding: space.l, gap: space.m },
   two: { flexDirection: "row", gap: space.s },
   field: { backgroundColor: c.surface, borderRadius: 14, paddingHorizontal: space.l, paddingTop: space.s, paddingBottom: space.s },
@@ -300,7 +306,7 @@ const styles = StyleSheet.create({
   rsvpOn: { backgroundColor: c.outgoing, borderColor: c.outgoing },
   rsvpText: { fontSize: 13, fontWeight: "600", color: c.ink },
   join: { height: 40, borderRadius: 12, backgroundColor: c.secure, alignItems: "center", justifyContent: "center" },
-  joinText: { color: "#fff", fontWeight: "600", fontSize: 15 },
+  joinText: { color: c.onSecure, fontWeight: "600", fontSize: 15 },
   calLink: { minHeight: 32, justifyContent: "center" },
   calText: { color: c.secure, fontWeight: "600", fontSize: 13 },
 });

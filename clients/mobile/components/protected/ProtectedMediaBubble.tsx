@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Camera, Eye, Lock, Timer } from './icons';
-import { COLORS as C } from '../../constants/theme';
+import { Palette, useThemed } from '../../features/conversation/ui/ThreadPalette';
 import { getMediaStatus, type ProtectedMediaInfo } from '../../lib/protectedMedia/api';
 import { forgetMediaKey } from '../../lib/protectedMedia/keyStore';
 import { policyLabel, type ExpiryStart, type ProtectionMode } from '../../lib/protectedMedia/policy';
@@ -49,6 +49,7 @@ function statusLine(info: ProtectedMediaInfo | null, isMine: boolean): string {
 }
 
 export function ProtectedMediaBubble(props: Props) {
+  const { c, styles } = useThemed(makeStyles);
   const { mediaId, isMine } = props;
   const [info, setInfo] = useState<ProtectedMediaInfo | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -94,6 +95,14 @@ export function ProtectedMediaBubble(props: Props) {
   const label = policyLabel(info ?? props);
   const line = statusLine(info, isMine);
 
+  // Active own photos sit on the outgoing colour with its text colour; finished ones (opened, expired, deleted) drop to an
+  // outlined card with secondary text. Every pairing here clears WCAG AA in the dark and light thread palettes.
+  const onOutgoing = isMine && active;
+  const titleColor = onOutgoing ? c.outgoingInk : c.ink;
+  const subColor = onOutgoing ? c.outgoingInk : c.muted;
+  const iconBg = isMine ? (active ? 'rgba(255,255,255,0.2)' : c.outgoing) : c.secure;
+  const iconFg = isMine ? c.outgoingInk : c.onSecure;
+
   const Icon = captured ? Camera : props.mode === 'TIMED' ? Timer : active ? Eye : Lock;
 
   return (
@@ -111,12 +120,12 @@ export function ProtectedMediaBubble(props: Props) {
           pressed && { opacity: 0.85 },
         ]}
       >
-        <View style={[styles.icon, isMine ? styles.iconMine : styles.iconTheirs, captured && { backgroundColor: C.danger }]}>
-          <Icon size={20} color="#FFFFFF" strokeWidth={2} />
+        <View style={[styles.icon, { backgroundColor: captured ? c.danger : iconBg }]}>
+          <Icon size={20} color={captured ? c.onDanger : iconFg} strokeWidth={2} />
         </View>
         <View style={{ flexShrink: 1 }}>
-          <Text style={[styles.title, isMine && { color: '#FFFFFF' }]}>Protected photo · {label}</Text>
-          <Text style={[styles.sub, isMine && { color: '#DCE4FB' }]}>{line}</Text>
+          <Text style={[styles.title, { color: titleColor }]}>Protected photo · {label}</Text>
+          <Text style={[styles.sub, { color: subColor }]}>{line}</Text>
         </View>
       </Pressable>
 
@@ -144,7 +153,7 @@ export function ProtectedMediaBubble(props: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   bubble: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -155,15 +164,13 @@ const styles = StyleSheet.create({
     maxWidth: 300,
     minHeight: 56,
   },
-  mine: { backgroundColor: C.accent, alignSelf: 'flex-end' },
-  theirs: { backgroundColor: C.field, alignSelf: 'flex-start' },
-  // A finished (opened, expired or deleted) photo is shown quieter by muting the bubble's colour, not by fading the
-  // whole bubble: opacity also faded the text, which dropped it below readable contrast (3.1-3.9:1; these are 5.0+).
-  closedMine: { backgroundColor: '#46598F' },
-  closedTheirs: { backgroundColor: '#E9ECF3' },
+  mine: { backgroundColor: c.outgoing, alignSelf: 'flex-end' },
+  theirs: { backgroundColor: c.surface, alignSelf: 'flex-start' },
+  // A finished photo is shown quieter by outlining the card, not by fading it: opacity also faded the text, which
+  // dropped it below readable contrast (3.1-3.9:1 on the old blue).
+  closedMine: { backgroundColor: c.surface, borderWidth: 1.5, borderColor: c.outgoing },
+  closedTheirs: { backgroundColor: c.surface, borderWidth: 1, borderColor: c.line },
   icon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  iconMine: { backgroundColor: 'rgba(255,255,255,0.2)' },
-  iconTheirs: { backgroundColor: C.accent },
-  title: { fontSize: 15, fontWeight: '600', color: C.text },
-  sub: { fontSize: 13, color: C.muted, marginTop: 2 },
+  title: { fontSize: 15, fontWeight: '600' },
+  sub: { fontSize: 13, marginTop: 2 },
 });

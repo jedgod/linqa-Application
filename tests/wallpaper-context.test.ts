@@ -33,18 +33,20 @@ function mount(children: React.ReactElement[], withProvider = true) {
   return renderer;
 }
 
-test("nothing chosen: the wallpaper matches the phone and follows it live", () => {
-  globalThis.__colorScheme = "dark";
+test("nothing chosen: Classic Dark Doodle, whatever the phone's appearance is", () => {
   const { probe: p, element, fresh } = probe("ctx-user-1", "chat-a");
-  const renderer = mount([element]);
-  assert.deepEqual([p.latest!.wallpaper.id, p.latest!.explicit, p.latest!.dim], ["theme_01", false, 0]);
-
   globalThis.__colorScheme = "light";
-  act(() => { renderer.update(h(WallpaperProvider, null, fresh())); });
-  assert.equal(p.latest!.wallpaper.id, "theme_05", "light phone → Light Mode Original");
+  const renderer = mount([element]);
+  assert.deepEqual([p.latest!.wallpaper.id, p.latest!.explicit, p.latest!.dim], ["theme_01", false, 0], "a light phone does not give a light conversation");
+
   globalThis.__colorScheme = "dark";
   act(() => { renderer.update(h(WallpaperProvider, null, fresh())); });
   assert.equal(p.latest!.wallpaper.id, "theme_01");
+  globalThis.__colorScheme = "light";
+  act(() => { renderer.update(h(WallpaperProvider, null, fresh())); });
+  assert.equal(p.latest!.wallpaper.id, "theme_01", "flipping the phone's appearance changes nothing");
+  assert.ok(!p.renders.some((id) => id !== "theme_01"), "never rendered any other wallpaper");
+  globalThis.__colorScheme = "dark";
 });
 
 test("a default chosen in settings reaches a chat that is already open", () => {
@@ -87,14 +89,14 @@ test("a chat's own wallpaper wins in that chat only, and 'follow default' remove
   assert.equal(a.probe.latest!.wallpaper.id, "theme_11");
 });
 
-test("turning 'match system' back on clears the default so the phone decides again", () => {
+test("resetting the default returns to Classic Dark Doodle, even on a light phone", () => {
   globalThis.__colorScheme = "light";
   const a = probe("ctx-user-5", "chat-a");
   mount([a.element]);
   act(() => { a.probe.latest!.setDefault("theme_12"); });
   assert.equal(a.probe.latest!.wallpaper.id, "theme_12");
   act(() => { a.probe.latest!.setDefault(null); });
-  assert.deepEqual([a.probe.latest!.wallpaper.id, a.probe.latest!.explicit], ["theme_05", false]);
+  assert.deepEqual([a.probe.latest!.wallpaper.id, a.probe.latest!.explicit], ["theme_01", false]);
   globalThis.__colorScheme = "dark";
 });
 

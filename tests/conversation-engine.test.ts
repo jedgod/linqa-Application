@@ -75,11 +75,11 @@ test("themes: light and dark define every colour; the person can follow the phon
 });
 
 test("preferences fall back to the defaults for anything unreadable, including the older colour themes", () => {
-  assert.deepEqual({ ...DEFAULT_PREFS, features: [] }, { theme: "system", quiet: false, verified: false, features: [], background: "AUTO" });
+  assert.deepEqual({ ...DEFAULT_PREFS, features: [] }, { theme: "dark", quiet: false, verified: false, features: [], background: "AUTO" });
   assert.deepEqual(parsePrefs(null), DEFAULT_PREFS);
   assert.deepEqual(parsePrefs("not json"), DEFAULT_PREFS);
   assert.deepEqual(parsePrefs(JSON.stringify({ theme: "neon", quiet: "yes", verified: 1 })), DEFAULT_PREFS);
-  assert.deepEqual(parsePrefs(JSON.stringify({ theme: "midnight", quiet: true })), { ...DEFAULT_PREFS, theme: "system", quiet: true });
+  assert.deepEqual(parsePrefs(JSON.stringify({ theme: "midnight", quiet: true })), { ...DEFAULT_PREFS, theme: "dark", quiet: true });
   assert.deepEqual(parsePrefs(JSON.stringify({ theme: "dark", quiet: true, verified: true })), { ...DEFAULT_PREFS, theme: "dark", quiet: true, verified: true });
 });
 

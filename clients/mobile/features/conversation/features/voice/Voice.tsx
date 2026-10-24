@@ -5,12 +5,14 @@ import React, { useEffect, useRef, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import { PrepareInput } from "../../attachments/AttachmentService";
-import { palette as c, space } from "../../ui/tokens";
+import { palette as light, space } from "../../ui/tokens";
+import { Palette, useThemed } from "../../ui/ThreadPalette";
 
 const MAX_MS = 5 * 60_000;
 const BARS = 48;
 
 export function VoiceRecorder({ onSend, onCancel }: { onSend: (input: PrepareInput) => Promise<void>; onCancel: () => void }) {
+  const { c, styles } = useThemed(makeStyles);
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   const state = useAudioRecorderState(recorder, 100);
   const levels = useRef<number[]>([]);
@@ -91,7 +93,7 @@ export function VoiceRecorder({ onSend, onCancel }: { onSend: (input: PrepareInp
           <Text style={styles.mainText}>{paused ? "Resume" : "Pause"}</Text>
         </Pressable>
         <Pressable onPress={finish} disabled={busy} accessibilityRole="button" accessibilityLabel="Send voice message" style={[styles.side, styles.send]}>
-          <Text style={[styles.sideText, { color: "#fff" }]}>{busy ? "…" : "Send"}</Text>
+          <Text style={[styles.sideText, { color: c.onSecure }]}>{busy ? "…" : "Send"}</Text>
         </Pressable>
       </View>
     </View>
@@ -99,6 +101,7 @@ export function VoiceRecorder({ onSend, onCancel }: { onSend: (input: PrepareInp
 }
 
 export function VoicePlayer({ path, durationMs, waveform, outgoing }: { path: string; durationMs?: number; waveform?: number[]; outgoing?: boolean }) {
+  const { c, styles } = useThemed(makeStyles);
   const player = useAudioPlayer(path);
   const status = useAudioPlayerStatus(player);
   const total = (status.duration || (durationMs ?? 0) / 1000) * 1000;
@@ -135,6 +138,7 @@ export function VoicePlayer({ path, durationMs, waveform, outgoing }: { path: st
 }
 
 export function Waveform({ values, progress, height, tint }: { values: number[]; progress: number; height: number; tint?: string }) {
+  const { c, styles } = useThemed(makeStyles);
   return (
     <View style={[styles.wave, { height }]} accessibilityElementsHidden>
       {values.map((v, i) => (
@@ -161,7 +165,7 @@ const fmt = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   rec: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.xl, padding: space.xl, backgroundColor: c.surface },
   status: { flexDirection: "row", alignItems: "center", gap: space.s },
   dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: c.danger },
@@ -177,7 +181,7 @@ const styles = StyleSheet.create({
   wave: { flexDirection: "row", alignItems: "center", gap: 2, alignSelf: "stretch" },
   player: { flexDirection: "row", alignItems: "center", gap: 10, minWidth: 230 },
   play: { width: 40, height: 40, borderRadius: 20, backgroundColor: c.secure, alignItems: "center", justifyContent: "center" },
-  playText: { color: "#fff", fontSize: 14 },
+  playText: { color: c.onSecure, fontSize: 14 },
   dur: { fontSize: 12, color: c.muted, fontVariant: ["tabular-nums"] },
   rate: { minWidth: 36, height: 28, borderRadius: 14, backgroundColor: c.bg, alignItems: "center", justifyContent: "center" },
   rateText: { fontSize: 12, fontWeight: "600", color: c.ink },

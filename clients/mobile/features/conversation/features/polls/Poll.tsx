@@ -3,7 +3,8 @@ import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from
 import { ContentMessage, PollContent } from "../../content/types";
 import { newId } from "../../content/codec";
 import { nextVote, pollStatus, tallyPoll } from "./pollModel";
-import { palette as c, space } from "../../ui/tokens";
+import { palette as light, space } from "../../ui/tokens";
+import { Palette, useThemed } from "../../ui/ThreadPalette";
 import { FormShell, Segmented } from "../../ui/Form";
 
 // --- composer ---------------------------------------------------------------
@@ -15,6 +16,7 @@ const CLOSE_OPTIONS = [
 ];
 
 export function PollComposer({ onSend, onCancel }: { onSend: (p: PollContent) => Promise<void>; onCancel: () => void }) {
+  const { c, styles } = useThemed(makeStyles);
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState(["", ""]);
   const [multi, setMulti] = useState(false);
@@ -99,6 +101,7 @@ interface CardProps {
 }
 
 export function PollCard({ poll, messages, selfId, peerName, nameOf, outgoing, onVote }: CardProps) {
+  const { c, styles } = useThemed(makeStyles);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     // Flip to "Closed" at the closing time even if no new message arrives.
@@ -145,6 +148,7 @@ export function PollCard({ poll, messages, selfId, peerName, nameOf, outgoing, o
 // --- shared bits ---------------------------------------------------------------
 
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  const { c, styles } = useThemed(makeStyles);
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
@@ -154,6 +158,7 @@ export function Field({ label, children }: { label: string; children: React.Reac
 }
 
 export function ToggleRow({ label, hint, value, onChange }: { label: string; hint?: string; value: boolean; onChange: (v: boolean) => void }) {
+  const { c, styles } = useThemed(makeStyles);
   return (
     <View style={styles.toggle}>
       <View style={{ flex: 1 }}>
@@ -165,7 +170,7 @@ export function ToggleRow({ label, hint, value, onChange }: { label: string; hin
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   form: { padding: space.l, gap: space.m },
   field: { backgroundColor: c.surface, borderRadius: 14, paddingHorizontal: space.l, paddingTop: space.s, paddingBottom: space.xs },
   label: { fontSize: 12, fontWeight: "600", color: c.muted },
@@ -190,7 +195,7 @@ const styles = StyleSheet.create({
   opt: { minHeight: 44, borderRadius: 10, borderWidth: 1.5, borderColor: c.line, flexDirection: "row", alignItems: "center", paddingHorizontal: 12, overflow: "hidden" },
   optMine: { borderColor: c.secure },
   bar: { position: "absolute", left: 0, top: 0, bottom: 0, backgroundColor: c.bg },
-  barMine: { backgroundColor: "#CFE3DB" },
+  barMine: { backgroundColor: c.secureTint },
   optLabel: { flex: 1, fontSize: 14, color: c.ink, paddingVertical: 8 },
   optCount: { fontSize: 13, fontWeight: "600", color: c.ink, marginLeft: space.s },
   status: { fontSize: 12, color: c.muted },

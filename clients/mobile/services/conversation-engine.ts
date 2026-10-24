@@ -22,7 +22,9 @@ export type Theme = {
 
 export const THEMES: Record<ThemeName, Theme> = {
   light: { background: "#ECEEF1", surface: "#FFFFFF", ink: "#111615", muted: "#667078", accent: "#2E7D4F", onAccent: "#FFFFFF", outgoing: "#195D50", onOutgoing: "#F4F8F9", incoming: "#FFFFFF", highlight: "#DDEFE3", line: "#D8DEE3", secure: "#2E7D4F", sealed: "#7A8B99", warn: "#A8641A", warnSurface: "#FBF1E3", danger: "#D92D20" },
-  dark: { background: "#12181D", surface: "#1B242B", ink: "#E6ECF1", muted: "#93A3B1", accent: "#4FB37A", onAccent: "#0E1A13", outgoing: "#1F6B58", onOutgoing: "#F4F8F9", incoming: "#25313A", highlight: "#21402F", line: "#2C3A46", secure: "#5FB39A", sealed: "#7F91A0", warn: "#E0A458", warnSurface: "#2C2418", danger: "#F26B60" }
+  // The approved Linqa dark palette (also the Chats list): background #121214, cards and incoming bubbles #22252B, outgoing #087F79,
+  // primary text #FFFFFF, secondary text #B9C1CA, dividers #34383F. Every text pair is at least WCAG AA (tests/chat-wallpapers.test.ts).
+  dark: { background: "#121214", surface: "#22252B", ink: "#FFFFFF", muted: "#B9C1CA", accent: "#2EC4B6", onAccent: "#04201F", outgoing: "#087F79", onOutgoing: "#FFFFFF", incoming: "#22252B", highlight: "#1E3A38", line: "#34383F", secure: "#5FD3B3", sealed: "#9AA5B1", warn: "#E0A458", warnSurface: "#2C2418", danger: "#FF8A80" }
 };
 export const THEME_CHOICES: ThemeChoice[] = ["system", "light", "dark"];
 export const isThemeChoice = (value: unknown): value is ThemeChoice => value === "system" || value === "light" || value === "dark";
@@ -174,7 +176,8 @@ export function conversationError(code: string | undefined): string {
  * marking the safety number as checked; `features` are the composer actions this conversation shows; `background` is the chat backdrop.
  */
 export type ConversationPrefs = { theme: ThemeChoice; quiet: boolean; verified: boolean; features: ThreadAction[]; background: ChatBackground };
-export const DEFAULT_PREFS: ConversationPrefs = { theme: "system", quiet: false, verified: false, features: ALL_ACTIONS.filter(id => id !== "AI_IMAGE"), background: "AUTO" };
+// Dark by default so a conversation never flips to light just because the phone is in light mode; Light and System stay available per conversation.
+export const DEFAULT_PREFS: ConversationPrefs = { theme: "dark", quiet: false, verified: false, features: ALL_ACTIONS.filter(id => id !== "AI_IMAGE"), background: "AUTO" };
 
 /** Reads stored preferences; anything unreadable or unknown (including the older colour themes) falls back to the defaults. */
 export function parsePrefs(raw: string | null | undefined): ConversationPrefs {

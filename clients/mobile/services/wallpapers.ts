@@ -28,7 +28,8 @@ export const DEFAULT_WALLPAPER_ID = "theme_01";
 
 export const WALLPAPERS: readonly Wallpaper[] = [
   // Patterns & Doodles
-  { id: "theme_01", name: "Classic Dark Doodle", category: "Patterns & Doodles", bgColors: ["#0B141A"], hasDoodle: true, accentColor: "#005C4B", isDark: true },
+  // The built-in default is the approved Linqa dark design: background #121214, outgoing bubbles #087F79 (white text 4.86:1).
+  { id: "theme_01", name: "Classic Dark Doodle", category: "Patterns & Doodles", bgColors: ["#121214"], hasDoodle: true, accentColor: "#087F79", isDark: true },
   { id: "theme_02", name: "Vintage Lavender", category: "Patterns & Doodles", bgColors: ["#2E2538"], hasDoodle: true, accentColor: "#6B4294", isDark: true },
   { id: "theme_03", name: "Sage Garden", category: "Patterns & Doodles", bgColors: ["#1E2C24"], hasDoodle: true, accentColor: "#2B5C3F", isDark: true },
   { id: "theme_04", name: "Crimson Sketch", category: "Patterns & Doodles", bgColors: ["#2C1414"], hasDoodle: true, accentColor: "#7C2D12", isDark: true },
@@ -85,26 +86,15 @@ export function getWallpaper(id: string | null | undefined): Wallpaper {
   return WALLPAPERS.find((w) => w.id === id) ?? WALLPAPERS.find((w) => w.id === DEFAULT_WALLPAPER_ID)!;
 }
 
-/** What the wallpaper becomes when nothing has been chosen and the phone is in light appearance (dark uses the built-in default). */
-export const LIGHT_SYSTEM_WALLPAPER_ID = "theme_05";
-
-/** The wallpaper that matches the phone's appearance. Unknown or missing appearance counts as dark, the built-in default. */
-export function systemWallpaperId(scheme: string | null | undefined): string {
-  return scheme === "light" ? LIGHT_SYSTEM_WALLPAPER_ID : DEFAULT_WALLPAPER_ID;
-}
-
 /**
- * This chat's own choice wins, then the person's default. With neither, the wallpaper matches the phone's light or dark
- * appearance (Light Mode Original, or Classic Dark Doodle) and follows it live. `explicit` is false only in that last case.
+ * This chat's own choice wins, then the person's default, then the built-in default (Classic Dark Doodle). The phone's
+ * light/dark setting is deliberately ignored: a conversation must not switch to light just because the phone did.
+ * `explicit` is false only for the built-in fallback.
  */
-export function resolveWallpaper(
-  chatId: string | null | undefined,
-  defaultId: string | null | undefined,
-  systemScheme?: string | null
-): { wallpaper: Wallpaper; explicit: boolean } {
+export function resolveWallpaper(chatId: string | null | undefined, defaultId: string | null | undefined): { wallpaper: Wallpaper; explicit: boolean } {
   if (isWallpaperId(chatId)) return { wallpaper: getWallpaper(chatId), explicit: true };
   if (isWallpaperId(defaultId)) return { wallpaper: getWallpaper(defaultId), explicit: true };
-  return { wallpaper: getWallpaper(systemWallpaperId(systemScheme)), explicit: false };
+  return { wallpaper: getWallpaper(DEFAULT_WALLPAPER_ID), explicit: false };
 }
 
 const channel = (v: number) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };

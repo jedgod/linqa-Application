@@ -10,9 +10,11 @@ import Svg, { Circle, Path, Pattern, Rect, Defs } from "react-native-svg";
 import { LocationContent } from "../../content/types";
 import { FormShell } from "../../ui/Form";
 import { Field, ToggleRow } from "../polls/Poll";
-import { palette as c, space } from "../../ui/tokens";
+import { palette as light, space } from "../../ui/tokens";
+import { Palette, useThemed } from "../../ui/ThreadPalette";
 
 export function LocationComposer({ onSend, onCancel }: { onSend: (l: LocationContent) => Promise<void>; onCancel: () => void }) {
+  const { c, styles } = useThemed(makeStyles);
   const [pos, setPos] = useState<ExpoLocation.LocationObject | null>(null);
   const [address, setAddress] = useState<string | undefined>();
   const [label, setLabel] = useState("");
@@ -90,6 +92,7 @@ export function LocationComposer({ onSend, onCancel }: { onSend: (l: LocationCon
 }
 
 export function LocationCard({ loc, outgoing }: { loc: LocationContent; outgoing: boolean }) {
+  const { c, styles } = useThemed(makeStyles);
   const open = () => {
     const q = encodeURIComponent(loc.label ?? loc.address ?? "Shared location");
     const url =
@@ -132,7 +135,7 @@ function MapPreview({ height }: { height: number }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   form: { padding: space.l, gap: space.m },
   loading: { height: 180, alignItems: "center", justifyContent: "center", gap: space.s, backgroundColor: c.surface, borderRadius: 14 },
   coords: { fontSize: 14, color: c.ink },

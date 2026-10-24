@@ -28,6 +28,7 @@ import { radius, space, type } from "./theme";
 import { useConversation } from "./useConversation";
 import { useProductionFeatures } from "./useProductionFeatures";
 import { WallpaperBackground } from "./WallpaperBackground";
+import { ThreadPaletteProvider } from "../../features/conversation/ui/ThreadPalette";
 import { WallpaperPicker } from "./WallpaperPicker";
 import type { WallpaperState } from "./useWallpaper";
 import { wallpaperTheme } from "../../services/wallpapers";
@@ -109,6 +110,8 @@ export function ConversationScreen(props: ConversationScreenProps) {
   const wp = props.wallpaper;
   const showWallpaper = Boolean(wp) && (wp!.explicit || prefs.background === "AUTO");
   const t = view === "chat" ? (showWallpaper ? wallpaperTheme(wp!.wallpaper, wp!.dim) : chatTheme(base, prefs.background)) : base;
+  // The in-thread cards (polls, events, files, call notes...) draw with the thread's current theme, whichever page of the conversation is showing.
+  const themed = (node: React.ReactElement) => <ThreadPaletteProvider theme={t}>{node}</ThreadPaletteProvider>;
   const [addOpen, setAddOpen] = useState(false);
   const [startDecision, setStartDecision] = useState(false);
   const [composeKind, setComposeKind] = useState<"EVENT" | "MEETING">("EVENT");
@@ -208,9 +211,9 @@ export function ConversationScreen(props: ConversationScreenProps) {
   const noticeEl = props.notice ? <Text accessibilityRole="alert" style={[type.meta, styles.notice, { backgroundColor: t.highlight, color: t.ink }]}>{props.notice}</Text> : null;
   const statusBar = <StatusBar style={t.ink === THEMES.dark.ink ? "light" : "dark"} />;
 
-  if (view === "share") return <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}{noticeEl}<SharedAttachmentForm key={scopeKey + shareKind} kind={shareKind} theme={t} peerFirstName={firstName} onSend={create} onBack={() => setView("chat")} /></SafeAreaView>;
+  if (view === "share") return themed(<SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}{noticeEl}<SharedAttachmentForm key={scopeKey + shareKind} kind={shareKind} theme={t} peerFirstName={firstName} onSend={create} onBack={() => setView("chat")} /></SafeAreaView>);
   if (view === "compose") {
-    return (
+    return themed(
       <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}
         {noticeEl}
         <CardFormView theme={t} kind={composeKind} peerFirstName={firstName} onSend={create} onBack={() => setView("chat")} />
@@ -218,7 +221,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
     );
   }
   if (view === "decisions") {
-    return (
+    return themed(
       <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}
         {noticeEl}
         <DecisionsView theme={t} peerName={peer.displayName} peerFirstName={firstName} live={live && !blocked} decisions={decisions} onVote={vote} onCreate={create} onBack={() => setView("chat")} startCreating={startDecision} />
@@ -226,7 +229,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
     );
   }
   if (view === "verify") {
-    return (
+    return themed(
       <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}
         {noticeEl}
         <SafetyNumberView theme={t} peerName={peer.displayName} peerFirstName={firstName} numbers={props.safetyNumber} verified={prefs.verified} onMarkVerified={() => props.onPrefsChange({ ...prefs, verified: true })} onBack={() => setView("settings")} />
@@ -234,14 +237,14 @@ export function ConversationScreen(props: ConversationScreenProps) {
     );
   }
   if (view === "wallpaper" && wp) {
-    return (
+    return themed(
       <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}
         <WallpaperPicker theme={t} state={wp} scope="chat" chatName={firstName} onBack={() => setView("settings")} />
       </SafeAreaView>
     );
   }
   if (view === "settings") {
-    return (
+    return themed(
       <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}
         {noticeEl}
         <SettingsView theme={t} peerName={peer.displayName} peerId={peer.id} peerFirstName={firstName} gate={c.gateState} prefs={prefs} featureSupport={features.featureSupport} blocked={Boolean(blocked)} pinned={props.pinned} disappearAfterSeconds={props.disappearAfterSeconds} onPinnedChange={props.onPinnedChange} onDisappearChange={props.onDisappearChange} onChange={props.onPrefsChange} onVerify={() => setView("verify")} onBlock={confirmBlock} onUnblock={props.onUnblock} onAskAi={props.onAskAi && live ? askAi : undefined} chat={props.chatActions} wallpaper={wp?.wallpaper} onOpenWallpaper={wp ? () => setView("wallpaper") : undefined} onBack={() => { setView("chat"); if (returnToShare.current) { returnToShare.current = false; features.reopen(); } }} />
@@ -249,7 +252,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
     );
   }
 
-  return (
+  return themed(
     <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>
       {statusBar}
       <ConversationHeader peer={peer} gate={c.gateState} theme={t} blocked={Boolean(blocked)} onBack={props.onBack} onOpenSettings={() => { returnToShare.current = false; setView("settings"); }} onSearch={() => { setSearchOpen(true); setSelecting(false); }} onCall={props.onCall} />

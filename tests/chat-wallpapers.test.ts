@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  DEFAULT_WALLPAPER_ID, DIM_STEPS, LIGHT_SYSTEM_WALLPAPER_ID, WALLPAPERS, WALLPAPER_CATEGORIES, contrastRatio, dimmed, getWallpaper, isWallpaperId, parseDim, resolveWallpaper, systemWallpaperId, wallpaperTheme
+  DEFAULT_WALLPAPER_ID, DIM_STEPS, WALLPAPERS, WALLPAPER_CATEGORIES, contrastRatio, dimmed, getWallpaper, isWallpaperId, parseDim, resolveWallpaper, wallpaperTheme
 } from "../clients/mobile/services/wallpapers.ts";
+import { THEMES, DEFAULT_PREFS } from "../clients/mobile/services/conversation-engine.ts";
 import { createWallpaperStore, type KeyValueStore } from "../clients/mobile/services/wallpaper-store.ts";
 
 const memory = (): KeyValueStore & { data: Map<string, string> } => {
@@ -30,28 +31,20 @@ test("Classic Dark Doodle is the built-in default and the fallback for anything 
   assert.equal(isWallpaperId(30), false);
 });
 
-test("a chat's own wallpaper wins over the person's default, which wins over matching the phone", () => {
-  assert.equal(resolveWallpaper("theme_20", "theme_12", "light").wallpaper.id, "theme_20");
-  assert.equal(resolveWallpaper("bogus", "theme_12", "dark").wallpaper.id, "theme_12"); // an unreadable per-chat value falls through
-  const picked = resolveWallpaper(null, "theme_12", "light");
-  assert.deepEqual([picked.wallpaper.id, picked.explicit], ["theme_12", true], "a chosen default ignores the phone's appearance");
+test("a chat's own wallpaper wins over the person's default, which wins over the built-in default", () => {
+  assert.equal(resolveWallpaper("theme_20", "theme_12").wallpaper.id, "theme_20");
+  assert.equal(resolveWallpaper("bogus", "theme_12").wallpaper.id, "theme_12"); // an unreadable per-chat value falls through
+  const picked = resolveWallpaper(null, "theme_12");
+  assert.deepEqual([picked.wallpaper.id, picked.explicit], ["theme_12", true]);
+  const builtIn = resolveWallpaper(null, null);
+  assert.deepEqual([builtIn.wallpaper.id, builtIn.explicit], [DEFAULT_WALLPAPER_ID, false]);
 });
 
-test("with nothing chosen the wallpaper matches the phone: Classic Dark Doodle in dark, Light Mode Original in light", () => {
-  for (const [scheme, id] of [["dark", "theme_01"], ["light", "theme_05"], [null, "theme_01"], [undefined, "theme_01"], ["unspecified", "theme_01"]] as const) {
-    const r = resolveWallpaper(null, null, scheme);
-    assert.deepEqual([r.wallpaper.id, r.explicit], [id, false], String(scheme));
-  }
-  assert.equal(resolveWallpaper(null, null).wallpaper.name, "Classic Dark Doodle", "no appearance info falls back to the built-in default");
-  assert.equal(systemWallpaperId("light"), LIGHT_SYSTEM_WALLPAPER_ID);
-  assert.equal(getWallpaper(LIGHT_SYSTEM_WALLPAPER_ID).name, "Light Mode Original");
-  assert.equal(getWallpaper(LIGHT_SYSTEM_WALLPAPER_ID).isDark, false);
-});
-
-test("flipping the phone's appearance flips the wallpaper only while nothing is chosen", () => {
-  assert.notEqual(resolveWallpaper(null, null, "dark").wallpaper.id, resolveWallpaper(null, null, "light").wallpaper.id);
-  assert.equal(resolveWallpaper(null, "theme_11", "dark").wallpaper.id, resolveWallpaper(null, "theme_11", "light").wallpaper.id);
-  assert.equal(resolveWallpaper("theme_20", null, "dark").wallpaper.id, resolveWallpaper("theme_20", null, "light").wallpaper.id);
+test("the phone's light/dark setting never changes which wallpaper a conversation gets", () => {
+  // resolveWallpaper takes no appearance input at all: a conversation cannot flip to light because the phone did.
+  assert.equal(resolveWallpaper.length, 2);
+  assert.equal(resolveWallpaper(null, null).wallpaper.name, "Classic Dark Doodle");
+  assert.equal(getWallpaper(DEFAULT_WALLPAPER_ID).isDark, true);
 });
 
 test("message text stays readable on every wallpaper's own bubbles (WCAG AA, 4.5:1)", () => {
@@ -150,5 +143,59 @@ test("text drawn straight onto the backdrop stays readable at every wallpaper an
     const ratio = contrastRatio(t.ink, t.background);
     if (ratio < 4.5) failures.push(`${w.name} @${dim}: ${ratio.toFixed(2)}`);
   }
+  assert.deepEqual(failures, []);
+});
+
+// ---- The approved dark design (Chats list and conversation thread) ----
+test("the approved dark palette is exactly what was specified", () => {
+  const d = THEMES.dark;
+  assert.deepEqual(
+    [d.background, d.surface, d.incoming, d.outgoing, d.ink, d.muted, d.line],
+    ["#121214", "#22252B", "#22252B", "#087F79", "#FFFFFF", "#B9C1CA", "#34383F"]
+  );
+});
+
+test("conversations default to dark, and Classic Dark Doodle is the approved background and outgoing colour", () => {
+  assert.equal(DEFAULT_PREFS.theme, "dark");
+  const w = getWallpaper(DEFAULT_WALLPAPER_ID);
+  assert.deepEqual([w.bgColors[0], w.accentColor], ["#121214", "#087F79"]);
+  const t = wallpaperTheme(w);
+  assert.deepEqual([t.background, t.outgoing, t.incoming, t.ink, t.muted, t.line], ["#121214", "#087F79", "#22252B", "#FFFFFF", "#B9C1CA", "#34383F"]);
+});
+
+test("every text pairing in the approved dark palette meets WCAG AA (4.5:1)", () => {
+  const d = THEMES.dark;
+  const pairs: Array<[string, string, string]> = [
+    ["primary text on background", d.ink, d.background],
+    ["primary text on cards", d.ink, d.surface],
+    ["primary text on incoming bubbles", d.ink, d.incoming],
+    ["secondary text on background", d.muted, d.background],
+    ["secondary text on cards (timestamps)", d.muted, d.surface],
+    ["text on outgoing bubbles", d.onOutgoing, d.outgoing],
+    ["accent on background", d.accent, d.background],
+    ["accent on cards", d.accent, d.surface],
+    ["text on accent", d.onAccent, d.accent],
+    ["secure/protected indicator on cards", d.secure, d.surface],
+    ["sealed indicator on background", d.sealed, d.background],
+    ["warning on its surface", d.warn, d.warnSurface],
+    ["danger on cards", d.danger, d.surface],
+    ["primary text on highlight", d.ink, d.highlight]
+  ];
+  const failures = pairs.filter(([, fg, bg]) => contrastRatio(fg, bg) < 4.5).map(([name, fg, bg]) => `${name}: ${contrastRatio(fg, bg).toFixed(2)}`);
+  assert.deepEqual(failures, []);
+});
+
+test("the in-thread card palette keeps its on-colour text readable in the dark thread (secure and danger fills)", async () => {
+  const { paletteFromTheme } = await import("../clients/mobile/features/conversation/ui/ThreadPalette.tsx");
+  const p = paletteFromTheme(THEMES.dark);
+  const pairs: Array<[string, string, string]> = [
+    ["text on secure fill", p.onSecure, p.secure],
+    ["text on danger fill", p.onDanger, p.danger],
+    ["text on outgoing", p.outgoingInk, p.outgoing],
+    ["ink on card", p.ink, p.surface],
+    ["muted on card", p.muted, p.surface],
+    ["ink on secure tint (own poll vote bar)", p.ink, p.secureTint]
+  ];
+  const failures = pairs.filter(([, fg, bg]) => contrastRatio(fg, bg) < 4.5).map(([name, fg, bg]) => `${name}: ${contrastRatio(fg, bg).toFixed(2)}`);
   assert.deepEqual(failures, []);
 });

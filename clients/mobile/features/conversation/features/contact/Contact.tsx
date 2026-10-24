@@ -7,9 +7,11 @@ import * as Contacts from "expo-contacts/legacy";
 import { ContactContent } from "../../content/types";
 import { FormShell } from "../../ui/Form";
 import { withSystemUi } from "../../../../services/system-ui-guard";
-import { palette as c, space } from "../../ui/tokens";
+import { palette as light, space } from "../../ui/tokens";
+import { Palette, useThemed } from "../../ui/ThreadPalette";
 
 export function ContactComposer({ onSend, onCancel }: { onSend: (k: ContactContent) => Promise<void>; onCancel: () => void }) {
+  const { c, styles } = useThemed(makeStyles);
   const [contact, setContact] = useState<Contacts.Contact | null>(null);
   const [include, setInclude] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
@@ -95,6 +97,7 @@ export function ContactComposer({ onSend, onCancel }: { onSend: (k: ContactConte
 }
 
 export function ContactCard({ contact, outgoing, onMessage }: { contact: ContactContent; outgoing: boolean; onMessage?: () => void }) {
+  const { c, styles } = useThemed(makeStyles);
   const save = async () => {
     const perm = await Contacts.requestPermissionsAsync();
     if (!perm.granted) return Alert.alert("Contacts access is off", "Allow access in Settings to save this contact.");
@@ -135,6 +138,7 @@ export function ContactCard({ contact, outgoing, onMessage }: { contact: Contact
 }
 
 function Avatar({ name, size }: { name: string; size: number }) {
+  const { c, styles } = useThemed(makeStyles);
   const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join("");
   return (
     <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: "#DCD5E6", alignItems: "center", justifyContent: "center" }}>
@@ -143,7 +147,7 @@ function Avatar({ name, size }: { name: string; size: number }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   form: { padding: space.l, gap: space.m },
   head: { flexDirection: "row", alignItems: "center", gap: space.m },
   name: { fontSize: 20, fontWeight: "600", color: c.ink },
@@ -154,7 +158,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", gap: space.m, minHeight: 56, paddingHorizontal: space.s },
   box: { width: 24, height: 24, borderRadius: 6, borderWidth: 2, borderColor: "#8796A4", alignItems: "center", justifyContent: "center" },
   boxOn: { backgroundColor: c.secure, borderColor: c.secure },
-  tick: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  tick: { color: c.onSecure, fontWeight: "700", fontSize: 14 },
   value: { fontSize: 16, color: c.ink },
   bubble: { width: 260, borderRadius: 18, padding: 12, gap: 10, backgroundColor: c.surface },
   bubbleIn: { borderBottomLeftRadius: 6 },

@@ -1,17 +1,21 @@
 import { StyleSheet } from "react-native";
 import { fonts } from "../../theme/tokens";
 
-/** Chats runs on the dark surface from the approved design. */
+/**
+ * Chats runs on the approved dark palette (shared with the conversation thread, see THEMES.dark): background #121214,
+ * cards #22252B, dividers #34383F, primary text #FFFFFF, secondary text #B9C1CA (8:1 or better on the card colour).
+ * The accent colours below are status/brand colours and are unchanged.
+ */
 export const C = {
-  bg: "#031824",
-  card: "#082335",
-  card2: "#0A2940",
-  border: "#14536A",
-  divider: "#0F3548",
+  bg: "#121214",
+  card: "#22252B",
+  card2: "#2B2F36",
+  border: "#34383F",
+  divider: "#34383F",
   teal: "#13D7B0",
   cyan: "#47C9E8",
-  white: "#F7FAFC",
-  muted: "#91A7B8",
+  white: "#FFFFFF",
+  muted: "#B9C1CA",
   blue: "#4586FF",
   purple: "#BB54EA",
   red: "#FF5D67"
@@ -199,7 +203,7 @@ export const s = StyleSheet.create({
     height: 22,
     paddingHorizontal: 5,
     borderRadius: 11,
-    backgroundColor: "#173D52",
+    backgroundColor: "#2B2F36",
     alignItems: "center",
     justifyContent: "center"
   },

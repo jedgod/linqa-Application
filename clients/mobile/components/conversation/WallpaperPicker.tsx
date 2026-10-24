@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Switch, Text, View, useColorScheme } from "react-native";
+import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import type { Theme } from "../../services/conversation-engine";
 import {
-  DIM_STEPS, WALLPAPERS, WALLPAPER_CATEGORIES, getWallpaper, systemWallpaperId, wallpaperTheme, type Wallpaper, type WallpaperCategory
+  DEFAULT_WALLPAPER_ID, DIM_STEPS, WALLPAPERS, WALLPAPER_CATEGORIES, getWallpaper, wallpaperTheme, type Wallpaper, type WallpaperCategory
 } from "../../services/wallpapers";
 import { SubHeader } from "./SubHeader";
 import { WallpaperBackground } from "./WallpaperBackground";
@@ -23,8 +23,7 @@ export function WallpaperPicker({ theme: t, state, scope, chatName, onBack }: {
   chatName?: string;
   onBack: () => void;
 }) {
-  const systemScheme = useColorScheme();
-  const [draftId, setDraftId] = useState(scope === "chat" ? state.wallpaper.id : (state.defaultId ?? state.wallpaper.id));
+  const [draftId, setDraftId] = useState(scope === "chat" ? state.wallpaper.id : (state.defaultId ?? DEFAULT_WALLPAPER_ID));
   const [category, setCategory] = useState<WallpaperCategory>(getWallpaper(draftId).category);
   const [status, setStatus] = useState<{ text: string; bad?: boolean } | null>(null);
   const draft = getWallpaper(draftId);
@@ -48,21 +47,15 @@ export function WallpaperPicker({ theme: t, state, scope, chatName, onBack }: {
     return ok;
   }, `${draft.name} is now your default wallpaper.`);
   const followDefault = () => run(() => state.setForChat(null), "This chat now follows your default wallpaper.");
-  // On: no default is stored, so the wallpaper matches the phone (Light Mode Original or Classic Dark Doodle) and follows it live.
-  // Off: pin what is showing now as the default, so it stays put when the phone changes appearance.
-  const matchSystem = state.defaultId === null;
-  const toggleMatchSystem = (on: boolean) => run(() => {
-    const ok = on ? state.setDefault(null) : state.setDefault(state.wallpaper.id);
-    if (ok && on) setDraftId(systemWallpaperId(systemScheme));
-    return ok;
-  }, on ? "Your wallpaper now matches your phone's light or dark appearance." : `${state.wallpaper.name} is now your default wallpaper.`);
+  // Back to the built-in default (Classic Dark Doodle): clears the stored default. The phone's light/dark setting plays no part.
+  const resetDefault = () => run(() => { const ok = state.setDefault(null); if (ok) setDraftId(DEFAULT_WALLPAPER_ID); return ok; }, "Your default is back to Classic Dark Doodle.");
   // Dimming applies to every chat's wallpaper, so it saves as soon as it is chosen and the preview shows it live.
   const chooseDim = (level: number) => run(() => state.setDim(level), level === 0 ? "Dimming is off." : `Wallpaper dimmed ${Math.round(level * 100)}%.`);
 
   const card = ({ item }: { item: Wallpaper | { id: string; blank: true } }) => {
     if ("blank" in item) return <View style={styles.cardWrap} />;
     const selected = item.id === draftId;
-    const isDefault = item.id === (state.defaultId ?? systemWallpaperId(systemScheme));
+    const isDefault = item.id === (state.defaultId ?? DEFAULT_WALLPAPER_ID);
     return (
       <Pressable
         testID={`theme-tile-${item.id}`}
@@ -92,15 +85,6 @@ export function WallpaperPicker({ theme: t, state, scope, chatName, onBack }: {
         <View style={[styles.bubble, styles.outgoing, { backgroundColor: preview.outgoing }]}>
           <Text style={[type.body, { color: preview.onOutgoing }]}>This is how your chat will look.</Text>
         </View>
-      </View>
-      <View style={[styles.syncRow, { borderColor: t.line }]}>
-        <View style={{ flex: 1 }}>
-          <Text style={[type.body, { color: t.ink }]}>Match system appearance</Text>
-          <Text style={[type.meta, { color: t.muted }]}>
-            {matchSystem ? "Light Mode Original in light, Classic Dark Doodle in dark, until you pick one." : "Using your chosen default. Turn on to follow your phone again."}
-          </Text>
-        </View>
-        <Switch accessibilityLabel="Match system appearance" value={matchSystem} onValueChange={toggleMatchSystem} />
       </View>
       <Text style={[type.meta, styles.dimLabel, { color: t.muted }]}>Dimming (all your chats)</Text>
       <View style={styles.dimRow} accessibilityRole="radiogroup" accessibilityLabel="Wallpaper dimming">
@@ -158,6 +142,7 @@ export function WallpaperPicker({ theme: t, state, scope, chatName, onBack }: {
         ) : (
           <>
             {button("Set as default", makeDefault, true)}
+            {state.defaultId ? button("Reset to Classic Dark Doodle", resetDefault) : null}
           </>
         )}
       </View>
@@ -173,7 +158,6 @@ const styles = StyleSheet.create({
   bubble: { maxWidth: "78%", paddingHorizontal: space.m, paddingVertical: space.s, borderRadius: radius.bubble },
   incoming: { alignSelf: "flex-start" },
   outgoing: { alignSelf: "flex-end" },
-  syncRow: { flexDirection: "row", alignItems: "center", gap: space.m, borderWidth: 1, borderRadius: radius.bubble - 6, padding: space.m, marginBottom: space.m },
   dimLabel: { marginBottom: space.xs },
   dimRow: { flexDirection: "row", gap: space.s, marginBottom: space.m },
   dimStep: { flex: 1, minHeight: 36, borderWidth: 1, borderRadius: radius.control, alignItems: "center", justifyContent: "center" },
