@@ -110,6 +110,12 @@ jobs:
         working-directory: clients/mobile
         run: npm ci --ignore-scripts
       - run: npm test
+      # These six files (wallet custody, money flows, fee refunds, idempotency, invoice payment, modules) skip unless
+      # LINQA_WALLET_DISPOSABLE_TEST_DB=1, because they wipe wallet tables. The runner creates a uniquely named
+      # throwaway database on this service container, runs them serially, proves a migration replay leaves ledger
+      # postings unchanged, then drops the database. Without this step none of them ever ran in CI.
+      - name: Wallet, ledger and idempotency integration (disposable database)
+        run: npm run linqasend:test:wallet:db
       - name: Chat security boundary regressions
         run: npm run test:security:chat
       - name: Mobile key-protection regressions

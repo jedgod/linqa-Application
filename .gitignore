@@ -87,3 +87,6 @@ mapboxdashboard.txt
 !clients/mobile/modules/linqa-blinkcard/android/vendor-maven/com/linqa/vendor/
 clients/mobile/modules/linqa-blinkcard/android/vendor-maven/**/*.aar
 LinkaSend-pageCode/ScanCard/blinkcard-xamarin-main/
+
+# Local scratch space (throwaway databases, logs); never commit
+.tmp/
