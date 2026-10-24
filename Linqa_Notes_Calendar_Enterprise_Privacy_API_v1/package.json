@@ -1,0 +1,21 @@
+{
+  "name": "linqa-mobile-modules-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Notes, Calendar, Enterprise, and Privacy API modules for Linqa",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "migrate": "knex migrate:latest --knexfile knexfile.js",
+    "migrate:rollback": "knex migrate:rollback --knexfile knexfile.js",
+    "check": "node --check src/server.js && node --check migrations/001_initial.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "knex": "^3.1.0",
+    "pg": "^8.16.3",
+    "sqlite3": "^5.1.7"
+  }
+}
