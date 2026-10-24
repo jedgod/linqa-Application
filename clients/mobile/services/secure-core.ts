@@ -200,6 +200,13 @@ type Inner = { v: 1; c: string; s: string; t: string };
 export class SecureCoreMessaging implements SecureMessaging {
   /** Opening the same envelope twice is refused by the core as a replay, so what was opened stays here (memory only). */
   private readonly opened = new Map<string,{plaintext:string;ciphertext:string;senderUserId:string}>();
+  /**
+   * Opens that have started but not finished. `opened` is only filled when an open FINISHES, so without this a second caller
+   * arriving mid-open (the chat-list preview, or the thread's receiver being rebuilt a moment after mount) would reach the core
+   * with an envelope it is already opening, be refused as a replay, and show "Can't open this message
+   * (SECURE_CORE_AUTHENTICATION_FAILED)" for a message that is perfectly readable. Overlapping callers share one open instead.
+   */
+  private readonly opening = new Map<string,{promise:Promise<string>;ciphertext:string;senderUserId:string}>();
 
   constructor(private readonly deps: {
     bridge: CoreBridge; device: SecureCoreDevice; directory: PeerDirectory;
@@ -271,6 +278,21 @@ export class SecureCoreMessaging implements SecureMessaging {
       return known.plaintext;
     }
 
+    const running = this.opening.get(key);
+    if(running!==undefined){
+      if(running.ciphertext!==ciphertextBase64||running.senderUserId!==context.senderUserId)return fail("MESSAGE_CONTEXT_MISMATCH");
+      return running.promise;
+    }
+    // A failure is shared by the callers waiting on this open but never remembered: once it settles, a retry opens afresh.
+    const promise: Promise<string> = this.openUncached(ciphertextBase64, context, key).finally(() => {
+      if (this.opening.get(key)?.promise === promise) this.opening.delete(key);
+    });
+    this.opening.set(key,{promise,ciphertext:ciphertextBase64,senderUserId:context.senderUserId});
+    return promise;
+  }
+
+  /** The one real open: reaches the core, so it must run at most once per message at a time (see `opening`). */
+  private async openUncached(ciphertextBase64: string, context: { conversationId: string; senderUserId: string; messageId: string }, key: string): Promise<string> {
     await this.deps.device.ensure();
     const selfDevice = await this.deps.device.deviceId();
     const bundle = fromJsonB64<Bundle>(ciphertextBase64);

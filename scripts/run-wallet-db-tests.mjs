@@ -21,6 +21,10 @@ try{
     cwd:server,windowsHide:true,timeout:300000,maxBuffer:8000000,
     env:{...process.env,NODE_ENV:"test",DATABASE_URL:url.href,LINQA_WALLET_DISPOSABLE_TEST_DB:"1",LINQA_REQUIRE_DB_TESTS:"1"}
   });process.stdout.write(result.stdout);process.stderr.write(result.stderr);
+  // A zero exit is not proof the suites ran: vitest exits 0 when every test is skipped. Require real passes and no skips or todos.
+  const plain=result.stdout.replace(/\u001b\[[0-9;]*m/g,""); // vitest colours the counts
+  const summary=plain.match(/^\s*Tests\s.*$/m)?.[0]??"";
+  if(!/\b\d+ passed\b/.test(summary)||/\b(skipped|todo|failed)\b/.test(summary))throw Object.assign(new Error(`Wallet suites did not all execute: "${summary.trim()||"no test summary found"}"`),{code:"WALLET_SUITES_NOT_EXECUTED"});
   const walletRowsBefore=(await pool.query('SELECT count(*)::text AS count FROM linqasend_wallet_postings')).rows[0].count;
   const replayClient=await pool.connect();
   try{await migrate(replayClient,path.join(server,'src/db/migrations'),'wallet-migration-replay-test');}finally{replayClient.release();}
@@ -28,7 +32,7 @@ try{
   console.log('Wallet migration replay verified without changing postings.');
 }catch(error){
   if(error.stdout)process.stdout.write(error.stdout);if(error.stderr)process.stderr.write(error.stderr);
-  console.error("Disposable wallet database tests failed:",error.code??error.name);process.exitCode=1;
+  console.error("Disposable wallet database tests failed:",error.code??error.name,error.code&&error.message?"- "+error.message:"");process.exitCode=1;
 }finally{
   await pool?.end();if(created){await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);console.log("Disposable wallet test database removed.");}await admin.end();
 }

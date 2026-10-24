@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SecureCoreDevice, SecureCoreError, SecureCoreMessaging, base64ToBytes, bytesToBase64, text, utf8, type CoreBridge, type KeyPackageJson, type PeerDirectory, type SecretStore } from "../clients/mobile/services/secure-core.ts";
+import { clearAccountScopedState } from "../clients/mobile/services/account-scope.ts";
 
 // A stand-in for the native core that enforces the same rules the real one does (the real one is tested in
 // core/tests/native_bridge_contract.rs): an envelope opens only on the device it names, only with the sender's key, and once.
@@ -277,4 +278,115 @@ test("other people's key packages are fetched from the server and remembered for
   t += 61_000;
   await server.keyPackages(USER_B);
   assert.equal(hits, 2);
+});
+
+// ---- Overlapping opens (the intermittent SECURE_CORE_AUTHENTICATION_FAILED on cold start) ---------------------------------
+// The core refuses an envelope it has already opened, and the "already opened" memory is only filled when an open FINISHES. On a
+// cold start the thread's receiver is rebuilt shortly after mount (the outbox database finishes opening, which gives the
+// conversation service a new identity), so a second pass over the same messages starts while the first is still in flight.
+// Without in-flight sharing the second pass reaches the core, which rejects it as a replay and the thread shows
+// "Can't open this message (SECURE_CORE_AUTHENTICATION_FAILED)" for every message.
+
+test("opening the same message from several places at once opens it once and gives every caller the text", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const directory = await directoryOf([alice, bob]);
+  const sealed = await messaging(alice, directory).seal("hello", { conversationId: CONV, senderUserId: USER_A, clientMessageId: "66666666-6666-4666-8666-666666666666" });
+  const b = messaging(bob, directory);
+  const ctx = { conversationId: CONV, senderUserId: USER_A, messageId: "srv-9" };
+  const results = await Promise.all([b.open(sealed, ctx), b.open(sealed, ctx), b.open(sealed, ctx)]);
+  assert.deepEqual(results, ["hello", "hello", "hello"]);
+  assert.equal(bob.core.decrypts, 1, "the core is asked once; the rest share that answer");
+});
+
+test("a whole thread opened twice at once (receiver rebuilt mid-load) opens every message and reaches the core once each", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const directory = await directoryOf([alice, bob]);
+  const a = messaging(alice, directory);
+  const thread: Array<{ sealed: string; ctx: { conversationId: string; senderUserId: string; messageId: string }; text: string }> = [];
+  for (let i = 0; i < 12; i++) {
+    const textBody = `message ${i}`;
+    thread.push({ text: textBody, ctx: { conversationId: CONV, senderUserId: USER_A, messageId: `srv-t${i}` },
+      sealed: await a.seal(textBody, { conversationId: CONV, senderUserId: USER_A, clientMessageId: `77777777-7777-4777-8777-${String(i).padStart(12, "0")}` }) });
+  }
+  const b = messaging(bob, directory);
+  const pass = () => Promise.all(thread.map((m) => b.open(m.sealed, m.ctx)));
+  const [first, second] = await Promise.all([pass(), pass()]); // two overlapping passes over the same thread
+  assert.deepEqual(first, thread.map((m) => m.text));
+  assert.deepEqual(second, thread.map((m) => m.text));
+  assert.equal(bob.core.decrypts, thread.length);
+});
+
+test("a genuinely bad envelope still fails (sharing never turns a failure into a success), and a later retry is allowed", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const directory = await directoryOf([alice, bob]);
+  const sealed = await messaging(alice, directory).seal("ok", { conversationId: CONV, senderUserId: USER_A, clientMessageId: "88888888-8888-4888-8888-888888888888" });
+  const b = messaging(bob, directory);
+  const ctx = { conversationId: CONV, senderUserId: USER_A, messageId: "srv-11" };
+  // An envelope meant for another device fails for every overlapping caller...
+  const wrong = unb64(sealed); wrong.e = { "not-this-device": "x" };
+  const bad = b64(wrong);
+  const failures = await Promise.all([code(b.open(bad, ctx)), code(b.open(bad, ctx))]);
+  assert.deepEqual(failures, ["NOT_FOR_THIS_DEVICE", "NOT_FOR_THIS_DEVICE"]);
+  // ...and the failure is not remembered: the real envelope for the same message still opens afterwards.
+  assert.equal(await b.open(sealed, ctx), "ok");
+});
+
+test("overlapping opens of one message with different content are refused, not silently merged", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const directory = await directoryOf([alice, bob]);
+  const a = messaging(alice, directory);
+  const one = await a.seal("one", { conversationId: CONV, senderUserId: USER_A, clientMessageId: "99999999-9999-4999-8999-999999999991" });
+  const two = await a.seal("two", { conversationId: CONV, senderUserId: USER_A, clientMessageId: "99999999-9999-4999-8999-999999999992" });
+  const b = messaging(bob, directory);
+  const ctx = { conversationId: CONV, senderUserId: USER_A, messageId: "srv-12" };
+  const [x, y] = await Promise.all([code(b.open(one, ctx)), code(b.open(two, ctx))]);
+  assert.deepEqual([x, y].sort(), ["MESSAGE_CONTEXT_MISMATCH", "NO_ERROR"].sort());
+});
+
+// ---- Account switching while a message is opening ------------------------------------------------------------------------
+
+test("an open that finishes after the account scope changed is dropped for every waiting caller, and nothing is remembered", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const directory = await directoryOf([alice, bob]);
+  const sealed = await messaging(alice, directory).seal("private", { conversationId: CONV, senderUserId: USER_A, clientMessageId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+  const b = messaging(bob, directory);
+  const ctx = { conversationId: CONV, senderUserId: USER_A, messageId: "srv-sw" };
+
+  // Hold the native decrypt open, as a slow device does, so the switch lands while the open is in flight.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const realDecrypt = bob.core.decryptMessage.bind(bob.core);
+  bob.core.decryptMessage = async (req: string) => { await gate; return realDecrypt(req); };
+
+  const waiting = [code(b.open(sealed, ctx)), code(b.open(sealed, ctx))]; // two overlapping callers share the one open
+  await new Promise((r) => setTimeout(r, 10));
+  clearAccountScopedState();                                              // the account is switched away
+  release();
+  assert.deepEqual(await Promise.all(waiting), ["SECURE_CORE_UNAVAILABLE", "SECURE_CORE_UNAVAILABLE"], "no plaintext reaches either caller");
+
+  // Nothing was remembered either: the old messaging object cannot hand the text out later.
+  bob.core.decryptMessage = realDecrypt;
+  assert.equal(await code(b.open(sealed, ctx)), "SECURE_CORE_UNAVAILABLE");
+});
+
+test("another account's session never serves this account's opened messages", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const directory = await directoryOf([alice, bob]);
+  const sealed = await messaging(alice, directory).seal("for bob only", { conversationId: CONV, senderUserId: USER_A, clientMessageId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" });
+  const ctx = { conversationId: CONV, senderUserId: USER_A, messageId: "srv-iso" };
+  const bobs = messaging(bob, directory);
+  assert.equal(await bobs.open(sealed, ctx), "for bob only");
+
+  // A different account's messaging object (its own cache, its own core) is not helped by Bob's cache: it has to open the envelope
+  // itself, and an envelope that was not sealed for its device is refused.
+  const carol = phone("00000000-0000-4000-8000-0000000000d4", "10000000-0000-4000-8000-0000000000d4", 9);
+  const carols = messaging(carol, await directoryOf([alice, bob, carol]));
+  assert.equal(await code(carols.open(sealed, ctx)), "NOT_FOR_THIS_DEVICE");
+  assert.equal(carol.core.decrypts, 0, "the core is never even asked");
 });
