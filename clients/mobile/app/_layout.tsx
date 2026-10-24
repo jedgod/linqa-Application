@@ -10,6 +10,8 @@ import { LanguageBootstrap } from '../i18n/LanguagePicker';
 import { SecureCallHost } from "../components/calls/SecureCallHost";
 import { HistoryTransferHost } from "../components/HistoryTransferHost";
 import { useEffect, useState } from "react";
+import * as Font from "expo-font";
+import { Ionicons } from "@expo/vector-icons";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { ActivityIndicator, View } from "react-native";
@@ -31,10 +33,38 @@ import { createSessionRefresher } from "../services/session-refresh";
 import { useTheme } from "../theme/tokens";
 import { getApiBaseUrl } from "../config/api";
 import { AdaptiveNavigation } from "../components/AdaptiveNavigation";
+import { WallpaperProvider } from "../components/conversation/WallpaperContext";
 import { CallOverlay } from "../components/calls/CallOverlay";
 import { ScheduledCallToast } from "../components/calls/ScheduledCallToast";
 import { usePublishingSync } from "../hooks/usePublishingSync";
 import { startIncomingCallListener } from "../services/incoming-call-listener";
+
+/**
+ * Loads the icon font before anything paints, retrying a few times.
+ *
+ * Every <Ionicons> loads the font itself when it mounts. If that one request fails (a dev build fetches fonts from
+ * Metro, and a request that arrives while Metro is still warming up can come back empty: "Font file for ionicons is
+ * empty"), the icon silently stays blank for the rest of the session. That left the tab bar and Quick Actions without
+ * icons. Loading it here first, with retries, means icons mount only once the font is really available.
+ */
+function useIoniconsFont(): boolean {
+  const [ready, setReady] = useState(() => Font.isLoaded("ionicons"));
+  useEffect(() => {
+    if (ready) return;
+    let live = true;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => {
+      Font.loadAsync(Ionicons.font).then(
+        () => { if (live) setReady(true); },
+        () => { if (live && attempt < 5) timer = setTimeout(load, 700 * ++attempt); }
+      );
+    };
+    load();
+    return () => { live = false; if (timer) clearTimeout(timer); };
+  }, [ready]);
+  return ready;
+}
 
 const sessionStore = new AccountSessionStore(new AccountSecureStorage());
 const API_BASE_URL = getApiBaseUrl();
@@ -85,18 +115,20 @@ export default function RootLayout() {
     PlusJakartaSans_800ExtraBold
   });
 
+  const iconsReady = useIoniconsFont();
+
   useEffect(() => {
     // Remote development assets or a stalled font loader must not hold the
     // entire app on an empty screen. Screens can use system fonts meanwhile.
-    if (fontsReady || fontError) return;
+    if ((fontsReady && iconsReady) || fontError) return;
     const timer = setTimeout(() => setFontWaitExpired(true), 8000);
     return () => clearTimeout(timer);
-  }, [fontsReady, fontError]);
+  }, [fontsReady, iconsReady, fontError]);
 
   // Holding the first paint avoids the flash where every screen renders in the
   // system face and then reflows once the real one arrives -- on Home that
   // shifts the whole layout, because the type is what sizes the cards.
-  if (!fontsReady && !fontError && !fontWaitExpired) {
+  if ((!fontsReady || !iconsReady) && !fontError && !fontWaitExpired) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator color={colors.accent} />
@@ -112,6 +144,7 @@ export default function RootLayout() {
         <AccountSessionBridge />
         <CallHost />
         <StatusBar style="auto" />
+        <WallpaperProvider>
         <AdaptiveNavigation>
         <Stack screenOptions={{ headerShown: false, animation: "slide_from_right" }}>
         <Stack.Screen name="welcome" />
@@ -215,6 +248,7 @@ export default function RootLayout() {
         <Stack.Screen name="onboarding/security-review" />
         </Stack>
         </AdaptiveNavigation>
+        </WallpaperProvider>
       </AccountProvider>
     </SafeAreaProvider>
     </GestureHandlerRootView>

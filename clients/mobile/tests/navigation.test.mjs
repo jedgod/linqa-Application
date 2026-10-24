@@ -112,3 +112,20 @@ test("shell stays off pre-auth, onboarding and modal flows", () => {
   }
   for (const p of ["/home", "/chats", "/vault/upload", "/account/settings"]) assert.equal(shellAllowedOnPath(p), true, p);
 });
+
+import { chatLayout, TWO_PANE_MIN_WIDTH, LIST_PANE_MIN, LIST_PANE_MAX } from "../navigation/chat-layout.ts";
+
+test("chats go two-pane only on tablets with enough room", () => {
+  assert.deepEqual(chatLayout(false, 1400), { twoPane: false, listWidth: null }); // phones never
+  assert.deepEqual(chatLayout(true, TWO_PANE_MIN_WIDTH - 1), { twoPane: false, listWidth: null });
+  assert.equal(chatLayout(true, TWO_PANE_MIN_WIDTH).twoPane, true);
+  assert.equal(chatLayout(true, 0).twoPane, false); // before first layout
+});
+
+test("list pane width stays within bounds and leaves a usable thread", () => {
+  for (const w of [720, 800, 952, 1200, 2000]) {
+    const { listWidth } = chatLayout(true, w);
+    assert.ok(listWidth >= LIST_PANE_MIN && listWidth <= LIST_PANE_MAX, `${w}: ${listWidth}`);
+    assert.ok(w - listWidth >= 400, `${w}: thread pane too narrow`);
+  }
+});

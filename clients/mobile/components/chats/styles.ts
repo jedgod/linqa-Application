@@ -218,6 +218,7 @@ export const s = StyleSheet.create({
     alignItems: "center",
     gap: 12
   },
+  rowSelected: { backgroundColor: C.card2, borderLeftWidth: 3, borderLeftColor: C.teal },
   rowBody: { flex: 1, gap: 3 },
   rowTitleLine: { flexDirection: "row", alignItems: "center", gap: 6 },
   rowTitle: { flex: 1, color: C.white, fontFamily: fonts.extrabold, fontSize: 15.5 },

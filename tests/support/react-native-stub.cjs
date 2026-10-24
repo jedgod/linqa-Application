@@ -8,6 +8,8 @@ const reactNative = {
   Platform: { OS: "android", Version: 34, select: (spec) => spec.android ?? spec.native ?? spec.default },
   NativeModules: {},
   AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
+  // Tests flip the phone's light/dark appearance by setting globalThis.__colorScheme before re-rendering.
+  useColorScheme: () => globalThis.__colorScheme ?? "dark",
 };
 
 const secureStoreItems = new Map();
@@ -18,6 +20,8 @@ const secureStore = {
   getItemAsync: async (key) => secureStoreItems.get(key) ?? null,
   setItemAsync: async (key, value) => { secureStoreItems.set(key, value); },
   deleteItemAsync: async (key) => { secureStoreItems.delete(key); },
+  getItem: (key) => secureStoreItems.get(key) ?? null,
+  setItem: (key, value) => { secureStoreItems.set(key, value); },
 };
 
 const stubs = { "react-native": reactNative, "expo-secure-store": secureStore };

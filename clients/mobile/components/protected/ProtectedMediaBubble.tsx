@@ -107,7 +107,7 @@ export function ProtectedMediaBubble(props: Props) {
         style={({ pressed }) => [
           styles.bubble,
           isMine ? styles.mine : styles.theirs,
-          !active && styles.closed,
+          !active && (isMine ? styles.closedMine : styles.closedTheirs),
           pressed && { opacity: 0.85 },
         ]}
       >
@@ -157,7 +157,10 @@ const styles = StyleSheet.create({
   },
   mine: { backgroundColor: C.accent, alignSelf: 'flex-end' },
   theirs: { backgroundColor: C.field, alignSelf: 'flex-start' },
-  closed: { opacity: 0.7 },
+  // A finished (opened, expired or deleted) photo is shown quieter by muting the bubble's colour, not by fading the
+  // whole bubble: opacity also faded the text, which dropped it below readable contrast (3.1-3.9:1; these are 5.0+).
+  closedMine: { backgroundColor: '#46598F' },
+  closedTheirs: { backgroundColor: '#E9ECF3' },
   icon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   iconMine: { backgroundColor: 'rgba(255,255,255,0.2)' },
   iconTheirs: { backgroundColor: C.accent },

@@ -27,6 +27,10 @@ import { SettingsView } from "./SettingsView";
 import { radius, space, type } from "./theme";
 import { useConversation } from "./useConversation";
 import { useProductionFeatures } from "./useProductionFeatures";
+import { WallpaperBackground } from "./WallpaperBackground";
+import { WallpaperPicker } from "./WallpaperPicker";
+import type { WallpaperState } from "./useWallpaper";
+import { wallpaperTheme } from "../../services/wallpapers";
 
 export interface ConversationScreenProps {
   conversationId: string;
@@ -55,6 +59,8 @@ export interface ConversationScreenProps {
   /** Opened from Linqa AI's "share a chat": ask for confirmation as soon as the messages are loaded. */
   aiShareOnOpen?: boolean;
   onAiShareCancelled?: () => void;
+  /** The chat wallpaper (this chat's own, else the person's default). Absent where wallpapers are not wired up. */
+  wallpaper?: WallpaperState;
   /** Messages the relay refused for good, kept on this device so they can be seen and discarded. */
   rejectedOutbox?: RejectedOutbox;
   onCall?: (kind: "AUDIO" | "VIDEO") => void;
@@ -64,7 +70,7 @@ export interface ConversationScreenProps {
   chatActions?: { isGroup: boolean; members: Array<{ name: string; role: string }>; onAddPeople?: () => void; onReport: () => void; onClear: () => void; onDelete: () => void };
 }
 
-type View_ = "chat" | "decisions" | "settings" | "verify" | "compose" | "share";
+type View_ = "chat" | "decisions" | "settings" | "verify" | "compose" | "share" | "wallpaper";
 
 /**
  * One conversation and the pages opened from it. The thread lists opened, sealed or unreadable messages; the bottom of
@@ -99,7 +105,10 @@ export function ConversationScreen(props: ConversationScreenProps) {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   // A chosen chat background only changes the thread itself; settings and the other pages keep the conversation theme.
-  const t = view === "chat" ? chatTheme(base, prefs.background) : base;
+  // A wallpaper the person chose wins; otherwise an older fixed background keeps applying, and with neither the default wallpaper shows.
+  const wp = props.wallpaper;
+  const showWallpaper = Boolean(wp) && (wp!.explicit || prefs.background === "AUTO");
+  const t = view === "chat" ? (showWallpaper ? wallpaperTheme(wp!.wallpaper, wp!.dim) : chatTheme(base, prefs.background)) : base;
   const [addOpen, setAddOpen] = useState(false);
   const [startDecision, setStartDecision] = useState(false);
   const [composeKind, setComposeKind] = useState<"EVENT" | "MEETING">("EVENT");
@@ -111,7 +120,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
   // The phone's back button goes back one page inside the conversation before it leaves it.
   useEffect(() => {
     if (view === "chat" && !searchOpen && !selecting) return;
-    const sub = BackHandler.addEventListener("hardwareBackPress", () => { if (view === "chat") { setSearchOpen(false); setSearch(""); setSelecting(false); setSelected([]); } else setView(view === "verify" ? "settings" : "chat"); return true; });
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => { if (view === "chat") { setSearchOpen(false); setSearch(""); setSelecting(false); setSelected([]); } else setView(view === "verify" || view === "wallpaper" ? "settings" : "chat"); return true; });
     return () => sub.remove();
   }, [view, searchOpen, selecting]);
 
@@ -224,11 +233,18 @@ export function ConversationScreen(props: ConversationScreenProps) {
       </SafeAreaView>
     );
   }
+  if (view === "wallpaper" && wp) {
+    return (
+      <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}
+        <WallpaperPicker theme={t} state={wp} scope="chat" chatName={firstName} onBack={() => setView("settings")} />
+      </SafeAreaView>
+    );
+  }
   if (view === "settings") {
     return (
       <SafeAreaView style={[styles.fill, { backgroundColor: t.surface }]}>{statusBar}
         {noticeEl}
-        <SettingsView theme={t} peerName={peer.displayName} peerId={peer.id} peerFirstName={firstName} gate={c.gateState} prefs={prefs} featureSupport={features.featureSupport} blocked={Boolean(blocked)} pinned={props.pinned} disappearAfterSeconds={props.disappearAfterSeconds} onPinnedChange={props.onPinnedChange} onDisappearChange={props.onDisappearChange} onChange={props.onPrefsChange} onVerify={() => setView("verify")} onBlock={confirmBlock} onUnblock={props.onUnblock} onAskAi={props.onAskAi && live ? askAi : undefined} chat={props.chatActions} onBack={() => { setView("chat"); if (returnToShare.current) { returnToShare.current = false; features.reopen(); } }} />
+        <SettingsView theme={t} peerName={peer.displayName} peerId={peer.id} peerFirstName={firstName} gate={c.gateState} prefs={prefs} featureSupport={features.featureSupport} blocked={Boolean(blocked)} pinned={props.pinned} disappearAfterSeconds={props.disappearAfterSeconds} onPinnedChange={props.onPinnedChange} onDisappearChange={props.onDisappearChange} onChange={props.onPrefsChange} onVerify={() => setView("verify")} onBlock={confirmBlock} onUnblock={props.onUnblock} onAskAi={props.onAskAi && live ? askAi : undefined} chat={props.chatActions} wallpaper={wp?.wallpaper} onOpenWallpaper={wp ? () => setView("wallpaper") : undefined} onBack={() => { setView("chat"); if (returnToShare.current) { returnToShare.current = false; features.reopen(); } }} />
       </SafeAreaView>
     );
   }
@@ -243,6 +259,7 @@ export function ConversationScreen(props: ConversationScreenProps) {
 
 
       <KeyboardAvoidingView style={[styles.fill, { backgroundColor: t.background }]} behavior="padding">
+        {showWallpaper ? <WallpaperBackground testID="chat-wallpaper-canvas" wallpaper={wp!.wallpaper} dim={wp!.dim} /> : null}
         {props.notice ? <Text accessibilityRole="alert" style={[type.meta, styles.notice, { backgroundColor: t.highlight, color: t.ink }]}>{props.notice}</Text> : null}
         {props.rejectedOutbox ? <RejectedMessagesPanel outbox={props.rejectedOutbox} conversationId={conversationId} enabled={live} /> : null}
         {c.loadError && !blocked ? (

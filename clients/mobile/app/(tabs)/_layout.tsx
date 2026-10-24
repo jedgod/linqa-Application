@@ -143,6 +143,8 @@ export default function TabsLayout() {
         name="calls"
         options={{
           title: t("Calls"),
+          // Calls draws its own header (and handles the top inset), like Chats and Home; the shared one stacked a second band above it.
+          headerShown: false,
           tabBarBadge: badgeValue(badges?.calls),
           tabBarAccessibilityLabel: badges?.calls
             ? t("missedCalls", { count: badges.calls })

@@ -35,6 +35,13 @@ export default function MessagingSettingsScreen() {
           <Switch disabled={busy} accessibilityLabel="Enter key sends" value={enterSends} onValueChange={(value) => void change(value)} />
         </View>
       </View>
+      <Pressable accessibilityRole="button" accessibilityLabel="Chat wallpaper" onPress={() => router.push("/settings/wallpaper" as never)} style={[s.card, s.linkCard]}>
+        <View style={s.copy}>
+          <Text style={s.label}>Chat wallpaper</Text>
+          <Text style={s.hint}>Pick the background your chats use. You can still give one chat its own.</Text>
+        </View>
+        <Text style={s.chevron}>›</Text>
+      </Pressable>
       {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
     </SafeAreaView>
   );
@@ -47,6 +54,8 @@ const s = StyleSheet.create({
   title: { fontSize: 28, fontWeight: "800", color: "#111827", marginTop: 4 },
   subtitle: { color: "#6B7280", marginTop: 4, marginBottom: 18, fontSize: 15 },
   card: { backgroundColor: "#FFFFFF", borderRadius: 16, padding: 16 },
+  linkCard: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 12, minHeight: 44 },
+  chevron: { color: "#9CA3AF", fontSize: 26 },
   row: { flexDirection: "row", alignItems: "center", gap: 12 },
   copy: { flex: 1 },
   label: { fontSize: 16, fontWeight: "700", color: "#111827" },

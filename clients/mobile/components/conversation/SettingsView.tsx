@@ -6,6 +6,8 @@ import { DISAPPEAR_CHOICES, THEMES, THEME_CHOICES, disappearLabel, type Conversa
 import type { GateState } from "../../services/conversation-types";
 import { radius, space, type } from "./theme";
 import { SubHeader } from "./SubHeader";
+import { WallpaperBackground } from "./WallpaperBackground";
+import type { Wallpaper } from "../../services/wallpapers";
 
 interface Props {
   theme: Theme;
@@ -28,6 +30,9 @@ interface Props {
   /** Present only when this chat is readable: hands its recent text to Linqa AI after confirmation. */
   onAskAi?: () => void;
   /** Group people, and the actions that work on the whole chat. These are the same as on Linqa for computers. */
+  /** When present, the wallpaper row replaces the older fixed-background swatches. */
+  wallpaper?: Wallpaper;
+  onOpenWallpaper?: () => void;
   chat?: { isGroup: boolean; members: Array<{ name: string; role: string }>; onAddPeople?: () => void; onReport: () => void; onClear: () => void; onDelete: () => void };
   onBack: () => void;
 }
@@ -36,7 +41,7 @@ const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2)
 const LABEL: Record<ThemeChoice, string> = { system: "System", light: "Light", dark: "Dark" };
 
 /** Conversation settings: privacy, appearance, notifications, block. Only settings that really do something are live. */
-export function SettingsView({ theme: t, peerName, peerId, peerFirstName, gate, prefs, featureSupport, blocked, pinned, disappearAfterSeconds, onPinnedChange, onDisappearChange, onChange, onVerify, onBlock, onUnblock, onAskAi, chat, onBack }: Props) {
+export function SettingsView({ theme: t, peerName, peerId, peerFirstName, gate, prefs, featureSupport, blocked, pinned, disappearAfterSeconds, onPinnedChange, onDisappearChange, onChange, onVerify, onBlock, onUnblock, onAskAi, chat, wallpaper, onOpenWallpaper, onBack }: Props) {
   const status = blocked ? "Blocked" : gate.mode === "LIVE" ? "End-to-end encrypted" : gate.mode === "CHECKING" ? "Checking encryption" : "Messages sealed on this device";
   const section = (label: string) => <Text style={[type.meta, styles.section, { color: t.muted }]}>{label.toUpperCase()}</Text>;
   const card = [styles.card, { backgroundColor: t.surface }];
@@ -115,8 +120,22 @@ export function SettingsView({ theme: t, peerName, peerId, peerFirstName, gate, 
           <View style={styles.swatches}>{THEME_CHOICES.map(swatch)}</View>
         </View>
 
-        {section("Change background")}
-        <View style={[card, styles.bgCard]}>
+        {wallpaper && onOpenWallpaper ? (
+          <>
+            {section("Wallpaper")}
+            <Pressable accessibilityRole="button" accessibilityLabel={`Chat wallpaper, ${wallpaper.name}`} onPress={onOpenWallpaper} style={[card, styles.wallpaperRow]}>
+              <View style={[styles.wallpaperThumb, { borderColor: t.line }]}><WallpaperBackground wallpaper={wallpaper} /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={[type.body, { color: t.ink }]}>Chat wallpaper</Text>
+                <Text style={[type.meta, { color: t.muted }]}>{wallpaper.name} · only changes how this looks to you</Text>
+              </View>
+              <Text style={[type.title, { color: t.muted }]}>›</Text>
+            </Pressable>
+          </>
+        ) : null}
+
+        {wallpaper && onOpenWallpaper ? null : section("Change background")}
+        {wallpaper && onOpenWallpaper ? null : <View style={[card, styles.bgCard]}>
           <View style={styles.bgRow} accessibilityRole="radiogroup">
             {BACKGROUND_CHOICES.map((choice) => {
               const selected = prefs.background === choice.id;
@@ -130,7 +149,7 @@ export function SettingsView({ theme: t, peerName, peerId, peerFirstName, gate, 
             })}
           </View>
           <Text style={[type.meta, { color: t.muted }]}>Only changes how this chat looks to you. {peerFirstName} isn't told.</Text>
-        </View>
+        </View>}
 
         {section("Add features")}
         <View style={card}>
@@ -236,6 +255,8 @@ const styles = StyleSheet.create({
   segment: { flexDirection: "row", borderRadius: 12, padding: 3 },
   segmentItem: { flex: 1, minHeight: 38, borderRadius: 10, alignItems: "center", justifyContent: "center", borderWidth: 0 },
   bgCard: { padding: space.l, gap: space.s },
+  wallpaperRow: { flexDirection: "row", alignItems: "center", gap: space.m, padding: space.m },
+  wallpaperThumb: { width: 44, height: 56, borderRadius: 10, overflow: "hidden", borderWidth: 1 },
   bgRow: { flexDirection: "row", justifyContent: "space-between" },
   bgSwatch: { width: 52, height: 52, borderRadius: 14 },
   chevron: { fontSize: 28, lineHeight: 30 },

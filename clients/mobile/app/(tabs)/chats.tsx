@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useChatPreviews } from "../../services/chat-previews";
 import { startSecureCallForPeer } from "../../services/secure-call-rooms";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, FlatList, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, FlatList, LayoutChangeEvent, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
@@ -26,6 +26,11 @@ import { DrawerMenu } from "../../components/drawer/DrawerMenu";
 import type { DrawerItem } from "../../components/drawer/drawerItems";
 import { useProfile } from "../../hooks/useProfile";
 import { avatarUri } from "../../lib/profileApi";
+import { ConversationContainer } from "../../components/conversation/ConversationContainer";
+import { useIsTablet } from "../../hooks/useIsTablet";
+import { chatLayout } from "../../navigation/chat-layout";
+
+type OpenThread = { conversationId: string; name?: string; peerId?: string };
 
 const API = getApiBaseUrl();
 
@@ -83,6 +88,12 @@ function ChatsInbox() {
   const [startingContact, setStartingContact] = useState<string | null>(null);
   const creatingConversation = useRef(false);
   const [typingIn, setTypingIn] = useState<Set<string>>(new Set());
+  // Tablet two-pane: the open thread lives beside the list instead of on its own screen.
+  const isTablet = useIsTablet();
+  const [containerWidth, setContainerWidth] = useState(0);
+  const { twoPane, listWidth } = chatLayout(isTablet, containerWidth);
+  const [thread, setThread] = useState<OpenThread | null>(null);
+  const onContainerLayout = useCallback((e: LayoutChangeEvent) => setContainerWidth(e.nativeEvent.layout.width), []);
   const mounted = useRef(true);
   const loadVersion = useRef(0);
   const loadInFlight = useRef(false);
@@ -196,10 +207,19 @@ function ChatsInbox() {
   const conversations = useChatPreviews(active?.userId ?? "", data?.conversations ?? []);
   const scheduledCall = data?.scheduledCall ?? null;
 
+  /** Two-pane shows the thread beside the list; otherwise it is its own screen. */
+  function openThread(target: OpenThread) {
+    if (twoPane) setThread(target);
+    else router.push({ pathname: "/modules/conversation", params: { conversationId: target.conversationId, ...(target.name ? { name: target.name } : {}), ...(target.peerId ? { peerId: target.peerId } : {}) } });
+  }
+
   function openConversation(item: ChatSummary) {
     // The thread checks access when loading and marks messages read only after encryption is available.
-    router.push({ pathname: "/modules/conversation", params: { conversationId: item.conversationId, name: item.title, ...(item.peerUserId ? { peerId: item.peerUserId } : {}) } });
+    openThread({ conversationId: item.conversationId, name: item.title, ...(item.peerUserId ? { peerId: item.peerUserId } : {}) });
   }
+
+  // Resizing below the two-pane width (rotation, split screen) returns to the single-screen flow.
+  useEffect(() => { if (!twoPane) setThread(null); }, [twoPane]);
 
   /** Long press on a chat: favorite, archive and lists. These are the same on the person's other devices. */
   function organizeChat(item: ChatSummary) {
@@ -310,7 +330,7 @@ function ChatsInbox() {
       const conversation = await hub.createConversation(contact.id);
       if (!mounted.current) return;
       setComposeOpen(false);
-      router.push({ pathname: "/modules/conversation", params: { conversationId: conversation.id, name: contact.displayName, peerId: contact.id } });
+      openThread({ conversationId: conversation.id, name: contact.displayName, peerId: contact.id });
     } catch (cause) {
       if (mounted.current) setComposeError(cause instanceof Error ? cause.message : "Unable to start that conversation.");
     } finally {
@@ -358,7 +378,7 @@ function ChatsInbox() {
     ["Scan QR", "qr-code-outline", C.blue, () => go("/modules/linked-devices")]
   ];
 
-  return (
+  const inboxPane = (
     <SideDrawer
       open={drawerOpen}
       onOpen={openDrawer}
@@ -523,6 +543,7 @@ function ChatsInbox() {
                 ? { ...item, typingLabel: item.isGroup ? "Someone is typing…" : "typing…" }
                 : item
             }
+            selected={twoPane && thread?.conversationId === item.conversationId}
             onOpen={() => void openConversation(item)}
             onLongPress={() => organizeChat(item)}
             onCall={(peerUserId, callType, peerName) => startPeerCall(peerUserId, callType, peerName)}
@@ -614,7 +635,7 @@ function ChatsInbox() {
           const id = await inbox.createGroup(name, userIds);
           setGroupOpen(false);
           void load(undefined, true);
-          router.push({ pathname: "/modules/conversation", params: { conversationId: id, name } });
+          openThread({ conversationId: id, name });
         }}
       />
 
@@ -643,5 +664,31 @@ function ChatsInbox() {
       />
     </SafeAreaView>
     </SideDrawer>
+  );
+
+  return (
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: C.bg }} onLayout={onContainerLayout}>
+      <View style={twoPane ? { width: listWidth ?? 360, borderRightWidth: 1, borderRightColor: C.divider } : { flex: 1 }}>
+        {inboxPane}
+      </View>
+      {twoPane ? (
+        <View style={{ flex: 1 }} accessibilityLabel="Conversation">
+          {thread ? (
+            <ConversationContainer
+              conversationId={thread.conversationId}
+              name={thread.name}
+              peerId={thread.peerId}
+              onBack={() => setThread(null)}
+              onClosed={() => { setThread(null); void load(undefined, true); }}
+            />
+          ) : (
+            <View style={[s.empty, { flex: 1, justifyContent: "center" }]}>
+              <Ionicons name="chatbubbles-outline" size={34} color={C.muted} />
+              <Text style={s.emptyText}>Select a chat to start messaging</Text>
+            </View>
+          )}
+        </View>
+      ) : null}
+    </View>
   );
 }

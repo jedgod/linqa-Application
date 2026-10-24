@@ -9,7 +9,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -18,6 +17,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "../../components/LinearGradient";
 import { RecordingsSection } from "../../components/calls/RecordingsSection";
@@ -150,7 +150,7 @@ export default function CallsScreen() {
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
-      <SafeAreaView style={[styles.safeArea, { width: pageWidth }]}> 
+      <SafeAreaView edges={["top", "left", "right"]} style={[styles.safeArea, { width: pageWidth }]}> 
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
@@ -284,8 +284,10 @@ function Hero({ scale, onNewCall, onSchedule }: { scale: number; onNewCall: () =
       <View style={styles.heroActions}>
         <Pressable style={styles.newCallWrap} onPress={onNewCall}>
           <LinearGradient colors={["#12C8ED", "#087BFF"]} style={styles.heroButton}>
-            <Ionicons name="call" size={21} color="#FFFFFF" />
-            <Ionicons name="add" size={16} color="#FFFFFF" style={styles.callPlus} />
+            <View style={styles.callIconWrap}>
+              <Ionicons name="call" size={21} color="#FFFFFF" />
+              <Ionicons name="add" size={14} color="#FFFFFF" style={styles.callPlus} />
+            </View>
             <Text style={styles.heroButtonText}>New call</Text>
           </LinearGradient>
         </Pressable>
@@ -543,7 +545,9 @@ const styles = StyleSheet.create({
   heroButton: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 10 },
   scheduleButton: { width: 105, height: 45, borderRadius: 10, borderWidth: 1, borderColor: "#285695", backgroundColor: "rgba(4,35,74,.82)", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   heroButtonText: { color: "#FFFFFF", fontSize: 13.5, fontWeight: "700" },
-  callPlus: { position: "absolute", left: 27, top: 8 },
+  // The plus badge is anchored to the phone icon, so it stays on the icon whatever width the button gets.
+  callIconWrap: { width: 24, height: 24, alignItems: "center", justifyContent: "center" },
+  callPlus: { position: "absolute", right: -6, top: -5 },
   heroShield: { position: "absolute", right: 13, bottom: 10 },
 
   filterFrame: { marginTop: 8, paddingHorizontal: 10 },

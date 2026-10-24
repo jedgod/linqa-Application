@@ -241,9 +241,12 @@ export function ConversationRow({
   item,
   onOpen,
   onLongPress,
-  onCall
+  onCall,
+  selected = false
 }: {
   item: ChatSummary;
+  /** Highlights the row whose thread is open in the tablet two-pane layout. */
+  selected?: boolean;
   onOpen: () => void;
   onLongPress?: () => void;
   onCall: (peerUserId: string, callType: "AUDIO" | "VIDEO", peerName: string) => void;
@@ -262,8 +265,9 @@ export function ConversationRow({
       delayLongPress={350}
       accessibilityHint={onLongPress ? "Long press for favorite, archive and lists" : undefined}
       accessibilityRole="button"
+      accessibilityState={{ selected }}
       accessibilityLabel={`${item.title}${item.pinned ? ", favorite" : ""}${unreadLabel}`}
-      style={({ pressed }) => [s.row, pressed && s.pressed]}
+      style={({ pressed }) => [s.row, selected && s.rowSelected, pressed && s.pressed]}
     >
       {item.isGroup && item.participantInitials.length > 1 ? (
         <GroupAvatar seed={item.conversationId} members={item.participantInitials} />

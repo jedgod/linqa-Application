@@ -153,7 +153,7 @@ export function useAttachFlow(o: Options) {
           onClose={() => { if (sentProtected.current) { sentProtected.current = false; setComposer(null); } else cancel(); }}
         />
       ) : null}
-      <Modal visible={composer !== null && composer !== "protected"} animationType="slide" presentationStyle="fullScreen" onRequestClose={cancel} navigationBarTranslucent>
+      <Modal visible={composer !== null && composer !== "protected"} animationType="slide" presentationStyle="fullScreen" onRequestClose={cancel}>
         <ModalSafe>
         {composer === "poll" ? <PollComposer onSend={done} onCancel={cancel} /> : null}
         {composer === "event" ? <ScheduleComposer initialKind="Event" onSend={done} onCancel={cancel} /> : null}
