@@ -6,3 +6,4 @@
 !tsconfig.json
 !src/
 !src/**
+!scripts/verify-production-readiness.sh
