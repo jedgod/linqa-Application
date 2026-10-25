@@ -90,3 +90,7 @@ LinkaSend-pageCode/ScanCard/blinkcard-xamarin-main/
 
 # Local scratch space (throwaway databases, logs); never commit
 .tmp/
+
+# Local MinIO credentials (development only)
+infra/minio/.env
+infra/minio/api-credentials.env

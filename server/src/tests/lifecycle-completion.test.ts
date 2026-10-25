@@ -53,7 +53,9 @@ describe("lifecycle completion", () => {
             chunk_count: 1,
             status: "UPLOADING",
             media_type: "IMAGE",
-            manifest_hash: Buffer.alloc(32, 7)
+            manifest_hash: Buffer.alloc(32, 7),
+            // The multipart session the SERVER created for this attachment; completion must present exactly this id.
+            multipart_upload_id: "upload-1"
           }],
           rowCount: 1
         };
@@ -69,7 +71,7 @@ describe("lifecycle completion", () => {
       userId: "user-1",
       attachmentId: "attachment-1",
       uploadId: "upload-1",
-      parts: [{ partNumber: 1, etag: "etag-1" }]
+      parts: [{ partNumber: 1, etag: "\"d41d8cd98f00b204e9800998ecf8427e\"" }]
     });
 
     const mediaIndex = statements.findIndex((sql) => sql.includes("INSERT INTO media_index"));

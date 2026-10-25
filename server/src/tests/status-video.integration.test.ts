@@ -22,6 +22,8 @@ suite("encrypted status video posts (real PostgreSQL)", () => {
   let service: StatusVideoService;
   const created: string[] = [];
   const deletedKeys: string[] = [];
+  const abortedUploads: Array<[string, string]> = [];
+  let failAbort = false;
   const signedKeys: string[] = [];
   let failDelete = false;
 
@@ -30,6 +32,7 @@ suite("encrypted status video posts (real PostgreSQL)", () => {
     async signPartUpload() { return { url: "https://upload.invalid" }; },
     async completeMultipartUpload() {},
     async signDownload(input) { signedKeys.push(input.objectKey); return { url: `https://download.invalid/${encodeURIComponent(input.objectKey)}` }; },
+    async abortMultipartUpload(key, uploadId) { if (failAbort) throw Object.assign(new Error("https://secret.example/presigned?sig=abc"), { name: "SlowDown" }); abortedUploads.push([key, uploadId]); },
     async deleteObject(key) { if (failDelete) throw new Error("storage down"); deletedKeys.push(key); }
   };
 
@@ -47,11 +50,16 @@ suite("encrypted status video posts (real PostgreSQL)", () => {
       await db.query("DELETE FROM conversations WHERE created_by_user_id = ANY($1::uuid[])", [created]);
       // retention_overrides points at posts by plain id (no foreign key), so it does not cascade.
       await db.query("DELETE FROM retention_overrides WHERE resource_type = 'STATUS_VIDEO' AND created_by = 'test'");
+      await db.query("DELETE FROM status_video_cleanup_jobs WHERE object_key LIKE ANY (SELECT 'attachments/' || x::text || '/%' FROM unnest($1::uuid[]) x)", [created]);
       await db.query("DELETE FROM users WHERE id = ANY($1::uuid[])", [created]);
     }
     await (db as unknown as pg.Pool).end();
   });
-  beforeEach(() => { deletedKeys.length = 0; signedKeys.length = 0; failDelete = false; });
+  beforeEach(async () => {
+    deletedKeys.length = 0; signedKeys.length = 0; abortedUploads.length = 0; failDelete = false; failAbort = false;
+    // Each test starts with an empty queue (a previous test's deliberate storage outage leaves a job behind, correctly).
+    if (created.length) await db.query("DELETE FROM status_video_cleanup_jobs WHERE object_key LIKE ANY (SELECT 'attachments/' || x::text || '/%' FROM unnest($1::uuid[]) x)", [created]);
+  });
 
   async function person(label: string): Promise<Person> {
     const user = randomUUID(), phone = randomUUID();
@@ -66,14 +74,15 @@ suite("encrypted status video posts (real PostgreSQL)", () => {
   const befriend = (a: Person, b: Person) => db.query(
     "INSERT INTO chat_contacts(owner_user_id,contact_user_id,created_via) VALUES($1,$2,'QR'),($2,$1,'QR') ON CONFLICT DO NOTHING", [a.user, b.user]);
   const block = (blocker: Person, blocked: Person) => db.query("INSERT INTO blocked_users(blocker_user_id,blocked_user_id) VALUES($1,$2)", [blocker.user, blocked.user]);
-  async function upload(owner: Person, over: { size?: number; status?: string; type?: string } = {}) {
+  async function upload(owner: Person, over: { size?: number; status?: string; type?: string; purpose?: string; completedAgoMinutes?: number; expiresInHours?: number } = {}) {
     const id = randomUUID();
     await db.query(
-      `INSERT INTO attachment_uploads(id,owner_user_id,owner_device_id,object_key,media_type,ciphertext_size,chunk_count,manifest_hash,status,expires_at,completed_at)
-       VALUES($1,$2,$3,$4,$5,$6,3,$7,$8,now()+interval '1 day',now())`,
-      [id, owner.user, owner.phone, `attachments/${owner.user}/${id}`, over.type ?? "VIDEO", over.size ?? 12_345_678, randomBytes(32), over.status ?? "COMPLETE"]
+      `INSERT INTO attachment_uploads(id,owner_user_id,owner_device_id,object_key,media_type,ciphertext_size,chunk_count,manifest_hash,status,expires_at,completed_at,purpose,multipart_upload_id)
+       VALUES($1,$2,$3,$4,$5,$6,3,$7,$8,now()+make_interval(hours => $9),now()-make_interval(mins => $10),$11,$12)`,
+      [id, owner.user, owner.phone, `attachments/${owner.user}/${id}`, over.type ?? "VIDEO", over.size ?? 12_345_678, randomBytes(32), over.status ?? "COMPLETE",
+       over.expiresInHours ?? 24, over.completedAgoMinutes ?? 0, over.purpose ?? "STATUS_VIDEO", `mp-${id}`]
     );
-    return { id, size: over.size ?? 12_345_678, key: `attachments/${owner.user}/${id}` };
+    return { id, size: over.size ?? 12_345_678, key: `attachments/${owner.user}/${id}`, multipartId: `mp-${id}` };
   }
   const token = (p: Person, scope: string, device: string | null = p.phone) =>
     new SignJWT({ user_id: p.user, ...(device ? { device_id: device } : {}), scope }).setProtectedHeader({ alg: "HS256" }).setSubject(p.user)
@@ -269,6 +278,115 @@ suite("encrypted status video posts (real PostgreSQL)", () => {
     expect((await call("GET", "/v1/status-videos/feed", bob, "status:react")).json().items).toEqual([]);             // but nobody can watch it
     expect((await call("POST", `/v1/status-videos/${id}/download`, bob, "status:react")).statusCode).toBe(404);
     expect((await db.query("SELECT count(*)::int AS n FROM status_video_recipients WHERE post_id=$1", [id])).rows[0].n).toBe(0);
+  });
+
+  // ---- Storage lifecycle ----------------------------------------------------------------------------------------------
+
+  const jobs = async (owner: Person) => (await db.query(
+    "SELECT action, status, attempts, last_error_code, object_key FROM status_video_cleanup_jobs WHERE object_key LIKE $1 ORDER BY created_at", [`attachments/${owner.user}/%`])).rows;
+
+  it("only an upload created for status videos can back a post (a chat or evidence video cannot)", async () => {
+    const alice = await person("alice"), bob = await person("bob");
+    await befriend(alice, bob);
+    const general = await upload(alice, { purpose: "GENERAL" });
+    expect((await post(alice, general, [{ userId: bob.user, deviceId: bob.phone }])).json()).toEqual({ error: "invalid_upload" });
+  });
+
+  it("a finished upload that never became a post is closed and its object deleted after the grace period, never before", async () => {
+    const alice = await person("alice"), bob = await person("bob");
+    await befriend(alice, bob);
+    const fresh = await upload(alice, { completedAgoMinutes: 5 });
+    const stale = await upload(alice, { completedAgoMinutes: 90 });
+    const posted = await upload(alice, { completedAgoMinutes: 90 });
+    expect((await post(alice, posted, [{ userId: bob.user, deviceId: bob.phone }])).statusCode).toBe(201);
+    await db.query("INSERT INTO media_index(user_id,media_type,object_key,metadata_ciphertext) VALUES($1,'VIDEO',$2,$3)", [alice.user, stale.key, randomBytes(32)]);
+
+    expect(await service.enqueueOrphans(60)).toEqual({ completedWithoutPost: 1, incomplete: 0 });
+    const out = await service.processCleanupJobs();
+    expect(out).toEqual({ done: 1, failed: 0 });
+    expect(deletedKeys).toEqual([stale.key]);                                                             // only the stale, unposted one
+    const status = async (id: string) => (await db.query("SELECT status FROM attachment_uploads WHERE id=$1", [id])).rows[0].status;
+    expect([await status(fresh.id), await status(stale.id), await status(posted.id)]).toEqual(["COMPLETE", "DELETED", "COMPLETE"]);
+    expect((await db.query("SELECT count(*)::int AS n FROM media_index WHERE object_key=$1", [stale.key])).rows[0].n).toBe(0);
+    expect((await jobs(alice)).map((j) => [j.action, j.status])).toEqual([["DELETE_OBJECT", "DONE"]]);
+    expect(await service.enqueueOrphans(60)).toEqual({ completedWithoutPost: 0, incomplete: 0 });         // idempotent
+  });
+
+  it("cleanup never touches an upload made for anything else, however old", async () => {
+    const alice = await person("alice");
+    const chat = await upload(alice, { purpose: "GENERAL", completedAgoMinutes: 60 * 24 * 30 });
+    const stuck = await upload(alice, { purpose: "GENERAL", status: "UPLOADING", expiresInHours: -48 });
+    await service.enqueueOrphans(60);
+    await service.processCleanupJobs();
+    expect(deletedKeys).toEqual([]);
+    expect(abortedUploads).toEqual([]);
+    const rows = (await db.query("SELECT id, status FROM attachment_uploads WHERE id = ANY($1::uuid[])", [[chat.id, stuck.id]])).rows;
+    expect(rows.map((r) => r.status).sort()).toEqual(["COMPLETE", "UPLOADING"]);
+  });
+
+  it("an upload abandoned mid-way has its stored parts freed using the server's own multipart id", async () => {
+    const alice = await person("alice");
+    const abandoned = await upload(alice, { status: "UPLOADING", expiresInHours: -1 });
+    const live = await upload(alice, { status: "UPLOADING", expiresInHours: 5 });
+    expect(await service.enqueueOrphans(60)).toEqual({ completedWithoutPost: 0, incomplete: 1 });
+    expect(await service.processCleanupJobs()).toEqual({ done: 1, failed: 0 });
+    expect(abortedUploads).toEqual([[abandoned.key, abandoned.multipartId]]);
+    expect((await db.query("SELECT status FROM attachment_uploads WHERE id=$1", [live.id])).rows[0].status).toBe("UPLOADING");
+  });
+
+  it("a storage outage keeps the job, backs it off, records only a safe error label, and a later run finishes it", async () => {
+    const alice = await person("alice");
+    const stale = await upload(alice, { completedAgoMinutes: 120 });
+    await service.enqueueOrphans(60);
+    failDelete = true;
+    expect(await service.processCleanupJobs()).toEqual({ done: 0, failed: 1 });
+    let [job] = await jobs(alice);
+    expect(job).toMatchObject({ status: "FAILED", attempts: 1 });
+    expect(job.last_error_code).not.toMatch(/https?:|secret|sig=|attachments\//);
+    expect(await service.processCleanupJobs()).toEqual({ done: 0, failed: 0 });                            // not due yet: backed off
+    await db.query("UPDATE status_video_cleanup_jobs SET next_attempt_at = now() - interval '1 minute' WHERE object_key=$1", [stale.key]);
+    failDelete = false;
+    expect(await service.processCleanupJobs()).toEqual({ done: 1, failed: 0 });
+    [job] = await jobs(alice);
+    expect(job).toMatchObject({ status: "DONE", attempts: 2, last_error_code: null });
+    expect(deletedKeys).toEqual([stale.key]);
+  });
+
+  it("taking a post down while storage is unreachable still removes access and queues the deletion for later", async () => {
+    const alice = await person("alice"), bob = await person("bob");
+    await befriend(alice, bob);
+    const up = await upload(alice);
+    const { id } = (await post(alice, up, [{ userId: bob.user, deviceId: bob.phone }])).json();
+    failDelete = true;
+    expect((await call("DELETE", `/v1/status-videos/${id}`, alice, "status:write")).statusCode).toBe(204);
+    expect((await call("GET", "/v1/status-videos/feed", bob, "status:react")).json().items).toEqual([]);
+    expect((await jobs(alice)).map((j) => [j.action, j.status])).toEqual([["DELETE_OBJECT", "PENDING"]]);
+    failDelete = false;
+    await service.processCleanupJobs();
+    expect(deletedKeys).toEqual([up.key]);
+  });
+
+  it("two workers running at once never process the same job twice", async () => {
+    const alice = await person("alice");
+    for (let i = 0; i < 6; i++) await upload(alice, { completedAgoMinutes: 120 });
+    await service.enqueueOrphans(60);
+    const results = await Promise.all([service.processCleanupJobs(3), service.processCleanupJobs(3), service.processCleanupJobs(3)]);
+    expect(results.reduce((n, r) => n + r.done, 0)).toBe(6);
+    expect(new Set(deletedKeys).size).toBe(deletedKeys.length);                                            // no key deleted twice
+    expect(deletedKeys).toHaveLength(6);
+  });
+
+  it("a held post's object is never queued for deletion by the orphan scan or by takedown", async () => {
+    const alice = await person("alice"), bob = await person("bob");
+    await befriend(alice, bob);
+    const up = await upload(alice);
+    const { id } = (await post(alice, up, [{ userId: bob.user, deviceId: bob.phone }])).json();
+    await db.query("INSERT INTO retention_overrides(resource_type,resource_id,reason,created_by) VALUES('STATUS_VIDEO',$1,'LEGAL_HOLD','test')", [id]);
+    await call("DELETE", `/v1/status-videos/${id}`, alice, "status:write");
+    await service.runLifecycle();
+    expect(deletedKeys).toEqual([]);
+    expect(await jobs(alice)).toEqual([]);
+    expect((await db.query("SELECT status FROM attachment_uploads WHERE id=$1", [up.id])).rows[0].status).toBe("COMPLETE");
   });
 
   it("the schema cannot hold a media key: the only key-like column is the sealed, per-device bundle", async () => {

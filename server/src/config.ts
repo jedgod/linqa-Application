@@ -51,6 +51,11 @@ const EnvSchema = z.object({
   OBJECT_STORAGE_KMS_KEY_ID: z.string().min(1).optional(),
   OBJECT_STORAGE_ENDPOINT: z.string().url().optional(),
   OBJECT_STORAGE_FORCE_PATH_STYLE: z.coerce.boolean().optional(),
+  /**
+   * Development only: store the (already end-to-end encrypted) video ciphertext in a local MinIO, which has no AWS KMS. Production
+   * keeps requiring OBJECT_STORAGE_KMS_KEY_ID; setting this anywhere but NODE_ENV=development stops the server at startup.
+   */
+  LOCAL_MINIO_ENABLED: z.enum(["true", "false"]).optional(),
   PASSKEY_RP_ID: z.string().min(1).default("linqa.local"),
   PASSKEY_RP_NAME: z.string().min(1).default("Linqa"),
   PASSKEY_ORIGINS: z.string()
@@ -204,11 +209,20 @@ const EnvSchema = z.object({
     context.addIssue({ code: "custom", message: "production requires a dedicated IP_HASH_SECRET" });
   }
 
-  requireAllOrNone([
-    ["OBJECT_STORAGE_REGION", value.OBJECT_STORAGE_REGION],
-    ["OBJECT_STORAGE_BUCKET", value.OBJECT_STORAGE_BUCKET],
-    ["OBJECT_STORAGE_KMS_KEY_ID", value.OBJECT_STORAGE_KMS_KEY_ID]
-  ]);
+  if (value.LOCAL_MINIO_ENABLED === "true") {
+    // The KMS requirement below is deliberately NOT relaxed for anything but this one explicit, development-only mode.
+    if (value.NODE_ENV !== "development") context.addIssue({ code: "custom", message: "LOCAL_MINIO_ENABLED is allowed only when NODE_ENV=development" });
+    if (!value.OBJECT_STORAGE_ENDPOINT || !value.OBJECT_STORAGE_BUCKET || !value.OBJECT_STORAGE_REGION) {
+      context.addIssue({ code: "custom", message: "LOCAL_MINIO_ENABLED requires OBJECT_STORAGE_ENDPOINT, OBJECT_STORAGE_BUCKET and OBJECT_STORAGE_REGION" });
+    }
+    if (value.OBJECT_STORAGE_KMS_KEY_ID) context.addIssue({ code: "custom", message: "LOCAL_MINIO_ENABLED and OBJECT_STORAGE_KMS_KEY_ID are mutually exclusive: pick one storage mode" });
+  } else {
+    requireAllOrNone([
+      ["OBJECT_STORAGE_REGION", value.OBJECT_STORAGE_REGION],
+      ["OBJECT_STORAGE_BUCKET", value.OBJECT_STORAGE_BUCKET],
+      ["OBJECT_STORAGE_KMS_KEY_ID", value.OBJECT_STORAGE_KMS_KEY_ID]
+    ]);
+  }
 
   requireAllOrNone([
     ["APNS_TEAM_ID", value.APNS_TEAM_ID],

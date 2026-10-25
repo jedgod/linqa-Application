@@ -24,7 +24,26 @@ export interface ObjectStorage {
   /** A short-lived GET link for a stored (ciphertext) object. Callers must authorize the requester before asking for one. */
   signDownload(input: { objectKey: string; expiresInSeconds: number }): Promise<{ url: string }>;
 
+  /** Frees the parts of an upload that will never be completed. Safe to repeat. */
+  abortMultipartUpload(objectKey: string, uploadId: string): Promise<void>;
+
   deleteObject(objectKey: string): Promise<void>;
+}
+
+export type UploadPurpose = "GENERAL" | "STATUS_VIDEO";
+
+/**
+ * Checks the parts list a client sends to complete an upload: exactly the declared count, numbered 1..N once each, with a plausible
+ * ETag. An ETag is the store's receipt for a part, not proof of what is in it: integrity comes from the authenticated chunk format
+ * and manifest check on the phones. The ETag syntax check only keeps junk (and anything XML-shaped) out of the completion request.
+ */
+export function validateMultipartParts(parts: Array<{ partNumber: number; etag: string }>, expectedCount: number) {
+  if (!Number.isInteger(expectedCount) || expectedCount < 1 || expectedCount > 10_000 || parts.length !== expectedCount) throw new Error("INVALID_PART_COUNT");
+  const ordered = [...parts].sort((a, b) => a.partNumber - b.partNumber);
+  ordered.forEach((part, i) => {
+    if (part.partNumber !== i + 1 || !/^"?[A-Za-z0-9+/=_-]{16,128}"?$/.test(part.etag)) throw new Error("INVALID_PART_METADATA");
+  });
+  return ordered;
 }
 
 export class AttachmentService {
@@ -40,6 +59,7 @@ export class AttachmentService {
     ciphertextSize: number;
     chunkCount: number;
     manifestHash: Buffer;
+    purpose?: UploadPurpose;
   }) {
     if (input.ciphertextSize <= 0 || input.ciphertextSize > 500 * 1024 * 1024) {
       throw new Error("invalid attachment size");
@@ -64,9 +84,11 @@ export class AttachmentService {
          ciphertext_size,
          chunk_count,
          manifest_hash,
+         multipart_upload_id,
+         purpose,
          status,
          expires_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'UPLOADING',now() + interval '24 hours')
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'UPLOADING',now() + interval '24 hours')
        RETURNING id`,
       [
         input.userId,
@@ -75,7 +97,9 @@ export class AttachmentService {
         input.mediaType,
         input.ciphertextSize,
         input.chunkCount,
-        input.manifestHash
+        input.manifestHash,
+        upload.uploadId,
+        input.purpose ?? "GENERAL"
       ]
     );
 
@@ -93,7 +117,7 @@ export class AttachmentService {
     partNumber: number
   ) {
     const result = await this.db.query(
-      `SELECT object_key, chunk_count, status
+      `SELECT object_key, chunk_count, status, multipart_upload_id
        FROM attachment_uploads
        WHERE id = $1 AND owner_user_id = $2`,
       [attachmentId, userId]
@@ -103,13 +127,15 @@ export class AttachmentService {
     if (!row || row.status !== "UPLOADING") {
       throw new Error("upload not available");
     }
+    // The multipart session is the one the server created for this attachment; a client may not point a part at another session.
+    if (!row.multipart_upload_id || row.multipart_upload_id !== uploadId) throw new Error("upload session mismatch");
     if (partNumber < 1 || partNumber > row.chunk_count) {
       throw new Error("invalid part number");
     }
 
     return this.storage.signPartUpload({
       objectKey: row.object_key,
-      uploadId,
+      uploadId: row.multipart_upload_id,
       partNumber,
       expiresInSeconds: 600
     });
@@ -126,7 +152,7 @@ export class AttachmentService {
       await client.query("BEGIN");
 
       const result = await client.query(
-        `SELECT object_key, chunk_count, status, media_type, manifest_hash
+        `SELECT object_key, chunk_count, status, media_type, manifest_hash, multipart_upload_id
          FROM attachment_uploads
          WHERE id = $1 AND owner_user_id = $2
          FOR UPDATE`,
@@ -137,14 +163,13 @@ export class AttachmentService {
       if (!row || row.status !== "UPLOADING") {
         throw new Error("upload cannot be completed");
       }
-      if (input.parts.length !== row.chunk_count) {
-        throw new Error("incomplete multipart upload");
-      }
+      if (!row.multipart_upload_id || row.multipart_upload_id !== input.uploadId) throw new Error("upload session mismatch");
+      const parts = validateMultipartParts(input.parts, row.chunk_count);
 
       await this.storage.completeMultipartUpload({
         objectKey: row.object_key,
-        uploadId: input.uploadId,
-        parts: input.parts
+        uploadId: row.multipart_upload_id,
+        parts
       });
 
       await client.query(
@@ -168,6 +193,31 @@ export class AttachmentService {
       throw error;
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * The owner cancels an upload that has not completed: the stored parts are freed and the attachment can never be completed. If the
+   * store cannot be reached the attachment is still closed to the owner and a cleanup job frees the parts later.
+   */
+  async abort(userId: string, attachmentId: string): Promise<void> {
+    const found = await this.db.query(
+      `UPDATE attachment_uploads SET status = 'DELETED', deleted_at = now()
+        WHERE id = $1 AND owner_user_id = $2 AND status IN ('CREATED','UPLOADING')
+        RETURNING object_key, multipart_upload_id`,
+      [attachmentId, userId]
+    );
+    const row = found.rows[0];
+    if (!row) throw new Error("upload not available");
+    if (!row.multipart_upload_id) return;
+    try {
+      await this.storage.abortMultipartUpload(row.object_key, row.multipart_upload_id);
+    } catch {
+      await this.db.query(
+        `INSERT INTO status_video_cleanup_jobs (attachment_id, action, object_key, multipart_upload_id)
+         VALUES ($1,'ABORT_MULTIPART',$2,$3) ON CONFLICT DO NOTHING`,
+        [attachmentId, row.object_key, row.multipart_upload_id]
+      );
     }
   }
 }

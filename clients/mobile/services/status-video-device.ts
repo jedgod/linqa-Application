@@ -98,8 +98,10 @@ export class StatusVideoApi implements UploadApi {
   }
 
   createUpload(input: { ciphertextSize: number; chunkCount: number; manifestHashBase64: string }) {
-    return this.call<{ attachmentId: string; uploadId: string }>("POST", "/v1/attachments", { mediaType: "VIDEO", ...input });
+    // `purpose` marks this upload as a status video, which is what lets the server clean it up if it is never posted.
+    return this.call<{ attachmentId: string; uploadId: string }>("POST", "/v1/attachments", { mediaType: "VIDEO", purpose: "STATUS_VIDEO", ...input });
   }
+  async abort(attachmentId: string) { await this.call("POST", `/v1/attachments/${attachmentId}/abort`, {}); }
   signPart(attachmentId: string, uploadId: string, partNumber: number) {
     return this.call<{ url: string }>("POST", `/v1/attachments/${attachmentId}/parts/${partNumber}`, { uploadId });
   }

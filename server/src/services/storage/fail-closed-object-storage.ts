@@ -19,6 +19,10 @@ export class FailClosedObjectStorage implements ObjectStorage {
     throw new Error("Object storage is not configured.");
   }
 
+  async abortMultipartUpload(): Promise<void> {
+    throw new Error("Object storage is not configured.");
+  }
+
   async signDownload(): Promise<{ url: string }> {
     throw new Error("Object storage is not configured.");
   }

@@ -27,6 +27,8 @@ export async function registerAttachmentRoutes(
 
       const body = z.object({
         mediaType: z.enum(["IMAGE", "VIDEO", "VOICE_NOTE", "DOCUMENT", "LINK", "FILE"]),
+        // What the upload is for. Only STATUS_VIDEO uploads are ever eligible for status-video cleanup.
+        purpose: z.enum(["GENERAL", "STATUS_VIDEO"]).default("GENERAL"),
         ciphertextSize: z.number().int().positive(),
         chunkCount: z.number().int().min(1).max(10_000),
         manifestHashBase64: z.string().min(40).max(100)
@@ -38,7 +40,8 @@ export async function registerAttachmentRoutes(
         mediaType: body.mediaType,
         ciphertextSize: body.ciphertextSize,
         chunkCount: body.chunkCount,
-        manifestHash: Buffer.from(body.manifestHashBase64, "base64")
+        manifestHash: Buffer.from(body.manifestHashBase64, "base64"),
+        purpose: body.purpose
       });
 
       return reply.code(201).send(created);
@@ -90,6 +93,20 @@ export async function registerAttachmentRoutes(
       return reply.code(204).send();
     } catch (error) {
       request.log.warn({ err: error }, "attachment completion rejected");
+      return reply.code(400).send({ error: "invalid_request" });
+    }
+  });
+
+  // Cancel an upload that has not completed: frees the stored parts and closes the attachment.
+  app.post("/v1/attachments/:attachmentId/abort", async (request, reply) => {
+    try {
+      const principal = await authenticate(request);
+      requireScope(principal, "attachments:write");
+      const params = z.object({ attachmentId: z.string().uuid() }).parse(request.params);
+      await attachments.abort(principal.userId, params.attachmentId);
+      return reply.code(204).send();
+    } catch (error) {
+      request.log.warn({ err: error }, "attachment abort rejected");
       return reply.code(400).send({ error: "invalid_request" });
     }
   });

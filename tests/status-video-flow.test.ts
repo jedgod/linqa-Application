@@ -33,6 +33,9 @@ class FakeServer {
   failPut: (partNumber: number, attempt: number) => boolean = () => false;
   attempts = new Map<number, number>();
   signCalls = 0;
+  aborted: string[] = [];
+  failAbort = false;
+  purposesSeen: unknown[] = [];
   seen: string[] = []; // everything the server was ever sent, as text, to prove it never sees a key or plaintext
 
   api(owner: string): UploadApi {
@@ -57,6 +60,11 @@ class FakeServer {
         const joined = Buffer.concat(parts.sort((a, b) => a.partNumber - b.partNumber).map((p) => u.parts.get(p.partNumber)!));
         assert.equal(joined.length, u.ciphertextSize, "the stored object must be exactly the declared size");
         this.stored.set(attachmentId, new Uint8Array(joined)); u.done = true;
+      },
+      abort: async (attachmentId) => {
+        if (this.failAbort) throw new Error("storage down");
+        this.aborted.push(attachmentId);
+        this.uploads.delete(attachmentId);
       },
       createPost: async (body) => {
         this.seen.push(JSON.stringify(body));
@@ -235,6 +243,48 @@ test("if the server cannot create the upload, nothing is sent, nothing is posted
   await assert.rejects(() => postStatusVideo(s.input, s.deps), (e: unknown) => e instanceof StatusVideoPostError && e.code === "UPLOAD_FAILED");
   assert.equal(s.server.posts.length, 0);
   assert.ok(s.scratch.disposed);
+});
+
+test("cancelling mid-upload frees the stored parts: the server is told to abort exactly that upload", async () => {
+  const s = await setup();
+  const signal = { aborted: false };
+  const created: string[] = [];
+  const real = s.deps.api.createUpload.bind(s.deps.api);
+  s.deps.api.createUpload = async (i) => { const r = await real(i); created.push(r.attachmentId); return r; };
+  await assert.rejects(() => postStatusVideo(s.input, s.deps, (p) => { if (p.phase === "uploading" && p.fraction >= 0.5) signal.aborted = true; }, signal),
+    (e: unknown) => e instanceof StatusVideoPostError && e.code === "CANCELLED");
+  assert.deepEqual(s.server.aborted, created, "one upload was open and exactly that one was aborted");
+  assert.equal(s.server.posts.length, 0);
+});
+
+test("a failed upload (every retry used up) aborts too, and a failing abort never hides the real error", async () => {
+  const s = await setup();
+  s.server.failPut = (part) => part === 2;
+  s.server.failAbort = true;
+  await assert.rejects(() => postStatusVideo(s.input, s.deps), (e: unknown) => e instanceof StatusVideoPostError && e.code === "UPLOAD_FAILED");
+  const t = await setup();
+  t.server.failPut = (part) => part === 2;
+  await assert.rejects(() => postStatusVideo(t.input, t.deps), (e: unknown) => e instanceof StatusVideoPostError && e.code === "UPLOAD_FAILED");
+  assert.equal(t.server.aborted.length, 1);
+});
+
+test("nothing is aborted when nothing was created (cancel while encrypting, or the upload could not be started)", async () => {
+  const early = await setup();
+  const signal = { aborted: false };
+  await assert.rejects(() => postStatusVideo(early.input, early.deps, (p) => { if (p.phase === "encrypting") signal.aborted = true; }, signal), (e: unknown) => (e as StatusVideoPostError).code === "CANCELLED");
+  assert.deepEqual(early.server.aborted, []);
+  const refused = await setup();
+  refused.deps.api.createUpload = async () => { throw new Error("HTTP_400"); };
+  await assert.rejects(() => postStatusVideo(refused.input, refused.deps), (e: unknown) => (e as StatusVideoPostError).code === "UPLOAD_FAILED");
+  assert.deepEqual(refused.server.aborted, []);
+});
+
+test("once the upload has completed it is never aborted (the server's orphan cleanup owns it if the post fails)", async () => {
+  const s = await setup();
+  s.deps.api.createPost = async () => { throw new Error("HTTP_422"); };
+  await assert.rejects(() => postStatusVideo(s.input, s.deps), (e: unknown) => e instanceof StatusVideoPostError && e.code === "POST_REJECTED");
+  assert.deepEqual(s.server.aborted, []);
+  assert.equal([...s.server.uploads.values()].filter((u) => u.done).length, 1, "the finished upload is left for the server to clean up");
 });
 
 test("cancelling stops the work, posts nothing and deletes the scratch file", async () => {

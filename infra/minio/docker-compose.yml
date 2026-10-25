@@ -1,0 +1,29 @@
+# DEVELOPMENT ONLY. A local S3-compatible store for testing encrypted status videos. Not production storage and not evidence for any
+# release gate: it has no KMS, replication, lifecycle policy or hardening. Run with:
+#   docker compose --env-file infra/minio/.env -f infra/minio/docker-compose.yml up -d
+name: linqa-minio-dev
+services:
+  minio:
+    # Pin by digest (see .env.example). Never use :latest.
+    image: ${MINIO_IMAGE:?Pin MINIO_IMAGE to a reviewed tag or digest}
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Required}
+    ports:
+      # Loopback only by default. A physical phone reaches it through `adb reverse` (USB), so nothing listens on the network.
+      # Set MINIO_BIND_IP to a private LAN address only for Wi-Fi testing, and restrict the port with the host firewall.
+      - "${MINIO_BIND_IP:-127.0.0.1}:${MINIO_API_PORT:-19000}:9000"
+      # The admin console is never exposed beyond this computer.
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-19001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  minio_data:

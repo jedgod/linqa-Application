@@ -44,6 +44,8 @@ export interface UploadApi {
   /** PUT the bytes to the signed URL and return the part's ETag. */
   putPart(url: string, bytes: Uint8Array): Promise<{ etag: string }>;
   complete(attachmentId: string, uploadId: string, parts: Array<{ partNumber: number; etag: string }>): Promise<void>;
+  /** Cancel an upload that has not completed, so the server frees the parts already stored. Best effort. */
+  abort?(attachmentId: string): Promise<void>;
   createPost(input: {
     attachmentId: string; kind: "VIDEO" | "PODCAST"; durationSeconds: number; ciphertextSize: number; expiresInHours?: number;
     recipients: Array<{ userId: string; deviceId: string; sealedKey: string }>;
@@ -119,6 +121,8 @@ export async function postStatusVideo(
     chunkCount: chunkCountFor(plaintextSize), plaintextSize, key, noncePrefix
   };
   const scratch = deps.scratch();
+  // Set once the upload exists and cleared when it completes: while it is open, any failure or cancel must free the stored parts.
+  let openUpload: string | null = null;
   try {
     // 1. Encrypt to the scratch file, one chunk in memory at a time.
     const hashes: Uint8Array[] = [];
@@ -138,6 +142,7 @@ export async function postStatusVideo(
     let created: { attachmentId: string; uploadId: string };
     try { created = await deps.api.createUpload({ ciphertextSize, chunkCount: params.chunkCount, manifestHashBase64: bytesToBase64(manifestHash(hashes)) }); }
     catch (e) { throw new StatusVideoPostError("UPLOAD_FAILED", `create: ${String((e as Error)?.message ?? e)}`); }
+    openUpload = created.attachmentId;
     const parts: Array<{ partNumber: number; etag: string }> = [];
     for (let i = 0; i < params.chunkCount; i++) {
       check();
@@ -161,6 +166,7 @@ export async function postStatusVideo(
     check();
     try { await deps.api.complete(created.attachmentId, created.uploadId, parts); }
     catch (e) { throw new StatusVideoPostError("UPLOAD_FAILED", `complete: ${String((e as Error)?.message ?? e)}`); }
+    openUpload = null; // completed: from here on the server's orphan cleanup owns an upload whose post never happens
 
     // 3. Seal the key for the audience, bound to this upload, and post.
     onProgress({ phase: "sealing", fraction: 0 });
@@ -187,6 +193,8 @@ export async function postStatusVideo(
   } finally {
     key.fill(0); noncePrefix.fill(0);
     scratch.dispose();
+    // Never let the cleanup call hide the real error.
+    if (openUpload) await deps.api.abort?.(openUpload).catch(() => undefined);
   }
 }
 

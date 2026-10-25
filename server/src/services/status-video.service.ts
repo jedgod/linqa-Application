@@ -77,7 +77,7 @@ export class StatusVideoService {
 
       // The bytes must already be a completed, owner-verified upload of exactly this size. One upload backs at most one post.
       const upload = await client.query(
-        `SELECT ciphertext_size, media_type FROM attachment_uploads WHERE id = $1 AND owner_user_id = $2 AND status = 'COMPLETE' FOR UPDATE`,
+        `SELECT ciphertext_size, media_type FROM attachment_uploads WHERE id = $1 AND owner_user_id = $2 AND status = 'COMPLETE' AND purpose = 'STATUS_VIDEO' FOR UPDATE`,
         [input.attachmentId, input.ownerUserId]
       );
       const u = upload.rows[0];
@@ -222,7 +222,7 @@ export class StatusVideoService {
    */
   private async retire(postIds: string[]): Promise<void> {
     const client = await this.db.connect();
-    let keys: string[] = [];
+    let keys: Array<{ attachmentId: string; key: string }> = [];
     try {
       await client.query("BEGIN");
       const posts = await client.query(
@@ -238,10 +238,12 @@ export class StatusVideoService {
       const attachmentIds = posts.rows.filter((r) => !r.held).map((r) => r.attachment_id as string);
       if (attachmentIds.length) {
         const uploads = await client.query(
-          `UPDATE attachment_uploads SET status = 'DELETED', deleted_at = now() WHERE id = ANY($1::uuid[]) RETURNING object_key`,
+          `UPDATE attachment_uploads SET status = 'DELETED', deleted_at = now() WHERE id = ANY($1::uuid[]) RETURNING id, object_key, owner_user_id`,
           [attachmentIds]
         );
-        keys = uploads.rows.map((r) => r.object_key as string);
+        keys = uploads.rows.map((r) => ({ attachmentId: r.id as string, key: r.object_key as string }));
+        // Completing an upload indexed it as the owner's media; a taken-down video must not stay listed.
+        for (const r of uploads.rows) await client.query(`DELETE FROM media_index WHERE user_id = $1 AND object_key = $2`, [r.owner_user_id, r.object_key]);
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -250,6 +252,113 @@ export class StatusVideoService {
     } finally {
       client.release();
     }
-    for (const key of keys) await this.storage.deleteObject(key).catch(() => undefined);
+    // Access is already gone. A storage failure must not leave the bytes behind forever: record a durable job so it is retried.
+    for (const { attachmentId, key } of keys) {
+      try { await this.storage.deleteObject(key); }
+      catch (error) { await this.enqueue("DELETE_OBJECT", key, null, attachmentId, error); }
+    }
   }
+
+  // ---- Storage lifecycle ---------------------------------------------------------------------------------------------------
+
+  private async enqueue(action: "DELETE_OBJECT" | "ABORT_MULTIPART", objectKey: string, multipartUploadId: string | null, attachmentId: string | null, cause?: unknown) {
+    await this.db.query(
+      `INSERT INTO status_video_cleanup_jobs (attachment_id, action, object_key, multipart_upload_id, last_error_code)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+      [attachmentId, action, objectKey, multipartUploadId, cause === undefined ? null : errorCode(cause)]
+    );
+  }
+
+  /**
+   * Finds status-video uploads nobody can use any more and closes them, queuing the storage work:
+   *  - completed uploads that never became a post (the post step failed, or the app was killed) after a grace period, and
+   *  - uploads that never completed and have outlived their window (their stored parts still occupy space).
+   * Only uploads created for status videos are ever touched (purpose = 'STATUS_VIDEO'), never a chat attachment or evidence upload.
+   * Rows are claimed with SKIP LOCKED, so a post being created at that instant keeps its upload.
+   */
+  async enqueueOrphans(graceMinutes = 60): Promise<{ completedWithoutPost: number; incomplete: number }> {
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      const completed = await client.query(
+        `WITH picked AS (
+           SELECT a.id FROM attachment_uploads a
+            WHERE a.purpose = 'STATUS_VIDEO' AND a.status = 'COMPLETE' AND a.completed_at < now() - make_interval(mins => $1)
+              AND NOT EXISTS (SELECT 1 FROM status_video_posts p WHERE p.attachment_id = a.id)
+            ORDER BY a.completed_at LIMIT 200 FOR UPDATE SKIP LOCKED)
+         UPDATE attachment_uploads a SET status = 'DELETED', deleted_at = now() FROM picked
+          WHERE a.id = picked.id RETURNING a.id, a.object_key, a.owner_user_id`, [graceMinutes]);
+      for (const r of completed.rows) {
+        await client.query(`DELETE FROM media_index WHERE user_id = $1 AND object_key = $2`, [r.owner_user_id, r.object_key]);
+        await client.query(`INSERT INTO status_video_cleanup_jobs (attachment_id, action, object_key) VALUES ($1,'DELETE_OBJECT',$2) ON CONFLICT DO NOTHING`, [r.id, r.object_key]);
+      }
+      const incomplete = await client.query(
+        `WITH picked AS (
+           SELECT a.id FROM attachment_uploads a
+            WHERE a.purpose = 'STATUS_VIDEO' AND a.status IN ('CREATED','UPLOADING','EXPIRED') AND a.expires_at < now()
+            ORDER BY a.expires_at LIMIT 200 FOR UPDATE SKIP LOCKED)
+         UPDATE attachment_uploads a SET status = 'DELETED', deleted_at = now() FROM picked
+          WHERE a.id = picked.id RETURNING a.id, a.object_key, a.multipart_upload_id`);
+      for (const r of incomplete.rows) {
+        if (!r.multipart_upload_id) continue;
+        await client.query(`INSERT INTO status_video_cleanup_jobs (attachment_id, action, object_key, multipart_upload_id) VALUES ($1,'ABORT_MULTIPART',$2,$3) ON CONFLICT DO NOTHING`, [r.id, r.object_key, r.multipart_upload_id]);
+      }
+      await client.query("COMMIT");
+      return { completedWithoutPost: completed.rowCount ?? 0, incomplete: incomplete.rowCount ?? 0 };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Runs due cleanup jobs. A job is leased (so two workers never take the same one), the storage call happens outside any
+   * transaction, and the job is marked DONE only after the store confirms; deleting an object that is already gone counts as done.
+   * A failure backs the job off (up to an hour) and keeps it, so a storage outage delays deletion but never forgets it.
+   */
+  async processCleanupJobs(limit = 50): Promise<{ done: number; failed: number }> {
+    const claimed = await this.db.query(
+      `UPDATE status_video_cleanup_jobs j SET status = 'LEASED', lease_until = now() + interval '5 minutes', attempts = j.attempts + 1
+        WHERE j.id IN (
+          SELECT id FROM status_video_cleanup_jobs
+           WHERE (status IN ('PENDING','FAILED') AND next_attempt_at <= now()) OR (status = 'LEASED' AND lease_until < now())
+           ORDER BY next_attempt_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+        RETURNING j.id, j.action, j.object_key, j.multipart_upload_id, j.attempts`,
+      [limit]
+    );
+    let done = 0, failed = 0;
+    for (const job of claimed.rows) {
+      try {
+        if (job.action === "DELETE_OBJECT") await this.storage.deleteObject(job.object_key as string);
+        else await this.storage.abortMultipartUpload(job.object_key as string, job.multipart_upload_id as string);
+        await this.db.query(`UPDATE status_video_cleanup_jobs SET status = 'DONE', completed_at = now(), lease_until = NULL, last_error_code = NULL WHERE id = $1`, [job.id]);
+        done++;
+      } catch (error) {
+        const minutes = Math.min(60, 2 ** Math.min(Number(job.attempts), 6));
+        await this.db.query(
+          `UPDATE status_video_cleanup_jobs SET status = 'FAILED', lease_until = NULL, last_error_code = $2, next_attempt_at = now() + make_interval(mins => $3) WHERE id = $1`,
+          [job.id, errorCode(error), minutes]
+        );
+        failed++;
+      }
+    }
+    return { done, failed };
+  }
+
+  /** Everything a scheduled run does, in order: expire posts, find orphans, then do the storage work. */
+  async runLifecycle(): Promise<{ expired: number; orphans: { completedWithoutPost: number; incomplete: number }; cleanup: { done: number; failed: number } }> {
+    let expired = 0;
+    for (;;) { const n = await this.expireDue(200); expired += n; if (n < 200) break; }
+    const orphans = await this.enqueueOrphans();
+    const cleanup = await this.processCleanupJobs();
+    return { expired, orphans, cleanup };
+  }
+}
+
+/** A short, safe label for a storage error: never the message, which can contain signed URLs, keys or hostnames. */
+function errorCode(error: unknown): string {
+  const e = error as { name?: string; code?: string; $metadata?: { httpStatusCode?: number } };
+  return String(e?.code ?? e?.name ?? (e?.$metadata?.httpStatusCode ? `HTTP_${e.$metadata.httpStatusCode}` : "STORAGE_ERROR")).slice(0, 64);
 }

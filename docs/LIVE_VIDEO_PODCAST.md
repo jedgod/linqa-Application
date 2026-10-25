@@ -78,9 +78,35 @@ Design points worth knowing:
 
 ## Known limits and open items
 
-- **Downloads need real object storage.** Posting and watching rely on S3-compatible storage with a KMS key; without it the server
-  fails closed. The local MinIO container is not configured for the API, so none of this can run end to end on a phone until it is.
+- **Downloads need real object storage.** Posting and watching rely on S3-compatible storage. Production requires a KMS key and
+  fails closed without it. For development only, a local MinIO can stand in (see "Local MinIO" below).
 - The audience check only covers people who are already contacts or share a conversation. Inviting people who are not yet on Linqa
   is phase 2.
 - Extra-minute billing: undefined; needs a price, who is charged and when, and a payments integration.
 - Recordings of other people (guests in a live room) need their consent flow; that belongs to phase 3.
+
+## Local MinIO (development only)
+
+`infra/minio/` runs a digest-pinned MinIO on loopback (API `127.0.0.1:19000`, console `127.0.0.1:19001`) with a private bucket
+`linqa-video-dev` and a service account limited to that bucket. The generated `.env` and `api-credentials.env` are git-ignored; the
+API never uses the root account.
+
+- `LOCAL_MINIO_ENABLED=true` selects a `local-minio` adapter. Config validation rejects it unless `NODE_ENV=development`, requires an
+  `http://` endpoint with path-style addressing, and forbids combining it with a KMS key. The adapter repeats those checks.
+  Production keeps requiring KMS; that is unchanged and covered by `storage-mode.test.ts`.
+- MinIO has no KMS, so objects are not server-side encrypted in this mode. That is acceptable only because the phone encrypts every
+  chunk before upload, so the store holds ciphertext either way.
+- Upload sessions are bound server-side: the multipart upload id is stored when the upload is created and compared on every part
+  signature and on completion; the client's id and key are never forwarded. Completion also validates the part list.
+- Uploads carry a `purpose`. Only `STATUS_VIDEO` uploads are eligible for orphan cleanup, through a durable job table
+  (`status_video_cleanup_jobs`, migration 090) worked with leases and capped exponential backoff. The phone aborts an unfinished
+  upload when the user cancels or posting fails.
+- Presigned URLs are host-bound; the phone reaches MinIO through `adb reverse tcp:19000 tcp:19000`, so nothing is exposed to the LAN.
+
+**What this proves:** the S3 transport at Linqa's real chunk size (5 MiB + 16-byte parts accepted, small non-final parts refused),
+expiry, host and key binding, private bucket, account scope, abort, and idempotent delete, via `status-video-minio.integration.test.ts`
+(opt-in: `LOCAL_MINIO_ENABLED=true` plus the endpoint, bucket and keys).
+
+**What it does not prove:** production storage (KMS, IAM, TLS, lifecycle rules), and anything on a phone. The physical-device
+matrix (record, upload, publish, watch, tamper, cancel, kill, low disk, delete, expire, account switch, outage, restart, second
+device) has **not** been run; it needs hands on the phones. Production remains blocked.
