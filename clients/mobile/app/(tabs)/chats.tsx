@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useChatPreviews } from "../../services/chat-previews";
 import { startSecureCallForPeer } from "../../services/secure-call-rooms";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, FlatList, LayoutChangeEvent, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, FlatList, LayoutChangeEvent, Modal, Pressable, RefreshControl, ScrollView, Share, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
@@ -369,13 +369,32 @@ function ChatsInbox() {
     else if (item.href) go(item.href);
   }
 
+  /** For actions that have no feature behind them yet: say so, rather than opening a page that does nothing. */
+  const comingSoon = (message: string) => { setHubOpen(false); setOrganizeNote(t(message)); };
+
+  const inviteFriends = () => {
+    setHubOpen(false);
+    // The system share sheet; nothing is sent from Linqa, so no contact data leaves the phone.
+    void Share.share({ message: t("Join me on Linqa, the secure messenger built for real connections.") }).catch(() => setOrganizeNote(t("Couldn't open sharing on this phone.")));
+  };
+
+  // [label, icon, colour, action]. Every action opens a real screen, the share sheet, or says it is coming soon.
   const hubActions: Array<[string, string, string, () => void]> = [
     ["New chat", "chatbubble-ellipses-outline", C.teal, openCompose],
-    ["New group", "people-outline", C.blue, () => { setHubOpen(false); setGroupOpen(true); }],
+    ["New group", "people-circle-outline", C.blue, () => { setHubOpen(false); setGroupOpen(true); }],
     ["Schedule", "calendar-outline", C.purple, () => go("/(tabs)/calls")],
     ["Start call", "call-outline", C.teal, () => go("/(tabs)/calls")],
     ["Broadcast", "megaphone-outline", C.red, () => go("/modules/status")],
-    ["Scan QR", "qr-code-outline", C.blue, () => go("/modules/linked-devices")]
+    ["Scan QR", "qr-code-outline", C.blue, () => go("/linked-devices")],
+    ["Community", "people-outline", C.orange, () => go("/(tabs)/communities")],
+    ["New event", "calendar-number-outline", C.yellow, () => go("/calendar?new=1")],
+    ["Contacts", "id-card-outline", C.purple, () => go("/connections")],
+    ["Discover", "compass-outline", C.teal, () => go("/countrylinqa/search")],
+    ["CountryLinqa", "earth-outline", C.blue, () => go("/countrylinqa/world")],
+    ["Translate", "language-outline", C.purple, () => comingSoon("Translate is coming soon.")],
+    ["Live rooms", "radio-outline", C.red, () => comingSoon("Live rooms are coming soon.")],
+    ["Invite friends", "share-social-outline", C.yellow, inviteFriends],
+    ["Business", "briefcase-outline", C.purple, () => go("/enterprise")]
   ];
 
   const inboxPane = (
@@ -440,12 +459,12 @@ function ChatsInbox() {
               <Pressable
                 key={label}
                 accessibilityRole="button"
-                accessibilityLabel={label}
+                accessibilityLabel={t(label)}
                 onPress={onPress}
                 style={({ pressed }) => [s.hubItem, pressed && s.pressed]}
               >
                 <Ionicons name={icon as never} size={25} color={color} />
-                <Text style={s.hubLabel}>{label}</Text>
+                <Text style={s.hubLabel} numberOfLines={2}>{t(label)}</Text>
               </Pressable>
             ))}
           </View>

@@ -18,7 +18,9 @@ export const C = {
   muted: "#B9C1CA",
   blue: "#4586FF",
   purple: "#BB54EA",
-  red: "#FF5D67"
+  red: "#FF5D67",
+  orange: "#FFA23A",
+  yellow: "#F5C542"
 } as const;
 
 export const s = StyleSheet.create({
@@ -63,7 +65,7 @@ export const s = StyleSheet.create({
     zIndex: 20,
     top: 62,
     right: 14,
-    width: 300,
+    width: 318,
     paddingVertical: 8,
     borderRadius: 16,
     borderWidth: 1,
