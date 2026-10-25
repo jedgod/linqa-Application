@@ -10,6 +10,7 @@ import { registerAccountIdentifierRoutes } from "../routes/account-identifiers.j
 import { registerAttachmentRoutes } from "../routes/attachments.js";
 import { registerAuthRoutes } from "../routes/auth.js";
 import { registerCallRoutes } from "../routes/calls.js";
+import { registerCommunityRoutes } from "../routes/communities.js";
 import { registerCallsV2Routes } from "../calls/calls-v2.routes.js";
 import { registerContactDiscoveryRoutes } from "../routes/contact-discovery.js";
 import { registerCountryLinqaRoutes } from "../routes/countrylinqa/routes.js";
@@ -156,6 +157,7 @@ export async function registerAll(
     legalHolds: services.legalHolds,
     orgAuthorization: services.orgAuthorization
   });
+  await registerCommunityRoutes(app, config, db, services.communities);
   await registerGapClosureRoutes(app, config, db, {
     gap: services.gap
   });
