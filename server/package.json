@@ -15,6 +15,7 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "dev:mint-ops-token": "tsx src/dev/mint-ops-access-token.ts",
     "db:cleanup": "tsx src/jobs/cleanup.ts",
+    "jobs:status-video-expiry": "node --env-file-if-exists=.env --import tsx src/jobs/status-video-expiry.ts",
     "linqasend:workers": "tsx src/jobs/linqasend-workers.ts",
     "linqasend:test:wallet:db": "tsx ../scripts/run-wallet-db-tests.mjs",
     "linqasend:wallet:preflight": "node --env-file-if-exists=.env --import tsx src/jobs/wallet-provider-preflight.ts",

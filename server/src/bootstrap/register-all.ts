@@ -60,6 +60,7 @@ import { registerModulesRoutes } from "../routes/modules.routes.js";
 import { registerProtocolCapabilityRoutes } from "../routes/protocol-capability.js";
 import { registerPushRoutes } from "../routes/push.js";
 import { registerRecordedVideoRoutes } from "../routes/recorded-videos.js";
+import { registerStatusVideoRoutes } from "../routes/status-videos.js";
 import { registerRelayRoutes } from "../routes/relay.js";
 import { registerRuntimeRoutes } from "../routes/runtime.js";
 import { registerSafetyRoutes } from "../routes/safety.js";
@@ -119,6 +120,7 @@ export async function registerAll(
   await registerCallRoutes(app, config, services.calls, services.location);
   await registerCallsV2Routes(app, config, db, services.calls, hub);
   await registerRecordedVideoRoutes(app, config, services.recordedVideos);
+  await registerStatusVideoRoutes(app, config, services.statusVideos);
   await registerPushRoutes(app, config, services.push);
   await registerContactDiscoveryRoutes(app, config, services.contactDiscovery);
   await registerSafetyRoutes(app, config, services.trustSafety);

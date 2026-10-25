@@ -21,6 +21,9 @@ export interface ObjectStorage {
     parts: Array<{ partNumber: number; etag: string }>;
   }): Promise<void>;
 
+  /** A short-lived GET link for a stored (ciphertext) object. Callers must authorize the requester before asking for one. */
+  signDownload(input: { objectKey: string; expiresInSeconds: number }): Promise<{ url: string }>;
+
   deleteObject(objectKey: string): Promise<void>;
 }
 

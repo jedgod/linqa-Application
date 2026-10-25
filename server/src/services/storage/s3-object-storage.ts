@@ -2,6 +2,7 @@ import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
   HeadBucketCommand,
   S3Client,
   UploadPartCommand
@@ -90,6 +91,16 @@ export class S3ObjectStorage implements ObjectStorage {
         }
       })
     );
+  }
+
+  async signDownload(input: { objectKey: string; expiresInSeconds: number }) {
+    return {
+      url: await getSignedUrl(
+        this.client,
+        new GetObjectCommand({ Bucket: this.config.bucket, Key: input.objectKey }),
+        { expiresIn: Math.min(Math.max(input.expiresInSeconds, 1), 300) }
+      )
+    };
   }
 
   async deleteObject(objectKey: string) {

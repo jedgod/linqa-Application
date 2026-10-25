@@ -85,6 +85,7 @@ import {
   FailClosedTokenVault
 } from "../services/push/fail-closed-push-provider.js";
 import { RecordedVideoService } from "../services/recorded-video.service.js";
+import { StatusVideoService } from "../services/status-video.service.js";
 import { RecoveryEmailService } from "../services/recovery-email.service.js";
 import { ReleasePromotionService } from "../services/release-promotion.service.js";
 import { RetentionArchiveService, FailClosedArchiveStorage } from "../services/retention-archive.service.js";
@@ -93,7 +94,7 @@ import { ScimService } from "../services/scim.service.js";
 import { SecurityAssessmentService } from "../services/security-assessment.service.js";
 import { SessionService } from "../services/session.service.js";
 import { SignalingService } from "../services/signaling.service.js";
-import { FailClosedObjectStorage } from "../services/storage/fail-closed-object-storage.js";
+import { createObjectStorage } from "../services/storage/create-object-storage.js";
 import { S3ObjectStorage } from "../services/storage/s3-object-storage.js";
 import { LocalVaultObjectStorage } from "../services/storage/local-vault-object-storage.js";
 import {
@@ -120,22 +121,7 @@ const readyHealth = async (id:string, configured:boolean, check?:()=>Promise<voi
 
 export function createServiceContainer(config: AppConfig, db: Database) {
   const pushProvider = () => new FailClosedPushProvider();
-  const objectStorage =
-    config.OBJECT_STORAGE_REGION &&
-    config.OBJECT_STORAGE_BUCKET &&
-    config.OBJECT_STORAGE_KMS_KEY_ID
-      ? new S3ObjectStorage({
-          region: config.OBJECT_STORAGE_REGION,
-          bucket: config.OBJECT_STORAGE_BUCKET,
-          kmsKeyId: config.OBJECT_STORAGE_KMS_KEY_ID,
-          ...(config.OBJECT_STORAGE_ENDPOINT
-            ? { endpoint: config.OBJECT_STORAGE_ENDPOINT }
-            : {}),
-          ...(config.OBJECT_STORAGE_FORCE_PATH_STYLE === undefined
-            ? {}
-            : { forcePathStyle: config.OBJECT_STORAGE_FORCE_PATH_STYLE })
-        })
-      : new FailClosedObjectStorage();
+  const objectStorage = createObjectStorage(config);
   const vaultObjectStorage =
     config.OBJECT_STORAGE_REGION &&
     config.OBJECT_STORAGE_BUCKET &&
@@ -344,6 +330,7 @@ export function createServiceContainer(config: AppConfig, db: Database) {
     }),
     pushV2,
     recordedVideos: new RecordedVideoService(db),
+    statusVideos: new StatusVideoService(db, objectStorage),
     recoveryEmails,
     runtimeCapabilities: createRuntimeCapabilityRegistry(config, db, providerRegistry),
     providerRegistry,
