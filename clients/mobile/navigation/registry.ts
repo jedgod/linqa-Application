@@ -29,6 +29,7 @@ export const routes: readonly NavRoute[] = [
   { id: HOME_ID, label: "Home", href: "/home", icon: "home-outline", group: "Connect" },
   { id: "chats", label: "Chats", href: "/chats", parentId: HOME_ID, icon: "chatbubbles-outline", group: "Connect" },
   { id: "calls", label: "Calls", href: "/calls", parentId: HOME_ID, icon: "call-outline", group: "Connect" },
+  { id: "podcast", label: "Video podcast", href: "/podcast", parentId: HOME_ID, icon: "videocam-outline", group: "Connect" },
   { id: "connections", label: "Connections", href: "/connections", parentId: HOME_ID, icon: "people-outline", group: "Connect" },
   { id: "vault", label: "LinqaVault", href: "/vault", match: ["/modules/file-vault"], parentId: HOME_ID, icon: "lock-closed-outline", group: "Organize" },
   { id: "calendar", label: "Calendar", href: "/calendar", parentId: HOME_ID, icon: "calendar-outline", group: "Organize" },

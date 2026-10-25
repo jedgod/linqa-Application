@@ -99,6 +99,7 @@ export type HubService = {
 export const LINQA_HUB_SERVICES: readonly HubService[] = [
   { key: "chats", title: "Chats", description: "Messages, groups and requests", icon: "chatbubbles-outline", color: "#5B4CFF", route: "/(tabs)/chats", group: "Connect" },
   { key: "calls", title: "Calls", description: "Audio, video and scheduled calls", icon: "call-outline", color: "#16B874", route: "/(tabs)/calls", group: "Connect" },
+  { key: "podcast", title: "Video podcast", description: "Record up to 30 minutes and share with chosen people", icon: "videocam-outline", color: "#E53E78", route: "/podcast", group: "Connect" },
   { key: "contacts", title: "Connections", description: "Your people, active status and messaging", icon: "people-outline", color: "#00AFC8", route: "/connections", group: "Connect" },
   { key: "vault", title: "LinqaVault", description: "Private files, scans and notes", icon: "lock-closed-outline", color: "#5966E9", route: "/modules/file-vault", group: "Organize" },
   { key: "calendar", title: "Calendar", description: "Events, calls and reminders", icon: "calendar-outline", color: "#E53E78", route: "/modules/calendar", group: "Organize" },
