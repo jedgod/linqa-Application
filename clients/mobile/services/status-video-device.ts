@@ -11,11 +11,13 @@ import type { ScratchFile, SourceFile, UploadApi, UploadDeps } from "./status-vi
  * upload, seal, verify, decrypt) lives in status-video-upload.ts and status-video-view.ts and is tested without a device; this file
  * only moves bytes. Nothing here is unit-tested, so it is kept deliberately thin.
  *
- * Everything written to disk goes under a private cache folder, is created per use, and is deleted by its owner when done.
+ * Everything written to disk goes under a private folder, is created per use, and is deleted by its owner when done. It lives in the
+ * app's files folder, not the cache folder: Android empties the cache within seconds when the phone is nearly full, which deleted the
+ * scratch file in the middle of an upload. The app does not allow backups, so these files are never copied off the phone.
  * Ciphertext scratch files are always deleted; decrypted copies are deleted when the viewer closes (see `wipeOpenedVideos`).
  */
 
-const root = () => { const d = new Directory(Paths.cache, "linqa-secure"); if (!d.exists) d.create({ intermediates: true }); return d; };
+const root = () => { const d = new Directory(Paths.document, "linqa-secure"); if (!d.exists) d.create({ intermediates: true }); return d; };
 const sub = (name: string) => { const d = new Directory(root(), name); if (!d.exists) d.create({ intermediates: true }); return d; };
 const randomName = (ext: string) => `${Crypto.randomUUID()}.${ext}`;
 
@@ -63,6 +65,13 @@ export function plainSink(mime: string): PlainSink {
 }
 
 /** Remove every decrypted copy left on disk (viewer closed, app locked, account switched). */
+/** Removes ciphertext and decrypted files that a killed or crashed run left behind. Call it before starting any new work. */
+export function sweepSecureScratch(): void {
+  for (const name of ["upload", "download", "open"]) {
+    try { const d = new Directory(root(), name); if (d.exists) d.delete(); } catch { /* best effort */ }
+  }
+}
+
 export function wipeOpenedVideos(): void {
   try { const d = new Directory(root(), "open"); if (d.exists) d.delete(); } catch { /* best effort */ }
 }

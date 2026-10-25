@@ -18,7 +18,7 @@ import { RuntimeCapabilitiesService } from "../services/runtime-capabilities.ser
 import * as MediaLibrary from "expo-media-library";
 import * as Sharing from "expo-sharing";
 import { saveToVault, VaultSaveError } from "../services/vault-save";
-import { StatusVideoApi, fileSource, uploadDepsFor, viewDepsFor, wipeOpenedVideos } from "../services/status-video-device";
+import { StatusVideoApi, fileSource, sweepSecureScratch, uploadDepsFor, viewDepsFor, wipeOpenedVideos } from "../services/status-video-device";
 
 const PURPLE = "#5B4CFF";
 const INK = "#F5F6FA";
@@ -195,6 +195,8 @@ function RecordTab({ onRecording }: { onRecording: (recording: boolean) => void 
     const hub = new MobileHubService(getApiBaseUrl(), () => accessTokenProvider.getAccessToken());
     hub.loadHub().then((snapshot) => setContacts(snapshot.contacts), () => setContacts([]));
   }, [clip, sheet, contacts]);
+
+  useEffect(() => { sweepSecureScratch(); }, []); // leftovers from a run that was killed mid-upload or mid-playback
 
   async function record() {
     if (!camera.current || !ready || recording) return;
