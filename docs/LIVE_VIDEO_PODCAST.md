@@ -8,7 +8,7 @@ exists yet, so none is implemented**. Live Rooms stays "coming soon" in the app 
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Record a video, encrypt it on the phone, post it to status for chosen people | **server done and tested; phone client not built yet** |
+| 1 | Record a video, encrypt it on the phone, post it to status for chosen people | **built and tested without a device or storage; not yet run end to end** (see below) |
 | 2 | Invites: single-use hashed tokens, UUID and device bound, system contact picker, `linqa://` link | not started |
 | 3 | Live room as a host-led wrapper over the existing mesh (`features/call-rooms`), key rotation for removals | not started |
 
@@ -38,13 +38,43 @@ API (all device-bound; posting needs `status:write`, watching needs `status:reac
 `POST /v1/status-videos`, `GET /v1/status-videos/feed`, `GET /v1/status-videos/mine`, `POST /v1/status-videos/:id/download`,
 `POST /v1/status-videos/:id/viewed`, `DELETE /v1/status-videos/:id`. Migration: `088_status_video_posts.sql`.
 
-## Not done yet in phase 1 (the phone side)
+## Phase 1 phone client
 
-1. Record up to 30 minutes (today's recorder stops video at 2 minutes).
-2. Chunked encrypt and multipart upload to the existing attachment API, never holding more than one chunk in memory.
-3. Seal the key bundle to each chosen friend's devices. `SecureCoreMessaging.seal` is tied to a conversation's members, so it needs
-   an audience-based variant.
-4. Pick the audience, post, watch (stream-decrypt to a private cache), and take down.
+`app/podcast.tsx` (Linqa hub, "Video podcast"): record up to 30 minutes at about 1.5 Mbit/s (a full-length recording is roughly
+360 MB, under the 500 MiB the server accepts), choose people, post with live progress and Cancel; a Watch tab lists what was shared
+with you, plays it, and lets you take your own posts down.
+
+| Piece | File | How it is verified |
+|---|---|---|
+| Chunked encryption format | `services/stream-crypto.ts` | 11 unit tests, mutation-checked |
+| Upload pipeline: encrypt to a scratch file, create upload, send parts with per-part retry, seal, post | `services/status-video-upload.ts` | `tests/status-video-flow.test.ts` |
+| Watch pipeline: open bundle, verify, download, decrypt chunk by chunk, delete on any failure | `services/status-video-view.ts` | same file; 11 tests, 5 mutation checks |
+| Sealing a key for an audience (per device, 8-day lifetime, up to 200 devices) | `SecureCoreMessaging.sealForAudience` | `tests/secure-core.test.ts` (27) |
+| Real files, HTTP and the account's secure session | `services/status-video-device.ts` | typecheck, and the screens on a Galaxy A03s |
+
+Design points worth knowing:
+- The upload API wants the manifest hash before any part is sent, which can only be computed from the finished ciphertext. So the
+  phone encrypts the whole recording to a private scratch file (one 5 MiB chunk in memory at a time), then uploads from it. It
+  needs free space of about the recording's size; running out is reported as such, and the file is always deleted.
+- The sealed key bundle names the upload it was made for, so a server cannot attach it to a different upload.
+- The app asks the server's `object-storage` capability first and shows plainly that sharing is unavailable, instead of failing
+  after a long encryption.
+- Decrypted copies live in a private cache folder and are deleted when the Watch screen closes.
+
+## What has NOT been verified yet (read before relying on this)
+
+- **No end-to-end run.** The pipeline has never run with a real S3-compatible store: this dev machine's API has no object storage
+  configured (the local MinIO container exists but is not wired in), and its running API predates the new routes and migration.
+  Posting, downloading and playing back a real video on a phone therefore remain untested. The server logic is tested against real
+  PostgreSQL with a fake store, and the phone logic against the real secure-core messaging code with a fake native core and fake
+  server; the glue between them (presigned part PUT and ETag handling, the file-handle streaming, ExoPlayer on the decrypted file) is
+  what is left to prove.
+- **Two physical devices.** Sharing needs a second phone with its own account, as does the separate requirement that Live Rooms
+  stay "coming soon" until the room feature passes on two devices.
+- A recording needs about its own size in free space during posting; very low-storage phones will see the "out of storage" message.
+- A completed upload whose post step then fails is left in storage with no post. A cleanup for such orphans is not written.
+- Strings on the new screen are English only; they are not in the shared translation catalog yet.
+- Backgrounding the app during a long upload may pause or kill it; the screen asks the user to keep Linqa open and keeps the screen awake.
 
 ## Known limits and open items
 

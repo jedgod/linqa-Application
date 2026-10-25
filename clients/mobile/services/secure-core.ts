@@ -187,6 +187,10 @@ const MAX_DEVICES = 8;
 /** Envelopes outlive any plausible history: ten years. */
 const ENVELOPE_LIFETIME_S = 10 * 365 * 86_400;
 const CACHE_LIMIT = 20_000;
+/** A status post may be sealed for many more devices than one chat (an audience, not a conversation), but not without bound. */
+export const MAX_AUDIENCE_DEVICES = 200;
+/** A sealed post key is useless after the post's longest life (7 days) plus slack, unlike a chat envelope, which must outlive history. */
+const AUDIENCE_ENVELOPE_LIFETIME_S = 8 * 86_400;
 
 type Bundle = { v: 1; d: string; e: Record<string, string> };
 type Inner = { v: 1; c: string; s: string; t: string };
@@ -271,6 +275,47 @@ export class SecureCoreMessaging implements SecureMessaging {
     }
     const bundle: Bundle = { v: 1, d: selfDevice, e };
     return jsonB64(bundle);
+  }
+
+  /**
+   * Seals one secret for an AUDIENCE (a status post) instead of a conversation: every device of every listed person, plus this
+   * person's own devices so they can watch it back. Each device gets its own single-device bundle, so no device is handed anyone
+   * else's envelope, and each bundle opens through the ordinary `open` with `contextId` standing in for the conversation id (the
+   * sealed text names it, so a bundle moved to another post fails). Nobody chosen is silently skipped: a person with no usable
+   * device fails the whole call, as in `seal`.
+   */
+  async sealForAudience(plaintext: string, context: { contextId: string; senderUserId: string; clientMessageId: string }, userIds: string[]): Promise<Array<{ userId: string; deviceId: string; sealedKey: string }>> {
+    await this.deps.device.ensure();
+    await assertMessagingUnlocked(this.deps.device.asNativeCore());
+    const selfDevice = await this.deps.device.deviceId();
+    const people = Array.from(new Set([context.senderUserId, ...userIds]));
+    const recipients: PeerDevice[] = [];
+    for (const userId of people) {
+      const devices = await this.devicesOf(userId, true);
+      if (devices.length === 0) return fail(userId === context.senderUserId ? "OWN_DEVICE_NOT_PUBLISHED" : "RECIPIENT_NOT_READY");
+      recipients.push(...devices);
+    }
+    if (!recipients.some((r) => r.userId === context.senderUserId && r.deviceId === selfDevice)) return fail("OWN_DEVICE_NOT_PUBLISHED");
+    if (recipients.length > MAX_AUDIENCE_DEVICES) return fail("TOO_MANY_DEVICES");
+
+    const inner: Inner = { v: 1, c: context.contextId, s: context.senderUserId, t: plaintext };
+    const created = this.now();
+    const out: Array<{ userId: string; deviceId: string; sealedKey: string }> = [];
+    for (const r of recipients) {
+      await this.deps.device.ensure();
+      const envelope = await this.deps.bridge.encryptMessage(JSON.stringify({
+        recipient_encryption_public_key: r.pkg.encryption_public_key,
+        recipient_pq_encryption_public_key: r.pkg.pq_encryption_public_key,
+        sender_user_id: context.senderUserId, sender_device_id: selfDevice,
+        recipient_user_id: r.userId, recipient_device_id: r.deviceId,
+        message_id: context.clientMessageId, plaintext: nums(utf8(JSON.stringify(inner))),
+        created_at_unix: created, expires_at_unix: created + AUDIENCE_ENVELOPE_LIFETIME_S
+      }));
+      await this.deps.device.ensure();
+      const bundle: Bundle = { v: 1, d: selfDevice, e: { [r.deviceId]: envelope } };
+      out.push({ userId: r.userId, deviceId: r.deviceId, sealedKey: jsonB64(bundle) });
+    }
+    return out;
   }
 
   async open(ciphertextBase64: string, context: { conversationId: string; senderUserId: string; messageId: string }): Promise<string> {

@@ -97,7 +97,7 @@ suite("encrypted status video posts (real PostgreSQL)", () => {
 
     const feed = (await call("GET", "/v1/status-videos/feed", bob, "status:react")).json().items;
     expect(feed).toHaveLength(1);
-    expect(feed[0]).toMatchObject({ id, ownerUserId: alice.user, kind: "PODCAST", durationSeconds: 600, ciphertextSize: up.size, sealedKey: "BOB-ONLY-BUNDLE", viewedAt: null });
+    expect(feed[0]).toMatchObject({ id, attachmentId: up.id, ownerUserId: alice.user, kind: "PODCAST", durationSeconds: 600, ciphertextSize: up.size, sealedKey: "BOB-ONLY-BUNDLE", viewedAt: null });
     expect(JSON.stringify(feed)).not.toContain(up.key); // the storage location is never handed to a viewer
 
     const dl = await call("POST", `/v1/status-videos/${id}/download`, bob, "status:react");

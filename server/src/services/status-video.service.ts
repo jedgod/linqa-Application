@@ -127,7 +127,7 @@ export class StatusVideoService {
   /** What this device may open right now: not expired, not deleted, not from someone who is now blocked either way. */
   async feed(userId: string, deviceId: string) {
     const result = await this.db.query(
-      `SELECT p.id, p.owner_user_id, p.kind, p.duration_seconds, p.ciphertext_size, p.created_at, p.expires_at, r.sealed_key, r.viewed_at
+      `SELECT p.id, p.attachment_id, p.owner_user_id, p.kind, p.duration_seconds, p.ciphertext_size, p.created_at, p.expires_at, r.sealed_key, r.viewed_at
          FROM status_video_recipients r JOIN status_video_posts p ON p.id = r.post_id
         WHERE r.recipient_device_id = $1 AND r.recipient_user_id = $2 AND p.deleted_at IS NULL AND p.expires_at > now()
           AND NOT EXISTS (SELECT 1 FROM blocked_users b
@@ -137,6 +137,8 @@ export class StatusVideoService {
     );
     return result.rows.map((row) => ({
       id: row.id as string,
+      // Not a storage location: it only lets the viewer check that the sealed bundle was made for THIS upload.
+      attachmentId: row.attachment_id as string,
       ownerUserId: row.owner_user_id as string,
       kind: row.kind as "VIDEO" | "PODCAST",
       durationSeconds: row.duration_seconds as number,

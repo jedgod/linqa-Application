@@ -3,68 +3,7 @@ import assert from "node:assert/strict";
 import { SecureCoreDevice, SecureCoreError, SecureCoreMessaging, base64ToBytes, bytesToBase64, text, utf8, type CoreBridge, type KeyPackageJson, type PeerDirectory, type SecretStore } from "../clients/mobile/services/secure-core.ts";
 import { clearAccountScopedState } from "../clients/mobile/services/account-scope.ts";
 
-// A stand-in for the native core that enforces the same rules the real one does (the real one is tested in
-// core/tests/native_bridge_contract.rs): an envelope opens only on the device it names, only with the sender's key, and once.
-const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64");
-const unb64 = (s: string) => JSON.parse(Buffer.from(s, "base64").toString("utf8"));
-const NOW_MS = Date.UTC(2026, 9, 6, 12, 0, 0);
-
-class FakeCore implements CoreBridge {
-  material: { signing_key: number[]; encryption_secret: number[]; pq_encryption_secret: number[] } | null = null;
-  seen = new Set<string>();
-  decrypts = 0;
-  creates: Array<string | null> = [];
-  async createCore(m: string | null) { this.creates.push(m); this.material = m ? unb64(m) : { signing_key: [0], encryption_secret: [0], pq_encryption_secret: Array.from({ length: 64 }, (_, i) => (i * 7 + this.creates.length) % 256) }; return true; }
-  async version() { if (!this.material) throw new Error("SECURE_CORE_NOT_CREATED"); return "0.2.0"; }
-  async protectionLevel() { return "SOFTWARE_REQUIRES_OS_WRAPPING"; }
-  async exportKeyMaterial() { return b64(this.material); }
-  async generateKeyPackage(userId: string, deviceId: string, expiresAtMs: number) {
-    const m = this.material!;
-    const pkg: KeyPackageJson = { version: 2, user_id: userId, device_id: deviceId, signing_public_key: m.signing_key.slice(0, 1).concat(Array(31).fill(m.signing_key[0]!)).slice(0, 32), encryption_public_key: Array(32).fill(m.encryption_secret[0]!), pq_encryption_public_key: [1, 2, 3], created_at_unix: Math.floor(NOW_MS / 1000), expires_at_unix: Math.floor(expiresAtMs / 1000) };
-    return b64(pkg);
-  }
-  async verifyKeyPackage(p: string) { const pkg = unb64(p) as KeyPackageJson; if (pkg.version !== 2 || pkg.expires_at_unix * 1000 <= NOW_MS) throw new Error("bad package"); return true; }
-  async encryptMessage(json: string) {
-    const r = JSON.parse(json);
-    for (const k of ["recipient_encryption_public_key", "recipient_pq_encryption_public_key", "sender_user_id", "sender_device_id", "recipient_user_id", "recipient_device_id", "message_id", "plaintext", "created_at_unix", "expires_at_unix"]) assert.ok(k in r, `request is missing ${k}`);
-    assert.ok(Array.isArray(r.plaintext) && r.recipient_encryption_public_key.length === 32);
-    return b64({ header: { recipient_device_id: r.recipient_device_id, sender_device_id: r.sender_device_id, message_id: r.message_id }, ciphertext: r.plaintext, sealed_for: r.recipient_encryption_public_key });
-  }
-  async decryptMessage(reqB64: string) {
-    this.decrypts += 1;
-    const req = unb64(reqB64);
-    for (const k of ["expected_recipient_device_id", "sender_signing_public_key", "envelope", "now_unix"]) assert.ok(k in req, `decrypt request is missing ${k}`);
-    const env = req.envelope;
-    if (env.header.recipient_device_id !== req.expected_recipient_device_id) throw new Error("wrong device");
-    const key = `${req.expected_recipient_device_id}:${env.header.message_id}`;
-    if (this.seen.has(key)) throw new Error("replay");
-    this.seen.add(key);
-    return Buffer.from(env.ciphertext).toString("base64");
-  }
-}
-
-const mem = (initial: Record<string, string> = {}): SecretStore & { data: Record<string, string> } => {
-  const data = { ...initial };
-  return { data, async protectionLevel() { return "OS_PROTECTED"; }, async get(k) { return data[k] ?? null; }, async put(k, v) { data[k] = v; } };
-};
-const enrolled = (deviceId: string, seed: number) => mem({ "device.signingPrivateKey": bytesToBase64(new Uint8Array(32).fill(seed)), "device.encryptionPrivateKey": bytesToBase64(new Uint8Array(32).fill(seed + 1)), "device.id": deviceId });
-
-type Phone = { core: FakeCore; device: SecureCoreDevice; store: ReturnType<typeof mem>; userId: string; deviceId: string };
-const USER_A = "00000000-0000-4000-8000-0000000000a1";
-const USER_B = "00000000-0000-4000-8000-0000000000b2";
-const CONV = "00000000-0000-4000-8000-0000000000c0";
-function phone(userId: string, deviceId: string, seed: number): Phone {
-  const core = new FakeCore(); const store = enrolled(deviceId, seed);
-  return { core, store, userId, deviceId, device: new SecureCoreDevice(core, store, userId, () => NOW_MS) };
-}
-async function directoryOf(phones: Phone[], extra: Record<string, Array<{ deviceId: string; packageBase64: string }>> = {}): Promise<PeerDirectory> {
-  const byUser: Record<string, Array<{ deviceId: string; packageBase64: string }>> = {};
-  for (const p of phones) (byUser[p.userId] ??= []).push({ deviceId: p.deviceId, packageBase64: (await p.device.createKeyPackage()).packageBase64 });
-  for (const [u, list] of Object.entries(extra)) (byUser[u] ??= []).push(...list);
-  return { async keyPackages(u) { return byUser[u] ?? []; } };
-}
-const messaging = (p: Phone, directory: PeerDirectory, members = [USER_A, USER_B]) => new SecureCoreMessaging({ bridge: p.core, device: p.device, directory, members: async () => members, now: () => NOW_MS });
-const code = async (promise: Promise<unknown>) => { try { await promise; return "NO_ERROR"; } catch (e) { return e instanceof SecureCoreError ? e.code : `OTHER:${(e as Error).message}`; } };
+import { FakeCore, mem, enrolled, phone, directoryOf, messaging, code, b64, unb64, USER_A, USER_B, CONV, NOW_MS, type Phone } from "./support/secure-core-fixtures.ts";
 
 test("text and base64 helpers round-trip, including emoji, and refuse broken input", () => {
   for (const s of ["", "hello", "héllo 世界", "🙂 ok", "a\u0000b"]) assert.equal(text(utf8(s)), s);
@@ -402,4 +341,76 @@ test("another account's session never serves this account's opened messages", as
   const carols = messaging(carol, await directoryOf([alice, bob, carol]));
   assert.equal(await code(carols.open(sealed, ctx)), "NOT_FOR_THIS_DEVICE");
   assert.equal(carol.core.decrypts, 0, "the core is never even asked");
+});
+
+// ---- Sealing one secret for an audience (status posts) ---------------------------------------------------------------------
+
+const POST_CTX = "status-video:55555555-5555-4555-8555-555555555aaa";
+
+test("a post key is sealed per device for each chosen person and for the owner's own phone, and each opens only its own", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const carol = phone("00000000-0000-4000-8000-0000000000d4", "10000000-0000-4000-8000-0000000000d4", 9);
+  const directory = await directoryOf([alice, bob, carol]);
+  const a = messaging(alice, directory);
+  const sealed = await a.sealForAudience("the-media-key-bundle", { contextId: POST_CTX, senderUserId: USER_A, clientMessageId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" }, [USER_B]);
+  assert.deepEqual(sealed.map((s) => s.deviceId).sort(), [alice.deviceId, bob.deviceId].sort(), "owner's phone and bob's phone; carol was not chosen");
+  assert.ok(sealed.every((s) => typeof s.sealedKey === "string" && s.sealedKey.length > 0));
+  // each bundle holds exactly one envelope, so no device is handed another device's envelope
+  for (const s of sealed) assert.deepEqual(Object.keys(unb64(s.sealedKey).e), [s.deviceId]);
+
+  const ctx = { conversationId: POST_CTX, senderUserId: USER_A, messageId: "post-1" };
+  const forBob = sealed.find((s) => s.deviceId === bob.deviceId)!;
+  assert.equal(await messaging(bob, directory).open(forBob.sealedKey, ctx), "the-media-key-bundle");
+  const forAlice = sealed.find((s) => s.deviceId === alice.deviceId)!;
+  assert.equal(await a.open(forAlice.sealedKey, ctx), "the-media-key-bundle", "the owner can watch it back");
+  // Carol (not chosen) cannot open Bob's bundle, and the core is never even asked.
+  assert.equal(await code(messaging(carol, directory).open(forBob.sealedKey, ctx)), "NOT_FOR_THIS_DEVICE");
+  assert.equal(carol.core.decrypts, 0);
+});
+
+test("a sealed post key cannot be moved to another post or claimed by another sender", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const directory = await directoryOf([alice, bob]);
+  const [forBob] = (await messaging(alice, directory).sealForAudience("k", { contextId: POST_CTX, senderUserId: USER_A, clientMessageId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" }, [USER_B])).filter((s) => s.deviceId === bob.deviceId);
+  const b = messaging(bob, directory);
+  assert.equal(await code(b.open(forBob!.sealedKey, { conversationId: "status-video:someone-elses-upload", senderUserId: USER_A, messageId: "post-2" })), "MESSAGE_CONTEXT_MISMATCH");
+  const fresh = messaging(phone(USER_B, bob.deviceId, 3), directory);
+  assert.equal(await code(fresh.open(forBob!.sealedKey, { conversationId: POST_CTX, senderUserId: USER_B, messageId: "post-3" })), "SENDER_UNKNOWN", "claimed sender must be a device that really sent it");
+});
+
+test("nobody chosen is silently skipped: a person with no usable device fails the whole seal", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const directory = await directoryOf([alice, bob]);
+  const a = messaging(alice, directory);
+  const ghost = "00000000-0000-4000-8000-0000000000ee";
+  assert.equal(await code(a.sealForAudience("k", { contextId: POST_CTX, senderUserId: USER_A, clientMessageId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }, [USER_B, ghost])), "RECIPIENT_NOT_READY");
+  // and the owner's own phone must be published, or nothing is sealed
+  const withoutMine = await directoryOf([bob]);
+  assert.equal(await code(messaging(alice, withoutMine).sealForAudience("k", { contextId: POST_CTX, senderUserId: USER_A, clientMessageId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1" }, [USER_B])), "OWN_DEVICE_NOT_PUBLISHED");
+});
+
+test("a post key is sealed for 8 days, not ten years, and the audience size is bounded", async () => {
+  const alice = phone(USER_A, "10000000-0000-4000-8000-0000000000a1", 1);
+  const bob = phone(USER_B, "10000000-0000-4000-8000-0000000000b2", 3);
+  const directory = await directoryOf([alice, bob]);
+  const seen: Array<{ created_at_unix: number; expires_at_unix: number }> = [];
+  const real = alice.core.encryptMessage.bind(alice.core);
+  alice.core.encryptMessage = async (json: string) => { const r = JSON.parse(json); seen.push({ created_at_unix: r.created_at_unix, expires_at_unix: r.expires_at_unix }); return real(json); };
+  await messaging(alice, directory).sealForAudience("k", { contextId: POST_CTX, senderUserId: USER_A, clientMessageId: "ffffffff-ffff-4fff-8fff-ffffffffffff" }, [USER_B]);
+  assert.ok(seen.length >= 2);
+  for (const e of seen) assert.equal(e.expires_at_unix - e.created_at_unix, 8 * 86_400);
+  // More devices than the audience limit is refused before anything is sealed: 201 real, valid devices of one friend.
+  const crowd = Array.from({ length: 201 }, (_, n) => phone(USER_B, `20000000-0000-4000-8000-${String(n).padStart(12, "0")}`, 4));
+  const bigDirectory = await directoryOf([alice, ...crowd]);
+  const fresh = phone(USER_A, alice.deviceId, 1);
+  const refused = messaging(fresh, bigDirectory);
+  assert.equal(await code(refused.sealForAudience("k", { contextId: POST_CTX, senderUserId: USER_A, clientMessageId: "ffffffff-ffff-4fff-8fff-fffffffffff1" }, [USER_B])), "TOO_MANY_DEVICES");
+  assert.equal(fresh.core.decrypts, 0);
+  // ...while exactly 200 in total (199 + the owner's) is accepted.
+  const ok = await directoryOf([alice, ...crowd.slice(0, 199)]);
+  const sealed = await messaging(phone(USER_A, alice.deviceId, 1), ok).sealForAudience("k", { contextId: POST_CTX, senderUserId: USER_A, clientMessageId: "ffffffff-ffff-4fff-8fff-fffffffffff2" }, [USER_B]);
+  assert.equal(sealed.length, 200);
 });
